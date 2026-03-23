@@ -5,7 +5,17 @@
     <groupId>com.hyperstreamdb</groupId>
     <artifactId>trino-hyperstream</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <description>Trino - HyperStreamDB Connector</description>
+    <description>Universal Vector &amp; Metadata Streaming Connector for Trino</description>
+    <url>https://github.com/rla3rd/hyperstreamdb</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <packaging>trino-plugin</packaging>
 
     <properties>

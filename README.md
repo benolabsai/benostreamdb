@@ -504,7 +504,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
-MIT OR Apache-2.0
+Apache-2.0
 
 ## 🙏 Acknowledgments
 
