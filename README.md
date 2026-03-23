@@ -101,7 +101,7 @@ sudo amdgpu-install --usecase=rocm
 ```
 
 **Apple Metal:**
-- Included with macOS 12.3+ on Apple Silicon (M1/M2/M3)
+- Included with macOS 12.3+ on Apple Silicon (M1, M2, M3, M4, M5)
 - No additional installation required
 
 **Intel OpenCL:**

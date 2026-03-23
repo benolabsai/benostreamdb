@@ -186,7 +186,7 @@ print(f"Computed {len(distances)} distances on AMD GPU")
 
 ### Requirements
 
-- **Hardware**: Apple Silicon Mac (M1, M2, M3, or newer)
+- **Hardware**: Apple Silicon Mac (M1, M2, M3, M4, M5, or newer)
 - **OS**: macOS 12.3 (Monterey) or later
 - **No additional installation required** - Metal is built into macOS
 
@@ -194,11 +194,11 @@ print(f"Computed {len(distances)} distances on AMD GPU")
 
 | Device | Chip | Supported |
 |--------|------|-----------|
-| MacBook Air (2020+) | M1/M2/M3 | ✅ Yes |
-| MacBook Pro (2020+) | M1/M2/M3 Pro/Max/Ultra | ✅ Yes |
+| MacBook Air (2020+) | M1/M2/M3/M4/M5 | ✅ Yes |
+| MacBook Pro (2020+) | M1/M2/M3/M4/M5 Pro/Max/Ultra | ✅ Yes |
 | Mac mini (2020+) | M1/M2/M2 Pro | ✅ Yes |
 | Mac Studio | M1/M2 Max/Ultra | ✅ Yes |
-| iMac (2021+) | M1/M3 | ✅ Yes |
+| iMac (2021+) | M1/M3/M4/M5 | ✅ Yes |
 | Mac Pro (2023+) | M2 Ultra | ✅ Yes |
 
 ### Verification
@@ -395,7 +395,7 @@ Expected speedups for batch operations (100,000 vectors, 768 dimensions):
 | CUDA | A100 | 25-35x |
 | ROCm | RX 7900 XTX | 12-18x |
 | Metal | M1 Max | 8-12x |
-| Metal | M2 Ultra | 15-20x |
+| Metal | M2-M5 Pro/Max/Ultra | 15-30x |
 | OpenCL | Arc A770 | 6-10x |
 
 *Benchmarks measured with float32 data, L2 distance metric*

@@ -99,7 +99,7 @@ rocm-smi
 #### Apple Metal (MPS)
 
 **Requirements:**
-- Apple Silicon Mac (M1, M2, M3, or newer)
+- Apple Silicon Mac (M1, M2, M3, M4, M5, or newer)
 - macOS 12.3 or later
 - No additional installation required
 
