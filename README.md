@@ -69,7 +69,7 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 ```bash
 # Install from source
-git clone https://github.com/yourusername/hyperstreamdb
+git clone https://github.com/rla3rd/hyperstreamdb
 cd hyperstreamdb
 
 # Build Python bindings
