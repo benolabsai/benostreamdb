@@ -1,0 +1,517 @@
+# HyperStreamDB
+
+**Serverless Index-Streaming Database with Overlay Indexing**
+
+A production-ready indexed data lake format that combines the transactional guarantees of Apache Iceberg with persistent indexes (scalar bitmaps + HNSW vector search) for blazing-fast queries on object storage.
+
+## 🎯 What Makes HyperStreamDB Different?
+
+**HyperStreamDB = Iceberg + Persistent Indexes**
+
+| Feature | Iceberg/Delta | HyperStreamDB |
+|---------|---------------|---------------|
+| **Transactional Updates** | ✅ Yes | ✅ Yes |
+| **Time Travel** | ✅ Yes | ✅ Yes |
+| **Scalar Indexes** | ❌ No | ✅ RoaringBitmap |
+| **Boolean Indexes** | ❌ No | ✅ Native Boolean |
+| **Vector Search** | ❌ No | ✅ HNSW |
+| **pgvector SQL** | ❌ No | ✅ Full Compatibility |
+| **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/Metal/OpenCL |
+| **Python Vector API** | ❌ No | ✅ NumPy-compatible |
+| **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
+| **Native SQL** | ❌ No | ✅ DataFusion |
+| **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
+| **Query Engines** | Spark/Trino | Spark/Trino/Python |
+
+## ⚡ Iceberg V2/V3 Compliance
+
+HyperStreamDB implements Apache Iceberg table format with full V2 and V3 feature support:
+
+| Feature | V1 | V2 | V3 | HyperStreamDB |
+|---------|----|----|----|--------------| 
+| **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ HyperLogLog |
+| **Row Lineage** | ❌ | ❌ | ✅ | ✅ UUID + Sequence |
+| **Default Values** | ❌ | ❌ | ✅ | ✅ Schema Fields |
+| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality |
+
+### New APIs
+
+```python
+import hyperstreamdb as hdb
+
+# Create table with sort order (V2)
+table = hdb.Table("s3://bucket/table")
+table.set_sort_order(["timestamp", "user_id"], ascending=[False, True])
+
+# Evolve partition spec (V2)
+table.set_partition_spec([
+    {"source_id": 1, "field_id": 1000, "name": "date", "transform": "day"}
+])
+
+# V3 tables automatically include row lineage
+# _row_id (UUID) and _last_updated_sequence_number are added when format_version >= 3
+```
+
+### Migration Guide: V2 → V3
+
+Upgrading to V3 enables row-level operations and enhanced tracking:
+
+1. **Automatic**: V3 metadata columns added transparently when `format_version >= 3`
+2. **No Data Rewrite**: Existing data remains compatible
+3. **New Columns**: `_row_id` (UUID v4), `_last_updated_sequence_number` (i64)
+
+
+## 🚀 Quick Start
+
+### Installation
+
+```bash
+# Install from source
+git clone https://github.com/yourusername/hyperstreamdb
+cd hyperstreamdb
+
+# Build Python bindings
+pip install maturin
+maturin develop
+
+# Or install from PyPI (coming soon)
+pip install hyperstreamdb
+```
+
+### GPU Acceleration (Optional)
+
+For GPU-accelerated vector operations, install the appropriate backend:
+
+**NVIDIA CUDA:**
+```bash
+# Ubuntu/Debian
+sudo apt-get install cuda-toolkit-12-3
+# Verify: nvidia-smi
+```
+
+**AMD ROCm:**
+```bash
+# Ubuntu
+wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_5.7.50700-1_all.deb
+sudo apt-get install ./amdgpu-install_5.7.50700-1_all.deb
+sudo amdgpu-install --usecase=rocm
+# Verify: rocm-smi
+```
+
+**Apple Metal:**
+- Included with macOS 12.3+ on Apple Silicon (M1/M2/M3)
+- No additional installation required
+
+**Intel OpenCL:**
+```bash
+# Ubuntu/Debian
+sudo apt-get install intel-opencl-icd
+# Verify: clinfo
+```
+
+See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
+
+### pgvector SQL Compatibility
+
+HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:
+
+```sql
+-- Use familiar pgvector operators
+SELECT id, content, 
+       embedding <-> '[0.1, 0.2, 0.3]'::vector AS l2_distance,
+       embedding <=> '[0.1, 0.2, 0.3]'::vector AS cosine_distance
+FROM documents
+WHERE category = 'science'
+ORDER BY l2_distance
+LIMIT 10;
+
+-- All six distance operators supported
+-- <->  L2 (Euclidean)
+-- <=>  Cosine  
+-- <#>  Inner Product
+-- <+>  L1 (Manhattan)
+-- <~>  Hamming
+-- <%>  Jaccard
+```
+
+See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation.
+
+### Basic Usage
+
+```python
+import hyperstreamdb as hdb
+
+# Create table
+table = hdb.Table("s3://bucket/my-table")
+
+# Write data (Pandas/PyArrow)
+import pandas as pd
+df = pd.DataFrame({
+    "id": [1, 2, 3],
+    "text": ["hello", "world", "test"],
+    "embedding": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+})
+table.write_pandas(df)
+
+# Query with filters (uses indexes!)
+results = table.to_pandas(filter="id > 1")
+
+# Vector search
+query_vec = [0.15, 0.25]
+results = table.to_pandas(
+    vector_filter={"embedding": query_vec, "k": 10}
+)
+
+# Hybrid query (scalar + vector)
+results = table.to_pandas(
+    filter="category = 'science'",
+    vector_filter={"embedding": query_vec, "k": 10}
+)
+```
+
+### Python Vector Distance API with GPU Acceleration
+
+HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
+
+```python
+import hyperstreamdb as hdb
+import numpy as np
+
+# GPU-accelerated batch distance computation
+ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/OpenCL
+print(f"Using GPU backend: {ctx.backend}")
+
+# Create query and database vectors
+query = np.random.randn(768).astype(np.float32)
+database = np.random.randn(100000, 768).astype(np.float32)
+
+# Compute distances on GPU (10x+ faster for large databases)
+distances = hdb.l2_distance_batch(query, database, context=ctx)
+
+# Find top-k nearest neighbors
+k = 10
+top_k_indices = np.argsort(distances)[:k]
+
+# Single-pair distance computation
+vec1 = np.array([1.0, 2.0, 3.0])
+vec2 = np.array([4.0, 5.0, 6.0])
+distance = hdb.cosine_distance(vec1, vec2)
+
+# Sparse vector support for high-dimensional sparse data
+sparse1 = hdb.SparseVector(
+    indices=np.array([0, 5, 100], dtype=np.int32),
+    values=np.array([1.0, 2.5, 0.8], dtype=np.float32),
+    dim=1000
+)
+sparse2 = hdb.SparseVector(
+    indices=np.array([5, 50, 100], dtype=np.int32),
+    values=np.array([2.0, 1.5, 0.9], dtype=np.float32),
+    dim=1000
+)
+distance = hdb.l2_distance_sparse(sparse1, sparse2)
+
+# Binary vector operations (bit-packed for efficiency)
+binary1 = np.packbits(np.random.randint(0, 2, 128))
+binary2 = np.packbits(np.random.randint(0, 2, 128))
+distance = hdb.hamming_distance_packed(binary1, binary2)
+```
+
+**Supported GPU Backends:**
+- **CUDA** - NVIDIA GPUs (Linux, Windows)
+- **ROCm** - AMD GPUs (Linux)
+- **Metal (MPS)** - Apple Silicon (macOS)
+- **OpenCL** - Intel GPUs (Linux, Windows)
+- **CPU** - Fallback for all platforms
+
+**Supported Distance Metrics:**
+- L2 (Euclidean), Cosine, Inner Product, L1 (Manhattan), Hamming, Jaccard
+
+See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
+
+# SQL queries (full DataFusion support with pgvector syntax)
+import hyperstreamdb as hdb
+session = hdb.Session()
+session.register("users", table)
+
+# Optional: Enable GPU acceleration for SQL queries
+ctx = hdb.GPUContext.auto_detect()
+hdb.set_global_gpu_context(ctx)
+
+# Simple SQL
+results = table.sql("SELECT * FROM t WHERE id > 100")
+
+# Vector similarity search with pgvector operators (GPU-accelerated)
+results = session.sql("""
+    SELECT id, content,
+           embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+    FROM documents
+    WHERE category = 'science'
+    ORDER BY distance
+    LIMIT 10
+""")
+
+# Joins (uses Index Nested Loop Join optimization)
+results = session.sql("""
+    SELECT u.name, o.amount
+    FROM users u
+    JOIN orders o ON u.id = o.user_id
+    WHERE u.category = 'premium'
+""")
+
+# Maintenance
+table.compact()
+table.expire_snapshots(retain_last=10)
+```
+
+## 📊 Real-World Testing Plan
+
+### Phase 1: Core Stability (Current)
+
+**Test Datasets:**
+- ✅ NYC Taxi (1.5B rows, ~200GB) - Scalar filtering
+- ✅ Synthetic Embeddings (10M vectors, 768-dim) - Vector search
+- 🔄 Wikipedia + Embeddings (100M docs) - Hybrid queries
+
+**Download Test Data:**
+```bash
+# NYC Taxi dataset
+./tests/data/download_nyc_taxi.sh
+
+# Generate synthetic embeddings
+python tests/data/generate_embeddings.py
+```
+
+**Run Benchmarks:**
+```bash
+# Rust benchmarks
+cargo bench
+
+# Integration tests
+python tests/integration/test_nyc_taxi.py
+```
+
+**Performance Targets:**
+- Ingest: >100K rows/sec ⏱️
+- Query (indexed): <100ms p99 ⏱️
+- Vector search: <50ms for k=10 on 10M vectors ⏱️
+- Compaction: <5min for 10GB ⏱️
+
+### Phase 2: Nessie Integration (Next)
+
+**Catalog Strategy:**
+- ✅ Use Nessie REST v2 (don't build custom catalog)
+- Implement Rust client for Iceberg REST Catalog API
+- Support Git-like branching for tables
+
+**Why Nessie?**
+- Iceberg-standard protocol
+- Multi-table transactions
+- Battle-tested (Netflix, Apple, Dremio)
+
+### Phase 3: Production Hardening
+
+- [ ] Schema evolution support
+- [ ] Partition evolution
+- [ ] Distributed locking (DynamoDB)
+- [ ] CLI tools (`hyperstream compact`, `vacuum`)
+- [ ] Prometheus metrics
+- [ ] Error handling & retries
+
+## 🏗️ Architecture
+
+### Overlay Indexing
+
+HyperStreamDB stores indexes as **sidecar files** alongside Parquet data:
+
+```
+s3://bucket/table/
+├── data/
+│   ├── segment_001.parquet          # Data file
+│   ├── segment_001.id.idx           # Scalar index (RoaringBitmap)
+│   └── segment_001.embedding.hnsw   # Vector index (HNSW)
+├── _manifest/
+│   ├── v1.json                      # Manifest (Iceberg-like)
+│   └── v2.json
+└── _metadata/
+    └── schema.json
+```
+
+### Manifest Format
+
+**Semantic Iceberg compatibility** (JSON encoding):
+
+```json
+{
+  "version": 2,
+  "timestamp_ms": 1705512000000,
+  "entries": [
+    {
+      "file_path": "segment_001.parquet",
+      "file_size_bytes": 104857600,
+      "record_count": 1000000,
+      "index_files": [
+        {
+          "file_path": "segment_001.id.idx",
+          "index_type": "scalar",
+          "column_name": "id"
+        },
+        {
+          "file_path": "segment_001.embedding.hnsw",
+          "index_type": "vector",
+          "column_name": "embedding"
+        }
+      ]
+    }
+  ],
+  "prev_version": 1
+}
+```
+
+## 🔌 Connectors
+
+### Spark
+```scala
+// Read
+val df = spark.read
+  .format("hyperstream")
+  .option("path", "s3://bucket/table")
+  .load()
+
+// Write
+df.write
+  .format("hyperstream")
+  .option("path", "s3://bucket/table")
+  .save()
+```
+
+### Trino
+```sql
+SELECT * FROM hyperstream.default.my_table
+WHERE id > 100;  -- Uses scalar index
+```
+
+### Python (Direct)
+```python
+# No Spark needed for local/notebook work
+import hyperstreamdb as hdb
+df = hdb.Table("s3://bucket/table").to_pandas()
+```
+
+## 🔨 Building Connectors
+
+The Spark and Trino connectors require building shaded "fat" JARs that bundle the native Rust core.
+
+### Matrix Build
+We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/4.0):
+```bash
+./build-connectors.sh
+```
+
+### Hardware Acceleration
+- **Standard**: Build with CPU + Intel GPU (OpenCL) support (default).
+- **CUDA**: Build for NVIDIA GPUs:
+  ```bash
+  ./build-connectors.sh --cuda
+  ```
+
+### Portable Toolchain
+The build script automatically downloads a project-local Maven and JDK 21 if they are missing from your system, ensuring a consistent build environment.
+
+### Artifacts
+Final JARs and ZIPs are collected in the `connector-artifacts/` directory.
+
+## 🧪 Development
+
+### Build & Test
+
+```bash
+# Build Rust library
+cargo build --release
+
+# Run tests
+cargo test
+
+# Run benchmarks
+cargo bench
+
+# Build Python bindings
+maturin develop
+
+# Python tests
+pytest tests/
+```
+
+### Project Structure
+
+```
+hyperstreamdb/
+├── src/
+│   ├── lib.rs              # Main library
+│   ├── segment.rs          # Hybrid segment writer
+│   ├── reader.rs           # Index-aware reader
+│   ├── manifest.rs         # Manifest management
+│   ├── compaction.rs       # Compaction engine
+│   ├── maintenance.rs      # Vacuum/GC
+│   ├── python_binding.rs   # PyO3 bindings
+│   └── storage.rs          # Multi-cloud storage
+├── spark-hyperstream/      # Spark connector (Java)
+├── trino-hyperstream/      # Trino connector (Java)
+├── tests/
+│   ├── data/               # Test datasets
+│   ├── integration/        # Integration tests
+│   └── benchmarks/         # Performance tests
+└── benches/                # Criterion benchmarks
+```
+
+## 📈 Roadmap
+
+### ✅ Completed
+- [x] Hybrid segment format (Parquet + indexes)
+- [x] Manifest management (Iceberg-like)
+- [x] Compaction engine
+- [x] Maintenance (expire_snapshots, remove_orphan_files)
+- [x] Python bindings (Pandas-compatible)
+- [x] Native SQL support (DataFusion integration)
+- [x] pgvector-compatible SQL operators and syntax
+- [x] Index Nested Loop Join optimization
+- [x] Boolean column indexing
+- [x] Multi-table JOIN support
+- [x] Real-world testing (NYC Taxi, Wikipedia, embeddings)
+- [x] Nessie catalog integration
+- [x] Iceberg V2 compliance (Sort Orders, Partition Evolution, Statistics)
+- [x] Iceberg V3 features (Row Lineage, Default Values, HyperLogLog NDV)
+- [x] Standard Iceberg API (`update_spec`, `replace_sort_order`, `rewrite_data_files`, `rollback_to_snapshot`)
+- [x] Python Vector Distance API with GPU acceleration
+- [x] Multi-backend GPU support (CUDA, ROCm, Metal, OpenCL)
+- [x] Sparse and binary vector operations
+
+### 🔄 In Progress
+- [ ] Spark/Trino connectors
+- [ ] Schema evolution
+- [ ] Partition evolution
+
+### 📋 Planned
+- [ ] Distributed locking
+- [ ] CLI tools
+- [ ] Prometheus metrics
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 📄 License
+
+MIT OR Apache-2.0
+
+## 🙏 Acknowledgments
+
+- **Apache Iceberg** - Inspiration for manifest design
+- **Apache Arrow** - Columnar format
+- **hnsw_rs** - Vector indexing
+- **RoaringBitmap** - Scalar indexing
+
+---
+
+**Built with ❤️ in Rust**

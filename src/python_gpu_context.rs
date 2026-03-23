@@ -1,0 +1,335 @@
+use pyo3::prelude::*;
+use crate::core::index::gpu::{ComputeContext, ComputeBackend};
+use std::sync::{Arc, Mutex};
+
+/// Performance statistics for GPU operations
+#[derive(Debug, Clone, Default)]
+pub struct GPUStats {
+    pub total_kernel_launches: u64,
+    pub total_gpu_time_ms: f64,
+    pub total_cpu_time_ms: f64,
+    pub total_vectors_processed: u64,
+    pub memory_transfers_mb: f64,
+}
+
+/// Python wrapper for ComputeContext with performance monitoring
+#[pyclass(name = "ComputeContext")]
+pub struct PyComputeContext {
+    context: ComputeContext,
+    stats: Arc<Mutex<GPUStats>>,
+}
+
+#[pymethods]
+impl PyComputeContext {
+    /// Detect and return the best available GPU backend
+    /// 
+    /// Automatically detects and selects the highest-priority GPU backend available
+    /// on the system. Priority order: CUDA > ROCm > MPS > Intel > CPU.
+    /// 
+    /// Returns
+    /// -------
+    /// ComputeContext
+    ///     Context configured with the highest-priority available backend
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> ctx = hdb.ComputeContext.auto_detect()
+    /// >>> print(f"Using backend: {ctx.backend}")
+    /// Using backend: cuda
+    #[staticmethod]
+    fn auto_detect() -> Self {
+        let context = ComputeContext::auto_detect();
+        Self {
+            context,
+            stats: Arc::new(Mutex::new(GPUStats::default())),
+        }
+    }
+
+    /// Create context with specific backend
+    /// 
+    /// Creates a ComputeContext configured to use a specific GPU backend and device.
+    /// This allows explicit control over which GPU hardware is used for computations.
+    /// 
+    /// Parameters
+    /// ----------
+    /// backend : str
+    ///     Backend name: 'cuda', 'rocm', 'mps', 'intel', or 'cpu'
+    /// device_id : int, optional
+    ///     GPU device ID (default: 0). Use -1 for CPU backend.
+    /// 
+    /// Returns
+    /// -------
+    /// ComputeContext
+    ///     Context configured with the specified backend
+    /// 
+    /// Raises
+    /// ------
+    /// RuntimeError
+    ///     If the requested backend is not available on this system
+    /// ValueError
+    ///     If an unknown backend name is provided
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> # Use CUDA GPU 0
+    /// >>> ctx = hdb.ComputeContext('cuda', device_id=0)
+    /// >>> print(ctx.backend)
+    /// cuda
+    /// 
+    /// >>> # Force CPU computation
+    /// >>> ctx_cpu = hdb.ComputeContext('cpu')
+    /// >>> print(ctx_cpu.backend)
+    /// cpu
+    #[new]
+    #[pyo3(signature = (backend, device_id=0))]
+    fn new(backend: &str, device_id: i32) -> PyResult<Self> {
+        let backend_enum = match backend.to_lowercase().as_str() {
+            "cpu" => ComputeBackend::Cpu,
+            "cuda" => {
+                #[cfg(feature = "cuda")]
+                {
+                    ComputeBackend::Cuda
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Backend 'cuda' not available. Available backends: {:?}", 
+                            Self::list_available_backends_internal())
+                    ));
+                }
+            }
+            "rocm" => {
+                #[cfg(feature = "rocm")]
+                {
+                    ComputeBackend::Rocm
+                }
+                #[cfg(not(feature = "rocm"))]
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Backend 'rocm' not available. Available backends: {:?}", 
+                            Self::list_available_backends_internal())
+                    ));
+                }
+            }
+            "mps" => {
+                #[cfg(feature = "mps")]
+                {
+                    ComputeBackend::Mps
+                }
+                #[cfg(not(feature = "mps"))]
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Backend 'mps' not available. Available backends: {:?}", 
+                            Self::list_available_backends_internal())
+                    ));
+                }
+            }
+            "intel" => {
+                #[cfg(feature = "intel_gpu")]
+                {
+                    ComputeBackend::Intel
+                }
+                #[cfg(not(feature = "intel_gpu"))]
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        format!("Backend 'intel' not available. Available backends: {:?}", 
+                            Self::list_available_backends_internal())
+                    ));
+                }
+            }
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    format!("Unknown backend '{}'. Valid backends: 'cuda', 'rocm', 'mps', 'intel', 'cpu'", backend)
+                ));
+            }
+        };
+
+        Ok(Self {
+            context: ComputeContext {
+                backend: backend_enum,
+                device_id,
+            },
+            stats: Arc::new(Mutex::new(GPUStats::default())),
+        })
+    }
+
+    /// Get current backend name
+    /// 
+    /// Returns
+    /// -------
+    /// str
+    ///     Backend name: 'cuda', 'rocm', 'mps', 'intel', or 'cpu'
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> ctx = hdb.ComputeContext.auto_detect()
+    /// >>> print(ctx.backend)
+    /// cuda
+    #[getter]
+    fn backend(&self) -> String {
+        match self.context.backend {
+            ComputeBackend::Cpu => "cpu".to_string(),
+            ComputeBackend::Cuda => "cuda".to_string(),
+            ComputeBackend::Rocm => "rocm".to_string(),
+            ComputeBackend::Mps => "mps".to_string(),
+            ComputeBackend::Intel => "intel".to_string(),
+        }
+    }
+
+    /// Get current device ID
+    /// 
+    /// Returns
+    /// -------
+    /// int
+    ///     Device ID (0 for first GPU, 1 for second GPU, etc., -1 for CPU)
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> ctx = hdb.ComputeContext('cuda', device_id=1)
+    /// >>> print(ctx.device_id)
+    /// 1
+    #[getter]
+    fn device_id(&self) -> i32 {
+        self.context.device_id
+    }
+
+    /// List all available GPU backends on this system
+    /// 
+    /// Queries the system to determine which GPU backends are available and can be used
+    /// for acceleration. The CPU backend is always available as a fallback.
+    /// 
+    /// Returns
+    /// -------
+    /// list of str
+    ///     List of available backend names (e.g., ['cuda', 'cpu'])
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> backends = hdb.ComputeContext.list_available_backends()
+    /// >>> print(backends)
+    /// ['cuda', 'cpu']
+    /// >>> 
+    /// >>> # Check if CUDA is available
+    /// >>> if 'cuda' in backends:
+    /// ...     ctx = hdb.ComputeContext('cuda')
+    /// ... else:
+    /// ...     ctx = hdb.ComputeContext('cpu')
+    #[staticmethod]
+    fn list_available_backends() -> Vec<String> {
+        Self::list_available_backends_internal()
+    }
+
+    /// Get performance statistics
+    /// 
+    /// Returns performance metrics collected during GPU operations. These statistics
+    /// help monitor GPU utilization and identify performance bottlenecks.
+    /// 
+    /// Returns
+    /// -------
+    /// dict
+    ///     Dictionary with performance metrics:
+    ///     
+    ///     - total_kernel_launches : int
+    ///         Number of GPU kernel launches
+    ///     - total_gpu_time_ms : float
+    ///         Total GPU computation time in milliseconds
+    ///     - total_cpu_time_ms : float
+    ///         Total CPU computation time in milliseconds
+    ///     - total_vectors_processed : int
+    ///         Total number of vectors processed
+    ///     - memory_transfers_mb : float
+    ///         Total memory transferred to/from GPU in megabytes
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> import numpy as np
+    /// >>> ctx = hdb.ComputeContext.auto_detect()
+    /// >>> 
+    /// >>> # Perform some computations
+    /// >>> query = np.random.rand(128).astype(np.float32)
+    /// >>> vectors = np.random.rand(10000, 128).astype(np.float32)
+    /// >>> distances = hdb.l2_batch(query, vectors, context=ctx)
+    /// >>> 
+    /// >>> # Check performance stats
+    /// >>> stats = ctx.get_stats()
+    /// >>> print(f"GPU time: {stats['total_gpu_time_ms']:.2f}ms")
+    /// GPU time: 5.23ms
+    /// >>> print(f"Vectors processed: {stats['total_vectors_processed']}")
+    /// Vectors processed: 10000
+    fn get_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let stats = self.stats.lock().unwrap();
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("total_kernel_launches", stats.total_kernel_launches)?;
+        dict.set_item("total_gpu_time_ms", stats.total_gpu_time_ms)?;
+        dict.set_item("total_cpu_time_ms", stats.total_cpu_time_ms)?;
+        dict.set_item("total_vectors_processed", stats.total_vectors_processed)?;
+        dict.set_item("memory_transfers_mb", stats.memory_transfers_mb)?;
+        Ok(dict.into())
+    }
+
+    /// Reset performance counters
+    /// 
+    /// Resets all performance statistics to zero. Useful for measuring performance
+    /// of specific operations or time periods.
+    /// 
+    /// Examples
+    /// --------
+    /// >>> import hyperstreamdb as hdb
+    /// >>> ctx = hdb.ComputeContext.auto_detect()
+    /// >>> 
+    /// >>> # Perform some computations
+    /// >>> # ... operations ...
+    /// >>> 
+    /// >>> # Reset counters before measuring specific operation
+    /// >>> ctx.reset_stats()
+    /// >>> # ... perform operation to measure ...
+    /// >>> stats = ctx.get_stats()
+    fn reset_stats(&self) {
+        let mut stats = self.stats.lock().unwrap();
+        *stats = GPUStats::default();
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ComputeContext(backend='{}', device_id={})", self.backend(), self.device_id())
+    }
+}
+
+impl PyComputeContext {
+    /// Internal helper to list available backends
+    fn list_available_backends_internal() -> Vec<String> {
+        let mut backends = Vec::new();
+        
+        #[cfg(feature = "cuda")]
+        backends.push("cuda".to_string());
+        
+        #[cfg(feature = "rocm")]
+        backends.push("rocm".to_string());
+        
+        #[cfg(feature = "mps")]
+        backends.push("mps".to_string());
+        
+        #[cfg(feature = "intel_gpu")]
+        backends.push("intel".to_string());
+        
+        // CPU is always available
+        backends.push("cpu".to_string());
+        
+        backends
+    }
+
+    /// Get the underlying Rust ComputeContext
+    pub fn get_context(&self) -> &ComputeContext {
+        &self.context
+    }
+
+    /// Get the stats tracker for recording performance metrics
+    pub fn get_stats_tracker(&self) -> Arc<Mutex<GPUStats>> {
+        self.stats.clone()
+    }
+}

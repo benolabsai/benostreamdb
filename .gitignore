@@ -1,0 +1,88 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.venv_iceberg/
+venv/*
+venv_verify/
+test_venv/
+!venv/requirements.txt
+!venv/.gitkeep
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+.metals/
+.continue/
+
+# Compiled Python extension (built by maturin develop)
+python/**/*.so
+python/**/*.pyd
+
+# HyperStream Data
+*.parquet
+*.idx
+*.hnsw.graph
+*.hnsw.data
+*.del
+_manifest/
+_metadata/
+
+# Local toolchain downloads (Maven/JDK downloaded by build-connectors.sh)
+.java/
+.maven/
+
+# Compiled native binaries
+fuzz_murmur3
+debug_murmur3
+test_pgvector_sql_integration
+
+# Test database directories
+test_ingestion_perf_db/
+test_lancedb_ingestion_perf_db/
+connector-artifacts/
+dist/
+
+# Build and test logs
+*.log
+build_errors*.txt
+check_output.txt
+rust_test_output*.log
+python_test_output*.log
+python_feature_test_output*.log
+test_output*.txt
+lancedb_verification.log
+verification.log
+compliance_run.log
+benchmark_output.log
+build_output.log
+benchmarks/competitive/venv/
+trino-hyperstream/src/main/resources/libhyperstreamdb.so
+spark-hyperstream/src/main/resources/libhyperstreamdb.so
+
+# Internal markdown docs (not for public release)
+COMPETITIVE*.md
+COMPETITOR*.md
+COMPLIANCE*.md
+ICEBERG_COMPLIANCE_TASK.md
+IMPLEMENT_FAST_FILTERING.md
+MARKET_REALITY_CHECK.md
+PERFORMANCE_GAP_ANALYSIS.md
+PERFORMANCE_OPTIMIZATION_RAG.md
+PLATFORM_TESTING_SUMMARY.md
+RAG_KILLER_FEATURE.md
+ROADMAP.md
+VISION.md
+GETTING_STARTED.md
+design_*.md
+docs/MONETIZATION_ARCHITECTURE.md
+docs/IN_MEMORY_COMPONENT_ANALYSIS.md
+docs/SUMMARY.md
+benchmarks/competitive/*.md
+benchmarks/competitive/benchmark_results/*.md

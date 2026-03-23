@@ -1,0 +1,10 @@
+[book]
+authors = ["HyperStream Team"]
+language = "en"
+multilingual = false
+src = "docs"
+title = "HyperStreamDB Documentation"
+
+[output.html]
+git-repository-url = "https://github.com/hyperstreamdb/hyperstream"
+edit-url-template = "https://github.com/hyperstreamdb/hyperstream/edit/main/{path}"

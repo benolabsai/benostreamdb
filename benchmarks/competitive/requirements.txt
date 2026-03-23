@@ -1,0 +1,19 @@
+# Core dependencies
+numpy>=1.24.0
+pandas>=2.0.0
+
+# HyperStreamDB (local)
+# Install with: pip install -e ../../
+
+# Competitors (optional - install what you want to benchmark)
+pymilvus>=2.3.0  # Milvus vector database
+weaviate-client>=3.25.0  # Weaviate vector database
+lancedb>=0.3.0  # LanceDB (vector + data lake)
+duckdb>=0.9.0  # DuckDB (data lake baseline)
+
+# Visualization (optional)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Reporting
+tabulate>=0.9.0  # For markdown tables

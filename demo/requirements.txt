@@ -1,0 +1,30 @@
+# Install hyperstreamdb from GitHub:
+#   git clone https://github.com/rla3rd/hyperstreamdb
+#   cd hyperstreamdb
+#   pip install maturin && maturin develop
+#
+# Then install these demo deps:
+#   pip install -r demo/requirements.txt
+
+jupyterlab>=4.0.0
+ipykernel>=6.0.0
+
+# Data loading
+datasets>=2.18.0
+
+# Embeddings (local, no API key required)
+sentence-transformers>=2.6.0
+
+# Data wrangling
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# Visualisation (used in Notebook 1 for result display)
+matplotlib>=3.8.0
+
+# HTTP client for Ollama (Notebook 2)
+requests>=2.31.0
+
+# PyIceberg — read HyperStreamDB tables as standard Iceberg (Notebook 1, Section 7)
+pyiceberg[sql-sqlite]>=0.7.0

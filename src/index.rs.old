@@ -1,0 +1,11 @@
+// use anyhow::Result;
+
+pub struct InvertedIndex {
+    // Wrapper around RoaringBitmap
+}
+
+impl InvertedIndex {
+    pub fn new() -> Self {
+        Self {}
+    }
+}

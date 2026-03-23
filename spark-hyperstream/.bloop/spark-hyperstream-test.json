@@ -1,0 +1,2872 @@
+{
+    "version": "1.4.0",
+    "project": {
+        "name": "spark-hyperstream-test",
+        "directory": "/home/ralbright/projects/hyperstreamdb/spark-hyperstream",
+        "workspaceDir": "/home/ralbright/projects/hyperstreamdb/spark-hyperstream",
+        "sources": [
+            
+        ],
+        "dependencies": [
+            "spark-hyperstream"
+        ],
+        "classpath": [
+            "/home/ralbright/projects/hyperstreamdb/spark-hyperstream/target/test-classes",
+            "/home/ralbright/projects/hyperstreamdb/spark-hyperstream/target/classes",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-sql_2.13/4.0.0-preview1/spark-sql_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/rocksdb/rocksdbjni/8.11.4/rocksdbjni-8.11.4.jar",
+            "/home/ralbright/.m2/repository/com/univocity/univocity-parsers/2.9.1/univocity-parsers-2.9.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-sketch_2.13/4.0.0-preview1/spark-sketch_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-core_2.13/4.0.0-preview1/spark-core_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/avro/avro/1.11.3/avro-1.11.3.jar",
+            "/home/ralbright/.m2/repository/org/apache/avro/avro-mapred/1.11.3/avro-mapred-1.11.3.jar",
+            "/home/ralbright/.m2/repository/org/apache/avro/avro-ipc/1.11.3/avro-ipc-1.11.3.jar",
+            "/home/ralbright/.m2/repository/org/tukaani/xz/1.9/xz-1.9.jar",
+            "/home/ralbright/.m2/repository/com/twitter/chill_2.13/0.10.0/chill_2.13-0.10.0.jar",
+            "/home/ralbright/.m2/repository/com/esotericsoftware/kryo-shaded/4.0.2/kryo-shaded-4.0.2.jar",
+            "/home/ralbright/.m2/repository/com/esotericsoftware/minlog/1.3.0/minlog-1.3.0.jar",
+            "/home/ralbright/.m2/repository/org/objenesis/objenesis/2.5.1/objenesis-2.5.1.jar",
+            "/home/ralbright/.m2/repository/com/twitter/chill-java/0.10.0/chill-java-0.10.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/hadoop/hadoop-client-api/3.4.0/hadoop-client-api-3.4.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/hadoop/hadoop-client-runtime/3.4.0/hadoop-client-runtime-3.4.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-launcher_2.13/4.0.0-preview1/spark-launcher_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-kvstore_2.13/4.0.0-preview1/spark-kvstore_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/fusesource/leveldbjni/leveldbjni-all/1.8/leveldbjni-all-1.8.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-network-common_2.13/4.0.0-preview1/spark-network-common_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-linux-x86_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-windows-x86_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-linux-aarch_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-osx-aarch_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-osx-x86_64.jar",
+            "/home/ralbright/.m2/repository/com/google/crypto/tink/tink/1.13.0/tink-1.13.0.jar",
+            "/home/ralbright/.m2/repository/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar",
+            "/home/ralbright/.m2/repository/com/google/protobuf/protobuf-java/3.25.1/protobuf-java-3.25.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-network-shuffle_2.13/4.0.0-preview1/spark-network-shuffle_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-unsafe_2.13/4.0.0-preview1/spark-unsafe_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-common-utils_2.13/4.0.0-preview1/spark-common-utils_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/ivy/ivy/2.5.2/ivy-2.5.2.jar",
+            "/home/ralbright/.m2/repository/oro/oro/2.0.8/oro-2.0.8.jar",
+            "/home/ralbright/.m2/repository/org/slf4j/jul-to-slf4j/2.0.13/jul-to-slf4j-2.0.13.jar",
+            "/home/ralbright/.m2/repository/org/slf4j/jcl-over-slf4j/2.0.13/jcl-over-slf4j-2.0.13.jar",
+            "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-slf4j2-impl/2.22.1/log4j-slf4j2-impl-2.22.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-api/2.22.1/log4j-api-2.22.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-core/2.22.1/log4j-core-2.22.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-1.2-api/2.22.1/log4j-1.2-api-2.22.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-layout-template-json/2.22.1/log4j-layout-template-json-2.22.1.jar",
+            "/home/ralbright/.m2/repository/javax/activation/activation/1.1.1/activation-1.1.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/curator/curator-recipes/5.6.0/curator-recipes-5.6.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/curator/curator-framework/5.6.0/curator-framework-5.6.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/curator/curator-client/5.6.0/curator-client-5.6.0.jar",
+            "/home/ralbright/.m2/repository/com/google/guava/guava/32.0.0-jre/guava-32.0.0-jre.jar",
+            "/home/ralbright/.m2/repository/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar",
+            "/home/ralbright/.m2/repository/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar",
+            "/home/ralbright/.m2/repository/org/checkerframework/checker-qual/3.33.0/checker-qual-3.33.0.jar",
+            "/home/ralbright/.m2/repository/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0.jar",
+            "/home/ralbright/.m2/repository/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8.jar",
+            "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper/3.9.2/zookeeper-3.9.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper-jute/3.9.2/zookeeper-jute-3.9.2.jar",
+            "/home/ralbright/.m2/repository/javax/servlet/javax.servlet-api/4.0.1/javax.servlet-api-4.0.1.jar",
+            "/home/ralbright/.m2/repository/jakarta/servlet/jakarta.servlet-api/5.0.0/jakarta.servlet-api-5.0.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-compress/1.26.2/commons-compress-1.26.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-text/1.12.0/commons-text-1.12.0.jar",
+            "/home/ralbright/.m2/repository/commons-io/commons-io/2.16.1/commons-io-2.16.1.jar",
+            "/home/ralbright/.m2/repository/commons-collections/commons-collections/3.2.2/commons-collections-3.2.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-collections4/4.4/commons-collections4-4.4.jar",
+            "/home/ralbright/.m2/repository/com/google/code/findbugs/jsr305/3.0.0/jsr305-3.0.0.jar",
+            "/home/ralbright/.m2/repository/com/ning/compress-lzf/1.1.2/compress-lzf-1.1.2.jar",
+            "/home/ralbright/.m2/repository/org/xerial/snappy/snappy-java/1.1.10.5/snappy-java-1.1.10.5.jar",
+            "/home/ralbright/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar",
+            "/home/ralbright/.m2/repository/com/github/luben/zstd-jni/1.5.6-3/zstd-jni-1.5.6-3.jar",
+            "/home/ralbright/.m2/repository/org/roaringbitmap/RoaringBitmap/1.0.6/RoaringBitmap-1.0.6.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-xml_2.13/2.2.0/scala-xml_2.13-2.2.0.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/scala-library/2.13.14/scala-library-2.13.14.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/scala-reflect/2.13.14/scala-reflect-2.13.14.jar",
+            "/home/ralbright/.m2/repository/org/json4s/json4s-jackson_2.13/4.0.7/json4s-jackson_2.13-4.0.7.jar",
+            "/home/ralbright/.m2/repository/org/json4s/json4s-core_2.13/4.0.7/json4s-core_2.13-4.0.7.jar",
+            "/home/ralbright/.m2/repository/org/json4s/json4s-ast_2.13/4.0.7/json4s-ast_2.13-4.0.7.jar",
+            "/home/ralbright/.m2/repository/org/json4s/json4s-scalap_2.13/4.0.7/json4s-scalap_2.13-4.0.7.jar",
+            "/home/ralbright/.m2/repository/org/json4s/json4s-jackson-core_2.13/4.0.7/json4s-jackson-core_2.13-4.0.7.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-client/3.0.12/jersey-client-3.0.12.jar",
+            "/home/ralbright/.m2/repository/jakarta/ws/rs/jakarta.ws.rs-api/3.0.0/jakarta.ws.rs-api-3.0.0.jar",
+            "/home/ralbright/.m2/repository/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-common/3.0.12/jersey-common-3.0.12.jar",
+            "/home/ralbright/.m2/repository/jakarta/annotation/jakarta.annotation-api/2.0.0/jakarta.annotation-api-2.0.0.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/hk2/osgi-resource-locator/1.0.3/osgi-resource-locator-1.0.3.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-server/3.0.12/jersey-server-3.0.12.jar",
+            "/home/ralbright/.m2/repository/jakarta/validation/jakarta.validation-api/3.0.2/jakarta.validation-api-3.0.2.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet/3.0.12/jersey-container-servlet-3.0.12.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet-core/3.0.12/jersey-container-servlet-core-3.0.12.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jersey/inject/jersey-hk2/3.0.12/jersey-hk2-3.0.12.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-locator/3.0.3/hk2-locator-3.0.3.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/hk2/external/aopalliance-repackaged/3.0.3/aopalliance-repackaged-3.0.3.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-api/3.0.3/hk2-api-3.0.3.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-utils/3.0.3/hk2-utils-3.0.3.jar",
+            "/home/ralbright/.m2/repository/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-all/4.1.110.Final/netty-all-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-codec/4.1.110.Final/netty-codec-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-codec-http/4.1.110.Final/netty-codec-http-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-codec-http2/4.1.110.Final/netty-codec-http2-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-codec-socks/4.1.110.Final/netty-codec-socks-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-handler/4.1.110.Final/netty-handler-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.110.Final/netty-transport-native-unix-common-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-handler-proxy/4.1.110.Final/netty-handler-proxy-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-resolver/4.1.110.Final/netty-resolver-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport/4.1.110.Final/netty-transport-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-epoll/4.1.110.Final/netty-transport-classes-epoll-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-kqueue/4.1.110.Final/netty-transport-classes-kqueue-4.1.110.Final.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-riscv64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-x86_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-aarch_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-kqueue/4.1.110.Final/netty-transport-native-kqueue-4.1.110.Final-osx-aarch_64.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-transport-native-kqueue/4.1.110.Final/netty-transport-native-kqueue-4.1.110.Final-osx-x86_64.jar",
+            "/home/ralbright/.m2/repository/com/clearspring/analytics/stream/2.9.6/stream-2.9.6.jar",
+            "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-core/4.2.25/metrics-core-4.2.25.jar",
+            "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jvm/4.2.25/metrics-jvm-4.2.25.jar",
+            "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-json/4.2.25/metrics-json-4.2.25.jar",
+            "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-graphite/4.2.25/metrics-graphite-4.2.25.jar",
+            "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jmx/4.2.25/metrics-jmx-4.2.25.jar",
+            "/home/ralbright/.m2/repository/com/fasterxml/jackson/module/jackson-module-scala_2.13/2.17.1/jackson-module-scala_2.13-2.17.1.jar",
+            "/home/ralbright/.m2/repository/com/thoughtworks/paranamer/paranamer/2.8/paranamer-2.8.jar",
+            "/home/ralbright/.m2/repository/net/razorvine/pickle/1.3/pickle-1.3.jar",
+            "/home/ralbright/.m2/repository/net/sf/py4j/py4j/0.10.9.7/py4j-0.10.9.7.jar",
+            "/home/ralbright/.m2/repository/org/apache/commons/commons-crypto/1.1.0/commons-crypto-1.1.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-catalyst_2.13/4.0.0-preview1/spark-catalyst_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-sql-api_2.13/4.0.0-preview1/spark-sql-api_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parser-combinators_2.13/2.4.0/scala-parser-combinators_2.13-2.4.0.jar",
+            "/home/ralbright/.m2/repository/org/antlr/antlr4-runtime/4.13.1/antlr4-runtime-4.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-variant_2.13/4.0.0-preview1/spark-variant_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar",
+            "/home/ralbright/.m2/repository/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar",
+            "/home/ralbright/.m2/repository/org/glassfish/jaxb/txw2/3.0.2/txw2-3.0.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-java/6.0.0/datasketches-java-6.0.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-memory/2.2.0/datasketches-memory-2.2.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/spark/spark-tags_2.13/4.0.0-preview1/spark-tags_2.13-4.0.0-preview1.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parallel-collections_2.13/1.0.4/scala-parallel-collections_2.13-1.0.4.jar",
+            "/home/ralbright/.m2/repository/org/apache/orc/orc-format/1.0.0/orc-format-1.0.0-shaded-protobuf.jar",
+            "/home/ralbright/.m2/repository/org/apache/orc/orc-core/2.0.1/orc-core-2.0.1-shaded-protobuf.jar",
+            "/home/ralbright/.m2/repository/org/apache/orc/orc-shims/2.0.1/orc-shims-2.0.1.jar",
+            "/home/ralbright/.m2/repository/io/airlift/aircompressor/0.26/aircompressor-0.26.jar",
+            "/home/ralbright/.m2/repository/org/jetbrains/annotations/17.0.0/annotations-17.0.0.jar",
+            "/home/ralbright/.m2/repository/org/threeten/threeten-extra/1.7.1/threeten-extra-1.7.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/orc/orc-mapreduce/2.0.1/orc-mapreduce-2.0.1-shaded-protobuf.jar",
+            "/home/ralbright/.m2/repository/org/apache/hive/hive-storage-api/2.8.1/hive-storage-api-2.8.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-column/1.13.1/parquet-column-1.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-common/1.13.1/parquet-common-1.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-encoding/1.13.1/parquet-encoding-1.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/yetus/audience-annotations/0.13.0/audience-annotations-0.13.0.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-hadoop/1.13.1/parquet-hadoop-1.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-format-structures/1.13.1/parquet-format-structures-1.13.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/parquet/parquet-jackson/1.13.1/parquet-jackson-1.13.1.jar",
+            "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.17.1/jackson-databind-2.17.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/ws/xmlschema/xmlschema-core/2.3.1/xmlschema-core-2.3.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/xbean/xbean-asm9-shaded/4.25/xbean-asm9-shaded-4.25.jar",
+            "/home/ralbright/.m2/repository/com/ibm/icu/icu4j/72.1/icu4j-72.1.jar",
+            "/home/ralbright/.m2/repository/org/apache/arrow/arrow-vector/14.0.2/arrow-vector-14.0.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/arrow/arrow-format/14.0.2/arrow-format-14.0.2.jar",
+            "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-core/14.0.2/arrow-memory-core-14.0.2.jar",
+            "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.15.1/jackson-core-2.15.1.jar",
+            "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.15.1/jackson-annotations-2.15.1.jar",
+            "/home/ralbright/.m2/repository/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.15.1/jackson-datatype-jsr310-2.15.1.jar",
+            "/home/ralbright/.m2/repository/commons-codec/commons-codec/1.15/commons-codec-1.15.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-common/4.1.96.Final/netty-common-4.1.96.Final.jar",
+            "/home/ralbright/.m2/repository/com/google/flatbuffers/flatbuffers-java/1.12.0/flatbuffers-java-1.12.0.jar",
+            "/home/ralbright/.m2/repository/org/slf4j/slf4j-api/1.7.25/slf4j-api-1.7.25.jar",
+            "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-netty/14.0.2/arrow-memory-netty-14.0.2.jar",
+            "/home/ralbright/.m2/repository/io/netty/netty-buffer/4.1.96.Final/netty-buffer-4.1.96.Final.jar",
+            "/home/ralbright/.m2/repository/org/apache/arrow/arrow-c-data/14.0.2/arrow-c-data-14.0.2.jar",
+            "/home/ralbright/.m2/repository/net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar",
+            "/home/ralbright/.m2/repository/org/scala-lang/scala-library/2.13.14/scala-library-2.13.14.jar"
+        ],
+        "out": "/home/ralbright/projects/hyperstreamdb/spark-hyperstream/target",
+        "classesDir": "/home/ralbright/projects/hyperstreamdb/spark-hyperstream/target/test-classes",
+        "resources": [
+            "/home/ralbright/projects/hyperstreamdb/spark-hyperstream/src/test/resources"
+        ],
+        "scala": {
+            "organization": "org.scala-lang",
+            "name": "scala-compiler",
+            "version": "2.13.14",
+            "options": [
+                
+            ],
+            "jars": [
+                "/home/ralbright/.m2/repository/org/scala-lang/scala-reflect/2.13.14/scala-reflect-2.13.14.jar",
+                "/home/ralbright/.m2/repository/org/jline/jline/3.25.1/jline-3.25.1.jar",
+                "/home/ralbright/.m2/repository/net/java/dev/jna/jna/5.14.0/jna-5.14.0.jar",
+                "/home/ralbright/.m2/repository/io/github/java-diff-utils/java-diff-utils/4.12/java-diff-utils-4.12.jar",
+                "/home/ralbright/.m2/repository/org/scala-lang/scala-compiler/2.13.14/scala-compiler-2.13.14.jar",
+                "/home/ralbright/.m2/repository/org/scala-lang/scala-library/2.13.14/scala-library-2.13.14.jar"
+            ],
+            "setup": {
+                "order": "java->scala",
+                "addLibraryToBootClasspath": true,
+                "addCompilerToClasspath": false,
+                "addExtraJarsToClasspath": false,
+                "manageBootClasspath": true,
+                "filterLibraryFromClasspath": true
+            }
+        },
+        "java": {
+            "options": [
+                "-g",
+                "-encoding",
+                "UTF-8"
+            ]
+        },
+        "test": {
+            "frameworks": [
+                {
+                    "names": [
+                        "com.novocode.junit.JUnitFramework"
+                    ]
+                },
+                {
+                    "names": [
+                        "org.scalatest.tools.Framework",
+                        "org.scalatest.tools.ScalaTestFramework"
+                    ]
+                },
+                {
+                    "names": [
+                        "org.scalacheck.ScalaCheckFramework"
+                    ]
+                },
+                {
+                    "names": [
+                        "org.specs.runner.SpecsFramework",
+                        "org.specs2.runner.Specs2Framework",
+                        "org.specs2.runner.SpecsFramework"
+                    ]
+                },
+                {
+                    "names": [
+                        "utest.runner.Framework"
+                    ]
+                },
+                {
+                    "names": [
+                        "munit.Framework"
+                    ]
+                },
+                {
+                    "names": [
+                        "mill.testng.TestNGFramework"
+                    ]
+                }
+            ],
+            "options": {
+                "excludes": [
+                    
+                ],
+                "arguments": [
+                    {
+                        "args": [
+                            "-v",
+                            "-a"
+                        ],
+                        "framework": {
+                            "names": [
+                                "com.novocode.junit.JUnitFramework"
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "platform": {
+            "name": "jvm",
+            "config": {
+                "home": "/usr/lib/jvm/java-17-openjdk-amd64",
+                "options": [
+                    
+                ]
+            },
+            "mainClass": [
+                
+            ]
+        },
+        "resolution": {
+            "modules": [
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-math3",
+                    "version": "3.6.1",
+                    "artifacts": [
+                        {
+                            "name": "commons-math3",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1.jar"
+                        },
+                        {
+                            "name": "commons-math3",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-math3/3.6.1/commons-math3-3.6.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.ning",
+                    "name": "compress-lzf",
+                    "version": "1.1.2",
+                    "artifacts": [
+                        {
+                            "name": "compress-lzf",
+                            "path": "/home/ralbright/.m2/repository/com/ning/compress-lzf/1.1.2/compress-lzf-1.1.2.jar"
+                        },
+                        {
+                            "name": "compress-lzf",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/ning/compress-lzf/1.1.2/compress-lzf-1.1.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-lang3",
+                    "version": "3.14.0",
+                    "artifacts": [
+                        {
+                            "name": "commons-lang3",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
+                        },
+                        {
+                            "name": "commons-lang3",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-text",
+                    "version": "1.12.0",
+                    "artifacts": [
+                        {
+                            "name": "commons-text",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-text/1.12.0/commons-text-1.12.0.jar"
+                        },
+                        {
+                            "name": "commons-text",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-text/1.12.0/commons-text-1.12.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-kqueue",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-kqueue",
+                            "classifier": "osx-aarch_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-kqueue/4.1.110.Final/netty-transport-native-kqueue-4.1.110.Final-osx-aarch_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-epoll",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-epoll",
+                            "classifier": "linux-x86_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-x86_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-launcher_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-launcher_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-launcher_2.13/4.0.0-preview1/spark-launcher_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-launcher_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-launcher_2.13/4.0.0-preview1/spark-launcher_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.json4s",
+                    "name": "json4s-core_2.13",
+                    "version": "4.0.7",
+                    "artifacts": [
+                        {
+                            "name": "json4s-core_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-core_2.13/4.0.7/json4s-core_2.13-4.0.7.jar"
+                        },
+                        {
+                            "name": "json4s-core_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-core_2.13/4.0.7/json4s-core_2.13-4.0.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.rocksdb",
+                    "name": "rocksdbjni",
+                    "version": "8.11.4",
+                    "artifacts": [
+                        {
+                            "name": "rocksdbjni",
+                            "path": "/home/ralbright/.m2/repository/org/rocksdb/rocksdbjni/8.11.4/rocksdbjni-8.11.4.jar"
+                        },
+                        {
+                            "name": "rocksdbjni",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/rocksdb/rocksdbjni/8.11.4/rocksdbjni-8.11.4-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.airlift",
+                    "name": "aircompressor",
+                    "version": "0.26",
+                    "artifacts": [
+                        {
+                            "name": "aircompressor",
+                            "path": "/home/ralbright/.m2/repository/io/airlift/aircompressor/0.26/aircompressor-0.26.jar"
+                        },
+                        {
+                            "name": "aircompressor",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/airlift/aircompressor/0.26/aircompressor-0.26-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.code.gson",
+                    "name": "gson",
+                    "version": "2.10.1",
+                    "artifacts": [
+                        {
+                            "name": "gson",
+                            "path": "/home/ralbright/.m2/repository/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar"
+                        },
+                        {
+                            "name": "gson",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/code/gson/gson/2.10.1/gson-2.10.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "net.java.dev.jna",
+                    "name": "jna",
+                    "version": "5.13.0",
+                    "artifacts": [
+                        {
+                            "name": "jna",
+                            "path": "/home/ralbright/.m2/repository/net/java/dev/jna/jna/5.13.0/jna-5.13.0.jar"
+                        },
+                        {
+                            "name": "jna",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/net/java/dev/jna/jna/5.13.0/jna-5.13.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.jetbrains",
+                    "name": "annotations",
+                    "version": "17.0.0",
+                    "artifacts": [
+                        {
+                            "name": "annotations",
+                            "path": "/home/ralbright/.m2/repository/org/jetbrains/annotations/17.0.0/annotations-17.0.0.jar"
+                        },
+                        {
+                            "name": "annotations",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/jetbrains/annotations/17.0.0/annotations-17.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-sql-api_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-sql-api_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sql-api_2.13/4.0.0-preview1/spark-sql-api_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-sql-api_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sql-api_2.13/4.0.0-preview1/spark-sql-api_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-kvstore_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-kvstore_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-kvstore_2.13/4.0.0-preview1/spark-kvstore_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-kvstore_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-kvstore_2.13/4.0.0-preview1/spark-kvstore_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-boringssl-static",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-boringssl-static",
+                            "classifier": "linux-aarch_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-linux-aarch_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.guava",
+                    "name": "listenablefuture",
+                    "version": "9999.0-empty-to-avoid-conflict-with-guava",
+                    "artifacts": [
+                        {
+                            "name": "listenablefuture",
+                            "path": "/home/ralbright/.m2/repository/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.arrow",
+                    "name": "arrow-memory-netty",
+                    "version": "14.0.2",
+                    "artifacts": [
+                        {
+                            "name": "arrow-memory-netty",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-netty/14.0.2/arrow-memory-netty-14.0.2.jar"
+                        },
+                        {
+                            "name": "arrow-memory-netty",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-netty/14.0.2/arrow-memory-netty-14.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-common-utils_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-common-utils_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-common-utils_2.13/4.0.0-preview1/spark-common-utils_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-common-utils_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-common-utils_2.13/4.0.0-preview1/spark-common-utils_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-classes-kqueue",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-classes-kqueue",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-kqueue/4.1.110.Final/netty-transport-classes-kqueue-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-transport-classes-kqueue",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-kqueue/4.1.110.Final/netty-transport-classes-kqueue-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-all",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-all",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-all/4.1.110.Final/netty-all-4.1.110.Final.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-resolver",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-resolver",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-resolver/4.1.110.Final/netty-resolver-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-resolver",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-resolver/4.1.110.Final/netty-resolver-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.avro",
+                    "name": "avro-ipc",
+                    "version": "1.11.3",
+                    "artifacts": [
+                        {
+                            "name": "avro-ipc",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro-ipc/1.11.3/avro-ipc-1.11.3.jar"
+                        },
+                        {
+                            "name": "avro-ipc",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro-ipc/1.11.3/avro-ipc-1.11.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-jackson",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-jackson",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-jackson/1.13.1/parquet-jackson-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-jackson",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-jackson/1.13.1/parquet-jackson-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.hk2",
+                    "name": "hk2-utils",
+                    "version": "3.0.3",
+                    "artifacts": [
+                        {
+                            "name": "hk2-utils",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-utils/3.0.3/hk2-utils-3.0.3.jar"
+                        },
+                        {
+                            "name": "hk2-utils",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-utils/3.0.3/hk2-utils-3.0.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.scala-lang.modules",
+                    "name": "scala-parallel-collections_2.13",
+                    "version": "1.0.4",
+                    "artifacts": [
+                        {
+                            "name": "scala-parallel-collections_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parallel-collections_2.13/1.0.4/scala-parallel-collections_2.13-1.0.4.jar"
+                        },
+                        {
+                            "name": "scala-parallel-collections_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parallel-collections_2.13/1.0.4/scala-parallel-collections_2.13-1.0.4-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.checkerframework",
+                    "name": "checker-qual",
+                    "version": "3.33.0",
+                    "artifacts": [
+                        {
+                            "name": "checker-qual",
+                            "path": "/home/ralbright/.m2/repository/org/checkerframework/checker-qual/3.33.0/checker-qual-3.33.0.jar"
+                        },
+                        {
+                            "name": "checker-qual",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/checkerframework/checker-qual/3.33.0/checker-qual-3.33.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-column",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-column",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-column/1.13.1/parquet-column-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-column",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-column/1.13.1/parquet-column-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "jakarta.inject",
+                    "name": "jakarta.inject-api",
+                    "version": "2.0.1",
+                    "artifacts": [
+                        {
+                            "name": "jakarta.inject-api",
+                            "path": "/home/ralbright/.m2/repository/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.jar"
+                        },
+                        {
+                            "name": "jakarta.inject-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.logging.log4j",
+                    "name": "log4j-core",
+                    "version": "2.22.1",
+                    "artifacts": [
+                        {
+                            "name": "log4j-core",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-core/2.22.1/log4j-core-2.22.1.jar"
+                        },
+                        {
+                            "name": "log4j-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-core/2.22.1/log4j-core-2.22.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.containers",
+                    "name": "jersey-container-servlet",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-container-servlet",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet/3.0.12/jersey-container-servlet-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-container-servlet",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet/3.0.12/jersey-container-servlet-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.twitter",
+                    "name": "chill-java",
+                    "version": "0.10.0",
+                    "artifacts": [
+                        {
+                            "name": "chill-java",
+                            "path": "/home/ralbright/.m2/repository/com/twitter/chill-java/0.10.0/chill-java-0.10.0.jar"
+                        },
+                        {
+                            "name": "chill-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/twitter/chill-java/0.10.0/chill-java-0.10.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.core",
+                    "name": "jersey-server",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-server",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-server/3.0.12/jersey-server-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-server",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-server/3.0.12/jersey-server-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.inject",
+                    "name": "jersey-hk2",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-hk2",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/inject/jersey-hk2/3.0.12/jersey-hk2-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-hk2",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/inject/jersey-hk2/3.0.12/jersey-hk2-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.crypto.tink",
+                    "name": "tink",
+                    "version": "1.13.0",
+                    "artifacts": [
+                        {
+                            "name": "tink",
+                            "path": "/home/ralbright/.m2/repository/com/google/crypto/tink/tink/1.13.0/tink-1.13.0.jar"
+                        },
+                        {
+                            "name": "tink",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/crypto/tink/tink/1.13.0/tink-1.13.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.zookeeper",
+                    "name": "zookeeper",
+                    "version": "3.9.2",
+                    "artifacts": [
+                        {
+                            "name": "zookeeper",
+                            "path": "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper/3.9.2/zookeeper-3.9.2.jar"
+                        },
+                        {
+                            "name": "zookeeper",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper/3.9.2/zookeeper-3.9.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.curator",
+                    "name": "curator-framework",
+                    "version": "5.6.0",
+                    "artifacts": [
+                        {
+                            "name": "curator-framework",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-framework/5.6.0/curator-framework-5.6.0.jar"
+                        },
+                        {
+                            "name": "curator-framework",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-framework/5.6.0/curator-framework-5.6.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "oro",
+                    "name": "oro",
+                    "version": "2.0.8",
+                    "artifacts": [
+                        {
+                            "name": "oro",
+                            "path": "/home/ralbright/.m2/repository/oro/oro/2.0.8/oro-2.0.8.jar"
+                        },
+                        {
+                            "name": "oro",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/oro/oro/2.0.8/oro-2.0.8-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.fasterxml.jackson.datatype",
+                    "name": "jackson-datatype-jsr310",
+                    "version": "2.15.1",
+                    "artifacts": [
+                        {
+                            "name": "jackson-datatype-jsr310",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.15.1/jackson-datatype-jsr310-2.15.1.jar"
+                        },
+                        {
+                            "name": "jackson-datatype-jsr310",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/datatype/jackson-datatype-jsr310/2.15.1/jackson-datatype-jsr310-2.15.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.dropwizard.metrics",
+                    "name": "metrics-jmx",
+                    "version": "4.2.25",
+                    "artifacts": [
+                        {
+                            "name": "metrics-jmx",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jmx/4.2.25/metrics-jmx-4.2.25.jar"
+                        },
+                        {
+                            "name": "metrics-jmx",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jmx/4.2.25/metrics-jmx-4.2.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.dropwizard.metrics",
+                    "name": "metrics-json",
+                    "version": "4.2.25",
+                    "artifacts": [
+                        {
+                            "name": "metrics-json",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-json/4.2.25/metrics-json-4.2.25.jar"
+                        },
+                        {
+                            "name": "metrics-json",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-json/4.2.25/metrics-json-4.2.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-handler",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-handler",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-handler/4.1.110.Final/netty-handler-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-handler",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-handler/4.1.110.Final/netty-handler-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-codec-socks",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-codec-socks",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-socks/4.1.110.Final/netty-codec-socks-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-codec-socks",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-socks/4.1.110.Final/netty-codec-socks-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.hadoop",
+                    "name": "hadoop-client-api",
+                    "version": "3.4.0",
+                    "artifacts": [
+                        {
+                            "name": "hadoop-client-api",
+                            "path": "/home/ralbright/.m2/repository/org/apache/hadoop/hadoop-client-api/3.4.0/hadoop-client-api-3.4.0.jar"
+                        },
+                        {
+                            "name": "hadoop-client-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/hadoop/hadoop-client-api/3.4.0/hadoop-client-api-3.4.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-sql_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-sql_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sql_2.13/4.0.0-preview1/spark-sql_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-sql_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sql_2.13/4.0.0-preview1/spark-sql_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.logging.log4j",
+                    "name": "log4j-api",
+                    "version": "2.22.1",
+                    "artifacts": [
+                        {
+                            "name": "log4j-api",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-api/2.22.1/log4j-api-2.22.1.jar"
+                        },
+                        {
+                            "name": "log4j-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-api/2.22.1/log4j-api-2.22.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "net.sf.py4j",
+                    "name": "py4j",
+                    "version": "0.10.9.7",
+                    "artifacts": [
+                        {
+                            "name": "py4j",
+                            "path": "/home/ralbright/.m2/repository/net/sf/py4j/py4j/0.10.9.7/py4j-0.10.9.7.jar"
+                        },
+                        {
+                            "name": "py4j",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/net/sf/py4j/py4j/0.10.9.7/py4j-0.10.9.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "javax.servlet",
+                    "name": "javax.servlet-api",
+                    "version": "4.0.1",
+                    "artifacts": [
+                        {
+                            "name": "javax.servlet-api",
+                            "path": "/home/ralbright/.m2/repository/javax/servlet/javax.servlet-api/4.0.1/javax.servlet-api-4.0.1.jar"
+                        },
+                        {
+                            "name": "javax.servlet-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/javax/servlet/javax.servlet-api/4.0.1/javax.servlet-api-4.0.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.hadoop",
+                    "name": "hadoop-client-runtime",
+                    "version": "3.4.0",
+                    "artifacts": [
+                        {
+                            "name": "hadoop-client-runtime",
+                            "path": "/home/ralbright/.m2/repository/org/apache/hadoop/hadoop-client-runtime/3.4.0/hadoop-client-runtime-3.4.0.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.arrow",
+                    "name": "arrow-memory-core",
+                    "version": "14.0.2",
+                    "artifacts": [
+                        {
+                            "name": "arrow-memory-core",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-core/14.0.2/arrow-memory-core-14.0.2.jar"
+                        },
+                        {
+                            "name": "arrow-memory-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-memory-core/14.0.2/arrow-memory-core-14.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "net.razorvine",
+                    "name": "pickle",
+                    "version": "1.3",
+                    "artifacts": [
+                        {
+                            "name": "pickle",
+                            "path": "/home/ralbright/.m2/repository/net/razorvine/pickle/1.3/pickle-1.3.jar"
+                        },
+                        {
+                            "name": "pickle",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/net/razorvine/pickle/1.3/pickle-1.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.flatbuffers",
+                    "name": "flatbuffers-java",
+                    "version": "1.12.0",
+                    "artifacts": [
+                        {
+                            "name": "flatbuffers-java",
+                            "path": "/home/ralbright/.m2/repository/com/google/flatbuffers/flatbuffers-java/1.12.0/flatbuffers-java-1.12.0.jar"
+                        },
+                        {
+                            "name": "flatbuffers-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/flatbuffers/flatbuffers-java/1.12.0/flatbuffers-java-1.12.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.json4s",
+                    "name": "json4s-scalap_2.13",
+                    "version": "4.0.7",
+                    "artifacts": [
+                        {
+                            "name": "json4s-scalap_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-scalap_2.13/4.0.7/json4s-scalap_2.13-4.0.7.jar"
+                        },
+                        {
+                            "name": "json4s-scalap_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-scalap_2.13/4.0.7/json4s-scalap_2.13-4.0.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.esotericsoftware",
+                    "name": "kryo-shaded",
+                    "version": "4.0.2",
+                    "artifacts": [
+                        {
+                            "name": "kryo-shaded",
+                            "path": "/home/ralbright/.m2/repository/com/esotericsoftware/kryo-shaded/4.0.2/kryo-shaded-4.0.2.jar"
+                        },
+                        {
+                            "name": "kryo-shaded",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/esotericsoftware/kryo-shaded/4.0.2/kryo-shaded-4.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-common",
+                    "version": "4.1.96.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-common",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-common/4.1.96.Final/netty-common-4.1.96.Final.jar"
+                        },
+                        {
+                            "name": "netty-common",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-common/4.1.96.Final/netty-common-4.1.96.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.hk2",
+                    "name": "hk2-api",
+                    "version": "3.0.3",
+                    "artifacts": [
+                        {
+                            "name": "hk2-api",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-api/3.0.3/hk2-api-3.0.3.jar"
+                        },
+                        {
+                            "name": "hk2-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-api/3.0.3/hk2-api-3.0.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-handler-proxy",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-handler-proxy",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-handler-proxy/4.1.110.Final/netty-handler-proxy-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-handler-proxy",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-handler-proxy/4.1.110.Final/netty-handler-proxy-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-core_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-core_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-core_2.13/4.0.0-preview1/spark-core_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-core_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-core_2.13/4.0.0-preview1/spark-core_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.protobuf",
+                    "name": "protobuf-java",
+                    "version": "3.25.1",
+                    "artifacts": [
+                        {
+                            "name": "protobuf-java",
+                            "path": "/home/ralbright/.m2/repository/com/google/protobuf/protobuf-java/3.25.1/protobuf-java-3.25.1.jar"
+                        },
+                        {
+                            "name": "protobuf-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/protobuf/protobuf-java/3.25.1/protobuf-java-3.25.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-tags_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-tags_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-tags_2.13/4.0.0-preview1/spark-tags_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-tags_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-tags_2.13/4.0.0-preview1/spark-tags_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jaxb",
+                    "name": "txw2",
+                    "version": "3.0.2",
+                    "artifacts": [
+                        {
+                            "name": "txw2",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jaxb/txw2/3.0.2/txw2-3.0.2.jar"
+                        },
+                        {
+                            "name": "txw2",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jaxb/txw2/3.0.2/txw2-3.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.arrow",
+                    "name": "arrow-vector",
+                    "version": "14.0.2",
+                    "artifacts": [
+                        {
+                            "name": "arrow-vector",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-vector/14.0.2/arrow-vector-14.0.2.jar"
+                        },
+                        {
+                            "name": "arrow-vector",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-vector/14.0.2/arrow-vector-14.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.arrow",
+                    "name": "arrow-format",
+                    "version": "14.0.2",
+                    "artifacts": [
+                        {
+                            "name": "arrow-format",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-format/14.0.2/arrow-format-14.0.2.jar"
+                        },
+                        {
+                            "name": "arrow-format",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-format/14.0.2/arrow-format-14.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-boringssl-static",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-boringssl-static",
+                            "classifier": "osx-aarch_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-osx-aarch_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.json4s",
+                    "name": "json4s-jackson_2.13",
+                    "version": "4.0.7",
+                    "artifacts": [
+                        {
+                            "name": "json4s-jackson_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-jackson_2.13/4.0.7/json4s-jackson_2.13-4.0.7.jar"
+                        },
+                        {
+                            "name": "json4s-jackson_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-jackson_2.13/4.0.7/json4s-jackson_2.13-4.0.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.curator",
+                    "name": "curator-client",
+                    "version": "5.6.0",
+                    "artifacts": [
+                        {
+                            "name": "curator-client",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-client/5.6.0/curator-client-5.6.0.jar"
+                        },
+                        {
+                            "name": "curator-client",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-client/5.6.0/curator-client-5.6.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.arrow",
+                    "name": "arrow-c-data",
+                    "version": "14.0.2",
+                    "artifacts": [
+                        {
+                            "name": "arrow-c-data",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-c-data/14.0.2/arrow-c-data-14.0.2.jar"
+                        },
+                        {
+                            "name": "arrow-c-data",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/arrow/arrow-c-data/14.0.2/arrow-c-data-14.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "jakarta.servlet",
+                    "name": "jakarta.servlet-api",
+                    "version": "5.0.0",
+                    "artifacts": [
+                        {
+                            "name": "jakarta.servlet-api",
+                            "path": "/home/ralbright/.m2/repository/jakarta/servlet/jakarta.servlet-api/5.0.0/jakarta.servlet-api-5.0.0.jar"
+                        },
+                        {
+                            "name": "jakarta.servlet-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/jakarta/servlet/jakarta.servlet-api/5.0.0/jakarta.servlet-api-5.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-common",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-common",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-common/1.13.1/parquet-common-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-common",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-common/1.13.1/parquet-common-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.xerial.snappy",
+                    "name": "snappy-java",
+                    "version": "1.1.10.5",
+                    "artifacts": [
+                        {
+                            "name": "snappy-java",
+                            "path": "/home/ralbright/.m2/repository/org/xerial/snappy/snappy-java/1.1.10.5/snappy-java-1.1.10.5.jar"
+                        },
+                        {
+                            "name": "snappy-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/xerial/snappy/snappy-java/1.1.10.5/snappy-java-1.1.10.5-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-boringssl-static",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-boringssl-static",
+                            "classifier": "osx-x86_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-osx-x86_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.orc",
+                    "name": "orc-shims",
+                    "version": "2.0.1",
+                    "artifacts": [
+                        {
+                            "name": "orc-shims",
+                            "path": "/home/ralbright/.m2/repository/org/apache/orc/orc-shims/2.0.1/orc-shims-2.0.1.jar"
+                        },
+                        {
+                            "name": "orc-shims",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/orc/orc-shims/2.0.1/orc-shims-2.0.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.containers",
+                    "name": "jersey-container-servlet-core",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-container-servlet-core",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet-core/3.0.12/jersey-container-servlet-core-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-container-servlet-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/containers/jersey-container-servlet-core/3.0.12/jersey-container-servlet-core-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-classes",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-classes",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final.jar"
+                        },
+                        {
+                            "name": "netty-tcnative-classes",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-classes/2.0.65.Final/netty-tcnative-classes-2.0.65.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "jakarta.validation",
+                    "name": "jakarta.validation-api",
+                    "version": "3.0.2",
+                    "artifacts": [
+                        {
+                            "name": "jakarta.validation-api",
+                            "path": "/home/ralbright/.m2/repository/jakarta/validation/jakarta.validation-api/3.0.2/jakarta.validation-api-3.0.2.jar"
+                        },
+                        {
+                            "name": "jakarta.validation-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/jakarta/validation/jakarta.validation-api/3.0.2/jakarta.validation-api-3.0.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-crypto",
+                    "version": "1.1.0",
+                    "artifacts": [
+                        {
+                            "name": "commons-crypto",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-crypto/1.1.0/commons-crypto-1.1.0.jar"
+                        },
+                        {
+                            "name": "commons-crypto",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-crypto/1.1.0/commons-crypto-1.1.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.xbean",
+                    "name": "xbean-asm9-shaded",
+                    "version": "4.25",
+                    "artifacts": [
+                        {
+                            "name": "xbean-asm9-shaded",
+                            "path": "/home/ralbright/.m2/repository/org/apache/xbean/xbean-asm9-shaded/4.25/xbean-asm9-shaded-4.25.jar"
+                        },
+                        {
+                            "name": "xbean-asm9-shaded",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/xbean/xbean-asm9-shaded/4.25/xbean-asm9-shaded-4.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.logging.log4j",
+                    "name": "log4j-layout-template-json",
+                    "version": "2.22.1",
+                    "artifacts": [
+                        {
+                            "name": "log4j-layout-template-json",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-layout-template-json/2.22.1/log4j-layout-template-json-2.22.1.jar"
+                        },
+                        {
+                            "name": "log4j-layout-template-json",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-layout-template-json/2.22.1/log4j-layout-template-json-2.22.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-codec-http",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-codec-http",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-http/4.1.110.Final/netty-codec-http-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-codec-http",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-http/4.1.110.Final/netty-codec-http-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.errorprone",
+                    "name": "error_prone_annotations",
+                    "version": "2.18.0",
+                    "artifacts": [
+                        {
+                            "name": "error_prone_annotations",
+                            "path": "/home/ralbright/.m2/repository/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0.jar"
+                        },
+                        {
+                            "name": "error_prone_annotations",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-boringssl-static",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-boringssl-static",
+                            "classifier": "linux-x86_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-linux-x86_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-catalyst_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-catalyst_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-catalyst_2.13/4.0.0-preview1/spark-catalyst_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-catalyst_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-catalyst_2.13/4.0.0-preview1/spark-catalyst_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.scala-lang",
+                    "name": "scala-reflect",
+                    "version": "2.13.14",
+                    "artifacts": [
+                        {
+                            "name": "scala-reflect",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/scala-reflect/2.13.14/scala-reflect-2.13.14.jar"
+                        },
+                        {
+                            "name": "scala-reflect",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/scala-reflect/2.13.14/scala-reflect-2.13.14-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.json4s",
+                    "name": "json4s-jackson-core_2.13",
+                    "version": "4.0.7",
+                    "artifacts": [
+                        {
+                            "name": "json4s-jackson-core_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-jackson-core_2.13/4.0.7/json4s-jackson-core_2.13-4.0.7.jar"
+                        },
+                        {
+                            "name": "json4s-jackson-core_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-jackson-core_2.13/4.0.7/json4s-jackson-core_2.13-4.0.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "javax.activation",
+                    "name": "activation",
+                    "version": "1.1.1",
+                    "artifacts": [
+                        {
+                            "name": "activation",
+                            "path": "/home/ralbright/.m2/repository/javax/activation/activation/1.1.1/activation-1.1.1.jar"
+                        },
+                        {
+                            "name": "activation",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/javax/activation/activation/1.1.1/activation-1.1.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.ws.xmlschema",
+                    "name": "xmlschema-core",
+                    "version": "2.3.1",
+                    "artifacts": [
+                        {
+                            "name": "xmlschema-core",
+                            "path": "/home/ralbright/.m2/repository/org/apache/ws/xmlschema/xmlschema-core/2.3.1/xmlschema-core-2.3.1.jar"
+                        },
+                        {
+                            "name": "xmlschema-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/ws/xmlschema/xmlschema-core/2.3.1/xmlschema-core-2.3.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-buffer",
+                    "version": "4.1.96.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-buffer",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-buffer/4.1.96.Final/netty-buffer-4.1.96.Final.jar"
+                        },
+                        {
+                            "name": "netty-buffer",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-buffer/4.1.96.Final/netty-buffer-4.1.96.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-sketch_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-sketch_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sketch_2.13/4.0.0-preview1/spark-sketch_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-sketch_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-sketch_2.13/4.0.0-preview1/spark-sketch_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.dropwizard.metrics",
+                    "name": "metrics-graphite",
+                    "version": "4.2.25",
+                    "artifacts": [
+                        {
+                            "name": "metrics-graphite",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-graphite/4.2.25/metrics-graphite-4.2.25.jar"
+                        },
+                        {
+                            "name": "metrics-graphite",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-graphite/4.2.25/metrics-graphite-4.2.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.fusesource.leveldbjni",
+                    "name": "leveldbjni-all",
+                    "version": "1.8",
+                    "artifacts": [
+                        {
+                            "name": "leveldbjni-all",
+                            "path": "/home/ralbright/.m2/repository/org/fusesource/leveldbjni/leveldbjni-all/1.8/leveldbjni-all-1.8.jar"
+                        },
+                        {
+                            "name": "leveldbjni-all",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/fusesource/leveldbjni/leveldbjni-all/1.8/leveldbjni-all-1.8-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.hk2.external",
+                    "name": "aopalliance-repackaged",
+                    "version": "3.0.3",
+                    "artifacts": [
+                        {
+                            "name": "aopalliance-repackaged",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/external/aopalliance-repackaged/3.0.3/aopalliance-repackaged-3.0.3.jar"
+                        },
+                        {
+                            "name": "aopalliance-repackaged",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/external/aopalliance-repackaged/3.0.3/aopalliance-repackaged-3.0.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-hadoop",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-hadoop",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-hadoop/1.13.1/parquet-hadoop-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-hadoop",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-hadoop/1.13.1/parquet-hadoop-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-classes-epoll",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-classes-epoll",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-epoll/4.1.110.Final/netty-transport-classes-epoll-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-transport-classes-epoll",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-classes-epoll/4.1.110.Final/netty-transport-classes-epoll-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.yetus",
+                    "name": "audience-annotations",
+                    "version": "0.13.0",
+                    "artifacts": [
+                        {
+                            "name": "audience-annotations",
+                            "path": "/home/ralbright/.m2/repository/org/apache/yetus/audience-annotations/0.13.0/audience-annotations-0.13.0.jar"
+                        },
+                        {
+                            "name": "audience-annotations",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/yetus/audience-annotations/0.13.0/audience-annotations-0.13.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.fasterxml.jackson.core",
+                    "name": "jackson-databind",
+                    "version": "2.17.1",
+                    "artifacts": [
+                        {
+                            "name": "jackson-databind",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.17.1/jackson-databind-2.17.1.jar"
+                        },
+                        {
+                            "name": "jackson-databind",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.17.1/jackson-databind-2.17.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-format-structures",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-format-structures",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-format-structures/1.13.1/parquet-format-structures-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-format-structures",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-format-structures/1.13.1/parquet-format-structures-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.curator",
+                    "name": "curator-recipes",
+                    "version": "5.6.0",
+                    "artifacts": [
+                        {
+                            "name": "curator-recipes",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-recipes/5.6.0/curator-recipes-5.6.0.jar"
+                        },
+                        {
+                            "name": "curator-recipes",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/curator/curator-recipes/5.6.0/curator-recipes-5.6.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.code.findbugs",
+                    "name": "jsr305",
+                    "version": "3.0.0",
+                    "artifacts": [
+                        {
+                            "name": "jsr305",
+                            "path": "/home/ralbright/.m2/repository/com/google/code/findbugs/jsr305/3.0.0/jsr305-3.0.0.jar"
+                        },
+                        {
+                            "name": "jsr305",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/code/findbugs/jsr305/3.0.0/jsr305-3.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.core",
+                    "name": "jersey-client",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-client",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-client/3.0.12/jersey-client-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-client",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-client/3.0.12/jersey-client-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-collections4",
+                    "version": "4.4",
+                    "artifacts": [
+                        {
+                            "name": "commons-collections4",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-collections4/4.4/commons-collections4-4.4.jar"
+                        },
+                        {
+                            "name": "commons-collections4",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-collections4/4.4/commons-collections4-4.4-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.j2objc",
+                    "name": "j2objc-annotations",
+                    "version": "2.8",
+                    "artifacts": [
+                        {
+                            "name": "j2objc-annotations",
+                            "path": "/home/ralbright/.m2/repository/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8.jar"
+                        },
+                        {
+                            "name": "j2objc-annotations",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.objenesis",
+                    "name": "objenesis",
+                    "version": "2.5.1",
+                    "artifacts": [
+                        {
+                            "name": "objenesis",
+                            "path": "/home/ralbright/.m2/repository/org/objenesis/objenesis/2.5.1/objenesis-2.5.1.jar"
+                        },
+                        {
+                            "name": "objenesis",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/objenesis/objenesis/2.5.1/objenesis-2.5.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.scala-lang.modules",
+                    "name": "scala-parser-combinators_2.13",
+                    "version": "2.4.0",
+                    "artifacts": [
+                        {
+                            "name": "scala-parser-combinators_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parser-combinators_2.13/2.4.0/scala-parser-combinators_2.13-2.4.0.jar"
+                        },
+                        {
+                            "name": "scala-parser-combinators_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-parser-combinators_2.13/2.4.0/scala-parser-combinators_2.13-2.4.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-unsafe_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-unsafe_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-unsafe_2.13/4.0.0-preview1/spark-unsafe_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-unsafe_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-unsafe_2.13/4.0.0-preview1/spark-unsafe_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.avro",
+                    "name": "avro",
+                    "version": "1.11.3",
+                    "artifacts": [
+                        {
+                            "name": "avro",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro/1.11.3/avro-1.11.3.jar"
+                        },
+                        {
+                            "name": "avro",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro/1.11.3/avro-1.11.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.ibm.icu",
+                    "name": "icu4j",
+                    "version": "72.1",
+                    "artifacts": [
+                        {
+                            "name": "icu4j",
+                            "path": "/home/ralbright/.m2/repository/com/ibm/icu/icu4j/72.1/icu4j-72.1.jar"
+                        },
+                        {
+                            "name": "icu4j",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/ibm/icu/icu4j/72.1/icu4j-72.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-epoll",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-epoll",
+                            "classifier": "linux-riscv64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-riscv64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-network-shuffle_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-network-shuffle_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-network-shuffle_2.13/4.0.0-preview1/spark-network-shuffle_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-network-shuffle_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-network-shuffle_2.13/4.0.0-preview1/spark-network-shuffle_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.github.luben",
+                    "name": "zstd-jni",
+                    "version": "1.5.6-3",
+                    "artifacts": [
+                        {
+                            "name": "zstd-jni",
+                            "path": "/home/ralbright/.m2/repository/com/github/luben/zstd-jni/1.5.6-3/zstd-jni-1.5.6-3.jar"
+                        },
+                        {
+                            "name": "zstd-jni",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/github/luben/zstd-jni/1.5.6-3/zstd-jni-1.5.6-3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "commons-collections",
+                    "name": "commons-collections",
+                    "version": "3.2.2",
+                    "artifacts": [
+                        {
+                            "name": "commons-collections",
+                            "path": "/home/ralbright/.m2/repository/commons-collections/commons-collections/3.2.2/commons-collections-3.2.2.jar"
+                        },
+                        {
+                            "name": "commons-collections",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/commons-collections/commons-collections/3.2.2/commons-collections-3.2.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-unix-common",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-unix-common",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.110.Final/netty-transport-native-unix-common-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-transport-native-unix-common",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-unix-common/4.1.110.Final/netty-transport-native-unix-common-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.ivy",
+                    "name": "ivy",
+                    "version": "2.5.2",
+                    "artifacts": [
+                        {
+                            "name": "ivy",
+                            "path": "/home/ralbright/.m2/repository/org/apache/ivy/ivy/2.5.2/ivy-2.5.2.jar"
+                        },
+                        {
+                            "name": "ivy",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/ivy/ivy/2.5.2/ivy-2.5.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.dropwizard.metrics",
+                    "name": "metrics-jvm",
+                    "version": "4.2.25",
+                    "artifacts": [
+                        {
+                            "name": "metrics-jvm",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jvm/4.2.25/metrics-jvm-4.2.25.jar"
+                        },
+                        {
+                            "name": "metrics-jvm",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-jvm/4.2.25/metrics-jvm-4.2.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "jakarta.annotation",
+                    "name": "jakarta.annotation-api",
+                    "version": "2.0.0",
+                    "artifacts": [
+                        {
+                            "name": "jakarta.annotation-api",
+                            "path": "/home/ralbright/.m2/repository/jakarta/annotation/jakarta.annotation-api/2.0.0/jakarta.annotation-api-2.0.0.jar"
+                        },
+                        {
+                            "name": "jakarta.annotation-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/jakarta/annotation/jakarta.annotation-api/2.0.0/jakarta.annotation-api-2.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-tcnative-boringssl-static",
+                    "version": "2.0.65.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-tcnative-boringssl-static",
+                            "classifier": "windows-x86_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-tcnative-boringssl-static/2.0.65.Final/netty-tcnative-boringssl-static-2.0.65.Final-windows-x86_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport/4.1.110.Final/netty-transport-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-transport",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport/4.1.110.Final/netty-transport-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.fasterxml.jackson.core",
+                    "name": "jackson-core",
+                    "version": "2.15.1",
+                    "artifacts": [
+                        {
+                            "name": "jackson-core",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.15.1/jackson-core-2.15.1.jar"
+                        },
+                        {
+                            "name": "jackson-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.15.1/jackson-core-2.15.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.orc",
+                    "name": "orc-format",
+                    "version": "1.0.0",
+                    "artifacts": [
+                        {
+                            "name": "orc-format",
+                            "classifier": "shaded-protobuf",
+                            "path": "/home/ralbright/.m2/repository/org/apache/orc/orc-format/1.0.0/orc-format-1.0.0-shaded-protobuf.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.codehaus.janino",
+                    "name": "janino",
+                    "version": "3.1.9",
+                    "artifacts": [
+                        {
+                            "name": "janino",
+                            "path": "/home/ralbright/.m2/repository/org/codehaus/janino/janino/3.1.9/janino-3.1.9.jar"
+                        },
+                        {
+                            "name": "janino",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/codehaus/janino/janino/3.1.9/janino-3.1.9-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.zookeeper",
+                    "name": "zookeeper-jute",
+                    "version": "3.9.2",
+                    "artifacts": [
+                        {
+                            "name": "zookeeper-jute",
+                            "path": "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper-jute/3.9.2/zookeeper-jute-3.9.2.jar"
+                        },
+                        {
+                            "name": "zookeeper-jute",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/zookeeper/zookeeper-jute/3.9.2/zookeeper-jute-3.9.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.fasterxml.jackson.core",
+                    "name": "jackson-annotations",
+                    "version": "2.15.1",
+                    "artifacts": [
+                        {
+                            "name": "jackson-annotations",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.15.1/jackson-annotations-2.15.1.jar"
+                        },
+                        {
+                            "name": "jackson-annotations",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.15.1/jackson-annotations-2.15.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.logging.log4j",
+                    "name": "log4j-slf4j2-impl",
+                    "version": "2.22.1",
+                    "artifacts": [
+                        {
+                            "name": "log4j-slf4j2-impl",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-slf4j2-impl/2.22.1/log4j-slf4j2-impl-2.22.1.jar"
+                        },
+                        {
+                            "name": "log4j-slf4j2-impl",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-slf4j2-impl/2.22.1/log4j-slf4j2-impl-2.22.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.roaringbitmap",
+                    "name": "RoaringBitmap",
+                    "version": "1.0.6",
+                    "artifacts": [
+                        {
+                            "name": "RoaringBitmap",
+                            "path": "/home/ralbright/.m2/repository/org/roaringbitmap/RoaringBitmap/1.0.6/RoaringBitmap-1.0.6.jar"
+                        },
+                        {
+                            "name": "RoaringBitmap",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/roaringbitmap/RoaringBitmap/1.0.6/RoaringBitmap-1.0.6-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.clearspring.analytics",
+                    "name": "stream",
+                    "version": "2.9.6",
+                    "artifacts": [
+                        {
+                            "name": "stream",
+                            "path": "/home/ralbright/.m2/repository/com/clearspring/analytics/stream/2.9.6/stream-2.9.6.jar"
+                        },
+                        {
+                            "name": "stream",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/clearspring/analytics/stream/2.9.6/stream-2.9.6-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-kqueue",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-kqueue",
+                            "classifier": "osx-x86_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-kqueue/4.1.110.Final/netty-transport-native-kqueue-4.1.110.Final-osx-x86_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.hk2",
+                    "name": "hk2-locator",
+                    "version": "3.0.3",
+                    "artifacts": [
+                        {
+                            "name": "hk2-locator",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-locator/3.0.3/hk2-locator-3.0.3.jar"
+                        },
+                        {
+                            "name": "hk2-locator",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/hk2-locator/3.0.3/hk2-locator-3.0.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.tukaani",
+                    "name": "xz",
+                    "version": "1.9",
+                    "artifacts": [
+                        {
+                            "name": "xz",
+                            "path": "/home/ralbright/.m2/repository/org/tukaani/xz/1.9/xz-1.9.jar"
+                        },
+                        {
+                            "name": "xz",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/tukaani/xz/1.9/xz-1.9-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.json4s",
+                    "name": "json4s-ast_2.13",
+                    "version": "4.0.7",
+                    "artifacts": [
+                        {
+                            "name": "json4s-ast_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-ast_2.13/4.0.7/json4s-ast_2.13-4.0.7.jar"
+                        },
+                        {
+                            "name": "json4s-ast_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/json4s/json4s-ast_2.13/4.0.7/json4s-ast_2.13-4.0.7-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-variant_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-variant_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-variant_2.13/4.0.0-preview1/spark-variant_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-variant_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-variant_2.13/4.0.0-preview1/spark-variant_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.orc",
+                    "name": "orc-mapreduce",
+                    "version": "2.0.1",
+                    "artifacts": [
+                        {
+                            "name": "orc-mapreduce",
+                            "classifier": "shaded-protobuf",
+                            "path": "/home/ralbright/.m2/repository/org/apache/orc/orc-mapreduce/2.0.1/orc-mapreduce-2.0.1-shaded-protobuf.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.logging.log4j",
+                    "name": "log4j-1.2-api",
+                    "version": "2.22.1",
+                    "artifacts": [
+                        {
+                            "name": "log4j-1.2-api",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-1.2-api/2.22.1/log4j-1.2-api-2.22.1.jar"
+                        },
+                        {
+                            "name": "log4j-1.2-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/logging/log4j/log4j-1.2-api/2.22.1/log4j-1.2-api-2.22.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.slf4j",
+                    "name": "jcl-over-slf4j",
+                    "version": "2.0.13",
+                    "artifacts": [
+                        {
+                            "name": "jcl-over-slf4j",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/jcl-over-slf4j/2.0.13/jcl-over-slf4j-2.0.13.jar"
+                        },
+                        {
+                            "name": "jcl-over-slf4j",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/jcl-over-slf4j/2.0.13/jcl-over-slf4j-2.0.13-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "jakarta.ws.rs",
+                    "name": "jakarta.ws.rs-api",
+                    "version": "3.0.0",
+                    "artifacts": [
+                        {
+                            "name": "jakarta.ws.rs-api",
+                            "path": "/home/ralbright/.m2/repository/jakarta/ws/rs/jakarta.ws.rs-api/3.0.0/jakarta.ws.rs-api-3.0.0.jar"
+                        },
+                        {
+                            "name": "jakarta.ws.rs-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/jakarta/ws/rs/jakarta.ws.rs-api/3.0.0/jakarta.ws.rs-api-3.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-codec",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-codec",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec/4.1.110.Final/netty-codec-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-codec",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec/4.1.110.Final/netty-codec-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.hk2",
+                    "name": "osgi-resource-locator",
+                    "version": "1.0.3",
+                    "artifacts": [
+                        {
+                            "name": "osgi-resource-locator",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/osgi-resource-locator/1.0.3/osgi-resource-locator-1.0.3.jar"
+                        },
+                        {
+                            "name": "osgi-resource-locator",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/hk2/osgi-resource-locator/1.0.3/osgi-resource-locator-1.0.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.dropwizard.metrics",
+                    "name": "metrics-core",
+                    "version": "4.2.25",
+                    "artifacts": [
+                        {
+                            "name": "metrics-core",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-core/4.2.25/metrics-core-4.2.25.jar"
+                        },
+                        {
+                            "name": "metrics-core",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/dropwizard/metrics/metrics-core/4.2.25/metrics-core-4.2.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.avro",
+                    "name": "avro-mapred",
+                    "version": "1.11.3",
+                    "artifacts": [
+                        {
+                            "name": "avro-mapred",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro-mapred/1.11.3/avro-mapred-1.11.3.jar"
+                        },
+                        {
+                            "name": "avro-mapred",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/avro/avro-mapred/1.11.3/avro-mapred-1.11.3-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.esotericsoftware",
+                    "name": "minlog",
+                    "version": "1.3.0",
+                    "artifacts": [
+                        {
+                            "name": "minlog",
+                            "path": "/home/ralbright/.m2/repository/com/esotericsoftware/minlog/1.3.0/minlog-1.3.0.jar"
+                        },
+                        {
+                            "name": "minlog",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/esotericsoftware/minlog/1.3.0/minlog-1.3.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "commons-io",
+                    "name": "commons-io",
+                    "version": "2.16.1",
+                    "artifacts": [
+                        {
+                            "name": "commons-io",
+                            "path": "/home/ralbright/.m2/repository/commons-io/commons-io/2.16.1/commons-io-2.16.1.jar"
+                        },
+                        {
+                            "name": "commons-io",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/commons-io/commons-io/2.16.1/commons-io-2.16.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-codec-http2",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-codec-http2",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-http2/4.1.110.Final/netty-codec-http2-4.1.110.Final.jar"
+                        },
+                        {
+                            "name": "netty-codec-http2",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-codec-http2/4.1.110.Final/netty-codec-http2-4.1.110.Final-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.commons",
+                    "name": "commons-compress",
+                    "version": "1.26.2",
+                    "artifacts": [
+                        {
+                            "name": "commons-compress",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-compress/1.26.2/commons-compress-1.26.2.jar"
+                        },
+                        {
+                            "name": "commons-compress",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/commons/commons-compress/1.26.2/commons-compress-1.26.2-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.spark",
+                    "name": "spark-network-common_2.13",
+                    "version": "4.0.0-preview1",
+                    "artifacts": [
+                        {
+                            "name": "spark-network-common_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-network-common_2.13/4.0.0-preview1/spark-network-common_2.13-4.0.0-preview1.jar"
+                        },
+                        {
+                            "name": "spark-network-common_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/spark/spark-network-common_2.13/4.0.0-preview1/spark-network-common_2.13-4.0.0-preview1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.threeten",
+                    "name": "threeten-extra",
+                    "version": "1.7.1",
+                    "artifacts": [
+                        {
+                            "name": "threeten-extra",
+                            "path": "/home/ralbright/.m2/repository/org/threeten/threeten-extra/1.7.1/threeten-extra-1.7.1.jar"
+                        },
+                        {
+                            "name": "threeten-extra",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/threeten/threeten-extra/1.7.1/threeten-extra-1.7.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.codehaus.janino",
+                    "name": "commons-compiler",
+                    "version": "3.1.9",
+                    "artifacts": [
+                        {
+                            "name": "commons-compiler",
+                            "path": "/home/ralbright/.m2/repository/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9.jar"
+                        },
+                        {
+                            "name": "commons-compiler",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/codehaus/janino/commons-compiler/3.1.9/commons-compiler-3.1.9-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.univocity",
+                    "name": "univocity-parsers",
+                    "version": "2.9.1",
+                    "artifacts": [
+                        {
+                            "name": "univocity-parsers",
+                            "path": "/home/ralbright/.m2/repository/com/univocity/univocity-parsers/2.9.1/univocity-parsers-2.9.1.jar"
+                        },
+                        {
+                            "name": "univocity-parsers",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/univocity/univocity-parsers/2.9.1/univocity-parsers-2.9.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.hive",
+                    "name": "hive-storage-api",
+                    "version": "2.8.1",
+                    "artifacts": [
+                        {
+                            "name": "hive-storage-api",
+                            "path": "/home/ralbright/.m2/repository/org/apache/hive/hive-storage-api/2.8.1/hive-storage-api-2.8.1.jar"
+                        },
+                        {
+                            "name": "hive-storage-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/hive/hive-storage-api/2.8.1/hive-storage-api-2.8.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.antlr",
+                    "name": "antlr4-runtime",
+                    "version": "4.13.1",
+                    "artifacts": [
+                        {
+                            "name": "antlr4-runtime",
+                            "path": "/home/ralbright/.m2/repository/org/antlr/antlr4-runtime/4.13.1/antlr4-runtime-4.13.1.jar"
+                        },
+                        {
+                            "name": "antlr4-runtime",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/antlr/antlr4-runtime/4.13.1/antlr4-runtime-4.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.thoughtworks.paranamer",
+                    "name": "paranamer",
+                    "version": "2.8",
+                    "artifacts": [
+                        {
+                            "name": "paranamer",
+                            "path": "/home/ralbright/.m2/repository/com/thoughtworks/paranamer/paranamer/2.8/paranamer-2.8.jar"
+                        },
+                        {
+                            "name": "paranamer",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/thoughtworks/paranamer/paranamer/2.8/paranamer-2.8-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "io.netty",
+                    "name": "netty-transport-native-epoll",
+                    "version": "4.1.110.Final",
+                    "artifacts": [
+                        {
+                            "name": "netty-transport-native-epoll",
+                            "classifier": "linux-aarch_64",
+                            "path": "/home/ralbright/.m2/repository/io/netty/netty-transport-native-epoll/4.1.110.Final/netty-transport-native-epoll-4.1.110.Final-linux-aarch_64.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.datasketches",
+                    "name": "datasketches-java",
+                    "version": "6.0.0",
+                    "artifacts": [
+                        {
+                            "name": "datasketches-java",
+                            "path": "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-java/6.0.0/datasketches-java-6.0.0.jar"
+                        },
+                        {
+                            "name": "datasketches-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-java/6.0.0/datasketches-java-6.0.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.lz4",
+                    "name": "lz4-java",
+                    "version": "1.8.0",
+                    "artifacts": [
+                        {
+                            "name": "lz4-java",
+                            "path": "/home/ralbright/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar"
+                        },
+                        {
+                            "name": "lz4-java",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.scala-lang.modules",
+                    "name": "scala-xml_2.13",
+                    "version": "2.2.0",
+                    "artifacts": [
+                        {
+                            "name": "scala-xml_2.13",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-xml_2.13/2.2.0/scala-xml_2.13-2.2.0.jar"
+                        },
+                        {
+                            "name": "scala-xml_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/modules/scala-xml_2.13/2.2.0/scala-xml_2.13-2.2.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.guava",
+                    "name": "guava",
+                    "version": "32.0.0-jre",
+                    "artifacts": [
+                        {
+                            "name": "guava",
+                            "path": "/home/ralbright/.m2/repository/com/google/guava/guava/32.0.0-jre/guava-32.0.0-jre.jar"
+                        },
+                        {
+                            "name": "guava",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/guava/guava/32.0.0-jre/guava-32.0.0-jre-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.scala-lang",
+                    "name": "scala-library",
+                    "version": "2.13.14",
+                    "artifacts": [
+                        {
+                            "name": "scala-library",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/scala-library/2.13.14/scala-library-2.13.14.jar"
+                        },
+                        {
+                            "name": "scala-library",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/scala-lang/scala-library/2.13.14/scala-library-2.13.14-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.slf4j",
+                    "name": "slf4j-api",
+                    "version": "1.7.25",
+                    "artifacts": [
+                        {
+                            "name": "slf4j-api",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/slf4j-api/1.7.25/slf4j-api-1.7.25.jar"
+                        },
+                        {
+                            "name": "slf4j-api",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/slf4j-api/1.7.25/slf4j-api-1.7.25-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.javassist",
+                    "name": "javassist",
+                    "version": "3.29.2-GA",
+                    "artifacts": [
+                        {
+                            "name": "javassist",
+                            "path": "/home/ralbright/.m2/repository/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA.jar"
+                        },
+                        {
+                            "name": "javassist",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/javassist/javassist/3.29.2-GA/javassist-3.29.2-GA-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.twitter",
+                    "name": "chill_2.13",
+                    "version": "0.10.0",
+                    "artifacts": [
+                        {
+                            "name": "chill_2.13",
+                            "path": "/home/ralbright/.m2/repository/com/twitter/chill_2.13/0.10.0/chill_2.13-0.10.0.jar"
+                        },
+                        {
+                            "name": "chill_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/twitter/chill_2.13/0.10.0/chill_2.13-0.10.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.datasketches",
+                    "name": "datasketches-memory",
+                    "version": "2.2.0",
+                    "artifacts": [
+                        {
+                            "name": "datasketches-memory",
+                            "path": "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-memory/2.2.0/datasketches-memory-2.2.0.jar"
+                        },
+                        {
+                            "name": "datasketches-memory",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/datasketches/datasketches-memory/2.2.0/datasketches-memory-2.2.0-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.google.guava",
+                    "name": "failureaccess",
+                    "version": "1.0.1",
+                    "artifacts": [
+                        {
+                            "name": "failureaccess",
+                            "path": "/home/ralbright/.m2/repository/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar"
+                        },
+                        {
+                            "name": "failureaccess",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.slf4j",
+                    "name": "jul-to-slf4j",
+                    "version": "2.0.13",
+                    "artifacts": [
+                        {
+                            "name": "jul-to-slf4j",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/jul-to-slf4j/2.0.13/jul-to-slf4j-2.0.13.jar"
+                        },
+                        {
+                            "name": "jul-to-slf4j",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/slf4j/jul-to-slf4j/2.0.13/jul-to-slf4j-2.0.13-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.glassfish.jersey.core",
+                    "name": "jersey-common",
+                    "version": "3.0.12",
+                    "artifacts": [
+                        {
+                            "name": "jersey-common",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-common/3.0.12/jersey-common-3.0.12.jar"
+                        },
+                        {
+                            "name": "jersey-common",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/glassfish/jersey/core/jersey-common/3.0.12/jersey-common-3.0.12-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.parquet",
+                    "name": "parquet-encoding",
+                    "version": "1.13.1",
+                    "artifacts": [
+                        {
+                            "name": "parquet-encoding",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-encoding/1.13.1/parquet-encoding-1.13.1.jar"
+                        },
+                        {
+                            "name": "parquet-encoding",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/org/apache/parquet/parquet-encoding/1.13.1/parquet-encoding-1.13.1-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "org.apache.orc",
+                    "name": "orc-core",
+                    "version": "2.0.1",
+                    "artifacts": [
+                        {
+                            "name": "orc-core",
+                            "classifier": "shaded-protobuf",
+                            "path": "/home/ralbright/.m2/repository/org/apache/orc/orc-core/2.0.1/orc-core-2.0.1-shaded-protobuf.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "commons-codec",
+                    "name": "commons-codec",
+                    "version": "1.15",
+                    "artifacts": [
+                        {
+                            "name": "commons-codec",
+                            "path": "/home/ralbright/.m2/repository/commons-codec/commons-codec/1.15/commons-codec-1.15.jar"
+                        },
+                        {
+                            "name": "commons-codec",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/commons-codec/commons-codec/1.15/commons-codec-1.15-sources.jar"
+                        }
+                    ]
+                },
+                {
+                    "organization": "com.fasterxml.jackson.module",
+                    "name": "jackson-module-scala_2.13",
+                    "version": "2.17.1",
+                    "artifacts": [
+                        {
+                            "name": "jackson-module-scala_2.13",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/module/jackson-module-scala_2.13/2.17.1/jackson-module-scala_2.13-2.17.1.jar"
+                        },
+                        {
+                            "name": "jackson-module-scala_2.13",
+                            "classifier": "sources",
+                            "path": "/home/ralbright/.m2/repository/com/fasterxml/jackson/module/jackson-module-scala_2.13/2.17.1/jackson-module-scala_2.13-2.17.1-sources.jar"
+                        }
+                    ]
+                }
+            ]
+        },
+        "tags": [
+            "test"
+        ]
+    }
+}
