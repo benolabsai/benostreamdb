@@ -328,19 +328,20 @@ HyperStreamDB stores indexes as **sidecar files** alongside Parquet data:
 ```
 s3://bucket/table/
 ├── data/
-│   ├── segment_001.parquet          # Data file
-│   ├── segment_001.id.idx           # Scalar index (RoaringBitmap)
-│   └── segment_001.embedding.hnsw   # Vector index (HNSW)
+│   ├── segment_001.parquet                   # Main Data (Parquet)
+│   ├── segment_001.id.inv.parquet           # Scalar index (Inverted Parquet)
+│   ├── segment_001.emb.centroids.parquet    # Vector index centroids
+│   └── segment_001.emb.cluster_0.hnsw.graph # Vector index graph (HNSW)
 ├── _manifest/
-│   ├── v1.json                      # Manifest (Iceberg-like)
-│   └── v2.json
+│   ├── v1.avro                              # Manifest (Iceberg/Avro)
+│   └── v2.avro
 └── _metadata/
-    └── schema.json
+    └── v1.metadata.json
 ```
 
 ### Manifest Format
 
-**Semantic Iceberg compatibility** (JSON encoding):
+**Apache Iceberg V2/V3 compliant** (Avro encoding):
 
 ```json
 {
@@ -353,12 +354,12 @@ s3://bucket/table/
       "record_count": 1000000,
       "index_files": [
         {
-          "file_path": "segment_001.id.idx",
+          "file_path": "segment_001.id.inv.parquet",
           "index_type": "scalar",
           "column_name": "id"
         },
         {
-          "file_path": "segment_001.embedding.hnsw",
+          "file_path": "segment_001.embedding.cluster_0.hnsw.graph",
           "index_type": "vector",
           "column_name": "embedding"
         }

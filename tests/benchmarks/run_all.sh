@@ -110,7 +110,7 @@ To reproduce these benchmarks:
 
 \`\`\`bash
 # Clone repository
-git clone https://github.com/yourusername/hyperstreamdb
+git clone https://github.com/rla3rd/hyperstreamdb
 cd hyperstreamdb
 
 # Install dependencies

@@ -45,8 +45,8 @@ cuda = []
 rocm = []
 
 [project.urls]
-Homepage = "https://github.com/yourusername/hyperstream"
-Repository = "https://github.com/yourusername/hyperstream"
+Homepage = "https://github.com/rla3rd/hyperstreamdb"
+Repository = "https://github.com/rla3rd/hyperstreamdb"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

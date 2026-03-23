@@ -15,11 +15,11 @@ HyperStreamDB adds a sophisticated sidecar index (Roaring + HNSW) *on top* of st
 Data is written in immutable **Segments**. Each segment is a self-contained unit comprising:
 
 1.  **Raw Data**:
-    *   `data.vector.bin`: Raw vector data (Generic Tensor support).
-    *   `data.metadata.json` / `data.parquet`: Raw metadata.
+    *   `segment_id.parquet`: Main data storage.
 2.  **Indexes**:
-    *   **`idx.meta.<col>.inv`**: Inverted Indexes (RoaringBitmaps) for scalar filtering.
-    *   **`idx.vector.ann`**: Vector Index (HNSW, DiskANN) for similarity search.
+    *   **`segment_id.col.inv.parquet`**: Inverted Indexes (RoaringBitmaps inside Parquet) for scalar filtering.
+    *   **`segment_id.col.centroids.parquet`**: Vector IV-centroids for IVF indexing.
+    *   **`segment_id.col.cluster_N.hnsw.graph`**: Vector Graph (HNSW) for similarity search.
 
 ## The Streaming Read Path
 
