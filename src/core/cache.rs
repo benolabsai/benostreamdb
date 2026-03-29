@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use moka::future::Cache;
 use once_cell::sync::Lazy;
 use std::sync::Arc;

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::sync::Arc;
 use arrow::record_batch::RecordBatch;
 use anyhow::Result;
@@ -60,12 +62,13 @@ impl HyperStreamSession {
         Ok(())
     }
 
-    pub async fn sql(&self, query: &str) -> Result<Vec<RecordBatch>> {
+    pub async fn sql(&self, query: &str) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef)> {
         // Parse the SQL query and execute directly
         // Note: pgvector rewriter temporarily disabled due to schema mismatch issues
         let df = self.ctx.sql(query).await?;
+        let schema: arrow::datatypes::SchemaRef = std::sync::Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
-        Ok(batches)
+        Ok((batches, schema))
     }
 }
 

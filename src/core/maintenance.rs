@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use crate::core::manifest::ManifestManager;
 use crate::core::storage::create_object_store;
 use object_store::ObjectStore;

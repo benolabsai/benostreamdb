@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Product Quantization (PQ) Implementation
 /// 
 /// PQ compresses high-dimensional vectors by splitting them into 'm' sub-vectors

@@ -9,27 +9,26 @@ __kernel void jaccard_distance_kernel(
     // Pointer to current vector
     __global const float* current_vector = vectors + row * dim;
     
-    int intersection = 0;
-    int union_count = 0;
+    float intersection = 0.0f;
+    float union_count = 0.0f;
     
     for (int i = 0; i < dim; i++) {
-        // For binary vectors represented as floats (0.0 or 1.0)
-        int q_bit = (query[i] != 0.0f) ? 1 : 0;
-        int v_bit = (current_vector[i] != 0.0f) ? 1 : 0;
+        float q_val = query[i];
+        float v_val = current_vector[i];
         
-        // Intersection: both are 1
-        if (q_bit && v_bit) {
-            intersection++;
-        }
-        
-        // Union: at least one is 1
-        if (q_bit || v_bit) {
-            union_count++;
+        if (q_val > 0.0f || v_val > 0.0f) {
+            if (q_val == v_val && q_val > 0.0f) {
+                intersection += 1.0f;
+            }
+            union_count += 1.0f;
         }
     }
     
     // Jaccard distance = 1 - (intersection / union)
     // Handle edge case where both vectors are all zeros
-    float jaccard_similarity = (union_count > 0) ? ((float)intersection / (float)union_count) : 1.0f;
-    distances[row] = 1.0f - jaccard_similarity;
+    if (union_count == 0.0f) {
+        distances[row] = 0.0f;
+    } else {
+        distances[row] = 1.0f - (intersection / union_count);
+    }
 }

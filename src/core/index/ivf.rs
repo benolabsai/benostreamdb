@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// IVF (Inverted File) Index Implementation
 /// 
 /// This is a simplified IVF index without Product Quantization.
@@ -15,6 +17,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use rayon::prelude::*;
 use super::distance::{l2_distance, l2_distance_squared};
+use super::gpu::{get_global_gpu_context, compute_kmeans_assignment, ComputeContext, ComputeBackend};
 
 /// IVF Index structure
 #[allow(dead_code)]
@@ -229,23 +232,42 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
     let mut labels = vec![0; n];
     
     for iter in 0..max_iters {
-        // Assign each vector to nearest centroid (parallel)
-        // Optimization: Use chunked processing for better cache locality
-        let new_labels: Vec<usize> = vectors
-            .par_chunks(1000)  // Process in chunks for better cache locality
-            .flat_map_iter(|chunk| {
-                chunk.iter().map(|vec| {
-                    // Squared distance is sufficient for finding nearest centroid
-                    centroids
-                        .iter()
-                        .enumerate()
-                        .map(|(i, centroid)| (i, l2_distance_squared(vec, centroid)))
-                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                        .map(|(i, _)| i)
-                        .unwrap()
-                })
-            })
-            .collect();
+        // Assign each vector to nearest centroid
+        let context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+        
+        let new_labels: Vec<usize> = if context.backend != ComputeBackend::Cpu {
+            // Flatten vectors and centroids for GPU
+            let flattened_vectors: Vec<f32> = vectors.iter().flatten().cloned().collect();
+            let flattened_centroids: Vec<f32> = centroids.iter().flatten().cloned().collect();
+            
+            match compute_kmeans_assignment(&flattened_vectors, &flattened_centroids, dim, &context) {
+                Ok(gpu_labels) => gpu_labels.into_iter().map(|l| l as usize).collect(),
+                Err(e) => {
+                    eprintln!("GPU K-Means assignment failed, falling back to CPU: {}", e);
+                    // Fallback to CPU parallel implementation
+                    vectors.par_chunks(1000)
+                        .flat_map_iter(|chunk| {
+                            chunk.iter().map(|vec| {
+                                centroids.iter().enumerate()
+                                    .map(|(i, centroid)| (i, l2_distance_squared(vec, centroid)))
+                                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                                    .map(|(i, _)| i).unwrap()
+                            })
+                        }).collect()
+                }
+            }
+        } else {
+            // Parallel CPU implementation
+            vectors.par_chunks(1000)
+                .flat_map_iter(|chunk| {
+                    chunk.iter().map(|vec| {
+                        centroids.iter().enumerate()
+                            .map(|(i, centroid)| (i, l2_distance_squared(vec, centroid)))
+                            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                            .map(|(i, _)| i).unwrap()
+                    })
+                }).collect()
+        };
         
         // Check convergence (early exit optimization)
         let changed = new_labels.iter().zip(labels.iter()).any(|(a, b)| a != b);

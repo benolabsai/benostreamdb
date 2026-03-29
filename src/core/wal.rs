@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use anyhow::Context;
 use arrow::record_batch::RecordBatch;

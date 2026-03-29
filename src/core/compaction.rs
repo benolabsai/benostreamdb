@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use crate::core::reader::HybridReader;
 use crate::core::segment::HybridSegmentWriter;
 use crate::SegmentConfig;

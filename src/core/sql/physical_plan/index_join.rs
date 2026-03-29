@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;

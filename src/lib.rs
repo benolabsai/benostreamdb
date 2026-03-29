@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::sync::Arc;
 pub mod core;
 
@@ -96,6 +98,9 @@ pub struct SegmentConfig {
     pub columns_to_index: Option<Vec<String>>,
     /// Partition values for this segment
     pub partition_values: std::collections::HashMap<String, serde_json::Value>,
+    /// Per-column device override (e.g. "cpu", "gpu", "mps")
+    pub column_devices: std::collections::HashMap<String, String>,
+    pub default_device: Option<String>,
 }
 
 impl SegmentConfig {
@@ -111,6 +116,8 @@ impl SegmentConfig {
             index_all: false,
             columns_to_index: None,
             partition_values: std::collections::HashMap::new(),
+            column_devices: std::collections::HashMap::new(),
+            default_device: None,
         }
     }
 
@@ -146,6 +153,16 @@ impl SegmentConfig {
 
     pub fn with_index_all(mut self, index_all: bool) -> Self {
         self.index_all = index_all;
+        self
+    }
+
+    pub fn with_default_device(mut self, device: Option<String>) -> Self {
+        self.default_device = device;
+        self
+    }
+
+    pub fn with_column_devices(mut self, column_devices: std::collections::HashMap<String, String>) -> Self {
+        self.column_devices = column_devices;
         self
     }
 

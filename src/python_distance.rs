@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Python bindings for vector distance functions
 /// 
 /// This module provides Python bindings for all 6 distance metrics with GPU acceleration support.
@@ -6,7 +8,7 @@
 use pyo3::prelude::*;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use crate::core::index::{VectorMetric, distance};
-use crate::core::index::gpu::{compute_distance, compute_distance_batch};
+use crate::core::index::gpu::{compute_distance, compute_distance_batch, ComputeBackend};
 use crate::python_gpu_context::PyComputeContext;
 
 /// Helper function to validate vector dimensions
@@ -399,17 +401,38 @@ fn compute_batch_distances(
     // Compute distances using GPU if context provided, otherwise CPU
     if let Some(ctx) = context {
         let gpu_context = ctx.get_context();
-        compute_distance_batch(query, vectors, dim, metric, gpu_context)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        let start = std::time::Instant::now();
+        
+        let results = compute_distance_batch(query, vectors, dim, metric, gpu_context)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            
+        let duration = start.elapsed();
+        
+        // Update stats
+        {
+            let tracker = ctx.get_stats_tracker();
+            let mut stats = tracker.lock().unwrap();
+            if gpu_context.backend == ComputeBackend::Cpu {
+                 stats.total_cpu_time_ms += duration.as_secs_f64() * 1000.0;
+            } else {
+                 stats.total_kernel_launches += 1;
+                 stats.total_gpu_time_ms += duration.as_secs_f64() * 1000.0;
+                 let bytes = (query.len() + vectors.len() + results.len()) * std::mem::size_of::<f32>();
+                 stats.memory_transfers_mb += bytes as f64 / 1024.0 / 1024.0;
+            }
+            stats.total_vectors_processed += (vectors.len() / dim) as u64;
+        }
+        
+        Ok(results)
     } else {
         // Use CPU computation
         let n_vectors = vectors.len() / dim;
         let mut distances = Vec::with_capacity(n_vectors);
         
         for i in 0..n_vectors {
-            let start = i * dim;
-            let end = start + dim;
-            let vector = &vectors[start..end];
+            let start_idx = i * dim;
+            let end_idx = start_idx + dim;
+            let vector = &vectors[start_idx..end_idx];
             
             let dist = match metric {
                 VectorMetric::L2 => distance::l2_distance(query, vector),
@@ -421,6 +444,8 @@ fn compute_batch_distances(
             };
             distances.push(dist);
         }
+        
+        // Note: CPU path without context doesn't track stats since there's no tracker
         
         Ok(distances)
     }

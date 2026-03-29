@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::core::manifest::{Schema, PartitionSpec, SortOrder};

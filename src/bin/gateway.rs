@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use axum::{
     routing::{get, post},
     Router, Json,

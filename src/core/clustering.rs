@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use arrow::record_batch::RecordBatch;
 use arrow::array::{Array, UInt64Array, Float32Array, Int32Array, Int64Array, Float64Array};
 use anyhow::Result;

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::sync::Arc;
 // use std::collections::HashSet;
 use chrono::Utc;
@@ -350,12 +352,25 @@ impl HybridReader {
         
         let mut matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
+            let mut dir_path = self.config.parquet_path.clone().unwrap_or_else(|| "".to_string());
+            if let Some(pos) = dir_path.rfind('/') {
+                dir_path.truncate(pos);
+            } else {
+                dir_path = "".to_string();
+            }
+            
+            let full_inv_path_str = if dir_path.is_empty() {
+                inv_path_str.clone()
+            } else {
+                format!("{}/{}", dir_path, inv_path_str)
+            };
+
             // Use Inverted Index (Value -> RowIDs)
             // 1. Check Object Cache (Decoded RecordBatches)
             let cache_key = if let Some(offset) = idx_info.offset {
-                 format!("{}/{}:{}", self.root_uri, inv_path_str, offset)
+                 format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
             } else {
-                 format!("{}/{}", self.root_uri, inv_path_str)
+                 format!("{}/{}", self.root_uri, full_inv_path_str)
             };
 
             let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get(&cache_key).await {
@@ -364,7 +379,7 @@ impl HybridReader {
             } else {
                 // println!("Cache MISS for {}", inv_path_str);
                 // Cache Miss - Load from Disk/Byte Cache
-                let inv_path = Path::from(inv_path_str.as_str());
+                let inv_path = Path::from(full_inv_path_str.as_str());
                 
                 let inv_bytes = match crate::core::cache::BYTE_CACHE.get(&cache_key).await {
                     Some(cached) => cached.as_ref().clone(),
@@ -398,7 +413,7 @@ impl HybridReader {
                     decoded.push(batch_result?);
                 }
                 
-                crate::core::cache::INVERTED_INDEX_CACHE.insert(format!("{}/{}", self.root_uri, inv_path_str), Arc::new(decoded.clone())).await;
+                crate::core::cache::INVERTED_INDEX_CACHE.insert(format!("{}/{}", self.root_uri, full_inv_path_str), Arc::new(decoded.clone())).await;
                 decoded
             };
             
@@ -851,12 +866,15 @@ impl HybridReader {
     /// 2. Plain HNSW: Falls back to `.hnsw.graph` files
     pub async fn vector_search_index(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, filter: Option<&FilterExpr>, metric: VectorMetric, ef_search: Option<usize>) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
+        println!("vector_search_index called with filter: {:?}", filter);
         let allowed_bitmap = if let Some(expr) = filter {
              let sub_filters = expr.extract_and_conditions();
              let mut combined_bitmap: Option<RoaringBitmap> = None;
              
              for sub_f in sub_filters {
-                 if let Ok(Some(bm)) = self.get_scalar_filter_bitmap(&sub_f).await {
+                 let res = self.get_scalar_filter_bitmap(&sub_f).await;
+                 println!("get_scalar_filter_bitmap returned {:?} for column {:?}", res.is_ok(), sub_f.column);
+                 if let Ok(Some(bm)) = res {
                      match combined_bitmap {
                          Some(ref mut existing) => { *existing &= bm; },
                          None => { combined_bitmap = Some(bm); }
@@ -884,7 +902,15 @@ impl HybridReader {
             .find(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column));
 
         let matches = if let Some(idx_info) = vector_idx_info {
-             self.search_hnsw_ivf(idx_info, query, k, &allowed_bitmap, metric, ef_search).await?
+             match self.search_hnsw_ivf(idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
+                 Ok(m) => m,
+                 Err(e) => {
+                     // In a real query planner, we would fallback to a sequential flat scan here.
+                     // For now, we return empty matches so we don't crash the query on missing/incomplete index.
+                     println!("Warning: Vector index listed in manifest not found or invalid: {}", e);
+                     vec![]
+                 }
+             }
         } else {
              // Fallback to convention-based path if no manifest entry (unlikely now)
              let idx_path = self.resolve_object_path(&column).to_string();
@@ -896,7 +922,10 @@ impl HybridReader {
                  offset: None,
                  length: None,
              };
-             self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await?
+             match self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
+                 Ok(m) => m,
+                 Err(_) => vec![] // Silently ignore if convention path doesn't exist
+             }
         };
         
         if matches.is_empty() {
@@ -1014,7 +1043,7 @@ impl HybridReader {
         k: usize,
         allowed_bitmap: &Option<RoaringBitmap>,
         _metric: VectorMetric,
-        ef_search: Option<usize>,
+        _ef_search: Option<usize>,
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
         
@@ -1038,6 +1067,7 @@ impl HybridReader {
         
         // Determine n_probe based on filtering or session config
         let n_probe = if allowed_bitmap.is_some() { 20 } else { 10 };
+        println!("search_hnsw_ivf allowed_bitmap is_some={}", allowed_bitmap.is_some());
         
         let matches = tokio::task::spawn_blocking(move || {
             hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref())

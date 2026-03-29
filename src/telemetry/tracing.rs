@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use opentelemetry::global;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use tracing_subscriber::layer::SubscriberExt;

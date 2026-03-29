@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use crate::core::manifest::{ManifestEntry, IndexFile};
 use serde_json::Value;
 use std::cmp::Ordering;
@@ -860,9 +862,9 @@ impl QueryPlanner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::core::manifest::{ColumnStats, ManifestValue};
-    use std::collections::HashMap;
+    
+    
+    
 
 
     /* DEPRECATED: These tests use the old QueryFilter API which has been replaced by FilterExpr

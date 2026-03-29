@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::{Result, anyhow};
 use std::net::ToSocketAddrs;
 use async_trait::async_trait;

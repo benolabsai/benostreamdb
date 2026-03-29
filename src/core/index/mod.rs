@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 pub mod ivf;
 pub mod hnsw_ivf;
 pub mod distance;

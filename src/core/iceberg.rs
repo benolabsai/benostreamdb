@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use apache_avro::{Reader, types::Value as AvroValue};
 use base64::Engine;
@@ -634,7 +636,7 @@ pub fn convert_iceberg_to_object(
         } else if df.content == 3 {
             // V3 Deletion Vector (content=3)
             // Check if we have the required DV fields
-            if let (Some(ref_file), Some(offset), Some(size)) = (
+            if let (Some(_ref_file), Some(offset), Some(size)) = (
                 df.referenced_data_file.clone(),
                 df.content_offset,
                 df.content_size_in_bytes
@@ -1074,11 +1076,12 @@ impl IcebergWriter {
         &self, 
         entries: &[crate::core::manifest::ManifestEntry], 
         partition_spec: &crate::core::manifest::PartitionSpec,
+        schema: &crate::core::manifest::Schema,
         snapshot_id: i64,
         seq_num: i64
     ) -> Result<Vec<u8>> {
         // 1. Generate Schema based on Partition Spec
-        let schema_json = self.generate_manifest_schema(partition_spec);
+        let schema_json = self.generate_manifest_schema(partition_spec, schema);
         let schema = apache_avro::Schema::parse_str(&schema_json)?;
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
@@ -1195,16 +1198,32 @@ impl IcebergWriter {
         Ok(writer.into_inner()?)
     }
 
-    fn generate_manifest_schema(&self, spec: &crate::core::manifest::PartitionSpec) -> String {
+    fn generate_manifest_schema(&self, spec: &crate::core::manifest::PartitionSpec, schema: &crate::core::manifest::Schema) -> String {
         let mut partition_fields = Vec::new();
         for field in &spec.fields {
-             // For now assume all partitions are int, string or long. 
-             // Need full type mapping from source schema implicitly?
-             // Or generic "string" / "int" based on transform.
              let type_str = match field.transform.as_str() {
                  "year" | "month" | "day" => r#"["null", "int"]"#,
                  s if s.starts_with("bucket[") => r#"["null", "int"]"#,
                  s if s.starts_with("truncate[") => r#"["null", "string"]"#,
+                 "identity" => {
+                     let source_id = field.source_ids.first().copied().or(field.source_id);
+                     if let Some(id) = source_id {
+                         if let Some(source_field) = schema.fields.iter().find(|f| f.id == id) {
+                             match source_field.type_str.as_str() {
+                                 "Int32" | "int" => r#"["null", "int"]"#,
+                                 "Int64" | "long" => r#"["null", "long"]"#,
+                                 "Float32" | "float" => r#"["null", "float"]"#,
+                                 "Float64" | "double" => r#"["null", "double"]"#,
+                                 "Boolean" | "bool" => r#"["null", "boolean"]"#,
+                                 _ => r#"["null", "string"]"#,
+                             }
+                         } else {
+                             r#"["null", "string"]"#
+                         }
+                     } else {
+                         r#"["null", "string"]"#
+                     }
+                 },
                  _ => r#"["null", "string"]"#,
              };
              partition_fields.push(format!(r#"{{"name": "{}", "type": {}, "default": null}}"#, field.name, type_str));

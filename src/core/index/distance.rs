@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Optimized distance functions for vector search
 /// 
 /// This module provides SIMD-accelerated distance metrics.

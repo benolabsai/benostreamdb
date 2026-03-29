@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Query execution engine for multi-segment queries
 use anyhow::Result;
 use arrow::record_batch::RecordBatch;
@@ -281,6 +283,7 @@ pub async fn execute_vector_search_with_config(
                     .strip_suffix(".parquet")
                     .unwrap_or(&file_path_str);
                 
+                println!("Entry index files: {:?}", entry.index_files);
                 let config = SegmentConfig::new(&base_uri, segment_id)
                     .with_parquet_path(entry.file_path.clone())
                     .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))

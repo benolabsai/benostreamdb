@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Core Table API - High-level interface for HyperStreamDB tables
 /// 
 /// This module provides the main Table abstraction that encapsulates:
@@ -38,6 +40,14 @@ use crate::core::wal::WriteAheadLog;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use crate::telemetry::metrics::INGEST_ROWS_TOTAL;
+use futures::StreamExt;
+use rayon::prelude::*;
+use crate::core::index::gpu::{get_global_gpu_context, ComputeContext};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColumnIndexConfig {
+    pub device: Option<String>,
+}
 
 /// Main Table struct - represents a HyperStreamDB table
 pub struct Table {
@@ -50,6 +60,8 @@ pub struct Table {
     // Indexing Configuration
     index_all: bool,
     index_columns: Arc<std::sync::RwLock<Vec<String>>>,
+    index_configs: Arc<std::sync::RwLock<HashMap<String, ColumnIndexConfig>>>,
+    default_device: Arc<std::sync::RwLock<Option<String>>>,
     schema: Arc<std::sync::RwLock<SchemaRef>>,
     write_buffer: Arc<std::sync::RwLock<Vec<RecordBatch>>>,
     memory_index: Arc<std::sync::RwLock<Option<InMemoryVectorIndex>>>,
@@ -76,6 +88,8 @@ impl Clone for Table {
             query_config: self.query_config.clone(),
             index_all: self.index_all,
             index_columns: self.index_columns.clone(),
+            index_configs: self.index_configs.clone(),
+            default_device: self.default_device.clone(),
             schema: self.schema.clone(),
             write_buffer: self.write_buffer.clone(),
             memory_index: self.memory_index.clone(),
@@ -98,6 +112,66 @@ impl std::fmt::Debug for Table {
             .field("uri", &self.uri)
             .field("index_all", &self.index_all)
             .finish()
+    }
+}
+
+// ============================================================================
+// Fluent Query API
+// ============================================================================
+
+pub struct TableQuery<'a> {
+    pub table: &'a Table,
+    pub filter_str: Option<String>,
+    pub vector_filter: Option<VectorSearchParams>,
+    pub columns: Option<Vec<String>>,
+    pub context: Option<ComputeContext>,
+}
+
+impl<'a> TableQuery<'a> {
+    pub fn new(table: &'a Table) -> Self {
+        Self {
+            table,
+            filter_str: None,
+            vector_filter: None,
+            columns: None,
+            context: None,
+        }
+    }
+
+    pub fn filter(mut self, expr: &str) -> Self {
+        if let Some(ref mut f) = self.filter_str {
+            *f = format!("({}) AND ({})", f, expr);
+        } else {
+            self.filter_str = Some(expr.to_string());
+        }
+        self
+    }
+
+    pub fn vector_search(mut self, column: &str, query: crate::core::index::VectorValue, k: usize) -> Self {
+        self.vector_filter = Some(VectorSearchParams::new(column, query, k));
+        self
+    }
+
+    pub fn select(mut self, columns: Vec<String>) -> Self {
+        self.columns = Some(columns);
+        self
+    }
+
+    pub fn with_context(mut self, context: ComputeContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    pub async fn to_batches(self) -> Result<Vec<RecordBatch>> {
+        let cols_refs: Option<Vec<&str>> = self.columns.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect());
+        let cols_slice: Option<&[&str]> = cols_refs.as_ref().map(|v| v.as_slice());
+        
+        // Inject context if provided
+        if let Some(ctx) = self.context {
+            crate::core::index::gpu::set_global_gpu_context(Some(ctx));
+        }
+        
+        self.table.read_async(self.filter_str.as_deref(), self.vector_filter, cols_slice).await
     }
 }
 
@@ -189,6 +263,8 @@ impl Table {
             query_config: QueryConfig::default(),
             index_all: false, // Default: Index Nothing
             index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
+            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            default_device: Arc::new(std::sync::RwLock::new(None)),
             schema: Arc::new(std::sync::RwLock::new(schema_val)),
             write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
             memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
@@ -694,8 +770,10 @@ impl Table {
             data_store: None,
             rt: None,
             query_config: QueryConfig::default(),
-            index_all: false, 
+            index_all: false,
             index_columns: index_cols,
+            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())), // TODO: Load from metadata
+            default_device: Arc::new(std::sync::RwLock::new(None)),
             schema: Arc::new(std::sync::RwLock::new(schema_val)),
             write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
             memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
@@ -928,6 +1006,7 @@ impl Table {
     }
 
     /// Check if schema has V3 metadata columns (_row_id, _last_updated_sequence_number)
+    #[allow(dead_code)]
     fn has_v3_metadata_columns(schema: &arrow::datatypes::SchemaRef) -> bool {
         schema.column_with_name("_row_id").is_some() 
             && schema.column_with_name("_last_updated_sequence_number").is_some()
@@ -1037,22 +1116,47 @@ impl Table {
         self.query_config.max_parallel_readers
     }
 
-    pub fn add_index_columns(&mut self, columns: Vec<String>) -> Result<()> {
-        let mut index_cols = self.index_columns.write().unwrap();
-        index_cols.extend(columns.clone());
-        index_cols.sort();
-        index_cols.dedup();
-        drop(index_cols);
+    pub fn add_index_columns(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
+        {
+            let mut index_cols = self.index_columns.write().unwrap();
+            let mut index_configs = self.index_configs.write().unwrap();
+            
+            for col in &columns {
+                if !index_cols.contains(col) {
+                    index_cols.push(col.clone());
+                }
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone() });
+            }
+            index_cols.sort();
+            index_cols.dedup();
+        }
         self.backfill_indexes(columns)
     }
 
-    pub async fn add_index_columns_async(&mut self, columns: Vec<String>) -> Result<()> {
-        let mut index_cols = self.index_columns.write().unwrap();
-        index_cols.extend(columns.clone());
-        index_cols.sort();
-        index_cols.dedup();
-        drop(index_cols);
+    pub async fn add_index_columns_async(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
+        {
+            let mut index_cols = self.index_columns.write().unwrap();
+            let mut index_configs = self.index_configs.write().unwrap();
+            
+            for col in &columns {
+                if !index_cols.contains(col) {
+                    index_cols.push(col.clone());
+                }
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone() });
+            }
+            index_cols.sort();
+            index_cols.dedup();
+        }
         self.backfill_indexes_async(columns).await
+    }
+
+    pub fn set_default_device(&mut self, device: Option<String>) {
+        let mut d = self.default_device.write().unwrap();
+        *d = device;
+    }
+
+    pub fn get_default_device(&self) -> Option<String> {
+        self.default_device.read().unwrap().clone()
     }
 
     pub fn remove_index_columns(&mut self, columns: Vec<String>) {
@@ -1149,6 +1253,10 @@ impl Table {
                 
                 writer.upload_to_store().await?;
                 
+                // Invalidate the cache for this segment
+                let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
+                crate::core::cache::PARQUET_META_CACHE.invalidate(&cache_key).await;
+                
                 let updated_entry = writer.to_manifest_entry();
                 current_entry.index_files = updated_entry.index_files;
                 
@@ -1190,6 +1298,14 @@ impl Table {
 
     pub async fn read_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
         self.read_with_config_async(filter_str, vector_filter, columns, self.query_config.clone()).await
+    }
+
+    pub fn query(&self) -> TableQuery<'_> {
+        TableQuery::new(self)
+    }
+
+    pub fn filter(&self, expr: &str) -> TableQuery<'_> {
+        TableQuery::new(self).filter(expr)
     }
 
     pub async fn read_with_config_async(
@@ -1288,10 +1404,10 @@ impl Table {
                       }).collect();
                       
                       let mut result_rows = Vec::new();
-                      for (id, _dist) in memory_hits {
+                      for (id, _dist) in &memory_hits {
                           for (i, offset) in batch_offsets.iter().enumerate().rev() {
-                              if id >= *offset {
-                                  let row_idx = id - offset;
+                              if *id >= *offset {
+                                  let row_idx = *id - offset;
                                   if i < buffer.len() && row_idx < buffer[i].num_rows() {
                                       result_rows.push(buffer[i].slice(row_idx, 1));
                                   }
@@ -1302,7 +1418,19 @@ impl Table {
                       
                       if !result_rows.is_empty() {
                           let mem_batch = arrow::compute::concat_batches(&schema, result_rows.iter().collect::<Vec<&RecordBatch>>())?;
-                          results.push(mem_batch);
+                          
+                          // Append _distance column to match disk search schema
+                          let mut new_fields = schema.fields().to_vec();
+                          new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false)));
+                          let new_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
+                          
+                          let mut new_columns = mem_batch.columns().to_vec();
+                          let distance_array = arrow::array::Float32Array::from(memory_hits.iter().map(|(_, dist)| *dist).collect::<Vec<f32>>());
+                          new_columns.push(std::sync::Arc::new(distance_array));
+                          
+                          if let Ok(dist_batch) = RecordBatch::try_new(new_schema, new_columns) {
+                              results.push(dist_batch);
+                          }
                       }
                   }
               }
@@ -1401,8 +1529,6 @@ impl Table {
         manifest_version: u64,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
-        use futures::StreamExt;
-        
         let file_path_str = entry.file_path.clone();
         let segment_id = file_path_str.split('/').last().unwrap_or(&file_path_str)
             .strip_suffix(".parquet").unwrap_or(&file_path_str);
@@ -1615,13 +1741,17 @@ impl Table {
         let new_schema_id = manifest.current_schema_id + 1;
         current_schema.schema_id = new_schema_id;
         
-        manifest.schemas.push(current_schema);
+        manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         manifest.last_column_id = new_id;
         
         // Commit Metadata Only Change
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(new_id)).await?;
         println!("Schema Evolution: Added column '{}' (Schema ID: {})", name, new_schema_id);
+        
+        let new_arrow_schema = current_schema.to_arrow();
+        let mut lock = self.schema.write().unwrap();
+        *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
     }
@@ -1690,10 +1820,15 @@ impl Table {
         // Update Manifest
         let new_schema_id = manifest.current_schema_id + 1;
         current_schema.schema_id = new_schema_id;
-        manifest.schemas.push(current_schema);
+        manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
         println!("Schema Evolution: Dropped column '{}' (Schema ID: {})", name, new_schema_id);
+        
+        let new_arrow_schema = current_schema.to_arrow();
+        let mut lock = self.schema.write().unwrap();
+        *lock = std::sync::Arc::new(new_arrow_schema);
+        
         Ok(())
     }
     
@@ -1713,10 +1848,15 @@ impl Table {
 
         let new_schema_id = manifest.current_schema_id + 1;
         current_schema.schema_id = new_schema_id;
-        manifest.schemas.push(current_schema);
+        manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
         println!("Schema Evolution: Renamed '{}' -> '{}' (Schema ID: {})", old_name, new_name, new_schema_id);
+        
+        let new_arrow_schema = current_schema.to_arrow();
+        let mut lock = self.schema.write().unwrap();
+        *lock = std::sync::Arc::new(new_arrow_schema);
+        
         Ok(())
     }
 
@@ -1740,11 +1880,16 @@ impl Table {
 
         let new_schema_id = manifest.current_schema_id + 1;
         current_schema.schema_id = new_schema_id;
-        manifest.schemas.push(current_schema);
+        manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
         println!("Schema Evolution: Updated column type '{}' to '{}' (Schema ID: {})", name, new_type, new_schema_id);
+        
+        let new_arrow_schema = current_schema.to_arrow();
+        let mut lock = self.schema.write().unwrap();
+        *lock = std::sync::Arc::new(new_arrow_schema);
+        
         Ok(())
     }
 
@@ -1784,11 +1929,16 @@ impl Table {
 
         let new_schema_id = manifest.current_schema_id + 1;
         current_schema.schema_id = new_schema_id;
-        manifest.schemas.push(current_schema);
+        manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
         println!("Schema Evolution: Moved column '{}' to index {} (Schema ID: {})", name, new_index, new_schema_id);
+        
+        let new_arrow_schema = current_schema.to_arrow();
+        let mut lock = self.schema.write().unwrap();
+        *lock = std::sync::Arc::new(new_arrow_schema);
+        
         Ok(())
     }
 
@@ -1811,7 +1961,18 @@ impl Table {
             drop(lock);
         }
 
-        let target_schema = self.arrow_schema();
+        let mut target_schema = self.arrow_schema();
+        
+        // Simple Implicit Schema Evolution
+        if let Some(first_batch) = batches.first() {
+            if first_batch.schema().fields().len() > target_schema.fields().len() {
+                let mut lock = self.schema.write().unwrap();
+                *lock = first_batch.schema();
+                drop(lock);
+                target_schema = self.arrow_schema();
+            }
+        }
+
         let batches: Vec<RecordBatch> = batches.into_iter().map(|b| {
             if b.schema() != target_schema {
                 // Remap batch to target schema (adds iceberg.id metadata)
@@ -1959,7 +2120,15 @@ impl Table {
 
         // --- NEW: Coalesce Batches for larger segments ---
         let schema = batches_to_write[0].schema();
-        let coalesced_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
+        let mut coalesced_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
+        
+        // --- NEW: Vector Shuffling (Optimization inspired by LanceDB)
+        // Attribution: Adapted from Lance partition/shuffle logic (Apache 2.0)
+        // Copyright The Lance Authors. Modified for HyperStreamDB Parquet layout.
+        if let Some(vector_col) = self.get_vector_column_for_shuffling(&coalesced_batch) {
+            println!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
+            coalesced_batch = self.shuffle_batch_by_centroids(&coalesced_batch, &vector_col).await?;
+        }
         
         // Apply sort order if configured (Iceberg V2 spec compliance)
         let sorted_batch = self.apply_sort_order(&coalesced_batch)?;
@@ -1988,25 +2157,46 @@ impl Table {
         let index_cols = self.index_columns.read().unwrap().clone();
         let index_all_flag = self.index_all;
 
-        for (partition_values, batch) in partitioned_batches {
-            let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
+        let index_configs_map: HashMap<String, String> = {
+            let configs = self.index_configs.read().unwrap();
+            configs.iter().filter_map(|(col, cfg)| {
+                cfg.device.as_ref().map(|d| (col.clone(), d.clone()))
+            }).collect()
+        };
+        let default_device = self.default_device.read().unwrap().clone();
+        let default_device_for_stream = default_device.clone();
 
-            // 1. Create writer for data write (no index building yet)
-            let config_write = SegmentConfig::new(base_path, &segment_id)
-                .with_index_all(false)
-                .with_columns_to_index(Vec::new())
-                .with_partition_values(partition_values.clone());
-            let writer_write = HybridSegmentWriter::new(config_write);
+        // Parallelize partition writing using futures stream
+        let stream = futures::stream::iter(partitioned_batches.into_iter().map(|(partition_values, batch)| {
+            let base_path = base_path.to_string();
+            let default_device_inner = default_device_for_stream.clone();
+            async move {
+                let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
 
-            // Copy needed data before spawn_blocking
-            let batch_for_write = batch.clone();
-            
-            let (entry, generated_files) = tokio::task::spawn_blocking(move || {
-                writer_write.write_batch(&batch_for_write)?;
-                let entry = writer_write.to_manifest_entry();
-                let files = writer_write.get_generated_files(); 
-                Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((entry, files))
-            }).await.context("Flush task panicked")??;
+                // 1. Create writer for data write (no index building yet)
+                let config_write = SegmentConfig::new(&base_path, &segment_id)
+                    .with_index_all(false)
+                    .with_columns_to_index(Vec::new())
+                    .with_partition_values(partition_values.clone())
+                    .with_default_device(default_device_inner);
+                let writer_write = HybridSegmentWriter::new(config_write);
+
+                let batch_inner = batch.clone();
+                let (entry, generated_files) = tokio::task::spawn_blocking(move || {
+                    writer_write.write_batch(&batch_inner)?;
+                    let entry = writer_write.to_manifest_entry();
+                    let files = writer_write.get_generated_files(); 
+                    Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((entry, files))
+                }).await.context("Flush task panicked")??;
+                
+                Ok::<(crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>), anyhow::Error>((entry, generated_files, segment_id, batch, partition_values))
+            }
+        })).buffer_unordered(16); // High concurrency for IO
+
+        let results: Vec<Result<(crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>)>> = stream.collect().await;
+
+        for res in results {
+            let (entry, generated_files, segment_id, batch, partition_values) = res?;
             
             all_generated_files.extend(generated_files);
             all_new_entries.push(entry.clone());
@@ -2018,18 +2208,23 @@ impl Table {
                 let segment_id_clone = segment_id.clone();
                 let batch_for_indexing = batch.clone();
                 let partition_values_clone = partition_values.clone();
+                let index_configs_clone = index_configs_map.clone();
+                let default_device_clone = default_device.clone();
                 
                 let entry_clone = entry.clone();
                 let manifest_manager_clone = manifest_manager.clone();
                 let index_all_flag = index_all_flag;
 
+                let table_schema = self.schema.read().unwrap().clone();
                 let handle = tokio::spawn(async move {
                     let _start = std::time::Instant::now();
                     
                     let config_index = SegmentConfig::new(&base_path_clone, &segment_id_clone)
                         .with_index_all(index_all_flag)
                         .with_columns_to_index(index_cols_clone)
-                        .with_partition_values(partition_values_clone);
+                        .with_partition_values(partition_values_clone)
+                        .with_column_devices(index_configs_clone)
+                        .with_default_device(default_device_clone);
                     
                     let index_res = tokio::task::spawn_blocking(move || {
                         let index_writer = HybridSegmentWriter::new(config_index);
@@ -2047,7 +2242,12 @@ impl Table {
                             merged_entry.index_files = updated_entry.index_files;
                             merged_entry.column_stats = updated_entry.column_stats; 
                             
-                            match manifest_manager_clone.commit(&[merged_entry], &[], crate::core::manifest::CommitMetadata::default()).await {
+                            let mut commit_metadata = crate::core::manifest::CommitMetadata::default();
+                            let manifest_schema = crate::core::manifest::Schema::from_arrow(&table_schema, 0);
+                            commit_metadata.updated_schemas = Some(vec![manifest_schema]);
+                            commit_metadata.updated_schema_id = Some(0);
+
+                            match manifest_manager_clone.commit(&[merged_entry], &[], commit_metadata).await {
                                 Ok(_) => println!("Successfully attached indexes to manifest for segment {}", 
                                                  segment_id_clone),
                                 Err(e) => eprintln!("Failed to attach indexes for segment {}: {}", segment_id_clone, e),
@@ -2090,6 +2290,7 @@ impl Table {
             updated_schema_id: final_schema_id,
             ..Default::default()
         };
+        
         let new_manifest = manifest_manager.commit(&all_new_entries, &[], commit_metadata).await?;
 
         // 4. Update Table Metadata (Iceberg v2 Spec)
@@ -3242,9 +3443,77 @@ impl Table {
         
         Ok(result)
     }
+    fn get_vector_column_for_shuffling(&self, batch: &RecordBatch) -> Option<String> {
+        // Use first index column if it's a vector
+        let index_cols = self.index_columns.read().unwrap();
+        for col_name in index_cols.iter() {
+            if let Ok(idx) = batch.schema().index_of(col_name) {
+                let col = batch.column(idx);
+                if matches!(col.data_type(), arrow::datatypes::DataType::FixedSizeList(inner, _) 
+                  if *inner.data_type() == arrow::datatypes::DataType::Float32) {
+                    return Some(col_name.clone());
+                }
+            }
+        }
+
+        // Fallback: Pick first vector column (FixedSizeList<Float32>)
+        batch.schema().fields().iter()
+            .find(|f| matches!(f.data_type(), arrow::datatypes::DataType::FixedSizeList(inner, _) 
+                  if *inner.data_type() == arrow::datatypes::DataType::Float32))
+            .map(|f| f.name().clone())
+    }
+
+    async fn shuffle_batch_by_centroids(&self, batch: &RecordBatch, col_name: &str) -> Result<RecordBatch> {
+        use crate::core::index::ivf::simple_kmeans;
+        use arrow::array::{Array, Int32Array};
+        
+        let col_idx = batch.schema().index_of(col_name)?;
+        let list_array = batch.column(col_idx).as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+        
+        let n = list_array.len();
+        if n < 1024 { return Ok(batch.clone()); } // Too small to benefit from shuffling
+        
+        // 1. Convert vectors to Vec<Vec<f32>> for K-Means (Training step)
+        // Optimization: Port this to handle FixedSizeList directly to avoid copies
+        let vectors: Vec<Vec<f32>> = (0..n).into_par_iter().step_by(n / 1000 + 1).map(|i| {
+            list_array.value(i).as_any().downcast_ref::<arrow::array::Float32Array>().unwrap().values().to_vec()
+        }).collect();
+
+        // 2. Train centroids (Sampled)
+        let k = (n as f64).sqrt() as usize;
+        let k = k.clamp(16, 1024);
+        let (centroids, _) = simple_kmeans(&vectors, k, 3)?; // Fast 3-iter training
+
+        // 3. Assign all vectors (GPU Accelerated!)
+        let ctx = get_global_gpu_context().unwrap_or_else(|| {
+              ComputeContext::auto_detect()
+        });
+
+        let dim = list_array.value_length() as usize;
+        let flat_vectors: Vec<f32> = (0..n).into_par_iter().flat_map(|i| {
+            list_array.value(i).as_any().downcast_ref::<arrow::array::Float32Array>().unwrap().values().to_vec()
+        }).collect();
+        
+        let flat_centroids: Vec<f32> = centroids.iter().flatten().copied().collect();
+        
+        let assignments = crate::core::index::gpu::compute_kmeans_assignment(&flat_vectors, &flat_centroids, dim, &ctx)?;
+        
+        // 4. Sort batch by assignments
+        let assignment_array = Int32Array::from(assignments.into_iter().map(|a| a as i32).collect::<Vec<i32>>());
+        let sort_indices = arrow::compute::sort_to_indices(&assignment_array, None, None)?;
+        
+        let mut columns = Vec::new();
+        for i in 0..batch.num_columns() {
+            columns.push(arrow::compute::take(batch.column(i), &sort_indices, None)?);
+        }
+        
+        RecordBatch::try_new(batch.schema(), columns).context("Failed to reconstruct shuffled batch")
+    }
 }
 
+
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use arrow::array::{Int32Array, StringArray};

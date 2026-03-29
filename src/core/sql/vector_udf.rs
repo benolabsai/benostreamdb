@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::any::Any;
 use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, FixedSizeListArray, Int8Array, Int16Array, Int32Array, Int64Array, ListBuilder, Float32Builder, ListArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array};
@@ -79,7 +81,7 @@ pub fn sparse_inner_product_distance(a: &SparseVector, b: &SparseVector) -> f32 
 macro_rules! impl_dyn_traits {
     ($name:ident) => {
         impl PartialEq for $name {
-            fn eq(&self, other: &Self) -> bool {
+            fn eq(&self, _other: &Self) -> bool {
                 // All instances of the same UDF type are considered equal
                 true
             }
@@ -1342,7 +1344,7 @@ mod sparse_distance_property_tests {
             let num_nonzero = num_nonzero.max(1).min(dim);
             
             // Generate unique indices
-            let mut indices: Vec<u32> = (0..num_nonzero)
+            let indices: Vec<u32> = (0..num_nonzero)
                 .map(|i| {
                     let step = dim / num_nonzero;
                     (i * step) as u32
@@ -1789,8 +1791,8 @@ mod sparse_utility_tests {
 mod aggregation_property_tests {
     use super::*;
     use proptest::prelude::*;
-    use arrow::array::{ArrayRef, FixedSizeListArray, Float32Array};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::array::{ArrayRef, Float32Array};
+    
     use std::sync::Arc;
 
     // Feature: pgvector-sql-support, Property 14: Vector Aggregation Correctness
@@ -2253,7 +2255,7 @@ mod grouped_aggregation_property_tests {
     use super::*;
     use proptest::prelude::*;
     use datafusion::prelude::*;
-    use datafusion::arrow::array::{ArrayRef, Float32Array, Int32Array, FixedSizeListArray};
+    use datafusion::arrow::array::{ArrayRef, Float32Array, Int32Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use std::sync::Arc;
@@ -2481,7 +2483,7 @@ mod type_conversion_property_tests {
     use super::*;
     use proptest::prelude::*;
     use datafusion::prelude::*;
-    use datafusion::arrow::array::{ArrayRef, Float32Array, FixedSizeListArray};
+    use datafusion::arrow::array::{ArrayRef, Float32Array};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
     use std::sync::Arc;

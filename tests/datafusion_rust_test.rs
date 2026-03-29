@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::Table;
 use std::sync::Arc;
 

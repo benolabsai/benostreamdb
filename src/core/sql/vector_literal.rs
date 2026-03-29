@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use datafusion::error::{DataFusionError, Result};
 use datafusion::scalar::ScalarValue;
 use arrow::array::Float32Array;
@@ -1589,7 +1591,7 @@ mod sparse_vector_property_tests {
             let actual_nonzero = num_nonzero.min(dim);
             
             // Generate unique random indices within bounds
-            let mut indices: Vec<u32> = (0..actual_nonzero)
+            let indices: Vec<u32> = (0..actual_nonzero)
                 .map(|i| {
                     // Distribute indices evenly to ensure uniqueness
                     let step = dim / actual_nonzero;

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::table::Table;
 use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
 use arrow::record_batch::RecordBatch;
@@ -25,8 +27,8 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     let spec = PartitionSpec {
         spec_id: 1,
         fields: vec![
-            PartitionField { source_id: 0, field_id: None, name: "year".to_string(), transform: "identity".to_string() },
-            PartitionField { source_id: 2, field_id: None, name: "category".to_string(), transform: "identity".to_string() },
+            PartitionField { source_ids: vec![1], source_id: Some(1), field_id: None, name: "year".to_string(), transform: "identity".to_string() },
+            PartitionField { source_ids: vec![3], source_id: Some(3), field_id: None, name: "category".to_string(), transform: "identity".to_string() },
         ],
     };
 
@@ -45,13 +47,14 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     )?;
 
     table.write_async(vec![batch]).await?;
+    table.flush_async().await?;
     table.commit_async().await?;
 
     // 5. Verify physical sharding in manifest
-    let (manifest, _) = table.get_snapshot_segments_with_version().await?;
+    let entries = table.get_snapshot_segments().await?;
     // We expect 4 segments (2022/A, 2022/B, 2023/A, NULL/C)
     // Note: If they happen to fall in same batch, they are sharded in flush_async.
-    assert_eq!(manifest.entries.len(), 4, "Should have 4 partitioned segments");
+    assert_eq!(entries.len(), 4, "Should have 4 partitioned segments");
 
     // 6. Test Pruning: Query by year=2022
     let filter_year = hyperstreamdb::core::planner::QueryFilter {
@@ -104,7 +107,7 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
     let spec = PartitionSpec {
         spec_id: 1,
         fields: vec![
-            PartitionField { source_id: 0, field_id: None, name: "category".to_string(), transform: "identity".to_string() },
+            PartitionField { source_ids: vec![1], source_id: Some(1), field_id: None, name: "category".to_string(), transform: "identity".to_string() },
         ],
     };
 
@@ -120,21 +123,22 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
             ]
         )?;
         table.write_async(vec![batch]).await?;
+        table.flush_async().await?;
         table.commit_async().await?;
     }
 
     // Verify we have 2 segments
-    let (manifest_pre, _) = table.get_snapshot_segments_with_version().await?;
-    assert_eq!(manifest_pre.entries.len(), 2);
+    let entries_pre = table.get_snapshot_segments().await?;
+    assert_eq!(entries_pre.len(), 2);
 
     // Trigger Compaction
-    table.compact(None)?;
+    table.rewrite_data_files_async(None).await?;
 
     // Verify we have 1 segment now, and it STILL HAS partition_values = {category: A}
-    let (manifest_post, _) = table.get_snapshot_segments_with_version().await?;
-    assert_eq!(manifest_post.entries.len(), 1, "Compaction should merge segments");
+    let entries_post = table.get_snapshot_segments().await?;
+    assert_eq!(entries_post.len(), 1, "Compaction should merge segments");
     
-    let entry = &manifest_post.entries[0];
+    let entry = &entries_post[0];
     assert!(entry.partition_values.contains_key("category"), "Compacted entry must have partition key");
     assert_eq!(entry.partition_values.get("category").unwrap(), &serde_json::json!("A"));
 

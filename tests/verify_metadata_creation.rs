@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::table::Table;
 use arrow::datatypes::{Field, DataType, Schema};
 use std::sync::Arc;

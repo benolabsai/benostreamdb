@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Integration test for pgvector operators with GPU acceleration
 /// 
 /// This test verifies that pgvector distance operators (<->, <=>, <#>)

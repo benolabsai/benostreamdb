@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use arrow::array::{Int32Array, StringArray, Float32Array, FixedSizeListArray};
 use arrow::record_batch::RecordBatch;
@@ -67,8 +69,8 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
     let spec = PartitionSpec {
         spec_id: 0,
         fields: vec![
-            PartitionField { source_id: 3, field_id: None, name: "year".to_string(), transform: "identity".to_string() },
-            PartitionField { source_id: 2, field_id: None, name: "category".to_string(), transform: "identity".to_string() },
+            PartitionField { source_ids: vec![3], source_id: Some(3), field_id: None, name: "year".to_string(), transform: "identity".to_string() },
+            PartitionField { source_ids: vec![2], source_id: Some(2), field_id: None, name: "category".to_string(), transform: "identity".to_string() },
         ]
     };
     let mut table = Table::create_partitioned_async(uri.clone(), schema, spec).await?;
@@ -82,7 +84,7 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
 
     // 3. Complex Query: year=2022 AND category='A' AND id > 5 + Vector Search
     let query_vec = vec![0.1; dim];
-    let vs_params = VectorSearchParams::new("embedding", query_vec, 5);
+    let vs_params = VectorSearchParams::new("embedding", hyperstreamdb::core::index::VectorValue::Float32(query_vec), 5);
     
     let filter = "year = 2022 AND category = 'A' AND id > 5";
     let results = table.read_async(Some(filter), Some(vs_params), None).await?;
@@ -194,7 +196,7 @@ async fn test_cosine_similarity_search() -> Result<()> {
     table.wait_for_background_tasks_async().await?;
 
     let query_vec = vec![1.0, 0.1, 0.0, 0.0];
-    let vs_params = VectorSearchParams::new("embedding", query_vec, 1)
+    let vs_params = VectorSearchParams::new("embedding", hyperstreamdb::core::index::VectorValue::Float32(query_vec), 1)
         .with_metric(VectorMetric::Cosine);
     
     let results = table.read_async(None, Some(vs_params), None).await?;

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 

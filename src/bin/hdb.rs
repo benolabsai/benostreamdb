@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use clap::{Parser, Subcommand};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -206,7 +208,7 @@ async fn run_repl(session: HyperStreamSession) -> Result<(), Box<dyn std::error:
 async fn run_query(session: &HyperStreamSession, query: &str) {
     let start = Instant::now();
     match session.sql(query).await {
-        Ok(batches) => {
+        Ok((batches, _schema)) => {
             let duration = start.elapsed();
             if batches.is_empty() {
                 println!("Query returned 0 rows in {:.2?}", duration);

@@ -8,7 +8,7 @@ __pycache__/
 *$py.class
 .venv/
 .venv_iceberg/
-venv/*
+venv/
 venv_verify/
 test_venv/
 !venv/requirements.txt

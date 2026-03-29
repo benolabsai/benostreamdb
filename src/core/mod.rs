@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 pub mod table;
 pub mod segment;
 pub mod reader;
@@ -19,5 +21,5 @@ pub mod metadata;
 pub mod clustering;
 pub mod nessie;
 pub mod puffin;
-pub mod parquet_filter;
+// pub mod parquet_filter;
 pub mod embeddings;

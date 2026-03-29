@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 pub mod nessie;
 pub mod rest;
 pub mod glue;

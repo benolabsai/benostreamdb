@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
@@ -111,7 +113,8 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     let config = SegmentConfig::new("", "seg_test_native");
     let reader = HybridReader::new(config, local_store, "");
 
-    let results = reader.vector_search_index("embedding", &query, k, None, hyperstreamdb::core::index::VectorMetric::L2).await?;
+    let query_val = hyperstreamdb::core::index::VectorValue::Float32(query);
+    let results = reader.vector_search_index("embedding", &query_val, k, None, hyperstreamdb::core::index::VectorMetric::L2, None).await?;
     
     assert!(!results.is_empty(), "Should return results");
     

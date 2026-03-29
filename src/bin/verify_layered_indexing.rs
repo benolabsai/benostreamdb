@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::Table;
 use anyhow::Result;
 use apache_avro::{Writer, Schema as AvroSchema, types::Value as AvroValue};
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
 
     println!("5. Building Scalar Index for 'id' column...");
     // This should build a sidecar index in /tmp/hdb_shadow
-    table.add_index_columns_async(vec!["id".to_string()]).await?;
+    table.add_index_columns_async(vec!["id".to_string()], None).await?;
     
     println!("6. Checking for local sidecar index file...");
     let mut found_idx = false;

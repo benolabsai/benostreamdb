@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::any::Any;
 use std::sync::Arc;
 pub mod index_join;
@@ -218,11 +220,21 @@ impl ExecutionPlan for HyperStreamExec {
                     ).await {
                         Ok(batches) => {
                             for batch in batches {
-                                if batch.schema() != expected_schema_inner {
-                                    yield Err(DataFusionError::Execution(format!("Schema mismatch in Vector Search")));
-                                    return;
+                                let mut b = batch;
+                                if b.schema() != expected_schema_inner {
+                                    if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                        if let Ok(new_batch) = datafusion::arrow::record_batch::RecordBatch::try_new(expected_schema_inner.clone(), b.columns().to_vec()) {
+                                            b = new_batch;
+                                        } else {
+                                            yield Err(DataFusionError::Execution(format!("Schema mismatch in Vector Search: Expected {:?} got {:?}", expected_schema_inner, b.schema())));
+                                            return;
+                                        }
+                                    } else {
+                                        yield Err(DataFusionError::Execution(format!("Schema mismatch in Vector Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                        return;
+                                    }
                                 }
-                                yield Ok(batch);
+                                yield Ok(b);
                             }
                         },
                         Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
@@ -233,11 +245,21 @@ impl ExecutionPlan for HyperStreamExec {
                     match table.read_segment(&entry, query_filter.as_ref(), version, col_slice).await {
                         Ok(batches) => {
                             for batch in batches {
-                                if batch.schema() != expected_schema_inner {
-                                    yield Err(DataFusionError::Execution(format!("Schema mismatch in standard scan")));
-                                    return;
+                                let mut b = batch;
+                                if b.schema() != expected_schema_inner {
+                                    if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                        if let Ok(new_batch) = datafusion::arrow::record_batch::RecordBatch::try_new(expected_schema_inner.clone(), b.columns().to_vec()) {
+                                            b = new_batch;
+                                        } else {
+                                            yield Err(DataFusionError::Execution(format!("Schema mismatch in standard scan: Expected {:?} got {:?}", expected_schema_inner, b.schema())));
+                                            return;
+                                        }
+                                    } else {
+                                        yield Err(DataFusionError::Execution(format!("Schema mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                        return;
+                                    }
                                 }
-                                yield Ok(batch);
+                                yield Ok(b);
                             }
                         },
                         Err(e) => yield Err(DataFusionError::Execution(e.to_string())),

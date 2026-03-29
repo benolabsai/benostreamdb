@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use serde::{Deserialize, Serialize};
 use reqwest::Client;
 use anyhow::{Result, anyhow};

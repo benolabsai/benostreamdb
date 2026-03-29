@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 pub mod physical_plan;
 pub mod session;
 pub mod optimizer;

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// HNSW-IVF Hybrid Index Implementation
 /// 
 /// Combines IVF coarse quantization with HNSW fine search for optimal performance.
@@ -7,6 +9,9 @@
 /// 1. Coarse quantization: Cluster vectors into N lists using k-means (IVF)
 /// 2. Fine search: Build small HNSW graphs within each cluster
 /// 3. Search: Find nearest clusters, then search HNSW graphs in those clusters
+///
+/// Attribution: Underlying HNSW graph logic relies on the vendored `hnsw_rs` library (MIT/Apache 2.0).
+/// Copyright Jean-Pierre Both and hnsw_rs contributors. Vendored and patched to support exact pre-filtering.
 
 use anyhow::{Result, Context};
 use std::collections::HashMap;
@@ -79,20 +84,20 @@ pub enum HnswGraph {
 }
 
 impl HnswGraph {
-    pub fn search(&self, query: &VectorValue, k: usize, ef: usize) -> Vec<Neighbour> {
+    pub fn search(&self, query: &VectorValue, k: usize, ef: usize, filter: Option<&roaring::RoaringBitmap>) -> Vec<Neighbour> {
         match (self, query) {
-            (HnswGraph::L2(h), VectorValue::Float32(q)) => h.search(q, k, ef),
-            (HnswGraph::Cosine(h), VectorValue::Float32(q)) => h.search(q, k, ef),
-            (HnswGraph::Dot(h), VectorValue::Float32(q)) => h.search(q, k, ef),
-            (HnswGraph::L1(h), VectorValue::Float32(q)) => h.search(q, k, ef),
-            (HnswGraph::Hamming(h), VectorValue::Float32(q)) => h.search(q, k, ef),
-            (HnswGraph::Jaccard(h), VectorValue::Float32(q)) => h.search(q, k, ef),
+            (HnswGraph::L2(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Cosine(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Dot(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::L1(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Hamming(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Jaccard(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             
-            (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef),
-            (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(&[q.clone()], k, ef),
+            (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(&[q.clone()], k, ef, filter),
             
             // Casting paths
-            (HnswGraph::L2(h), VectorValue::Float16(q)) => h.search(q, k, ef),
+            (HnswGraph::L2(h), VectorValue::Float16(q)) => h.search(q, k, ef, filter),
             
             _ => {
                 eprintln!("Error: HnswGraph / query type mismatch");
@@ -283,7 +288,8 @@ impl HnswIvfIndex {
 
         // Step 1: Find n_probe nearest clusters (coarse search)
         let all_centroids_flat: Vec<f32> = self.centroids.iter().flatten().cloned().collect();
-        let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric, &self.compute_context)
+        let context = crate::core::index::gpu::get_global_gpu_context().unwrap_or(self.compute_context);
+        let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric, &context)
             .unwrap_or_else(|_| {
                 match self.metric {
                     VectorMetric::L2 => self.centroids.par_iter().map(|c| l2_distance(query_f32, c)).collect(),
@@ -292,7 +298,6 @@ impl HnswIvfIndex {
                     VectorMetric::L1 => self.centroids.par_iter().map(|c| l1_distance(query_f32, c)).collect(),
                     VectorMetric::Hamming => self.centroids.par_iter().map(|c| hamming_distance(query_f32, c)).collect(),
                     VectorMetric::Jaccard => self.centroids.par_iter().map(|c| jaccard_distance(query_f32, c)).collect(),
-                    _ => vec![0.0; self.centroids.len()],
                 }
             });
 
@@ -309,7 +314,18 @@ impl HnswIvfIndex {
                     let cluster_k = if filter.is_some() { k * 4 } else { k * 2 };
                     let ef_search = if filter.is_some() { 100 } else { 40 };
                     
-                    let results = hnsw.search(query, cluster_k, ef_search);
+                    let mut local_filter_opt: Option<roaring::RoaringBitmap> = None;
+                    if let Some(f) = filter {
+                        let mut bm = roaring::RoaringBitmap::new();
+                        for (local_id, &global_id) in row_id_mapping.iter().enumerate() {
+                            if f.contains(global_id as u32) {
+                                bm.insert(local_id as u32);
+                            }
+                        }
+                        local_filter_opt = Some(bm);
+                    }
+                    
+                    let results = hnsw.search(query, cluster_k, ef_search, local_filter_opt.as_ref());
                     
                     // Map local indices back to global row IDs and apply filter
                     results.into_iter().filter_map(|neighbor| {
@@ -885,5 +901,57 @@ impl HnswIvfIndex {
             size += data_count * 16 * 4; 
         }
         size
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roaring::RoaringBitmap;
+
+    #[test]
+    fn test_hnsw_ivf_pre_filtering() {
+        let mut vectors = Vec::new();
+        for i in 0..100 {
+            let mut vec = vec![0.0; 4];
+            vec[0] = (i as f32) / 100.0;
+            vectors.push(vec);
+        }
+
+        let index = HnswIvfIndex::build(vectors.clone(), VectorMetric::L2, Some(2), Some(16), false).unwrap();
+        let query = VectorValue::Float32(vectors[50].clone());
+
+        // Unfiltered search (should find ID 50 easily since it's an exact match)
+        let results_unfiltered = index.search(&query, 5, 40, 10, None);
+        assert!(!results_unfiltered.is_empty(), "Should return results");
+        
+        let mut found_50 = false;
+        for (id, _) in &results_unfiltered {
+            if *id == 50 { found_50 = true; break; }
+        }
+        assert!(found_50, "Unfiltered search should easily find exact match ID 50");
+
+        // Filtered search (exclude ID 50, only allow 51, 52, 53)
+        let mut filter = RoaringBitmap::new();
+        filter.insert(51);
+        filter.insert(52);
+        filter.insert(53);
+
+        let results_filtered = index.search(&query, 3, 40, 10, Some(&filter));
+        assert!(!results_filtered.is_empty(), "Filtered search should return results");
+
+        let mut found_50_filtered = false;
+        let mut found_51_filtered = false;
+        for (id, _) in &results_filtered {
+            if *id == 50 { found_50_filtered = true; }
+            if *id == 51 { found_51_filtered = true; }
+        }
+
+        assert!(!found_50_filtered, "Pre-filtering failed to exclude exact match ID 50");
+        assert!(found_51_filtered, "Pre-filtering failed to find the next best allowed match ID 51");
+        
+        for (id, _) in &results_filtered {
+            assert!(filter.contains(*id as u32), "Result ID {} was not in the filter!", id);
+        }
     }
 }

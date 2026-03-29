@@ -1,9 +1,7 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
-use hyperstreamdb::core::iceberg::{IcebergTransform, murmur3_32_x86};
-use arrow::array::{Int32Array, Int64Array, StringArray, TimestampMicrosecondArray, FixedSizeBinaryArray};
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use std::sync::Arc;
-use hyperstreamdb::Table;
+use hyperstreamdb::core::iceberg::murmur3_32_x86;
 
 #[test]
 fn test_murmur3_hashing_spec_values() {

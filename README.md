@@ -18,6 +18,7 @@ A production-ready indexed data lake format that combines the transactional guar
 | **pgvector SQL** | ❌ No | ✅ Full Compatibility |
 | **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/Metal/OpenCL |
 | **Python Vector API** | ❌ No | ✅ NumPy-compatible |
+| **Fluent Query API** | ❌ No | ✅ Method Chaining |
 | **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
 | **Native SQL** | ❌ No | ✅ DataFusion |
 | **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
@@ -155,21 +156,97 @@ df = pd.DataFrame({
 })
 table.write_pandas(df)
 
-# Query with filters (uses indexes!)
-results = table.to_pandas(filter="id > 1")
+# Query with filters (uses indexes!) - Fluent API
+results = table.query().filter("id > 1").execute()
 
-# Vector search
+# Vector search - Fluent API
 query_vec = [0.15, 0.25]
-results = table.to_pandas(
-    vector_filter={"embedding": query_vec, "k": 10}
-)
+results = table.query().vector_search(query_vec, column="embedding", k=10).execute()
 
-# Hybrid query (scalar + vector)
+# Hybrid query (scalar + vector) - Fluent API
+results = (table.query()
+                .filter("category = 'science'")
+                .vector_search(query_vec, column="embedding", k=10)
+                .execute())
+
+# Alternative: Traditional API still supported
 results = table.to_pandas(
     filter="category = 'science'",
     vector_filter={"embedding": query_vec, "k": 10}
 )
 ```
+
+## 🔄 Fluent Query API
+
+HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:
+
+### Python Fluent API
+
+```python
+import hyperstreamdb as hdb
+
+table = hdb.Table("s3://bucket/my-table")
+
+# Method chaining with filters
+results = (table.query()
+                .filter("age > 25")
+                .filter("status = 'active'")  # Automatically combines with AND
+                .execute())
+
+# Vector search with fluent API
+query_embedding = [0.1, 0.2, 0.3, 0.4]
+results = (table.query()
+                .vector_search(query_embedding, column="embedding", k=10)
+                .execute())
+
+# Combine scalar filtering with vector search
+results = (table.query()
+                .filter("category = 'documents'")
+                .vector_search(query_embedding, column="content_vec", k=5)
+                .select(['title', 'score'])
+                .execute())
+
+# Complex hybrid queries
+results = (table.query()
+                .filter("published_date > '2024-01-01'")
+                .filter("author IN ('smith', 'jones')")
+                .vector_search(query_embedding, column="embedding", k=20)
+                .select(['title', 'author', 'score'])
+                .execute())
+```
+
+### Rust Fluent API
+
+The same fluent interface is available in native Rust:
+
+```rust
+use hyperstreamdb::{Table, VectorValue};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let table = Table::new("s3://bucket/my-table")?;
+    
+    // Method chaining
+    let results = table
+        .query()
+        .filter("age > 25")
+        .vector_search("embedding", VectorValue::Float32(query_vec), 10)
+        .select(vec!["name".to_string(), "score".to_string()])
+        .to_batches()
+        .await?;
+    
+    println!("Found {} result batches", results.len());
+    Ok(())
+}
+```
+
+### Benefits
+
+- **Method Chaining**: Intuitive, readable query construction  
+- **Type Safe**: Compile-time validation in Rust, runtime validation in Python
+- **Performance**: Same underlying optimized execution as traditional APIs
+- **Interoperable**: Mix with SQL queries and traditional `to_pandas()` calls
+- **GPU Acceleration**: Automatic GPU context propagation for vector operations
 
 ### Python Vector Distance API with GPU Acceleration
 
@@ -397,7 +474,8 @@ WHERE id > 100;  -- Uses scalar index
 ```python
 # No Spark needed for local/notebook work
 import hyperstreamdb as hdb
-df = hdb.Table("s3://bucket/table").to_pandas()
+df = hdb.Table("s3://bucket/table").query().execute()
+# Or using traditional API: df = hdb.Table("s3://bucket/table").to_pandas()
 ```
 
 ## 🔨 Building Connectors

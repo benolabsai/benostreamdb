@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use ax_lib::{
     routing::{get, post},
     Router, Json,

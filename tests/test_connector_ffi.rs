@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::Table;
 use hyperstreamdb::core::ffi::HyperStreamSession; // Requires pub usage of implementation details
 use arrow::datatypes::{DataType, Field, Schema};

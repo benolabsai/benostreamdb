@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::convert::TryInto;
 
 fn murmur3_32_x86_trace(data: &[u8], seed: u32) -> u32 {

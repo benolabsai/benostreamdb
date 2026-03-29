@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::sync::Arc;
 use std::collections::HashMap;
 use anyhow::Result;
@@ -52,6 +54,7 @@ pub fn get_embedded_func(name: &str) -> Option<Arc<dyn EmbeddingFunction>> {
 // --- Implementations ---
 
 #[cfg(feature = "candle")]
+#[allow(dead_code)]
 pub struct CandleFunction {
     name: String,
     model: Arc<candle_transformers::models::bert::BertModel>,
@@ -60,9 +63,10 @@ pub struct CandleFunction {
     dim: usize,
 }
 
+#[cfg(feature = "candle")]
 #[async_trait]
 impl EmbeddingFunction for CandleFunction {
-    async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    async fn embed(&self, _texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         // Implementation using candle...
         // For now, return stub if actually implemented
         unimplemented!("Candle implementation details to be fleshed out in next step")

@@ -1,7 +1,9 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::table::Table;
 use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use std::sync::Arc;
 use futures::StreamExt;
@@ -25,7 +27,8 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
         spec_id: 1,
         fields: vec![
             PartitionField {
-                source_id: 1,
+                source_ids: vec![1],
+                source_id: Some(1),
                 field_id: Some(1000),
                 name: "id_bucket".to_string(),
                 transform: "bucket[16]".to_string(),

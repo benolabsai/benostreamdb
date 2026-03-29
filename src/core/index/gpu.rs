@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Hardware Acceleration Module for HyperStreamDB
 /// 
 /// This module provides support for various GPU backends:
@@ -39,29 +41,18 @@ pub struct ComputeContext {
 
 impl ComputeContext {
     pub fn auto_detect() -> Self {
-        #[cfg(feature = "cuda")]
-        {
-            return Self { backend: ComputeBackend::Cuda, device_id: 0 };
-        }
-        
-        #[cfg(all(not(feature = "cuda"), feature = "rocm"))]
-        {
-            return Self { backend: ComputeBackend::Rocm, device_id: 0 };
-        }
+        Self { backend: ComputeBackend::Cpu, device_id: -1 }
+    }
 
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), feature = "mps"))]
-        {
-            return Self { backend: ComputeBackend::Mps, device_id: 0 };
-        }
-
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), feature = "intel_gpu"))]
-        {
-            return Self { backend: ComputeBackend::Intel, device_id: 0 };
-        }
-
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel_gpu")))]
-        {
-            Self { backend: ComputeBackend::Cpu, device_id: -1 }
+    pub fn from_device_str(device: &str) -> Result<Self> {
+        match device.to_lowercase().as_str() {
+            "cpu" => Ok(Self { backend: ComputeBackend::Cpu, device_id: -1 }),
+            "gpu" | "auto" => Ok(Self::auto_detect()),
+            "cuda" => Ok(Self { backend: ComputeBackend::Cuda, device_id: 0 }),
+            "mps" | "metal" => Ok(Self { backend: ComputeBackend::Mps, device_id: 0 }),
+            "rocm" => Ok(Self { backend: ComputeBackend::Rocm, device_id: 0 }),
+            "intel" | "opencl" => Ok(Self { backend: ComputeBackend::Intel, device_id: 0 }),
+            _ => anyhow::bail!("Unsupported device: {}", device),
         }
     }
 }
@@ -173,11 +164,9 @@ pub fn compute_distance_batch(
         anyhow::bail!("Vectors array length {} is not a multiple of dimension {}", vectors.len(), dim);
     }
     
-    let n_vectors = vectors.len() / dim;
+    let _n_vectors = vectors.len() / dim;
     
-    // For small batches or CPU backend, use the standard compute_distance
-    // Threshold: 1000 vectors or CPU backend
-    if n_vectors <= 1000 || context.backend == ComputeBackend::Cpu {
+    if context.backend == ComputeBackend::Cpu {
         return compute_distance(query, vectors, dim, metric, context);
     }
     
@@ -345,6 +334,9 @@ fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
 }
 
 #[cfg(all(target_os = "macos", feature = "mps"))]
+static MSL_KMEANS: &str = include_str!("mps/kmeans_assignment.metal");
+
+#[cfg(all(target_os = "macos", feature = "mps"))]
 static MSL_L2: &str = include_str!("mps/l2_distance.metal");
 
 #[cfg(all(target_os = "macos", feature = "mps"))]
@@ -358,6 +350,12 @@ static MSL_L1: &str = include_str!("mps/l1_distance.metal");
 
 #[cfg(all(target_os = "macos", feature = "mps"))]
 static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
+
+#[cfg(feature = "cuda")]
+static CUDA_KMEANS: &str = include_str!("cuda/kmeans_assignment.cu");
+
+#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
 
 #[cfg(all(target_os = "macos", feature = "mps"))]
 static MSL_JACCARD: &str = include_str!("mps/jaccard_distance.metal");
@@ -565,18 +563,13 @@ fn compute_opencl(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetr
     let _query_write_event = unsafe { queue.enqueue_write_buffer(&mut query_buffer, CL_BLOCKING, 0, query, &[])? };
     let _vectors_write_event = unsafe { queue.enqueue_write_buffer(&mut vectors_buffer, CL_BLOCKING, 0, vectors, &[])? };
 
-    // 7. Set Arguments
-    let dim_int = dim as i32;
-    unsafe {
-        kernel.set_arg(0, &query_buffer)?;
-        kernel.set_arg(1, &vectors_buffer)?;
-        kernel.set_arg(2, &output_buffer)?;
-        kernel.set_arg(3, &dim_int)?;
-    }
-
     // 8. Execute Kernel
     let kernel_event = unsafe {
         ExecuteKernel::new(&kernel)
+            .set_arg(&query_buffer)
+            .set_arg(&vectors_buffer)
+            .set_arg(&output_buffer)
+            .set_arg(&(dim as i32))
             .set_global_work_size(n_vectors)
             .enqueue_nd_range(&queue)?
     };
@@ -595,8 +588,9 @@ fn compute_intel(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetri
         // Try Intel GPU, fall back to CPU if not available
         match compute_opencl(query, vectors, dim, metric, Some("Intel")) {
             Ok(result) => Ok(result),
-            Err(_) => {
+            Err(e) => {
                 // Fall back to CPU if Intel GPU is not available
+                eprintln!("DEBUG: Intel GPU computation failed, falling back to CPU. Error: {}", e);
                 compute_cpu(query, vectors, dim, metric)
             }
         }
@@ -867,7 +861,7 @@ fn compute_mps_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorM
 
 /// OpenCL batch implementation with chunked processing
 #[cfg(any(feature = "intel_gpu", feature = "rocm"))]
-fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, platform_filter: Option<&str>, context: &ComputeContext) -> Result<Vec<f32>> {
+fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, platform_filter: Option<&str>, _context: &ComputeContext) -> Result<Vec<f32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
     use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
@@ -929,6 +923,10 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
     let program = Program::create_and_build_from_source(&opencl_context, opencl_source, "")
         .map_err(|e| anyhow::anyhow!("OpenCL build error: {}", e))?;
     let kernel = Kernel::create(&program, kernel_name)?;
+    let num_expected_args = kernel.num_args().map_err(|e| anyhow::anyhow!("Error getting num_args: {}", e))?;
+    if num_expected_args != 4 {
+        panic!("DEBUG: Kernel {} expects {} args, but code provides 4. dim={}", kernel_name, num_expected_args, dim);
+    }
     
     // Create query buffer once (reused across chunks)
     let mut query_buffer = unsafe { 
@@ -939,7 +937,7 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
     };
     
     let mut all_distances = Vec::with_capacity(n_vectors);
-    let dim_int = dim as i32;
+    let _dim_int = dim as i32;
     
     // Process in chunks
     for chunk_start in (0..n_vectors).step_by(max_vectors_per_chunk) {
@@ -962,18 +960,14 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
         let _vectors_write_event = unsafe { 
             queue.enqueue_write_buffer(&mut vectors_buffer, CL_BLOCKING, 0, chunk_vectors, &[])? 
         };
-        
-        // Set arguments
-        unsafe {
-            kernel.set_arg(0, &query_buffer)?;
-            kernel.set_arg(1, &vectors_buffer)?;
-            kernel.set_arg(2, &output_buffer)?;
-            kernel.set_arg(3, &dim_int)?;
-        }
-        
+
         // Execute kernel
         let kernel_event = unsafe {
             ExecuteKernel::new(&kernel)
+                .set_arg(&query_buffer)
+                .set_arg(&vectors_buffer)
+                .set_arg(&output_buffer)
+                .set_arg(&(dim as i32))
                 .set_global_work_size(chunk_size)
                 .enqueue_nd_range(&queue)?
         };
@@ -1017,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_compute_context_auto_detect() {
-        let ctx = ComputeContext::auto_detect();
+        let _ctx = ComputeContext::auto_detect();
         // On a standard test environment without special flags, this should be CPU
         #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel_gpu")))]
         {
@@ -1094,12 +1088,12 @@ mod tests {
     #[test]
     fn test_gpu_backend_fallback_to_cpu() {
         // Test that unimplemented GPU kernels fall back to CPU
-        let query = vec![1.0, 2.0, 3.0];
-        let vectors = vec![
+        let _query = vec![1.0, 2.0, 3.0];
+        let _vectors = vec![
             1.0, 2.0, 3.0,
             4.0, 5.0, 6.0,
         ];
-        let dim = 3;
+        let _dim = 3;
         
         // Test with CUDA backend (will fall back to CPU for non-L2 metrics)
         #[cfg(feature = "cuda")]
@@ -1512,4 +1506,212 @@ mod property_tests {
         }
     }
 
+}
+
+/// Accelerated K-Means assignment for all backends
+pub fn compute_kmeans_assignment(vectors: &[f32], centroids: &[f32], dim: usize, context: &ComputeContext) -> Result<Vec<u32>> {
+    println!("Using {:?} backend for K-Means assignment", context.backend);
+    match context.backend {
+        ComputeBackend::Cpu => compute_kmeans_assignment_cpu(vectors, centroids, dim),
+        ComputeBackend::Cuda => compute_kmeans_assignment_cuda(vectors, centroids, dim),
+        ComputeBackend::Mps => compute_kmeans_assignment_mps(vectors, centroids, dim),
+        ComputeBackend::Rocm => compute_kmeans_assignment_opencl(vectors, centroids, dim, Some("AMD")),
+        ComputeBackend::Intel => compute_kmeans_assignment_opencl(vectors, centroids, dim, Some("Intel")),
+    }
+}
+
+fn compute_kmeans_assignment_cpu(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    let n_vectors = vectors.len() / dim;
+    let k = centroids.len() / dim;
+    let mut labels = Vec::with_capacity(n_vectors);
+
+    for i in 0..n_vectors {
+        let vec = &vectors[i * dim..(i + 1) * dim];
+        let mut min_dist = f32::MAX;
+        let mut best_idx = 0u32;
+
+        for j in 0..k {
+            let centroid = &centroids[j * dim..(j + 1) * dim];
+            let mut dist = 0.0f32;
+            for (v1, v2) in vec.iter().zip(centroid.iter()) {
+                let diff = v1 - v2;
+                dist += diff * diff;
+            }
+
+            if dist < min_dist {
+                min_dist = dist;
+                best_idx = j as u32;
+            }
+        }
+        labels.push(best_idx);
+    }
+    Ok(labels)
+}
+
+#[cfg(all(target_os = "macos", feature = "mps"))]
+fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    use metal::*;
+    use std::mem;
+
+    let device = Device::system_default()
+        .ok_or_else(|| anyhow::anyhow!("No Metal device found"))?;
+    let command_queue = device.new_command_queue();
+    
+    let library = device.new_library_with_source(MSL_KMEANS, &CompileOptions::new())
+        .map_err(|e| anyhow::anyhow!("Metal compilation error: {}", e))?;
+    let kernel = library.get_function("kmeans_assignment", None)
+        .map_err(|e| anyhow::anyhow!("Metal function error: {}", e))?;
+    let pipeline_state = device.new_compute_pipeline_state_with_function(&kernel)
+        .map_err(|e| anyhow::anyhow!("Metal pipeline error: {}", e))?;
+
+    let n_vectors = vectors.len() / dim;
+    let k = centroids.len() / dim;
+
+    let vectors_buffer = device.new_buffer_with_data(
+        vectors.as_ptr() as *const _,
+        (vectors.len() * mem::size_of::<f32>()) as u64,
+        MTLResourceOptions::StorageModeShared
+    );
+    let centroids_buffer = device.new_buffer_with_data(
+        centroids.as_ptr() as *const _,
+        (centroids.len() * mem::size_of::<f32>()) as u64,
+        MTLResourceOptions::StorageModeShared
+    );
+    let labels_buffer = device.new_buffer(
+        (n_vectors * mem::size_of::<u32>()) as u64,
+        MTLResourceOptions::StorageModeShared
+    );
+
+    let batch_size_u32 = n_vectors as u32;
+    let k_u32 = k as u32;
+    let dim_u32 = dim as u32;
+
+    let command_buffer = command_queue.new_command_buffer();
+    let encoder = command_buffer.new_compute_command_encoder();
+    
+    encoder.set_compute_pipeline_state(&pipeline_state);
+    encoder.set_buffer(0, Some(&vectors_buffer), 0);
+    encoder.set_buffer(1, Some(&centroids_buffer), 0);
+    encoder.set_buffer(2, Some(&labels_buffer), 0);
+    encoder.set_bytes(3, mem::size_of::<u32>() as u64, &batch_size_u32 as *const _ as *const _);
+    encoder.set_bytes(4, mem::size_of::<u32>() as u64, &k_u32 as *const _ as *const _);
+    encoder.set_bytes(5, mem::size_of::<u32>() as u64, &dim_u32 as *const _ as *const _);
+
+    let threads_per_group = MTLSize::new(256, 1, 1);
+    let groups = MTLSize::new((n_vectors as u64 + 255) / 256, 1, 1);
+    
+    encoder.dispatch_thread_groups(groups, threads_per_group);
+    encoder.end_encoding();
+    command_buffer.commit();
+    command_buffer.wait_until_completed();
+
+    let labels_ptr = labels_buffer.contents() as *mut u32;
+    unsafe {
+        Ok(std::slice::from_raw_parts(labels_ptr, n_vectors).to_vec())
+    }
+}
+
+#[cfg(not(all(target_os = "macos", feature = "mps")))]
+fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    compute_kmeans_assignment_cpu(vectors, centroids, dim)
+}
+
+#[cfg(feature = "cuda")]
+fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    use cust::prelude::*;
+    let _ctx = cust::quick_init()?;
+    let module = Module::from_str(CUDA_KMEANS)?;
+    let stream = Stream::new(StreamFlags::NON_BLOCKING, None)?;
+
+    let n_vectors = vectors.len() / dim;
+    let k = centroids.len() / dim;
+
+    let d_vectors = DeviceBuffer::from_slice(vectors)?;
+    let d_centroids = DeviceBuffer::from_slice(centroids)?;
+    let mut d_labels = DeviceBuffer::from_slice(&vec![0u32; n_vectors])?;
+
+    let func = module.get_function("kmeans_assignment")?;
+    let grid_size = (n_vectors as u32 + 255) / 256;
+    
+    unsafe {
+        launch!(
+            func<<<grid_size, 256, 0, stream>>>(
+                d_vectors.as_device_ptr(),
+                d_centroids.as_device_ptr(),
+                d_labels.as_device_ptr(),
+                n_vectors as u32,
+                k as u32,
+                dim as u32
+            )
+        )?;
+    }
+
+    stream.synchronize()?;
+    let mut labels = vec![0u32; n_vectors];
+    d_labels.copy_to(&mut labels)?;
+    Ok(labels)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    compute_kmeans_assignment_cpu(vectors, centroids, dim)
+}
+
+#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, platform_filter: Option<&str>) -> Result<Vec<u32>> {
+    use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
+    use opencl3::context::Context;
+    use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
+    use opencl3::kernel::{ExecuteKernel, Kernel};
+    use opencl3::memory::{Buffer, CL_MEM_READ_ONLY, CL_MEM_WRITE_ONLY};
+    use opencl3::program::Program;
+    use std::ptr;
+
+    let n_vectors = vectors.len() / dim;
+    let k = centroids.len() / dim;
+
+    let platform_filter = platform_filter.unwrap_or("");
+    let device_id = get_all_devices(CL_DEVICE_TYPE_GPU)?
+        .into_iter()
+        .find(|&id| {
+            if platform_filter.is_empty() { return true; }
+            let device = Device::new(id);
+            device.vendor().map(|v| v.contains(platform_filter)).unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow::anyhow!("No suitable OpenCL GPU found"))?;
+    
+    let device = Device::new(device_id);
+    let cl_context = Context::from_device(&device)?;
+    let queue = unsafe { CommandQueue::create_with_properties(&cl_context, device_id, 0, 0)? };
+    let program = Program::create_and_build_from_source(&cl_context, OPENCL_KMEANS, "")
+        .map_err(|e| anyhow::anyhow!("OpenCL build error: {}", e))?;
+    let kernel = Kernel::create(&program, "kmeans_assignment")?;
+
+    let mut d_vectors = unsafe { Buffer::<f32>::create(&cl_context, CL_MEM_READ_ONLY, vectors.len(), ptr::null_mut())? };
+    let mut d_centroids = unsafe { Buffer::<f32>::create(&cl_context, CL_MEM_READ_ONLY, centroids.len(), ptr::null_mut())? };
+    let d_labels = unsafe { Buffer::<u32>::create(&cl_context, CL_MEM_WRITE_ONLY, n_vectors, ptr::null_mut())? };
+
+    unsafe {
+        queue.enqueue_write_buffer(&mut d_vectors, CL_BLOCKING, 0, vectors, &[])?;
+        queue.enqueue_write_buffer(&mut d_centroids, CL_BLOCKING, 0, centroids, &[])?;
+
+        ExecuteKernel::new(&kernel)
+            .set_arg(&d_vectors)
+            .set_arg(&d_centroids)
+            .set_arg(&d_labels)
+            .set_arg(&(n_vectors as u32))
+            .set_arg(&(k as u32))
+            .set_arg(&(dim as u32))
+            .set_global_work_size(n_vectors)
+            .enqueue_nd_range(&queue)?;
+        
+        let mut labels = vec![0u32; n_vectors];
+        queue.enqueue_read_buffer(&d_labels, CL_BLOCKING, 0, &mut labels, &[])?;
+        Ok(labels)
+    }
+}
+
+#[cfg(not(any(feature = "intel_gpu", feature = "rocm")))]
+fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, _pf: Option<&str>) -> Result<Vec<u32>> {
+    compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }

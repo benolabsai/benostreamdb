@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Integration test for SQL UDF GPU context support
 /// 
 /// This test verifies that SQL distance UDFs can use GPU acceleration

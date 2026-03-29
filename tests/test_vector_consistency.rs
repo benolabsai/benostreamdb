@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use arrow::array::{Float32Array, FixedSizeListArray, Int32Array};
 use arrow::record_batch::RecordBatch;
@@ -60,7 +62,7 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     let query_vec = vec![0.1; dim];
     let vs_params = VectorSearchParams::new(
         "embedding",
-        query_vec,
+        hyperstreamdb::core::index::VectorValue::Float32(query_vec),
         10,
     );
 

@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 02771c4c1f58ab1da7d2549968d93660fdc78f7a6e4d9b76a3b035cea2fba3ac # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 0
+cc 568900dca277d38a11baad3fa7c24267e17c33352c3f8e7317fd763470fdb139 # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 2791878455420188562

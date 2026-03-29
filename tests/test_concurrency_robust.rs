@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use arrow::array::{Int32Array, Float32Array, FixedSizeListArray};
 use arrow::record_batch::RecordBatch;
@@ -83,7 +85,7 @@ async fn test_high_concurrency_readers_writers() -> Result<()> {
                 let _ = t.sql("SELECT * FROM t WHERE id > 0").await.unwrap();
                 
                 let query_vec = vec![0.5; 4];
-                let vs_params = VectorSearchParams::new("embedding", query_vec, 5);
+                let vs_params = VectorSearchParams::new("embedding", hyperstreamdb::core::index::VectorValue::Float32(query_vec), 5);
                 let _ = t.read_async(None, Some(vs_params), None).await.unwrap();
                 
                 sleep(Duration::from_millis(15)).await;
@@ -98,7 +100,7 @@ async fn test_high_concurrency_readers_writers() -> Result<()> {
         for _ in 0..3 {
             sleep(Duration::from_secs(1)).await;
             println!("Triggering background compaction...");
-            let _ = t_compactor.compact(None);
+            let _ = t_compactor.rewrite_data_files_async(None).await;
         }
     });
     

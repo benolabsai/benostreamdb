@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::convert::TryInto;
 
 fn murmur3_msg(data: &[u8], seed: u32, big_endian: bool) -> u32 {

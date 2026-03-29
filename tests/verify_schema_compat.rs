@@ -1,12 +1,13 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use arrow::array::{
-    Array, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, 
-    Int32Array, Int64Array, LargeBinaryArray, ListArray, MapArray, StringArray, 
+    Array, BooleanArray, Date32Array, Float32Array, Float64Array, 
+    Int32Array, Int64Array, LargeBinaryArray, ListArray, StringArray, 
     StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray
 };
 use arrow::record_batch::RecordBatch;
-use arrow::datatypes::{Schema, DataType, Field, SchemaRef, TimeUnit};
-use arrow::buffer::Buffer;
+use arrow::datatypes::{Schema, DataType, Field, TimeUnit};
 use hyperstreamdb::Table;
 use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
 use std::sync::Arc;
@@ -321,7 +322,7 @@ async fn test_partition_transforms() -> Result<()> {
     let spec = PartitionSpec {
         spec_id: 0,
         fields: vec![
-            PartitionField { source_id: 1, field_id: None, name: "id_bucket".to_string(), transform: "bucket[2]".to_string() },
+            PartitionField { source_ids: vec![1], source_id: Some(1), field_id: None, name: "id_bucket".to_string(), transform: "bucket[2]".to_string() },
         ]
     };
     

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 /// Expression rewriter for pgvector-compatible syntax
 /// 
 /// This module provides a DataFusion expression rewriter that transforms pgvector
@@ -8,7 +10,7 @@
 /// 
 /// This uses DataFusion's TreeNodeRewriter for proper expression tree traversal.
 
-use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{Expr, Operator};
 use datafusion::scalar::ScalarValue;
@@ -87,7 +89,7 @@ impl TreeNodeRewriter for PgVectorRewriter {
 }
 
 /// Check if a DataFusion operator matches a pgvector operator string
-fn matches_operator(op: &Operator, pg_op: &str) -> bool {
+fn matches_operator(_op: &Operator, _pg_op: &str) -> bool {
     // DataFusion operators are enums, so we need to match based on the operator type
     // For custom operators, we'd need to extend DataFusion's Operator enum
     // For now, we'll rely on string matching in the debug representation
@@ -132,7 +134,7 @@ pub fn rewrite_pgvector_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::logical_expr::col;
+    use datafusion::common::tree_node::TreeNode;
     use datafusion::arrow::datatypes::DataType;
     
     #[test]

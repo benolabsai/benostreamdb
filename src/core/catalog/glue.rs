@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use aws_config::BehaviorVersion;
 use aws_sdk_glue::{Client as GlueClient, types::TableInput, types::StorageDescriptor, types::Column};
 use anyhow::{Result, anyhow};

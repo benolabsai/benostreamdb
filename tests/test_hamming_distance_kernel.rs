@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext};
 use hyperstreamdb::core::index::VectorMetric;

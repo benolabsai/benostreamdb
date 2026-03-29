@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 // Integration tests for pgvector-compatible SQL support
 // Feature: pgvector-sql-support
 

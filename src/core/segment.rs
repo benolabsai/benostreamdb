@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::fs::File;
 
 use arrow::record_batch::RecordBatch;
@@ -16,6 +18,7 @@ use object_store::ObjectStore;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
 use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
 use std::collections::hash_map::RandomState;
+use crate::core::index::gpu::{ComputeContext, set_global_gpu_context};
 
 pub struct HybridSegmentWriter {
     config: SegmentConfig,
@@ -409,6 +412,25 @@ impl HybridSegmentWriter {
     /// Build index for a single column. 
     /// Can be called during ingestion OR for post-hoc backfilling.
     pub fn index_column(&self, col_name: &str, col_array: &std::sync::Arc<dyn Array>) -> Result<()> {
+        // Apply per-column device override if specified
+        if let Some(device_str) = self.config.column_devices.get(col_name) {
+            println!("Applying device override for column {}: {}", col_name, device_str);
+            if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
+                println!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
+                set_global_gpu_context(Some(ctx));
+            } else {
+                println!("Failed to parse device string: {}", device_str);
+            }
+        } else if let Some(ref device_str) = self.config.default_device {
+            println!("Applying default device for column {}: {}", col_name, device_str);
+            if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
+                println!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
+                set_global_gpu_context(Some(ctx));
+            } else {
+                println!("Failed to parse default device string: {}", device_str);
+            }
+        }
+
         // Create a local staging directory if base_path is a URI
         let is_remote = self.config.base_path.contains("://") && !self.config.base_path.starts_with("file://");
         let local_staging_dir = if is_remote {
@@ -430,27 +452,39 @@ impl HybridSegmentWriter {
                 // Scalar Indexing (RoaringBitmap for Int32)
                 arrow::datatypes::DataType::Int32 => {
                     println!("Indexing Int32 column: {}", col_name);
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
                     
                     // Scalar index (.idx) is removed for Int32 as we use more precise Inverted Index
 
-                    // Inverted Index (Value -> RowIDs) as Parquet
-                    let mut inverted_map: std::collections::HashMap<i32, Vec<u32>> = std::collections::HashMap::new();
-                    for (row_i, val) in array.iter().enumerate() {
-                        if let Some(v) = val {
-                            inverted_map.entry(v).or_default().push(row_i as u32);
-                        }
-                    }
-
+                    // Optimized Inverted Index (Sort-based instead of HashMap)
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    
+                    // 1. Get sort indices to group same values together
+                    let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
+                    
                     let mut key_builder = arrow::array::Int32Builder::new();
                     let value_builder = arrow::array::UInt32Builder::new();
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-                    for (key, row_ids) in inverted_map {
-                        key_builder.append_value(key);
-                        for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                    let mut current_val: Option<i32> = None;
+                    let _count = 0;
+
+                    for i in 0..sort_indices.len() {
+                        let row_idx = sort_indices.value(i);
+                        if array.is_null(row_idx as usize) { continue; }
+                        let val = array.value(row_idx as usize);
+
+                        if Some(val) != current_val {
+                            if let Some(v) = current_val {
+                                key_builder.append_value(v);
+                                list_builder.append(true);
+                            }
+                            current_val = Some(val);
                         }
+                        list_builder.values().append_value(row_idx);
+                    }
+                    if let Some(v) = current_val {
+                        key_builder.append_value(v);
                         list_builder.append(true);
                     }
 
@@ -482,19 +516,38 @@ impl HybridSegmentWriter {
                     }
                 },
 
-                arrow::datatypes::DataType::FixedSizeList(inner, dim) => {
+                arrow::datatypes::DataType::List(inner) | arrow::datatypes::DataType::FixedSizeList(inner, _) => {
                      if *inner.data_type() == arrow::datatypes::DataType::Float32 {
-                        println!("Indexing Vector column: {} (dim={})", col_name, dim);
-                        let list_array = col_array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+                        println!("Indexing Vector column: {} (type={:?})", col_name, col_array.data_type());
                         
-                        let vectors: Vec<Vec<f32>> = (0..list_array.len())
-                            .into_par_iter()
-                            .map(|i| {
-                                let item = list_array.value(i);
-                                let float_array = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
-                                float_array.values().to_vec()
-                            })
-                            .collect();
+                        let vectors: Vec<Vec<f32>> = match col_array.data_type() {
+                            arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                                let list_array = col_array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+                                (0..list_array.len())
+                                    .into_par_iter()
+                                    .map(|i| {
+                                        let item = list_array.value(i);
+                                        let float_array = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                                        float_array.values().to_vec()
+                                    })
+                                    .collect()
+                            },
+                            arrow::datatypes::DataType::List(_) => {
+                                let list_array = col_array.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                                (0..list_array.len())
+                                    .into_par_iter()
+                                    .map(|i| {
+                                        let item = list_array.value(i);
+                                        let float_array = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                                        float_array.values().to_vec()
+                                    })
+                                    .collect()
+                            },
+                            _ => unreachable!(),
+                        };
+
+                        if vectors.is_empty() { return Ok(()); }
+                        let _dim = vectors[0].len();
 
                         let use_pq = vectors.len() > 100_000;
                         if use_pq {
@@ -515,28 +568,35 @@ impl HybridSegmentWriter {
                 },
                 arrow::datatypes::DataType::Int64 => {
                     println!("Indexing Int64 column: {}", col_name);
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
                     
                     // No mock .idx for Int64
 
-                    // Inverted Index (Value -> RowIDs) as Parquet (Int64)
-                    let mut inverted_map: std::collections::HashMap<i64, Vec<u32>> = std::collections::HashMap::new();
-                    for (row_i, val) in array.iter().enumerate() {
-                        if let Some(v) = val {
-                            inverted_map.entry(v).or_default().push(row_i as u32);
-                        }
-                    }
+                    // Optimized Inverted Index (Sort-based)
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
 
-                    // Build Arrow Arrays
                     let mut key_builder = arrow::array::Int64Builder::new();
                     let value_builder = arrow::array::UInt32Builder::new();
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-                    for (key, row_ids) in inverted_map {
-                        key_builder.append_value(key);
-                        for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                    let mut current_val: Option<i64> = None;
+                    for i in 0..sort_indices.len() {
+                        let row_idx = sort_indices.value(i);
+                        if array.is_null(row_idx as usize) { continue; }
+                        let val = array.value(row_idx as usize);
+
+                        if Some(val) != current_val {
+                            if let Some(v) = current_val {
+                                key_builder.append_value(v);
+                                list_builder.append(true);
+                            }
+                            current_val = Some(val);
                         }
+                        list_builder.values().append_value(row_idx);
+                    }
+                    if let Some(v) = current_val {
+                        key_builder.append_value(v);
                         list_builder.append(true);
                     }
 
@@ -569,27 +629,36 @@ impl HybridSegmentWriter {
 
                 arrow::datatypes::DataType::Float64 => {
                     println!("Indexing Float64 column: {}", col_name);
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
                     
                     // No mock .idx for Float64
 
-                    // Inverted Index (Value -> RowIDs)
-                    let mut inverted_map: std::collections::HashMap<u64, Vec<u32>> = std::collections::HashMap::new();
-                    for (row_i, val) in array.iter().enumerate() {
-                        if let Some(v) = val {
-                            inverted_map.entry(v.to_bits()).or_default().push(row_i as u32);
-                        }
-                    }
+                    // Optimized Inverted Index (Sort-based)
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                    let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
 
                     let mut key_builder = arrow::array::Float64Builder::new();
                     let value_builder = arrow::array::UInt32Builder::new();
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-                    for (key_bits, row_ids) in inverted_map {
-                        key_builder.append_value(f64::from_bits(key_bits));
-                        for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                    let mut current_val: Option<u64> = None; // Store as bits for comparison
+                    for i in 0..sort_indices.len() {
+                        let row_idx = sort_indices.value(i);
+                        if array.is_null(row_idx as usize) { continue; }
+                        let val = array.value(row_idx as usize);
+                        let val_bits = val.to_bits();
+
+                        if Some(val_bits) != current_val {
+                            if let Some(v_bits) = current_val {
+                                key_builder.append_value(f64::from_bits(v_bits));
+                                list_builder.append(true);
+                            }
+                            current_val = Some(val_bits);
                         }
+                        list_builder.values().append_value(row_idx);
+                    }
+                    if let Some(v_bits) = current_val {
+                        key_builder.append_value(f64::from_bits(v_bits));
                         list_builder.append(true);
                     }
 
@@ -1153,6 +1222,7 @@ impl HybridSegmentWriter {
                         .map_err(|e| anyhow::anyhow!("Failed to unpack dictionary: {}", e))?;
                     self.index_column(col_name, &casted)?;
                 },
+
 
                 _ => {
                     // Skip unsupported

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::puffin::{PuffinWriter, PuffinReader};
 use std::io::Cursor;
 use std::collections::HashMap;

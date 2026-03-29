@@ -1,10 +1,11 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::table::Table;
 // use hyperstreamdb::core::manifest::Schema; // Unused
 use arrow::record_batch::RecordBatch;
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use std::sync::Arc;
-use tokio::runtime::Runtime;
 use futures::StreamExt;
 
 #[tokio::test]
@@ -131,7 +132,7 @@ async fn verify_delete_files_format(uri: &str, expected_min_count: usize) -> any
                 // Optional: Read it with avro-rs to verify schema
                 let file = std::fs::File::open(&path)?;
                 let reader = apache_avro::Reader::new(file)?;
-                let schema = reader.writer_schema();
+                let _schema = reader.writer_schema();
                 // Check if schema has "file_path" and "pos"
                 // Simplified check
                 // println!("Schema: {:?}", schema);

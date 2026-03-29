@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use serde::{Deserialize, Serialize};
 use anyhow::{Result, Context};
 use std::io::{Read, Write, Seek, SeekFrom};

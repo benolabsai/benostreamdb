@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -868,7 +870,7 @@ impl ManifestManager {
         let mut attempt = 0;
         
         loop {
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (_current_manifest, current_ver) = self.load_latest().await?;
             let new_ver = current_ver + 1;
             
             // Load the target version we want to rollback to
@@ -971,7 +973,9 @@ impl ManifestManager {
                     let path = self.manifest_dir.child(filename);
                     
                     let writer = crate::core::iceberg::IcebergWriter::new();
-                    let bytes = writer.write_manifest_file(chunk, &current_manifest.partition_spec, new_ver as i64, new_ver as i64)?;
+                    let default_schema = crate::core::manifest::Schema::default();
+                    let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema);
+                    let bytes = writer.write_manifest_file(chunk, &current_manifest.partition_spec, table_schema, new_ver as i64, new_ver as i64)?;
                     let manifest_length = bytes.len() as i64;
                     let rows_count: i64 = chunk.iter().map(|e| e.record_count).sum();
                     
@@ -1012,7 +1016,9 @@ impl ManifestManager {
                 let path = self.manifest_dir.child(filename);
                 
                 let writer = crate::core::iceberg::IcebergWriter::new();
-                let bytes = writer.write_manifest_file(&new_entries, &current_manifest.partition_spec, new_ver as i64, new_ver as i64)?;
+                let default_schema = crate::core::manifest::Schema::default();
+                let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema);
+                let bytes = writer.write_manifest_file(&new_entries, &current_manifest.partition_spec, table_schema, new_ver as i64, new_ver as i64)?;
                 let manifest_length = bytes.len() as i64;
                 let rows_count: i64 = new_entries.iter().map(|e| e.record_count).sum();
                 
@@ -1560,7 +1566,7 @@ mod tests {
 
         // Load specific version (v2)
         // Load specific version (v2)
-        let (manifest, entries, version) = manager.load_latest_full().await?;
+        let (_manifest, entries, version) = manager.load_latest_full().await?;
         assert_eq!(version, 2);
         assert_eq!(entries.len(), 2);
 

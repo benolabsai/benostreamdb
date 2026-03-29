@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 
 #[cfg(test)]
 mod tests {
@@ -25,7 +27,7 @@ mod tests {
             Field::new("data", DataType::Utf8, false),
         ]));
         
-        let mut table = Table::create_async(uri.clone(), schema.clone()).await?;
+        let table = Table::create_async(uri.clone(), schema.clone()).await?;
 
         // 2. Insert Data
         let batch = RecordBatch::try_new(
@@ -45,7 +47,6 @@ mod tests {
         // 4. Verify Delete Files exist
         let paths = fs::read_dir(test_dir)?;
         let mut found_del_file = false;
-        let mut del_file_path = String::new();
         
         for path in paths {
             let p = path?.path();
@@ -53,7 +54,6 @@ mod tests {
             // Look for del-pos-*.avro
             if name.starts_with("del-pos-") && name.ends_with(".avro") {
                 found_del_file = true;
-                del_file_path = p.to_string_lossy().to_string();
                 println!("Found Delete File: {}", name);
             }
         }

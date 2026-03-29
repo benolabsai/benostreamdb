@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::{Result, Context};
 use arrow::record_batch::RecordBatch;
 use arrow::array::{Array, Float32Array, FixedSizeListArray, ListArray};

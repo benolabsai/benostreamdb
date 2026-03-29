@@ -15,7 +15,6 @@ __kernel void inner_product_kernel(
         dot_product += query[i] * current_vector[i];
     }
     
-    // Inner product distance is negative dot product
-    // (to maintain distance semantics where smaller is more similar)
-    distances[row] = -dot_product;
+    // Inner product
+    distances[row] = dot_product;
 }

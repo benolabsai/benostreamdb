@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use lazy_static::lazy_static;
 use prometheus::{
     register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge,

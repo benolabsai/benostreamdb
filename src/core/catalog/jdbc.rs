@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::{Result, anyhow, Context};
 use async_trait::async_trait;
 use sqlx::{AnyPool, any::AnyPoolOptions, Row};

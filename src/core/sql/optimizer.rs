@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use std::sync::Arc;
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
@@ -335,7 +337,7 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                 }
                             
                             // Construct optimized scan
-                            let mut new_hs = HyperStreamExec::new(
+                            let new_hs = HyperStreamExec::new(
                                 hs_exec.table.clone(),
                                 hs_exec.partitions.clone(),
                                 hs_exec.projection().cloned(),
@@ -566,16 +568,16 @@ mod property_tests {
             use crate::core::index::VectorValue;
             use std::sync::Arc;
             use arrow::datatypes::{Schema, Field, DataType};
-            use datafusion::physical_plan::limit::GlobalLimitExec;
-            use datafusion::physical_plan::sorts::sort::SortExec;
-            use datafusion::physical_expr::expressions::{Column, Literal};
-            use datafusion::physical_expr::PhysicalSortExpr;
-            use datafusion::scalar::ScalarValue;
-            use arrow::array::{Float32Array, FixedSizeListArray};
-            use arrow::buffer::OffsetBuffer;
+            
+            
+            
+            
+            
+            
+            
             
             // Create a test schema
-            let schema = Arc::new(Schema::new(vec![
+            let _schema = Arc::new(Schema::new(vec![
                 Field::new("id", DataType::Int64, false),
                 Field::new("embedding", DataType::FixedSizeList(
                     Arc::new(Field::new("item", DataType::Float32, true)),
@@ -1788,7 +1790,6 @@ mod fallback_tests {
 // Requirements: 5.1
 #[cfg(test)]
 mod sparse_vector_table_tests {
-    use super::*;
     use crate::core::index::SparseVector;
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
@@ -2076,7 +2077,7 @@ mod sparse_vector_table_tests {
 // Requirements: 6.4
 #[cfg(test)]
 mod empty_aggregation_tests {
-    use super::*;
+    
     
     #[test]
     fn test_empty_input_returns_null_concept() {
@@ -2280,7 +2281,7 @@ mod empty_aggregation_tests {
 // Requirements: 7.5
 #[cfg(test)]
 mod binary_vector_display_tests {
-    use super::*;
+    
     
     #[test]
     fn test_binary_display_format_exists() {

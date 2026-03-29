@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext};
 use rand::Rng;
@@ -52,7 +54,7 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
     let vectors = generate_random_vectors(n_vectors, dim);
 
     // Always test CPU (reference)
-    let ref_backend = ComputeBackend::Cpu;
+    let _ref_backend = ComputeBackend::Cpu;
 
     // 1. Test CUDA if enabled
     #[cfg(feature = "cuda")]

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use pyo3::prelude::*;
 use crate::core::index::gpu::{ComputeContext, ComputeBackend};
 use std::sync::{Arc, Mutex};
@@ -15,11 +17,12 @@ pub struct GPUStats {
 /// Python wrapper for ComputeContext with performance monitoring
 #[pyclass(name = "ComputeContext")]
 pub struct PyComputeContext {
-    context: ComputeContext,
-    stats: Arc<Mutex<GPUStats>>,
+    pub(crate) context: ComputeContext,
+    pub(crate) stats: Arc<Mutex<GPUStats>>,
 }
 
 #[pymethods]
+#[allow(deprecated)]
 impl PyComputeContext {
     /// Detect and return the best available GPU backend
     /// 
@@ -295,8 +298,68 @@ impl PyComputeContext {
         *stats = GPUStats::default();
     }
 
+    /// Activate this context for the current thread
+    /// 
+    /// Sets this context as the global default for the current thread.
+    /// Operations like index building will automatically use this GPU context.
+    fn activate(&self) {
+        crate::core::index::gpu::set_global_gpu_context(Some(self.context));
+    }
+
+    /// Deactivate the global context for the current thread
+    /// 
+    /// Clears the global GPU context for the current thread, falling back to CPU
+    /// for operations that don't specify a context.
+    #[staticmethod]
+    fn deactivate() {
+        crate::core::index::gpu::set_global_gpu_context(None);
+    }
+
     fn __repr__(&self) -> String {
         format!("ComputeContext(backend='{}', device_id={})", self.backend(), self.device_id())
+    }
+
+    /// Perform K-Means clustering on a set of vectors.
+    /// 
+    /// This method uses the GPU backend associated with this context to accelerate
+    /// the K-Means assignment phase.
+    /// 
+    /// Parameters
+    /// ----------
+    /// vectors : List[List[float]]
+    ///     Input vectors to cluster
+    /// k : int
+    ///     Number of clusters
+    /// max_iters : int, optional
+    ///     Maximum number of iterations (default: 10)
+    /// 
+    /// Returns
+    /// -------
+    /// tuple (centroids, labels)
+    ///     centroids : List[List[float]]
+    ///         The computed cluster centroids
+    ///     labels : List[int]
+    ///         Cluster assignment for each input vector
+    #[pyo3(signature = (vectors, k, max_iters=10))]
+    fn kmeans(
+        &self,
+        py: Python<'_>,
+        vectors: Vec<Vec<f32>>,
+        k: usize,
+        max_iters: usize,
+    ) -> PyResult<(Vec<Vec<f32>>, Vec<usize>)> {
+        // Temporarily activate this context for simple_kmeans if it's not already global
+        let prev_ctx = crate::core::index::gpu::get_global_gpu_context();
+        crate::core::index::gpu::set_global_gpu_context(Some(self.context));
+        
+        let result = py.allow_threads(|| {
+            crate::core::index::ivf::simple_kmeans(&vectors, k, max_iters)
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()));
+            
+        // Restore previous context
+        crate::core::index::gpu::set_global_gpu_context(prev_ctx);
+        
+        result
     }
 }
 

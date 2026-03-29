@@ -142,6 +142,15 @@ class CompetitiveBenchmark:
             # Table creation (not counted in timing)
             table = hdb.Table(uri)
             
+            # Flush with GPU acceleration
+            try:
+                table.set_default_device("mps")
+                print("  (Using MPS GPU acceleration)")
+            except Exception as e:
+                print(f"  (GPU acceleration not available: {e})")
+
+            table.add_index_columns(["embedding"])
+            
             # Add embedding column
             metadata['embedding'] = list(vectors)
             
@@ -149,6 +158,7 @@ class CompetitiveBenchmark:
             start = time.time()
             table.write_pandas(metadata)
             table.commit()
+            table.wait_for_background_tasks() # Ensure indexing is finished
             elapsed = time.time() - start
             
             throughput = n_rows / elapsed
@@ -184,6 +194,7 @@ class CompetitiveBenchmark:
             metadata['embedding'] = list(vectors)
             table.write_pandas(metadata)
             table.commit()
+            table.wait_for_background_tasks() # MUST wait for index to be built
             
             # Note: Vector indexing happens automatically on commit
             # For small datasets, search may use brute-force if index isn't built yet

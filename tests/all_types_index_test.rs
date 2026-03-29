@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::Table;
 use arrow::array::{
     Int32Array, BooleanArray, Time32MillisecondArray, BinaryArray, 

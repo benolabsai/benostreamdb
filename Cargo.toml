@@ -12,8 +12,9 @@ default = ["intel_gpu", "candle"]
 candle = []
 cuda = ["dep:cust", "intel_gpu"]
 rocm = ["dep:opencl3", "intel_gpu"] # Fallback to OpenCL for now
-mps = ["intel_gpu"]
+mps = ["metal"]
 intel_gpu = ["dep:opencl3"]
+enterprise = []
 
 [dependencies]
 # core columnar memory format
@@ -57,7 +58,7 @@ opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
 
 # indexing
 roaring = "0.10.2" # For scalar bitmaps
-hnsw_rs = "0.1.19" # For vector indexing
+hnsw_rs = { path = "vendor/hnsw_rs" } # For vector indexing
 # lance removed due to missing protoc
 
 # error handling
@@ -93,7 +94,7 @@ opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
 tracing-opentelemetry = "0.23"
 base64 = "0.22.1"
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql", "chrono", "uuid", "any"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql", "chrono", "uuid", "any"] }
 murmur3 = "0.5.2"
 regex = "1.10"
 candle-core = "0.8"
@@ -128,17 +129,17 @@ version = "0.26.0"
 criterion = { version = "0.5", features = ["async_tokio"] }
 rand = "0.8"
 rand_distr = "0.4"
-hnsw_rs = "0.1.19"
+hnsw_rs = { path = "vendor/hnsw_rs" }
 tempfile = "3.10"
 proptest = "1.4"
 
 [[bin]]
 name = "generate_iceberg_manifests"
-path = "tests/generate_iceberg_manifests.rs"
+path = "tests/bin/generate_iceberg_manifests.rs"
 
 [[bin]]
 name = "verify_iceberg_read_check"
-path = "tests/verify_iceberg_read_check.rs"
+path = "tests/bin/verify_iceberg_read_check.rs"
 
 [[bench]]
 name = "performance"

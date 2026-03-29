@@ -103,7 +103,7 @@ fn bench_query_indexed(c: &mut Criterion) {
     
     let table = rt.block_on(async {
         let mut t = Table::new_async(table_uri).await.unwrap();
-        t.add_index_columns_async(vec!["id".to_string()]).await.unwrap(); 
+        t.add_index_columns_async(vec!["id".to_string()], None).await.unwrap(); 
         t.write_async(vec![batch]).await.unwrap();
         t.commit_async().await.unwrap();
         t.wait_for_background_tasks_async().await.unwrap();
@@ -133,7 +133,7 @@ fn bench_vector_search_in_memory(c: &mut Criterion) {
     
     let table = rt.block_on(async {
         let mut t = Table::new_async(table_uri).await.unwrap();
-        t.add_index_columns_async(vec!["embedding".to_string()]).await.unwrap();
+        t.add_index_columns_async(vec!["embedding".to_string()], None).await.unwrap();
         t.write_async(vec![batch]).await.unwrap();
         t.commit_async().await.unwrap();
         t.wait_for_background_tasks_async().await.unwrap();
@@ -142,7 +142,7 @@ fn bench_vector_search_in_memory(c: &mut Criterion) {
 
     let vs_params = VectorSearchParams::new(
         "embedding",
-        (0..dim).map(|i| i as f32 / 100.0).collect(),
+        hyperstreamdb::core::index::VectorValue::Float32((0..dim).map(|i| i as f32 / 100.0).collect()),
         10,
     );
 

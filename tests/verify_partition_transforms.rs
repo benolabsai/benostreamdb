@@ -1,7 +1,7 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::core::iceberg::{murmur3_32_x86, IcebergTransform};
-use arrow::array::{Int32Array, Int64Array, StringArray, Date32Array, TimestampMicrosecondArray};
-use arrow::datatypes::DataType;
-use std::sync::Arc;
+use arrow::array::{StringArray, Date32Array, TimestampMicrosecondArray};
 use serde_json::json;
 
 #[test]

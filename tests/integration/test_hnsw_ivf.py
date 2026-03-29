@@ -73,3 +73,6 @@ def test_hnsw_ivf_integration():
     print("\n" + "="*60)
     print("✅ All tests passed!")
     print("="*60)
+
+if __name__ == '__main__':
+    test_hnsw_ivf_integration()

@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
 use hyperstreamdb::Table;
 use arrow::array::{Int32Array, StringArray, Float64Array};
 use arrow::datatypes::{Schema, Field, DataType};
@@ -173,7 +175,7 @@ async fn test_merge_with_compaction() -> Result<(), Box<dyn std::error::Error>> 
     }
 
     // Compact to merge segments (pass None for default options)
-    table.compact(None)?;
+    table.rewrite_data_files_async(None).await?;
 
     // Verify data after compaction
     let result = table.read_async(None, None, None).await?;
