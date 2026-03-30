@@ -101,7 +101,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features intel_gpu,cuda
-          sccache: 'true'
+          sccache: 'false'
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -136,7 +136,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features mps
-          sccache: 'true'
+          sccache: 'false'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
