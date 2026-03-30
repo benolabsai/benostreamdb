@@ -1,0 +1,275 @@
+   Compiling hyperstreamdb v0.1.0 (/home/ralbright/projects/hyperstreamdb)
+warning: unused import: `arrow::array::BooleanArray`
+ --> src/core/reader.rs:9:5
+  |
+9 | use arrow::array::BooleanArray;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `QueryFilter`
+  --> src/core/reader.rs:13:28
+   |
+13 | use crate::core::planner::{QueryFilter, FilterExpr};
+   |                            ^^^^^^^^^^^
+
+warning: unused import: `std::cmp::Ordering`
+ --> src/core/manifest.rs:3:5
+  |
+3 | use std::cmp::Ordering;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `QueryFilter`
+  --> src/core/query.rs:11:28
+   |
+11 | use crate::core::planner::{QueryFilter, FilterExpr};
+   |                            ^^^^^^^^^^^
+
+warning: unused import: `datafusion::common::ToDFSchema`
+   --> src/core/planner.rs:413:13
+    |
+413 |         use datafusion::common::ToDFSchema;
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around assigned value
+   --> src/core/clustering.rs:219:26
+    |
+219 |              let range = (max as f64 - min as f64);
+    |                          ^                       ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+219 -              let range = (max as f64 - min as f64);
+219 +              let range = max as f64 - min as f64 ;
+    |
+
+warning: variable does not need to be mutable
+   --> src/core/manifest.rs:526:17
+    |
+526 |             let mut all_entries = self.load_all_entries(&current_manifest).await?;
+    |                 ----^^^^^^^^^^^
+    |                 |
+    |                 help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/core/manifest.rs:541:17
+    |
+541 |             let mut new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
+    |                 ----^^^^^^^^^^^
+    |                 |
+    |                 help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/core/reader.rs:611:22
+    |
+611 |                  let mut mask_vec = vec![true; batch.num_rows()];
+    |                      ----^^^^^^^^
+    |                      |
+    |                      help: remove this `mut`
+
+warning: use of deprecated associated function `opencl3::command_queue::CommandQueue::create`: From CL_VERSION_2_0 use create_command_queue_with_properties
+   --> src/core/index/gpu.rs:314:40
+    |
+314 |     let queue = unsafe { CommandQueue::create(&context, device_id, 0)? };
+    |                                        ^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `store`
+   --> src/core/table.rs:170:13
+    |
+170 |         let store = create_object_store(&uri)?;
+    |             ^^^^^ help: if this is intentional, prefix it with an underscore: `_store`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `manifest`
+   --> src/core/table.rs:236:24
+    |
+236 |             if let Ok((manifest, _)) = table.get_snapshot_segments_with_version().await {
+    |                        ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: variable `found` is assigned to, but never used
+   --> src/core/table.rs:907:31
+    |
+907 |                           let mut found = false;
+    |                               ^^^^^^^^^
+    |
+    = note: consider using `_found` instead
+
+warning: value assigned to `found` is never read
+   --> src/core/table.rs:914:35
+    |
+914 | ...                   found = true;
+    |                       ^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `manifest`
+  --> src/core/compaction.rs:80:14
+   |
+80 |         let (manifest, all_entries, _) = self.manifest.load_latest_full().await?;
+   |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+    --> src/core/table.rs:1805:18
+     |
+1805 |             let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+     |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+    --> src/core/table.rs:1958:18
+     |
+1958 |             let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+     |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+    --> src/core/table.rs:2064:14
+     |
+2064 |         let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+    --> src/core/table.rs:2360:18
+     |
+2360 |             let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+     |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `manifest`
+    --> src/core/table.rs:2407:14
+     |
+2407 |         let (manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest`
+
+warning: unused variable: `query`
+   --> src/core/index/gpu.rs:159:17
+    |
+159 | fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+    |                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_query`
+
+warning: unused variable: `vectors`
+   --> src/core/index/gpu.rs:159:32
+    |
+159 | fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_vectors`
+
+warning: unused variable: `dim`
+   --> src/core/index/gpu.rs:159:49
+    |
+159 | fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+    |                                                 ^^^ help: if this is intentional, prefix it with an underscore: `_dim`
+
+warning: unused variable: `metric`
+   --> src/core/index/gpu.rs:159:61
+    |
+159 | fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+    |                                                             ^^^^^^ help: if this is intentional, prefix it with an underscore: `_metric`
+
+warning: unused variable: `metric`
+   --> src/core/index/gpu.rs:173:60
+    |
+173 | fn compute_mps(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+    |                                                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_metric`
+
+warning: variable does not need to be mutable
+   --> src/core/planner.rs:150:13
+    |
+150 |         let mut expr = if let Some(values) = &self.values {
+    |             ----^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `inner`
+   --> src/core/planner.rs:575:23
+    |
+575 |             Expr::Not(inner) => {
+    |                       ^^^^^ help: if this is intentional, prefix it with an underscore: `_inner`
+
+warning: methods `might_match_clustering` and `normalize_value_u64` are never used
+   --> src/core/planner.rs:740:8
+    |
+387 | impl QueryPlanner {
+    | ----------------- methods in this implementation
+...
+740 |     fn might_match_clustering(&self, entry: &ManifestEntry, filters: &[QueryFilter]) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+802 |     fn normalize_value_u64(&self, val: &Value, min: &Value, max: &Value, bits: usize) -> u64 {
+    |        ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `hyperstreamdb` (lib) generated 28 warnings (run `cargo fix --lib -p hyperstreamdb` to apply 24 suggestions)
+warning: unused imports: `DataType`, `Field`, and `Schema`
+ --> src/bin/verify_layered_indexing.rs:8:24
+  |
+8 | use arrow::datatypes::{DataType, Field, Schema};
+  |                        ^^^^^^^^  ^^^^^  ^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `object_store::path::Path`
+  --> src/bin/iceberg_rest.rs:11:5
+   |
+11 | use object_store::path::Path;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::io::Write`
+ --> src/bin/verify_layered_indexing.rs:5:5
+  |
+5 | use std::io::Write;
+  |     ^^^^^^^^^^^^^^
+
+warning: `hyperstreamdb` (bin "iceberg_rest") generated 1 warning (run `cargo fix --bin "iceberg_rest" -p hyperstreamdb` to apply 1 suggestion)
+warning: `hyperstreamdb` (bin "verify_layered_indexing") generated 2 warnings (run `cargo fix --bin "verify_layered_indexing" -p hyperstreamdb` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.76s
+     Running tests/test_partitioning_advanced.rs (target/debug/deps/test_partitioning_advanced-0275a3378e458350)
+
+running 1 test
+Committed Manifest v1
+Written data to /tmp/.tmpjZW3Na/seg_9af3fccb-7db8-4488-b18f-dd162ab54c81.parquet (1 rows)
+Written data to /tmp/.tmpjZW3Na/seg_40a058b9-1cea-41e1-9844-9f12d7954697.parquet (1 rows)
+Written data to /tmp/.tmpjZW3Na/seg_c5861961-8b6d-488f-905c-4dfba51ef45e.parquet (1 rows)
+Written data to /tmp/.tmpjZW3Na/seg_2465f751-af67-4855-a431-464562eb350a.parquet (1 rows)
+Committed Manifest v2
+Partition Pruning: col=year, val=Number(2022), filter_min=Some(Number(2022)), filter_max=None
+Partition Pruning: col=year, val=Number(2022), filter_min=None, filter_max=Some(Number(2022))
+Partition Pruning: col=year, val=Number(2023), filter_min=Some(Number(2022)), filter_max=None
+Partition Pruning: col=year, val=Number(2023), filter_min=None, filter_max=Some(Number(2022))
+Partition Pruning: col=year, val=Number(2022), filter_min=Some(Number(2022)), filter_max=None
+Partition Pruning: col=year, val=Number(2022), filter_min=None, filter_max=Some(Number(2022))
+Partition Pruning: col=year, val=Null, filter_min=Some(Number(2022)), filter_max=None
+DEBUG read_segment_expr: segment_id=seg_9af3fccb-7db8-4488-b18f-dd162ab54c81, batches_count=1, total_rows=1
+DEBUG evaluate_expr: mask true_count=1, total=1
+DEBUG read_segment_expr: filtered rows=1/1
+DEBUG read_segment_expr: returning 1 filtered batches
+DEBUG read_segment_expr: segment_id=seg_40a058b9-1cea-41e1-9844-9f12d7954697, batches_count=1, total_rows=1
+DEBUG evaluate_expr: mask true_count=1, total=1
+DEBUG read_segment_expr: filtered rows=1/1
+DEBUG read_segment_expr: returning 1 filtered batches
+Partition Pruning: col=category, val=String("A"), filter_min=Some(String("A")), filter_max=None
+Partition Pruning: col=category, val=String("A"), filter_min=None, filter_max=Some(String("A"))
+Partition Pruning: col=category, val=String("A"), filter_min=Some(String("A")), filter_max=None
+Partition Pruning: col=category, val=String("A"), filter_min=None, filter_max=Some(String("A"))
+Partition Pruning: col=category, val=String("B"), filter_min=Some(String("A")), filter_max=None
+Partition Pruning: col=category, val=String("B"), filter_min=None, filter_max=Some(String("A"))
+Partition Pruning: col=category, val=String("C"), filter_min=Some(String("A")), filter_max=None
+Partition Pruning: col=category, val=String("C"), filter_min=None, filter_max=Some(String("A"))
+DEBUG read_segment_expr: segment_id=seg_9af3fccb-7db8-4488-b18f-dd162ab54c81, batches_count=1, total_rows=1
+DEBUG evaluate_expr: mask true_count=1, total=1
+DEBUG read_segment_expr: filtered rows=1/1
+DEBUG read_segment_expr: returning 1 filtered batches
+DEBUG read_segment_expr: segment_id=seg_c5861961-8b6d-488f-905c-4dfba51ef45e, batches_count=1, total_rows=1
+DEBUG evaluate_expr: mask true_count=1, total=1
+DEBUG read_segment_expr: filtered rows=1/1
+DEBUG read_segment_expr: returning 1 filtered batches
+test test_multi_column_null_partitioning ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.48s
+

@@ -1,0 +1,21 @@
+--- src/python_binding.rs
++++ src/python_binding.rs
+@@ -482,8 +482,16 @@
+             }
+         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+         
++        let mut final_schema = projected_schema.clone();
++        if let Some(batch) = batches.first() {
++            final_schema = batch.schema();
++        } else if vs_params.is_some() {
++            let mut fields: Vec<arrow::datatypes::Field> = final_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
++            fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
++            final_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
++        }
++        
+         // Convert to Arrow C Data Interface
+-        arrow_batches_to_pyarrow(py, batches, projected_schema)
++        arrow_batches_to_pyarrow(py, batches, final_schema)
+     }
+ 
+     /// Read table to Pandas DataFrame with optional filtering and column projection

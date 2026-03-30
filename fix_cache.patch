@@ -1,0 +1,12 @@
+--- src/core/table.rs
++++ src/core/table.rs
+@@ -1251,6 +1251,10 @@
+                 
+                 writer.upload_to_store().await?;
+                 
++                // Invalidate the cache for this segment
++                let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
++                crate::core::cache::PARQUET_META_CACHE.invalidate(&cache_key).await;
++                
+                 let updated_entry = writer.to_manifest_entry();
+                 current_entry.index_files = updated_entry.index_files;
