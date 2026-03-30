@@ -39,6 +39,12 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
           cuda: '12.1.0'
+      - name: Prep CUDA Stubs
+        run: |
+          # The linker looks for libcuda.so.1, but stubs only provide libcuda.so
+          sudo ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+          echo "/usr/local/cuda/lib64/stubs" | sudo tee /etc/ld.so.conf.d/cuda-stubs.conf
+          sudo ldconfig
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
