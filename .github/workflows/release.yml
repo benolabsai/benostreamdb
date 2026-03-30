@@ -45,7 +45,17 @@ jobs:
           sudo ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
           echo "/usr/local/cuda/lib64/stubs" | sudo tee /etc/ld.so.conf.d/cuda-stubs.conf
           sudo ldconfig
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!(.github/**)'
+              - '!(README.md)'
+              - '!(LICENSE)'
+
       - name: Cache dependencies
+        if: steps.filter.outputs.code == 'true'
         uses: actions/cache@v4
         with:
           path: |
@@ -53,11 +63,17 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Run Cargo Check
+        if: steps.filter.outputs.code == 'true'
         run: cargo check --all-targets --all-features
+
       - name: Run Cargo Tests (CPU)
+        if: steps.filter.outputs.code == 'true'
         run: cargo test --lib --tests
+
       - name: Run Cargo Tests (Features)
+        if: steps.filter.outputs.code == 'true'
         # Note: GPU tests might skip on CI runners, but compilation is verified
         # Use --nocapture to see live progress and identify potential hangs
         timeout-minutes: 20
