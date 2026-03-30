@@ -11,7 +11,35 @@ permissions:
   id-token: write
 
 jobs:
+  check:
+    name: Run Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: '12.1.0'
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Run Cargo Check
+        run: cargo check --all-targets --all-features
+      - name: Run Cargo Tests (CPU)
+        run: cargo test --lib --tests
+      - name: Run Cargo Tests (Features)
+        # Note: GPU tests might skip on CI runners, but compilation is verified
+        run: cargo test --features intel_gpu,cuda --all-targets -- --skip gpu_execution
+
   linux:
+    needs: [check]
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -51,6 +79,7 @@ jobs:
           path: dist
 
   macos:
+    needs: [check]
     runs-on: macos-latest
     strategy:
       matrix:
@@ -81,6 +110,7 @@ jobs:
           path: dist
 
   sdist:
+    needs: [check]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
