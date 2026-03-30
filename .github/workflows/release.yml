@@ -86,6 +86,7 @@ jobs:
     needs: [check]
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: true
       matrix:
         target: [x86_64, aarch64]
     steps:
@@ -132,6 +133,7 @@ jobs:
     needs: [check]
     runs-on: macos-latest
     strategy:
+      fail-fast: true
       matrix:
         target: [x86_64, aarch64]
     steps:
