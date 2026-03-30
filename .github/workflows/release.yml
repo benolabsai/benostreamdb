@@ -122,11 +122,10 @@ jobs:
           fi
       - name: Install OpenCL headers and ICD
         run: sudo apt-get update && sudo apt-get install -y ocl-icd-opencl-dev
-      - name: Create cross-compilation OpenCL stub
+      - name: Create cross-compilation stubs
         run: |
-          # Create a universal stub dir.
-          mkdir -p /tmp/opencl-stub
-          echo 'void clGetPlatformIDs() {}' > /tmp/opencl-stub/stub.c
+          # Create a platform-specific stub dir
+          mkdir -p /tmp/stubs
           
           # Target architectures
           if [ "${{ matrix.target }}" = "aarch64" ]; then
@@ -135,23 +134,25 @@ jobs:
             ZIG_TARGET="x86_64-linux-gnu.2.17"
           fi
           
-          # Compile the stub with an old GLIBC target to satisfy manylinux_2_17
-          zig cc -target $ZIG_TARGET -shared -o /tmp/opencl-stub/libOpenCL.so /tmp/opencl-stub/stub.c
+          # 1. Create OpenCL stub (with more common symbols)
+          echo 'void clGetPlatformIDs() {} void clGetDeviceIDs() {} void clCreateContext() {}' > /tmp/stubs/opencl_stub.c
+          zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libOpenCL.so /tmp/stubs/opencl_stub.c
+          ln -sf libOpenCL.so /tmp/stubs/libOpenCL.so.1
           
-          # Also link CUDA stubs if they exist
-          if [ -d /usr/local/cuda/lib64/stubs ]; then
-            ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/opencl-stub/libcuda.so 2>/dev/null || true
-            ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/opencl-stub/libcuda.so.1 2>/dev/null || true
-          fi
-          ls -la /tmp/opencl-stub/
+          # 2. Create CUDA stub (to avoid taking incompatible host stubs)
+          echo 'void cuInit() {} void cuDeviceGet() {} void cuCtxCreate_v2() {}' > /tmp/stubs/cuda_stub.c
+          zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libcuda.so /tmp/stubs/cuda_stub.c
+          ln -sf libcuda.so /tmp/stubs/libcuda.so.1
+          
+          ls -la /tmp/stubs/
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
-          # Point Zig's linker to our legacy-compatible stub directory
-          RUSTFLAGS: -L /tmp/opencl-stub -L /usr/local/cuda/lib64/stubs -L /usr/local/cuda/lib64
+          # Use our clean, architecture-correct stubs exclusively
+          RUSTFLAGS: -L /tmp/stubs
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features intel_gpu,cuda --zig
