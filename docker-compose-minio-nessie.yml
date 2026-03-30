@@ -1,0 +1,135 @@
+version: "3.8"
+
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+      # MinIO performance optimizations
+      - MINIO_CACHE_DRIVES=/tmp/cache
+      - MINIO_CACHE_EXCLUDE=*.pdf,*.mp4
+      - MINIO_CACHE_QUOTA=80
+      - MINIO_CACHE_AFTER=3
+      - MINIO_CACHE_WATERMARK_LOW=70
+      - MINIO_CACHE_WATERMARK_HIGH=90
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ~/minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - nessie_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  create-bucket:
+    image: minio/mc:latest
+    container_name: minio-mc-init
+    networks:
+      - nessie_network
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set minio http://minio:9000 minioadmin minioadmin;
+      mc mb minio/mstar-staging --ignore-existing;
+      mc policy set public minio/mstar-staging;
+      exit 0;
+      "
+
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.105.5
+    container_name: nessie
+    ports:
+      - "19120:19120"
+    environment:
+      - QUARKUS_HTTP_PORT=19120
+      - QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL=jdbc:postgresql://nessie-postgres:5432/nessie
+      - QUARKUS_DATASOURCE_POSTGRESQL_USERNAME=nessie
+      - QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD=nessie
+      - QUARKUS_HIBERNATE_ORM_DATABASE_GENERATION=update
+      - QUARKUS_HIBERNATE_ORM_DATABASE_GENERATION_STRATEGY=update
+      - NESSIE_VERSION_STORE_TYPE=JDBC
+      - NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE=postgresql
+      # Enable Iceberg REST catalog - using nessie.* format as per Dremio blog
+      - nessie.catalog.iceberg-rest.enabled=true
+      - nessie.catalog.iceberg-rest.vended-credentials-enabled=true
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://mstar-staging/warehouse/
+      - nessie.catalog.s3.endpoint=http://minio:9000/
+      - nessie.catalog.s3.access-key=minioadmin
+      - nessie.catalog.s3.secret-key=minioadmin
+      - nessie.catalog.s3.path-style-access=true
+      - nessie.catalog.s3.region=us-east-1
+      - nessie.server.authentication.enabled=false
+    volumes:
+      - nessie-data:/var/lib/nessie
+      - ./nessie-config:/opt/nessie/config
+    networks:
+      - nessie_network
+    depends_on:
+      minio:
+        condition: service_healthy
+      nessie-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nessie-postgres:
+    image: postgres:15
+    container_name: nessie-postgres
+    environment:
+      - POSTGRES_DB=nessie
+      - POSTGRES_USER=nessie
+      - POSTGRES_PASSWORD=nessie
+    volumes:
+      - nessie-postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - nessie_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nessie -d nessie"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino-config:/etc/trino
+    environment:
+      - TRINO_ENV=dev
+      - PG_CONN_RW=${PG_CONN_RW}
+    entrypoint: ["/bin/bash", "/etc/trino/entrypoint.sh"]
+    networks:
+      - nessie_network
+    depends_on:
+      minio:
+        condition: service_healthy
+      nessie:
+        condition: service_healthy
+
+volumes:
+  minio-data:
+  nessie-data:
+  nessie-postgres-data:
+    external: true
+    name: hyperstreamdb_postgres_data
+
+networks:
+  nessie_network:
+    driver: bridge

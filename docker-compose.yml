@@ -1,0 +1,153 @@
+version: "3.8"
+
+services:
+  # ---------------------
+  # 1. MinIO (S3)
+  # ---------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+      # Performance settings from template
+      - MINIO_CACHE_DRIVES=/tmp/cache
+      - MINIO_CACHE_QUOTA=80
+      - MINIO_CACHE_AFTER=3
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./docker/data/minio:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - hyperstream_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO Setup (Buckets)
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set minio http://minio:9000 minioadmin minioadmin;
+      mc mb minio/warehouse --ignore-existing;
+      mc mb minio/hyperstream --ignore-existing;
+      mc policy set public minio/warehouse;
+      mc policy set public minio/hyperstream;
+      exit 0;
+      "
+
+  # ---------------------
+  # 2. Nessie (Catalog) with Postgres
+  # ---------------------
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.105.5
+    container_name: nessie
+    ports:
+      - "19120:19120"
+    environment:
+      - QUARKUS_HTTP_PORT=19120
+      - QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL=jdbc:postgresql://nessie-postgres:5432/nessie
+      - QUARKUS_DATASOURCE_POSTGRESQL_USERNAME=nessie
+      - QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD=nessie
+      - NESSIE_VERSION_STORE_TYPE=JDBC
+      - NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE=postgresql
+      # Iceberg REST
+      - nessie.catalog.iceberg-rest.enabled=true
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://warehouse/
+      - nessie.catalog.s3.endpoint=http://minio:9000/
+      - nessie.catalog.s3.access-key=minioadmin
+      - nessie.catalog.s3.secret-key=minioadmin
+      - nessie.catalog.s3.path-style-access=true
+      - nessie.server.authentication.enabled=false
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+      nessie-postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nessie-postgres:
+    image: postgres:15
+    container_name: nessie-postgres
+    environment:
+      - POSTGRES_DB=nessie
+      - POSTGRES_USER=nessie
+      - POSTGRES_PASSWORD=nessie
+    volumes:
+      - ./docker/data/postgres:/var/lib/postgresql/data
+    networks:
+      - hyperstream_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nessie -d nessie"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------
+  # 3. Trino
+  # ---------------------
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      # Use the local checked trino-config, but we will augment it
+      - ./trino-config:/etc/trino
+      # Mount our built plugin
+      # - ./trino-hyperstream/target/trino-hyperstream-0.1.0:/usr/lib/trino/plugin/hyperstream
+    environment:
+      - TRINO_ENV=dev
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+      nessie:
+        condition: service_healthy
+
+  # ---------------------
+  # 4. Azurite (Azure Blob)
+  # ---------------------
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: azurite
+    ports:
+      - "10000:10000"
+    command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000
+    networks:
+      - hyperstream_net
+
+  # ---------------------
+  # 5. Fake GCS
+  # ---------------------
+  fake-gcs:
+    image: fsouza/fake-gcs-server
+    container_name: fake-gcs
+    ports:
+      - "4443:4443"
+    command: -scheme http
+    networks:
+      - hyperstream_net
+
+networks:
+  hyperstream_net:
+    driver: bridge
