@@ -50,9 +50,15 @@ jobs:
         with:
           filters: |
             code:
-              - '!(.github/**)'
-              - '!(README.md)'
-              - '!(LICENSE)'
+              - 'src/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'vendor/**'
+              - 'python/**'
+              - 'pyproject.toml'
+              - 'tests/**'
+              - 'benches/**'
+              - 'build.rs'
 
       - name: Cache dependencies
         if: steps.filter.outputs.code == 'true'
@@ -112,17 +118,36 @@ jobs:
           fi
       - name: Install OpenCL headers and ICD
         run: sudo apt-get update && sudo apt-get install -y ocl-icd-opencl-dev
+      - name: Create cross-compilation OpenCL stub
+        run: |
+          # opencl-sys links libOpenCL.so dynamically at runtime.
+          # For cross-compilation (aarch64), we need a stub .so in the right path
+          # so the linker can verify symbols exist. Create a universal stub dir.
+          mkdir -p /tmp/opencl-stub
+          # For x86_64 native builds, the real lib is at /usr/lib/x86_64-linux-gnu
+          # For aarch64 cross builds, create a minimal stub
+          if [ "${{ matrix.target }}" = "aarch64" ]; then
+            # Create a minimal ELF stub that satisfies the linker
+            echo 'void clGetPlatformIDs() {}' > /tmp/opencl-stub/stub.c
+            zig cc -target aarch64-linux-gnu -shared -o /tmp/opencl-stub/libOpenCL.so /tmp/opencl-stub/stub.c 2>/dev/null || \
+              aarch64-linux-gnu-gcc -shared -o /tmp/opencl-stub/libOpenCL.so /tmp/opencl-stub/stub.c 2>/dev/null || true
+          else
+            cp /usr/lib/x86_64-linux-gnu/libOpenCL.so /tmp/opencl-stub/libOpenCL.so
+          fi
+          # Also link CUDA stubs
+          if [ -d /usr/local/cuda/lib64/stubs ]; then
+            ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/opencl-stub/libcuda.so 2>/dev/null || true
+            ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /tmp/opencl-stub/libcuda.so.1 2>/dev/null || true
+          fi
+          ls -la /tmp/opencl-stub/
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
-          # Zig's linker ignores LIBRARY_PATH — pass search paths explicitly via RUSTFLAGS
-          RUSTFLAGS: >-
-            -L /usr/lib/x86_64-linux-gnu
-            -L /usr/local/cuda/lib64/stubs
-            -L /usr/local/cuda/lib64
+          # Point Zig's linker to our stub directory (works for both x86_64 and aarch64)
+          RUSTFLAGS: -L /tmp/opencl-stub -L /usr/local/cuda/lib64/stubs -L /usr/local/cuda/lib64
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features intel_gpu,cuda --zig

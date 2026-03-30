@@ -61,4 +61,4 @@ sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*"
 # Optimizations for WHEEL builds
 strip = true
 # Use sccache if available during build
-sccache = true
+sccache = false
