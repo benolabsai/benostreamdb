@@ -54,24 +54,24 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
     let vectors = generate_random_vectors(n_vectors, dim);
 
     // Always test CPU (reference)
-    let ref_backend = ComputeBackend::Cpu;
-
+    let _ref_backend = ComputeBackend::Cpu;
+ 
     // 1. Test CUDA if enabled
     #[cfg(feature = "cuda")]
     {
-        assert_parity("CUDA Parity", &query, &vectors, dim, ref_backend, ComputeBackend::Cuda)?;
+        assert_parity("CUDA Parity", &query, &vectors, dim, _ref_backend, ComputeBackend::Cuda)?;
     }
-
+ 
     // 2. Test MPS if enabled
     #[cfg(feature = "mps")]
     {
-        assert_parity("MPS Parity", &query, &vectors, dim, ref_backend, ComputeBackend::Mps)?;
+        assert_parity("MPS Parity", &query, &vectors, dim, _ref_backend, ComputeBackend::Mps)?;
     }
-    
+     
     // 3. Test ROCm if enabled (OpenCL based)
     #[cfg(feature = "rocm")]
     {
-        assert_parity("ROCm Parity", &query, &vectors, dim, ref_backend, ComputeBackend::Rocm)?;
+        assert_parity("ROCm Parity", &query, &vectors, dim, _ref_backend, ComputeBackend::Rocm)?;
     }
 
     Ok(())
