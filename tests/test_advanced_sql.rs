@@ -168,9 +168,6 @@ async fn test_cosine_similarity_search() -> Result<()> {
     // Vec2: [0, 1, 0, 0]
     // Query: [1, 0.1, 0, 0] (should be closer to Vec1 in Cosine)
     
-    let _row1 = vec![1.0, 0.0, 0.0, 0.0];
-    let _row2 = vec![0.0, 1.0, 0.0, 0.0];
-    
     let id_array = Int32Array::from(vec![1, 2]);
     let category_array = StringArray::from(vec!["A", "B"]);
     let year_array = Int32Array::from(vec![2022, 2022]);

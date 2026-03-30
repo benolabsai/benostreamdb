@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use hyperstreamdb::{SegmentConfig, core::{segment::HybridSegmentWriter, reader::HybridReader, compaction::{Compactor, CompactionOptions}, planner::FilterExpr, index::VectorMetric}};
+use hyperstreamdb::{SegmentConfig, core::{segment::HybridSegmentWriter, reader::HybridReader, compaction::{Compactor, CompactionOptions}, planner::FilterExpr, index::{VectorMetric, VectorValue}}};
 use arrow::record_batch::RecordBatch;
 use arrow::datatypes::{Schema, Field, DataType};
 use arrow::array::{Int32Array, Float32Array, StringArray, FixedSizeListArray};
@@ -7,10 +7,6 @@ use std::sync::Arc;
 use object_store::local::LocalFileSystem;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal, Zipf};
-use hnsw_rs::prelude::*;
-use std::fs::File;
-use std::io::BufReader;
-use hnsw_rs::hnswio::{load_description, load_hnsw};
 
 /// Benchmark: Ingest throughput
 fn bench_ingest(c: &mut Criterion) {
@@ -46,10 +42,13 @@ fn bench_query_indexed(c: &mut Criterion) {
         .with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(writer_config);
     writer.write_batch(&batch).unwrap();
+    writer.build_indexes(&batch).unwrap();
+    let entry = writer.to_manifest_entry();
     
     // For Reader: Use relative path logic since store is rooted at tmp_dir
     // If we passed absolute path to reader config, it would be appended to store prefix
-    let reader_config = SegmentConfig::new("", "query_test");
+    let reader_config = SegmentConfig::new("", "query_test")
+        .with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
     
@@ -82,13 +81,17 @@ fn bench_vector_search(c: &mut Criterion) {
     
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
+    writer.build_indexes(&batch).unwrap();
     
     // Generate a random query vector
     let mut rng = rand::thread_rng();
     let normal = Normal::new(0.0, 1.0).unwrap();
     let query_vec: Vec<f32> = (0..vec_dim).map(|_| normal.sample(&mut rng)).collect();
+    let query_val = VectorValue::Float32(query_vec);
 
-    let reader_config = SegmentConfig::new("", "vec_bench");
+    let entry = writer.to_manifest_entry();
+    let reader_config = SegmentConfig::new("", "vec_bench")
+        .with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(base_path).unwrap());
     let reader = HybridReader::new(reader_config, store, base_path);
     
@@ -99,7 +102,7 @@ fn bench_vector_search(c: &mut Criterion) {
             |b, &k| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
-                        black_box(reader.vector_search_index("embedding", &query_vec, k, None, VectorMetric::L2).await.unwrap())
+                        black_box(reader.vector_search_index("embedding", &query_val, k, None, VectorMetric::L2, None).await.unwrap())
                     });
             },
         );
@@ -125,11 +128,15 @@ fn bench_hybrid_search(c: &mut Criterion) {
     
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
+    writer.build_indexes(&batch).unwrap();
     
     let mut rng = rand::thread_rng();
     let query_vec: Vec<f32> = (0..vec_dim).map(|_| rng.gen()).collect();
+    let query_val = VectorValue::Float32(query_vec);
 
-    let reader_config = SegmentConfig::new("", "hybrid_bench");
+    let entry = writer.to_manifest_entry();
+    let reader_config = SegmentConfig::new("", "hybrid_bench")
+        .with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(base_path).unwrap());
     let reader = HybridReader::new(reader_config, store, base_path);
     
@@ -140,7 +147,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
             .iter(|| async {
                  // Pre-filter strategy (HybridReader way)
                  let expr = FilterExpr::DataFusion(filter.to_expr());
-                 black_box(reader.vector_search_index("embedding", &query_vec, 10, Some(&expr), VectorMetric::L2).await.unwrap())
+                 black_box(reader.vector_search_index("embedding", &query_val, 10, Some(&expr), VectorMetric::L2, None).await.unwrap())
             });
     });
     
@@ -185,9 +192,12 @@ fn bench_high_selectivity(c: &mut Criterion) {
         .with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
+    writer.build_indexes(&batch).unwrap();
+    let entry = writer.to_manifest_entry();
     
     // For Reader: Use relative path logic
-    let reader_config = SegmentConfig::new("", "high_selectivity");
+    let reader_config = SegmentConfig::new("", "high_selectivity")
+        .with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
     

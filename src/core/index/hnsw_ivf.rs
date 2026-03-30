@@ -1,4 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+// Modified by Richard Albright / HyperStreamDB on 2026-03-29 to add pre-filtering support and better integration with Iceberg manifests. 
+// This file contains derivative work from the Apache 2.0 licensed project(s).
 
 /// HNSW-IVF Hybrid Index Implementation
 /// 
@@ -12,7 +14,6 @@
 ///
 /// Attribution: Underlying HNSW graph logic relies on the vendored `hnsw_rs` library (MIT/Apache 2.0).
 /// Copyright Jean-Pierre Both and hnsw_rs contributors. Vendored and patched to support exact pre-filtering.
-
 use anyhow::{Result, Context};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,7 +95,7 @@ impl HnswGraph {
             (HnswGraph::Jaccard(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
-            (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(&[q.clone()], k, ef, filter),
+            (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(std::slice::from_ref(q), k, ef, filter),
             
             // Casting paths
             (HnswGraph::L2(h), VectorValue::Float16(q)) => h.search(q, k, ef, filter),
@@ -128,14 +129,14 @@ impl HnswGraph {
     pub fn file_dump(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let path_string = path.to_string();
         match self {
-            HnswGraph::L2(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::Cosine(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::Dot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::L1(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::Hamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::Jaccard(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::BinaryHamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
-            HnswGraph::SparseDot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error>),
+            HnswGraph::L2(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Cosine(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Dot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::L1(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Hamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Jaccard(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::BinaryHamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::SparseDot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
         }
     }
 }
@@ -209,7 +210,7 @@ impl HnswIvfIndex {
         // Train PQ encoder if requested
         let pq_encoder = if use_pq {
             // Use 8-bit quantization with m sub-vectors (e.g., 16 or 32)
-            let m = if dim >= 32 && dim % 16 == 0 { 16 } else if dim >= 8 && dim % 8 == 0 { 8 } else { 1 };
+            let m = if dim >= 32 && dim.is_multiple_of(16) { 16 } else if dim >= 8 && dim.is_multiple_of(8) { 8 } else { 1 };
             println!("  - Training PQ encoder with m={} subspaces...", m);
             let config = PqConfig { m, k: 256, dim };
             Some(PqEncoder::train(&vectors, config)?)
@@ -226,7 +227,7 @@ impl HnswIvfIndex {
             let cluster_id = *cluster_id_ref;
             cluster_vectors
                 .entry(cluster_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((vec, row_id));
         }
         println!("  - Grouping vectors took: {:.2?}", t1.elapsed());
@@ -601,14 +602,16 @@ impl HnswIvfIndex {
         base_path: &str,
         cache_key: &str,
     ) -> Result<Arc<Self>> {
-        use crate::core::cache::HNSW_IVF_CACHE;
+        use crate::core::cache::{HNSW_IVF_CACHE, DiskCache};
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        
+
         let cache_key_str = cache_key.to_string();
         if let Some(cached) = HNSW_IVF_CACHE.get(&cache_key_str).await {
             return Ok(cached);
         }
-        
+
+        let disk_cache = DiskCache::new(store.clone());
+
         let root_path = if base_path.contains("://") {
              if let Ok(url) = url::Url::parse(base_path) {
                  url.path().trim_start_matches('/').to_string()
@@ -620,7 +623,7 @@ impl HnswIvfIndex {
         };
 
         let centroids_path = format!("{}.centroids.parquet", root_path);
-        let centroids_bytes = store.get(&Path::from(centroids_path.as_str())).await?.bytes().await?;
+        let centroids_bytes = disk_cache.get_bytes(&centroids_path).await?;
         
         let builder = ParquetRecordBatchReaderBuilder::try_new(centroids_bytes)?;
         let reader = builder.build()?;
@@ -646,8 +649,8 @@ impl HnswIvfIndex {
         
         // Load metric from parquet metadata
         let metric = {
-            let centroids_bytes_for_meta = store.get(&Path::from(centroids_path.as_str())).await?.bytes().await?;
-            let parquet_reader = parquet::file::reader::SerializedFileReader::new(bytes::Bytes::from(centroids_bytes_for_meta))?;
+            let centroids_bytes_for_meta = disk_cache.get_bytes(&centroids_path).await?;
+            let parquet_reader = parquet::file::reader::SerializedFileReader::new(centroids_bytes_for_meta)?;
             let file_metadata = parquet_reader.metadata().file_metadata();
             let mut loaded_metric = VectorMetric::L2;
             if let Some(kv_list) = file_metadata.key_value_metadata() {
@@ -694,15 +697,15 @@ impl HnswIvfIndex {
         let bodies = futures::stream::iter(cluster_ids)
             .map(move |cluster_id| {
                 let root_path = root_path_clone.clone();
-                let store = store.clone();
+                let dc = disk_cache.clone();
                 async move {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let data_key = format!("{}.cluster_{}.hnsw.data", root_path, cluster_id);
                     let mapping_key = format!("{}.cluster_{}.mapping.parquet", root_path, cluster_id);
                 
-                    let res_graph = store.get(&Path::from(hnsw_key.as_str())).await?.bytes().await?;
-                    let res_data = store.get(&Path::from(data_key.as_str())).await?.bytes().await?;
-                    let res_mapping = store.get(&Path::from(mapping_key.as_str())).await?.bytes().await?;
+                    let res_graph = dc.get_bytes(&hnsw_key).await?;
+                    let res_data = dc.get_bytes(&data_key).await?;
+                    let res_mapping = dc.get_bytes(&mapping_key).await?;
                     
                     let graph_cursor = Cursor::new(res_graph);
                     let data_cursor = Cursor::new(res_data);
@@ -746,7 +749,8 @@ impl HnswIvfIndex {
             })
             .buffer_unordered(fetch_concurrency);
             
-        let results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> = bodies.collect().await;
+        type ClusterResult = (usize, (HnswGraph, Vec<usize>));
+        let results: Vec<Result<ClusterResult>> = bodies.collect().await;
         
         let mut cluster_graphs = HashMap::new();
         for res in results {
@@ -836,15 +840,15 @@ impl HnswIvfIndex {
             }
 
             use std::io::BufReader;
-            let graph_file = File::open(&format!("{}.hnsw.graph", hnsw_path))?;
-            let data_file = File::open(&format!("{}.hnsw.data", hnsw_path))?;
+            let graph_file = File::open(format!("{}.hnsw.graph", hnsw_path))?;
+            let data_file = File::open(format!("{}.hnsw.data", hnsw_path))?;
             let mut graph_reader = BufReader::new(graph_file);
             let mut data_reader = BufReader::new(data_file);
             
             let description = hnsw_rs::hnswio::load_description(&mut graph_reader)
                 .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
             
-            let metric = metric; // Use the metric loaded from centroids metadata
+            // Use the metric loaded from centroids metadata
             let hnsw = match metric {
                 VectorMetric::L2 => HnswGraph::L2(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
@@ -922,7 +926,7 @@ mod tests {
         let query = VectorValue::Float32(vectors[50].clone());
 
         // Unfiltered search (should find ID 50 easily since it's an exact match)
-        let results_unfiltered = index.search(&query, 5, 40, 10, None);
+        let results_unfiltered = index.search(&query, 5, 40, None);
         assert!(!results_unfiltered.is_empty(), "Should return results");
         
         let mut found_50 = false;
@@ -937,7 +941,7 @@ mod tests {
         filter.insert(52);
         filter.insert(53);
 
-        let results_filtered = index.search(&query, 3, 40, 10, Some(&filter));
+        let results_filtered = index.search(&query, 3, 40, Some(&filter));
         assert!(!results_filtered.is_empty(), "Filtered search should return results");
 
         let mut found_50_filtered = false;

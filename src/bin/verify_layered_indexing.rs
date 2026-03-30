@@ -139,17 +139,19 @@ fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_
     let manifest_path = format!("{}/metadata/{}", base_dir, m_name);
     let mut writer = Writer::new(&manifest_schema, File::create(&manifest_path)?);
 
-    let mut data_file = Vec::new();
-    data_file.push(("file_path".to_string(), AvroValue::String(data_path.to_string())));
-    data_file.push(("file_format".to_string(), AvroValue::String("PARQUET".to_string())));
-    data_file.push(("partition".to_string(), AvroValue::Record(Vec::new())));
-    data_file.push(("record_count".to_string(), AvroValue::Long(100)));
-    data_file.push(("file_size_in_bytes".to_string(), AvroValue::Long(1024)));
+    let data_file = vec![
+        ("file_path".to_string(), AvroValue::String(data_path.to_string())),
+        ("file_format".to_string(), AvroValue::String("PARQUET".to_string())),
+        ("partition".to_string(), AvroValue::Record(Vec::new())),
+        ("record_count".to_string(), AvroValue::Long(100)),
+        ("file_size_in_bytes".to_string(), AvroValue::Long(1024)),
+    ];
 
-    let mut entry = Vec::new();
-    entry.push(("status".to_string(), AvroValue::Int(1))); // Added
-    entry.push(("snapshot_id".to_string(), AvroValue::Union(1, Box::new(AvroValue::Long(snapshot_id)))));
-    entry.push(("data_file".to_string(), AvroValue::Record(data_file)));
+    let entry = vec![
+        ("status".to_string(), AvroValue::Int(1)), // Added
+        ("snapshot_id".to_string(), AvroValue::Union(1, Box::new(AvroValue::Long(snapshot_id)))),
+        ("data_file".to_string(), AvroValue::Record(data_file)),
+    ];
 
     writer.append(AvroValue::Record(entry))?;
     writer.flush()?;
@@ -168,11 +170,12 @@ fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_
     let ml_path = format!("{}/metadata/{}", base_dir, ml_name);
     let mut ml_writer = Writer::new(&ml_schema, File::create(&ml_path)?);
 
-    let mut ml_entry = Vec::new();
-    ml_entry.push(("manifest_path".to_string(), AvroValue::String(m_name.to_string())));
-    ml_entry.push(("manifest_length".to_string(), AvroValue::Long(512)));
-    ml_entry.push(("partition_spec_id".to_string(), AvroValue::Int(0)));
-    ml_entry.push(("added_snapshot_id".to_string(), AvroValue::Long(snapshot_id)));
+    let ml_entry = vec![
+        ("manifest_path".to_string(), AvroValue::String(m_name.to_string())),
+        ("manifest_length".to_string(), AvroValue::Long(512)),
+        ("partition_spec_id".to_string(), AvroValue::Int(0)),
+        ("added_snapshot_id".to_string(), AvroValue::Long(snapshot_id)),
+    ];
 
     ml_writer.append(AvroValue::Record(ml_entry))?;
     ml_writer.flush()?;

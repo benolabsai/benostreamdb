@@ -21,6 +21,12 @@ pub struct EmbeddingRegistry {
     functions: HashMap<String, Arc<dyn EmbeddingFunction>>,
 }
 
+impl Default for EmbeddingRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EmbeddingRegistry {
     pub fn new() -> Self {
         Self {
@@ -77,9 +83,11 @@ impl EmbeddingFunction for CandleFunction {
 }
 
 /// A bridge to call Python embedding functions from Rust.
+type EmbeddingCallback = Box<dyn Fn(Vec<String>) -> Result<Vec<Vec<f32>>> + Send + Sync>;
+
 pub struct PythonCallbackFunction {
     name: String,
-    callback: Box<dyn Fn(Vec<String>) -> Result<Vec<Vec<f32>>> + Send + Sync>,
+    callback: EmbeddingCallback,
     dim: usize,
 }
 

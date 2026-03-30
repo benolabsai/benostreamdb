@@ -181,7 +181,7 @@ fn bench_compaction_in_memory(c: &mut Criterion) {
                     }
                     
                     let start = std::time::Instant::now();
-                    table.compact(None).unwrap();
+                    table.rewrite_data_files_async(None).await.unwrap();
                     total_duration += start.elapsed();
                 }
                 total_duration

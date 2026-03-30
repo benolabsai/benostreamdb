@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod tokenizer;
 pub mod ivf;
 pub mod hnsw_ivf;
 pub mod distance;
@@ -12,7 +13,9 @@ use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum VectorMetric {
+    #[default]
     L2,
     Cosine,
     InnerProduct,
@@ -44,11 +47,6 @@ pub enum VectorValue {
     Sparse(SparseVector),
 }
 
-impl Default for VectorMetric {
-    fn default() -> Self {
-        Self::L2
-    }
-}
 
 pub trait VectorIndex {
     fn search(&self, query: &VectorValue, k: usize, filter: Option<&RoaringBitmap>) -> Result<Vec<(u32, f32)>>;

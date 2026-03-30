@@ -230,10 +230,10 @@ mod tests {
 
         // 2. Commit Manifests
         // v1: [A, B]
-        manager.commit(&[entry_a.clone(), entry_b.clone()], &vec![], crate::core::manifest::CommitMetadata::default()).await?;
+        manager.commit(&[entry_a.clone(), entry_b.clone()], &[], crate::core::manifest::CommitMetadata::default()).await?;
         // v2: [C, B] (A is dropped)
         // Remove path for A
-        manager.commit(&[entry_c.clone()], &vec![entry_a.file_path.clone()], crate::core::manifest::CommitMetadata::default()).await?;
+        manager.commit(std::slice::from_ref(&entry_c), std::slice::from_ref(&entry_a.file_path), crate::core::manifest::CommitMetadata::default()).await?;
         
         // 3. Expire Snapshots
         // Retain 1 (Only v2). v1 is expired.

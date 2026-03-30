@@ -76,8 +76,8 @@ async fn test_merge_large_dataset_disk_spill() -> Result<(), Box<dyn std::error:
     let num_batches = 10;
 
     for batch_idx in 0..num_batches {
-        let start_id = (batch_idx * batch_size) as i32;
-        let end_id = start_id + batch_size as i32;
+        let start_id = batch_idx * batch_size;
+        let end_id = start_id + batch_size;
         let ids: Vec<i32> = (start_id..end_id).collect();
         let data: Vec<String> = ids.iter().map(|i| format!("data_{}", i)).collect();
         let data_refs: Vec<&str> = data.iter().map(|s| s.as_str()).collect();

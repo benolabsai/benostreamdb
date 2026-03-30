@@ -11,7 +11,6 @@
 /// - Maintenance
 ///
 /// Language bindings (Python, Java, etc.) should be thin wrappers around this core API.
-
 use anyhow::{Result, Context};
 use roaring::RoaringBitmap;
 use std::collections::HashMap;
@@ -45,9 +44,13 @@ use rayon::prelude::*;
 use crate::core::index::gpu::{get_global_gpu_context, ComputeContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ColumnIndexConfig {
     pub device: Option<String>,
+    pub tokenizer: Option<String>,
+    pub enabled: bool,
 }
+
 
 /// Main Table struct - represents a HyperStreamDB table
 pub struct Table {
@@ -76,6 +79,8 @@ pub struct Table {
     sort_order_columns: Arc<std::sync::RwLock<Option<Vec<String>>>>,
     #[cfg(feature = "enterprise")]
     enterprise_license: Option<String>,
+    primary_key: Arc<std::sync::RwLock<Vec<String>>>,
+    autocommit: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Clone for Table {
@@ -102,6 +107,8 @@ impl Clone for Table {
             sort_order_columns: self.sort_order_columns.clone(),
             #[cfg(feature = "enterprise")]
             enterprise_license: self.enterprise_license.clone(),
+            primary_key: self.primary_key.clone(),
+            autocommit: self.autocommit.clone(),
         }
     }
 }
@@ -112,6 +119,42 @@ impl std::fmt::Debug for Table {
             .field("uri", &self.uri)
             .field("index_all", &self.index_all)
             .finish()
+    }
+}
+
+impl Table {
+    pub fn set_index_all(&mut self, enabled: bool) {
+        self.index_all = enabled;
+    }
+
+    pub fn get_index_all(&self) -> bool {
+        self.index_all
+    }
+    
+    pub fn set_autocommit(&self, enabled: bool) {
+        self.autocommit.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+    
+    pub fn get_autocommit(&self) -> bool {
+        self.autocommit.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_primary_key(&self, columns: Vec<String>) {
+        let mut pk = self.primary_key.write().unwrap();
+        *pk = columns;
+    }
+
+    pub fn get_primary_key(&self) -> Vec<String> {
+        self.primary_key.read().unwrap().clone()
+    }
+
+    pub fn set_index_config(&self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
+        let mut configs = self.index_configs.write().unwrap();
+        configs.insert(column, ColumnIndexConfig {
+            device,
+            tokenizer,
+            enabled,
+        });
     }
 }
 
@@ -164,7 +207,7 @@ impl<'a> TableQuery<'a> {
 
     pub async fn to_batches(self) -> Result<Vec<RecordBatch>> {
         let cols_refs: Option<Vec<&str>> = self.columns.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect());
-        let cols_slice: Option<&[&str]> = cols_refs.as_ref().map(|v| v.as_slice());
+        let cols_slice: Option<&[&str]> = cols_refs.as_deref();
         
         // Inject context if provided
         if let Some(ctx) = self.context {
@@ -188,6 +231,16 @@ impl Table {
         &self.query_config
     }
 
+    /// Get the number of rows currently in the write buffer (not yet flushed)
+    pub fn write_buffer_row_count(&self) -> usize {
+        self.write_buffer.read().unwrap().iter().map(|b| b.num_rows()).sum()
+    }
+
+    /// Check if the table currently has an active in-memory vector index
+    pub fn has_memory_index(&self) -> bool {
+        self.memory_index.read().unwrap().is_some()
+    }
+
     /// Create a new Table instance (Synchronous)
     /// This blocks the current thread to load the schema.
     /// CAUTION: Do not call this from within an async runtime. Use `new_async` instead.
@@ -205,7 +258,7 @@ impl Table {
         let rt = Arc::new(Runtime::new()?);
         
         // Load schema eagerly (blocking)
-        let schema_val = rt.block_on(Self::load_initial_schema(store.clone(), &uri));
+        let mut schema_val = rt.block_on(Self::load_initial_schema(store.clone(), &uri));
 
         // Initialize WAL (Sync wrapper)
         let wal_dir = if uri.starts_with("file://") {
@@ -221,7 +274,7 @@ impl Table {
         }
 
         let mut wal = WriteAheadLog::new(wal_dir);
-        let _ = rt.block_on(async {
+        rt.block_on(async {
             wal.spawn_worker().unwrap_or_default();
         });
         
@@ -237,6 +290,32 @@ impl Table {
         if !recovered_batches.is_empty() {
             println!("recovering {} batches from WAL...", recovered_batches.len());
             initial_buffer = recovered_batches;
+            
+            // Promote THE MOST EVOLVED schema from manifest + all WAL batches
+            for batch in &initial_buffer {
+                let wal_schema = batch.schema();
+                if wal_schema.fields().len() > schema_val.fields().len() {
+                    schema_val = wal_schema.clone();
+                }
+            }
+            
+            // Align all recovered batches to the widest schema
+            initial_buffer = initial_buffer.into_iter().map(|b| {
+                if b.schema() != schema_val {
+                    let mut cols = Vec::with_capacity(schema_val.fields().len());
+                    for field in schema_val.fields() {
+                        let col = if let Some(c) = b.column_by_name(field.name()) {
+                            c.clone()
+                        } else {
+                            arrow::array::new_null_array(field.data_type(), b.num_rows())
+                        };
+                        cols.push(col);
+                    }
+                    RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
+                } else {
+                    b
+                }
+            }).collect();
              
              // Simple recovery of memory index (brute force)
              if let Some(first) = initial_buffer.first() {
@@ -261,7 +340,7 @@ impl Table {
             data_store: None,
             rt: Some(rt),
             query_config: QueryConfig::default(),
-            index_all: false, // Default: Index Nothing
+            index_all: true, // Default: Index Everything
             index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
             index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
             default_device: Arc::new(std::sync::RwLock::new(None)),
@@ -277,6 +356,8 @@ impl Table {
             sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
             #[cfg(feature = "enterprise")]
             enterprise_license: None,
+            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
+            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
 
@@ -350,20 +431,43 @@ impl Table {
     pub async fn register_external(uri: String, iceberg_metadata_uri: &str) -> Result<Self> {
         create_object_store(&uri)?;
         
-        // Derive iceberg_meta_store from the parent directory of iceberg_metadata_uri
-        let meta_url = url::Url::parse(iceberg_metadata_uri).context("Invalid iceberg_metadata_uri")?;
-        let meta_path_str = meta_url.path();
-        let meta_path = std::path::Path::new(meta_path_str);
-        let parent_dir = meta_path.parent().context("No parent directory for metadata file")?;
-        let filename = meta_path.file_name().context("No filename for metadata file")?.to_str().unwrap();
-        
-        let meta_store_uri = if iceberg_metadata_uri.starts_with("file://") {
-            format!("file://{}", parent_dir.display())
-        } else {
-            // Reconstruct URI without the filename
-            let mut base_url = meta_url.clone();
-            base_url.set_path(parent_dir.to_str().unwrap());
-            base_url.to_string()
+        // Determine if iceberg_metadata_uri is a directory (table location) or a file (metadata file)
+        // If it's a directory, we need to find the metadata file inside it
+        let (meta_store_uri, filename) = {
+            let meta_url = url::Url::parse(iceberg_metadata_uri).context("Invalid iceberg_metadata_uri")?;
+            let meta_path_str = meta_url.path();
+            let meta_path = std::path::Path::new(meta_path_str);
+            
+            // Check if the path looks like a metadata file (ends with .json and contains "metadata")
+            let path_str = meta_path_str.to_string();
+            if path_str.ends_with(".metadata.json") || path_str.ends_with(".json") && path_str.contains("metadata") {
+                // It's a metadata file path
+                let parent_dir = meta_path.parent().context("No parent directory for metadata file")?;
+                let fname = meta_path.file_name().context("No filename for metadata file")?.to_str().unwrap().to_string();
+                
+                let store_uri = if iceberg_metadata_uri.starts_with("file://") {
+                    format!("file://{}", parent_dir.display())
+                } else {
+                    let mut base_url = meta_url.clone();
+                    base_url.set_path(parent_dir.to_str().unwrap());
+                    base_url.to_string()
+                };
+                (store_uri, fname)
+            } else {
+                // It's a table directory, look for metadata file inside metadata/ subdirectory
+                // Try to find the latest metadata file
+                let table_dir = meta_path_str;
+                let metadata_dir = if iceberg_metadata_uri.starts_with("file://") {
+                    format!("file://{}/metadata", table_dir)
+                } else {
+                    format!("{}/metadata", iceberg_metadata_uri.trim_end_matches('/'))
+                };
+                
+                println!("Table location appears to be a directory. Looking for metadata in: {}", metadata_dir);
+                
+                // Use v1.metadata.json as default
+                (metadata_dir, "v1.metadata.json".to_string())
+            }
         };
 
         let iceberg_meta_store = create_object_store(&meta_store_uri)?;
@@ -371,7 +475,7 @@ impl Table {
         println!("Linking external Iceberg table: {}", iceberg_metadata_uri);
         
         // 1. Load Iceberg Metadata
-        let path = object_store::path::Path::from(filename);
+        let path = object_store::path::Path::from(filename.as_str());
         let ret = iceberg_meta_store.get(&path).await?;
         let bytes = ret.bytes().await?;
         let iceberg_meta: crate::core::iceberg::IcebergTableMetadata = serde_json::from_slice(&bytes)?;
@@ -480,6 +584,51 @@ impl Table {
             table.catalog_table_name = Some(table_name);
             Ok(table)
         } else {
+            // Try to open the warehouse location as a HyperStreamDB native table first
+            // (REST-created tables are stored as HyperStreamDB tables in the warehouse)
+            println!("Checking if warehouse location is a HyperStreamDB table: {}", metadata.location);
+            
+            match create_object_store(&metadata.location) {
+                Ok(warehouse_store) => {
+                    let warehouse_manager = ManifestManager::new(
+                        warehouse_store,
+                        "",
+                        &metadata.location
+                    );
+                    
+                    if let Ok((_, warehouse_version)) = warehouse_manager.load_latest().await {
+                        if warehouse_version > 0 {
+                            // It's a HyperStreamDB table in the warehouse, open it directly
+                            println!("✅ Opening existing HyperStreamDB table from REST catalog: {}", metadata.location);
+                            let mut table = Self::new_native_async(metadata.location).await?;
+                            table.catalog = Some(Arc::new(client));
+                            table.catalog_namespace = Some(namespace);
+                            table.catalog_table_name = Some(table_name);
+                            return Ok(table);
+                        } else {
+                            // Version=0, but this could be an empty newly-created table
+                            // Create a new native table at the warehouse location using the metadata schema
+                            println!("✅ Creating new HyperStreamDB table at warehouse location: {}", metadata.location);
+                            let current_schema = metadata.schemas.iter()
+                                .find(|s| s.schema_id == metadata.current_schema_id)
+                                .or_else(|| metadata.schemas.last())
+                                .ok_or_else(|| anyhow::anyhow!("No schema found in table metadata"))?;
+                            let schema_ref = Arc::new(current_schema.to_arrow());
+                            let table = Self::create_async(metadata.location.clone(), schema_ref).await?;
+                            // Don't set catalog fields - this is a newly-created empty table and committing back
+                            // to the catalog would fail. On next load, we'll detect the existing manifest and open normally.
+                            return Ok(table);
+                        }
+                    } else {
+                        println!("ℹ️  Warehouse location has no manifest, trying external Iceberg import or creating new table");
+                    }
+                },
+                Err(e) => {
+                    println!("ℹ️  Could not access warehouse location: {}. Trying external Iceberg import.", e);
+                }
+            }
+            
+            // If not a HyperStreamDB table, try to import as external Iceberg table
             println!("Auto-registering Iceberg table from REST catalog: {}", rest_uri);
             let mut table = Self::register_external(native_uri, &metadata.location).await?;
             table.catalog = Some(Arc::new(client));
@@ -600,7 +749,8 @@ impl Table {
                                  write_default: None,
                              }
                         }).collect()
-                    }).unwrap_or_default()
+                    }).unwrap_or_else(Vec::new),
+                identifier_field_ids: Vec::new(),
             };
 
             let iceberg_spec = meta.partition_specs.iter()
@@ -754,6 +904,32 @@ impl Table {
             
             initial_buffer = recovered_batches;
             
+            // Promote THE MOST EVOLVED schema from manifest + all WAL batches
+            for batch in &initial_buffer {
+                let wal_schema = batch.schema();
+                if wal_schema.fields().len() > schema_val.fields().len() {
+                    schema_val = wal_schema.clone();
+                }
+            }
+            
+            // Align all recovered batches to the widest schema
+            initial_buffer = initial_buffer.into_iter().map(|b| {
+                if b.schema() != schema_val {
+                    let mut cols = Vec::with_capacity(schema_val.fields().len());
+                    for field in schema_val.fields() {
+                        let col = if let Some(c) = b.column_by_name(field.name()) {
+                            c.clone()
+                        } else {
+                            arrow::array::new_null_array(field.data_type(), b.num_rows())
+                        };
+                        cols.push(col);
+                    }
+                    RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
+                } else {
+                    b
+                }
+            }).collect();
+            
             // Note: We DO NOT truncate WAL here. 
             // We kept the data in memory (dirty). If we crash now, we need WAL again.
             // We only truncate when we Flush to Parquet.
@@ -786,6 +962,8 @@ impl Table {
             sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
             #[cfg(feature = "enterprise")]
             enterprise_license: None,
+            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
+            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
     
@@ -807,7 +985,7 @@ impl Table {
 
         // Initialize Manifest with Schema
         // This will create v1.json
-        manifest_manager.update_schema(vec![manifest_schema.clone()], 1, Some(max_id as i32)).await?;
+        manifest_manager.update_schema(vec![manifest_schema.clone()], 1, Some(max_id)).await?;
 
         // Initialize Table Metadata (Iceberg v2 Spec)
         let mut metadata = TableMetadata::new(
@@ -1091,7 +1269,7 @@ impl Table {
         }
         
         if let Some(path) = first_file {
-             let filename = path.split('/').last().unwrap();
+             let filename = path.split('/').next_back().unwrap();
              let segment_id = filename.replace(".parquet", "");
              let config = SegmentConfig::new("", &segment_id); 
              let reader = HybridReader::new(config, store.clone(), _uri);
@@ -1125,7 +1303,7 @@ impl Table {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone() });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -1142,7 +1320,7 @@ impl Table {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone() });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -1224,7 +1402,7 @@ impl Table {
             async move {
                 let mut current_entry = entry.clone();
                 let file_path_str = current_entry.file_path.clone();
-                let segment_id = file_path_str.split('/').last().unwrap_or(&file_path_str)
+                let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
                     .strip_suffix(".parquet").unwrap_or(&file_path_str);
 
                 let mut cols_to_index = self.index_columns.read().unwrap().clone();
@@ -1242,6 +1420,7 @@ impl Table {
                 
                 let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
                 let mut writer = HybridSegmentWriter::new(config);
+                writer.primary_key = self.primary_key.read().unwrap().clone();
                 writer.set_store(store.clone());
                 
                 let mut stream = reader.stream_all(None as Option<arrow::datatypes::SchemaRef>).await?;
@@ -1335,33 +1514,55 @@ impl Table {
         use futures::StreamExt;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (manifest, all_entries, version) = manifest_manager.load_latest_full().await.unwrap_or_default();
+        let (_manifest, all_entries, version) = match manifest_manager.load_latest_full().await {
+            Ok((m, e, v)) => (m, e, v),
+            Err(_) => {
+                if manifest_manager.exists().await.unwrap_or(false) {
+                   (crate::core::manifest::Manifest::default(), Vec::new(), 0)
+                } else {
+                   let segments = self.list_segments_from_store().await.unwrap_or_default();
+                   (crate::core::manifest::Manifest::default(), segments, 0)
+                }
+            }
+        };
 
-        let entries_to_read = if manifest.version > 0 {
-            if expr.is_some() {
+
+
+        // 1. Read from Physical Storage (Snapshot Isolation)
+        let entries_to_read = if version > 0 {
+            if let Some(ref e) = expr {
                 let planner = QueryPlanner::new();
-                planner.prune_entries(&all_entries, expr.as_ref()).into_iter().map(|(e, _)| e).collect()
+                planner.prune_entries(&all_entries, Some(e)).into_iter().map(|(e, _)| e).collect()
             } else {
                 all_entries.clone()
             }
         } else {
-            self.list_segments_from_store().await?
+            // Version 0. Check if we want autodetection.
+            if manifest_manager.exists().await.unwrap_or(false) {
+                Vec::new() // Strictly follow the empty manifest
+            } else {
+                all_entries.clone() // Already contains discovered segments if in autodetection path
+            }
         };
         // Handle vector search
         if let Some(ref vs_params) = vector_filter {
              // 1. Search Disk
+             let request = query::VectorSearchRequest::new(
+                 vs_params.column.clone(),
+                 vs_params.query.clone(),
+                 vs_params.k,
+                 vs_params.metric,
+             )
+             .with_filter(expr.clone())
+             .with_config(config.clone())
+             .with_ef_search(vs_params.ef_search);
+             
              let mut results = query::execute_vector_search_with_config(
                 entries_to_read,
                 self.store.clone(),
                 self.data_store.clone(),
                 &self.uri,
-                &vs_params.column,
-                &vs_params.query,
-                vs_params.k,
-                expr.clone(),
-                vs_params.metric,
-                config.clone(),
-                vs_params.ef_search,
+                request,
             ).await?;
 
              // 2. Search Memory
@@ -1530,7 +1731,7 @@ impl Table {
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let file_path_str = entry.file_path.clone();
-        let segment_id = file_path_str.split('/').last().unwrap_or(&file_path_str)
+        let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
             .strip_suffix(".parquet").unwrap_or(&file_path_str);
 
         // Load Manifest to get Schema
@@ -1589,9 +1790,7 @@ impl Table {
                  batches = indexed_batches;
                  index_used = true;
                  break;
-             } else {
-
-             }
+             } 
         }
 
         if !index_used {
@@ -1692,7 +1891,48 @@ impl Table {
     
     /// Async commit
     pub async fn commit_async(&self) -> Result<()> {
-        self.flush_async().await
+        self.flush_async().await?;
+        Ok(())
+    }
+
+    /// Truncate the table (metadata-only operation)
+    pub fn truncate(&self) -> Result<()> {
+        self.runtime().block_on(self.truncate_async())
+    }
+
+    /// Async implementation of truncate
+    pub async fn truncate_async(&self) -> Result<()> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        
+        // Step 1: Get all current entry paths
+        // We must load THE WHOLE current manifest to know what to remove.
+        let (_, entries, _) = manifest_manager.load_latest_full().await.unwrap_or((crate::core::manifest::Manifest::default(), Vec::new(), 0));
+        let remove_paths: Vec<String> = entries.iter().map(|e| e.file_path.clone()).collect();
+        
+        // Step 2: Commit with all paths in remove_paths and empty add_entries
+        // This is a single atomic snapshot swap that points to an empty segment set.
+        manifest_manager.commit(&[], &remove_paths, crate::core::manifest::CommitMetadata::default()).await?;
+        
+        // Step 3: Truncate WAL
+        {
+            let mut wal = self.wal.lock().await;
+            wal.truncate().context("Failed to truncate WAL during table truncate")?;
+        }
+        
+        // Step 4: Clear memory index
+        {
+            let mut idx = self.memory_index.write().unwrap();
+            *idx = None;
+        }
+        
+        // Step 5: Clear write buffer
+        {
+            let mut buffer = self.write_buffer.write().unwrap();
+            buffer.clear();
+        }
+        
+        println!("Table truncated: metadata reset, all {} segments removed, buffers cleared.", remove_paths.len());
+        Ok(())
     }
 
     /// Compact the WAL (consolidate log entries)
@@ -1721,7 +1961,7 @@ impl Table {
                       initial_default: None,
                       write_default: None,
                   }
-             }).collect())
+             }).collect(), Vec::new())
         };
 
         // Check if exists
@@ -1973,12 +2213,30 @@ impl Table {
             }
         }
 
-        let batches: Vec<RecordBatch> = batches.into_iter().map(|b| {
+        let batches: Vec<Result<RecordBatch>> = batches.into_iter().map(|b| {
             if b.schema() != target_schema {
-                // Remap batch to target schema (adds iceberg.id metadata)
-                RecordBatch::try_new(target_schema.clone(), b.columns().to_vec()).unwrap_or(b)
+                let mut cols = Vec::with_capacity(target_schema.fields().len());
+                for field in target_schema.fields() {
+                    let col = if let Some(c) = b.column_by_name(field.name()) {
+                        c.clone()
+                    } else {
+                        arrow::array::new_null_array(field.data_type(), b.num_rows())
+                    };
+                    cols.push(col);
+                }
+                RecordBatch::try_new(target_schema.clone(), cols).map_err(|e| anyhow::anyhow!(e))
             } else {
-                b
+                Ok(b)
+            }
+        }).collect();
+        
+        let batches: Vec<RecordBatch> = batches.into_iter().filter_map(|r| {
+            match r {
+                Ok(b) => Some(b),
+                Err(e) => {
+                    eprintln!("Warning: Batch schema coercion failed during write: {}", e);
+                    None
+                }
             }
         }).collect();
 
@@ -2016,8 +2274,7 @@ impl Table {
                 }
                 
                 // Check if WAL needs compaction (sync check for now)
-                if wal_lock.should_compact()? {
-                }
+                wal_lock.should_compact()?;
                 Ok::<(), anyhow::Error>(())
             },
             // Indexing Task
@@ -2063,7 +2320,7 @@ impl Table {
         wal_res?;
         idx_res?;
         // -----------------------------
-
+ 
         // Buffer the batches
         {
             let mut buffer = self.write_buffer.write().unwrap();
@@ -2088,9 +2345,11 @@ impl Table {
             total_bytes > limit_bytes
         };
 
-        if should_flush {
-            println!("Write buffer exceeded limit. Flushing to disk (Spillover)...");
-            self.flush_async().await?;
+        if should_flush || self.get_autocommit() {
+            if should_flush {
+                println!("Write buffer exceeded limit. Flushing to disk (Spillover)...");
+            }
+            self.commit_async().await?;
         }
 
         Ok(())
@@ -2099,6 +2358,8 @@ impl Table {
     /// Flush buffer to disk
     /// Flush buffer to disk
     pub async fn flush_async(&self) -> Result<()> {
+        // Type alias for stream results to avoid complex type annotation
+        type PartitionSegment = (crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>);
         // Extract batches from buffer
         let batches_to_write: Vec<RecordBatch> = {
             let mut buffer = self.write_buffer.write().unwrap();
@@ -2125,6 +2386,7 @@ impl Table {
         // --- NEW: Vector Shuffling (Optimization inspired by LanceDB)
         // Attribution: Adapted from Lance partition/shuffle logic (Apache 2.0)
         // Copyright The Lance Authors. Modified for HyperStreamDB Parquet layout.
+        // MODIFIED by Richard Albright / HyperStreamDB on 2026-03-29 to integrate with Iceberg V2/V3 manifests and sidecar indexing.
         if let Some(vector_col) = self.get_vector_column_for_shuffling(&coalesced_batch) {
             println!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
             coalesced_batch = self.shuffle_batch_by_centroids(&coalesced_batch, &vector_col).await?;
@@ -2179,7 +2441,9 @@ impl Table {
                     .with_columns_to_index(Vec::new())
                     .with_partition_values(partition_values.clone())
                     .with_default_device(default_device_inner);
-                let writer_write = HybridSegmentWriter::new(config_write);
+                let mut writer_write = HybridSegmentWriter::new(config_write);
+                writer_write.primary_key = self.primary_key.read().unwrap().clone();
+                writer_write.set_store(self.store.clone());
 
                 let batch_inner = batch.clone();
                 let (entry, generated_files) = tokio::task::spawn_blocking(move || {
@@ -2189,12 +2453,12 @@ impl Table {
                     Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((entry, files))
                 }).await.context("Flush task panicked")??;
                 
-                Ok::<(crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>), anyhow::Error>((entry, generated_files, segment_id, batch, partition_values))
+                Ok::<PartitionSegment, anyhow::Error>((entry, generated_files, segment_id, batch, partition_values))
             }
         })).buffer_unordered(16); // High concurrency for IO
 
-        let results: Vec<Result<(crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>)>> = stream.collect().await;
-
+        let results: Vec<Result<PartitionSegment>> = stream.collect().await;
+        
         for res in results {
             let (entry, generated_files, segment_id, batch, partition_values) = res?;
             
@@ -2213,9 +2477,11 @@ impl Table {
                 
                 let entry_clone = entry.clone();
                 let manifest_manager_clone = manifest_manager.clone();
-                let index_all_flag = index_all_flag;
 
                 let table_schema = self.schema.read().unwrap().clone();
+                let pk_clone = self.primary_key.read().unwrap().clone();
+                let table_store = self.store.clone();
+
                 let handle = tokio::spawn(async move {
                     let _start = std::time::Instant::now();
                     
@@ -2227,7 +2493,9 @@ impl Table {
                         .with_default_device(default_device_clone);
                     
                     let index_res = tokio::task::spawn_blocking(move || {
-                        let index_writer = HybridSegmentWriter::new(config_index);
+                        let mut index_writer = HybridSegmentWriter::new(config_index);
+                        index_writer.primary_key = pk_clone;
+                        index_writer.set_store(table_store);
                         index_writer.build_indexes(&batch_for_indexing)?;
                         let files = index_writer.get_generated_files();
                         let updated_entry_info = index_writer.to_manifest_entry();
@@ -2450,133 +2718,133 @@ impl Table {
         manifest_manager.vacuum(retention_versions).await
     }
 
-    /// Delete rows matching the filter (Merge-on-Read)
-    pub fn delete(&self, filter: &str) -> Result<()> {
-        self.runtime().block_on(self.delete_async(filter))
-    }
-
     /// Async implementation of delete
-/// Async implementation of delete
-pub async fn delete_async(&self, filter: &str) -> Result<()> {
-    use futures::StreamExt;
-    // use roaring::RoaringBitmap; // No longer needed for persistence, only temp
-    
-    let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-    let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
-    
-    if all_entries.is_empty() {
-        return Ok(());
-    }
-
-    let planner = QueryPlanner::new();
-    let arrow_schema = self.arrow_schema();
-    let expr = FilterExpr::parse_sql(filter, arrow_schema).await.context("Failed to parse delete filter")?;
-    
-    let candidates = planner.prune_entries(&all_entries, Some(&expr));
-    // println!("Delete Plan: Scanning {} candidate segments for deletions.", candidates.len());
-
-    let mut all_new_entries = Vec::new();
-
-    for (entry, _index_file) in candidates {
-        let file_path_str = entry.file_path.clone();
-        let segment_id = file_path_str.split('/').last().unwrap_or(&file_path_str)
-            .strip_suffix(".parquet").unwrap_or(&file_path_str);
+    pub async fn delete_async(&self, filter: &str) -> Result<()> {
+        use futures::StreamExt;
         
-        // Critical: We MUST scan WITHOUT applying existing deletes to get correct absolute Row IDs.
-        // We create a reader that only sees the base data file.
-        let config = SegmentConfig::new(&self.uri, segment_id); 
-        // Note: .with_delete_files() is NOT called, so existing deletes are ignored during scan.
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
+        
+        if all_entries.is_empty() {
+            return Ok(());
+        }
 
-        let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+        let planner = QueryPlanner::new();
+        let arrow_schema = self.arrow_schema();
+        let expr = FilterExpr::parse_sql(filter, arrow_schema).await.context("Failed to parse delete filter")?;
         
-        let mut new_deletes = Vec::new();
-        let mut current_row_offset = 0;
-        
-            // Scan full file to find absolute positions matching the filter
-        let mut stream = reader.stream_all(None).await?;
-        
-        while let Some(batch_res) = stream.next().await {
-            let batch = batch_res?;
-            let num_rows = batch.num_rows();
+        let candidates = planner.prune_entries(&all_entries, Some(&expr));
+        let mut all_new_entries = Vec::new();
+
+        for (entry, _index_file) in candidates {
+            let file_path_str = entry.file_path.clone();
+            let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
+                .strip_suffix(".parquet").unwrap_or(&file_path_str);
             
-            // Evaluate filter on this batch
-            let mask = planner.evaluate_expr(&batch, &expr)?;
+            let config = SegmentConfig::new(&self.uri, segment_id); 
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             
-            for i in 0..num_rows {
-                if mask.value(i) {
-                    new_deletes.push((current_row_offset + i) as i64);
+            let mut new_deletes = Vec::new();
+            
+            // OPTIMIZATION: Check for Sidecar Scalar Index (Inverted Index)
+            let and_filters = expr.extract_and_conditions();
+            let mut bitmap_opt: Option<roaring::RoaringBitmap> = None;
+
+            if !and_filters.is_empty() {
+                for filter in and_filters {
+                    if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&filter).await {
+                        if let Some(current) = bitmap_opt {
+                            bitmap_opt = Some(current & bm);
+                        } else {
+                            bitmap_opt = Some(bm);
+                        }
+                    } else {
+                        // If any part of the AND is MISSING an index, we might need a scan
+                        // or we just skip this optimization.
+                        bitmap_opt = None;
+                        break;
+                    }
+                }
+            }
+
+            if let Some(bitmap) = bitmap_opt {
+                // Index HIT! We found the deleted rows instantly.
+                for row_id in bitmap.iter() {
+                    new_deletes.push(row_id as i64);
+                }
+            } else {
+                // Index MISS: Full file scan (fallback)
+                let mut stream = reader.stream_all(None).await?;
+                let mut current_row_offset = 0;
+                while let Some(batch_res) = stream.next().await {
+                    let batch = batch_res?;
+                    let num_rows = batch.num_rows();
+                    let mask = planner.evaluate_expr(&batch, &expr)?;
+                    for i in 0..num_rows {
+                        if mask.value(i) {
+                            new_deletes.push((current_row_offset + i) as i64);
+                        }
+                    }
+                    current_row_offset += num_rows;
                 }
             }
             
-            current_row_offset += num_rows;
-        }
-        
-        if !new_deletes.is_empty() {
-            println!("Segment {}: Found {} NEW rows to delete.", segment_id, new_deletes.len());
-            
-            // Generate NEW Position Delete File
-            let mut file_paths = arrow::array::StringBuilder::new();
-            let mut positions = arrow::array::Int64Builder::new();
-            
-            for &pos in &new_deletes {
-                file_paths.append_value(&entry.file_path);
-                positions.append_value(pos);
-            }
-            
-            let file_path_array = file_paths.finish();
-            let pos_array = positions.finish();
-            
-            let delete_writer = crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
-                self.uri.clone(),
-                2 // Format V2
-            );
-            
-            let partition_data = if !entry.partition_values.is_empty() {
-                // Determine relative partition path from data file path
-                // Heuristic: remove filename, treat remainder relative to table uri as partition path
-                let path = std::path::Path::new(&entry.file_path);
-                let parent = path.parent().unwrap(); 
-                let parent_str = parent.to_str().unwrap();
+            if !new_deletes.is_empty() {
+                // Generate NEW Position Delete File
+                let mut file_paths = arrow::array::StringBuilder::new();
+                let mut positions = arrow::array::Int64Builder::new();
                 
-                // Attempt to strip base uri
-                // Handle "file://" prefix difference
-                let base_clean = self.uri.replace("file://", "");
-                let parent_clean = parent_str.replace("file://", "");
+                for &pos in &new_deletes {
+                    file_paths.append_value(&entry.file_path);
+                    positions.append_value(pos);
+                }
                 
-                let rel_path = if parent_clean.starts_with(&base_clean) {
-                    parent_clean.strip_prefix(&base_clean).unwrap_or("").trim_start_matches('/').to_string()
+                let file_path_array = file_paths.finish();
+                let pos_array = positions.finish();
+                
+                let delete_writer = crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
+                    self.uri.clone(),
+                    2 // Format V2
+                );
+
+                let partition_data = if !entry.partition_values.is_empty() {
+                    let path = std::path::Path::new(&entry.file_path);
+                    let parent = path.parent().unwrap(); 
+                    let parent_str = parent.to_str().unwrap();
+                    
+                    let base_clean = self.uri.replace("file://", "");
+                    let parent_clean = parent_str.replace("file://", "");
+                    
+                    let rel_path = if parent_clean.starts_with(&base_clean) {
+                        parent_clean.strip_prefix(&base_clean).unwrap_or("").trim_start_matches('/').to_string()
+                    } else {
+                        parent.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string()
+                    };
+                    Some((rel_path, entry.partition_values.clone()))
                 } else {
-                    // Fallback: just use directory name (works for single level)
-                    // Or if different store, we might be in trouble, but let's assume valid structure.
-                    parent.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string()
+                    None
                 };
 
-                Some((rel_path, entry.partition_values.clone()))
+                let delete_file = delete_writer.write_position_delete(
+                    partition_data, 
+                    &file_path_array,
+                    &pos_array
+                ).await?;
+                
+                let mut new_entry = entry.clone();
+                new_entry.delete_files.push(delete_file);
+                all_new_entries.push(new_entry);
             } else {
-                None
-            };
-
-            let delete_file = delete_writer.write_position_delete(
-                partition_data, 
-                &file_path_array,
-                &pos_array
-            ).await?;
-            
-            let mut new_entry = entry.clone();
-            new_entry.delete_files.push(delete_file);
-            all_new_entries.push(new_entry);
-        } else {
-            all_new_entries.push(entry.clone());
+                all_new_entries.push(entry.clone());
+            }
         }
-    }
 
-    if !all_new_entries.is_empty() {
-        // Commit Update
-        manifest_manager.commit(&all_new_entries, &[], crate::core::manifest::CommitMetadata::default()).await?;
-    }
+        if !all_new_entries.is_empty() {
+            manifest_manager.commit(&all_new_entries, &[], crate::core::manifest::CommitMetadata::default()).await?;
+        }
 
-    Ok(())
-}
+        Ok(())
+    }
 
     /// Merge (Upsert) batches into the table
     pub fn merge(&self, batches: Vec<RecordBatch>, key_column: &str, mode: MergeMode) -> Result<()> {
@@ -2587,38 +2855,43 @@ pub async fn delete_async(&self, filter: &str) -> Result<()> {
     }
 
     fn merge_on_read(&self, batches: Vec<RecordBatch>, key_column: &str) -> Result<()> {
+        let key_cols: Vec<&str> = key_column.split(',').collect();
         self.runtime().block_on(async {
-            // For MoR:
-            // 1. Write the new batches as new segments (Append)
-            // 2. Identify the keys being updated and delete them from old segments
-            
-            // Step 1: Delete existing keys
-            // This is complex because we need to delete specific keys, not a range.
-            // For now, we'll do it naively: for each key in the batch, call delete("column = key")
-            // Optimization: Batch the deletes using an IN clause (if supported) or manual logic.
-            
             for batch in &batches {
                 let schema = batch.schema();
-                let col_idx = schema.index_of(key_column)?;
-                let col = batch.column(col_idx);
+                let col_indices: Vec<usize> = key_cols.iter()
+                    .map(|&c| schema.index_of(c))
+                    .collect::<Result<Vec<usize>, _>>()?;
                 
-                // For simplicity, handle Int32/Int64 keys for integration tests
-                if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
-                    for i in 0..arr.len() {
-                        let filter = format!("{} = {}", key_column, arr.value(i));
-                        self.delete_async(&filter).await?;
+                for i in 0..batch.num_rows() {
+                    let mut filters = Vec::new();
+                    for (&col_name, &col_idx) in key_cols.iter().zip(col_indices.iter()) {
+                        let col = batch.column(col_idx);
+                        let val = if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                            format!("{}", arr.value(i))
+                        } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                            format!("{}", arr.value(i))
+                        } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                            format!("'{}'", arr.value(i))
+                        } else {
+                            // Fallback for other types
+                            "".to_string()
+                        };
+                        
+                        if !val.is_empty() {
+                            filters.push(format!("{} = {}", col_name, val));
+                        }
                     }
-                } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
-                    for i in 0..arr.len() {
-                        let filter = format!("{} = {}", key_column, arr.value(i));
-                        self.delete_async(&filter).await?;
+                    
+                    if !filters.is_empty() {
+                        let filter_expr = filters.join(" AND ");
+                        self.delete_async(&filter_expr).await?;
                     }
                 }
             }
-
-            // Step 2: Write new batches
-            self.write_async(batches).await?;
             
+            // Step 2: Write the new data (Append)
+            self.write_async(batches).await?;
             Ok(())
         })
     }
@@ -2651,7 +2924,7 @@ pub async fn delete_async(&self, filter: &str) -> Result<()> {
             let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
             
             let segment_ids: Vec<String> = all_entries.iter().map(|e| {
-                e.file_path.split('/').last().unwrap().replace(".parquet", "")
+                e.file_path.split('/').next_back().unwrap().replace(".parquet", "")
             }).collect();
             
             let planner = MergePlanner::new();
@@ -3094,12 +3367,9 @@ impl Table {
              let mut index_used = false;
              if let Some(filter_str) = filter {
                  if let Some(qf) = crate::core::planner::QueryFilter::parse(filter_str) {
-                     match reader.query_index_first(&qf, target_schema.clone()).await {
-                         Ok(indexed_batches) => {
-                             batches = indexed_batches;
-                             index_used = true;
-                         },
-                         Err(_) => {}
+                     if let Ok(indexed_batches) = reader.query_index_first(&qf, target_schema.clone()).await {
+                         batches = indexed_batches;
+                         index_used = true;
                      }
                  }
              }
@@ -3418,13 +3688,13 @@ impl Table {
             }
             let key_str = serde_json::to_string(&key_map)?;
             row_groups.entry(key_str.clone()).or_default().push(row_i as u32);
-            if !key_cache.contains_key(&key_str) {
+            key_cache.entry(key_str).or_insert_with(|| {
                 let mut final_key = HashMap::new();
                 for (k, v) in key_map {
                     final_key.insert(k, v);
                 }
-                key_cache.insert(key_str, final_key);
-            }
+                final_key
+            });
         }
         
         let mut result = Vec::new();
@@ -3513,7 +3783,6 @@ impl Table {
 
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use arrow::array::{Int32Array, StringArray};
@@ -3612,6 +3881,62 @@ mod tests {
             assert!(sub_batch.num_rows() >= 1);
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_admin_ops() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().to_str().unwrap().to_string();
+        let uri = format!("file://{}", path);
+        let table = Table::new_async(uri.clone()).await?;
+
+        // 1. Initial State: Autocommit is True
+        assert!(table.get_autocommit());
+
+        // 2. Write Data (Autocommit)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]
+        )?;
+        
+        table.write_async(vec![batch.clone()]).await?;
+        
+        // Should be committed automatically
+        let batches = table.read_async(None, None, None).await?;
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 3);
+
+        // 3. Truncate
+        table.truncate_async().await?;
+        let batches = table.read_async(None, None, None).await?;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        println!("After truncate, read {} records in {} batches", total_rows, batches.len());
+        assert!(total_rows == 0, "Table should be empty after truncate, but found {} rows!", total_rows);
+
+        // 4. Autocommit
+        table.set_autocommit(false);
+        table.write_async(vec![batch.clone()]).await?;
+        
+        // Visible in read (from buffer)
+        let batches = table.read_async(None, None, None).await?;
+        assert!(!batches.is_empty(), "Should see data in buffer");
+        
+        let manifest_manager = ManifestManager::new(table.store.clone(), "", &table.uri);
+        let (_, _, ver_pre) = manifest_manager.load_latest_full().await.unwrap_or_default();
+        assert_eq!(ver_pre, 2, "Should still be v2 before manual commit");
+        
+        table.commit_async().await?;
+        let (_, _, ver_post) = manifest_manager.load_latest_full().await.unwrap_or_default();
+        assert_eq!(ver_post, 3, "Should be v3 after manual commit");
+
+        // 5. Vacuum
+        // Note: vacuum_async might not delete anything if within retention, but let's test it works
+        table.vacuum_async(1).await?; 
+        
         Ok(())
     }
 }

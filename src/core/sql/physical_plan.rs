@@ -134,7 +134,7 @@ impl ExecutionPlan for HyperStreamExec {
             self.projection.clone(),
             self.filter.clone(),
             self.vector_params.clone(),
-            self.limit.clone(),
+            self.limit,
             self.base_schema.clone(),  // Use base schema for reprojection
         )))
     }
@@ -200,23 +200,27 @@ impl ExecutionPlan for HyperStreamExec {
                 // Read Segment
                 if let Some(ref vp) = vector_params {
                     // Hybrid Search: Vector + Scalar
-                    use crate::core::query::execute_vector_search_with_config;
+                    use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
                     use crate::core::planner::FilterExpr;
                     
                     let filter_expr = query_filter.as_ref().and_then(|f| FilterExpr::from_filters(vec![f.clone()]));
+                    
+                    let request = VectorSearchRequest::new(
+                        vp.column.clone(),
+                        vp.query.clone(),
+                        vp.k,
+                        vp.metric,
+                    )
+                    .with_filter(filter_expr)
+                    .with_config(table.query_config().clone())
+                    .with_ef_search(vp.ef_search);
                     
                     match execute_vector_search_with_config(
                         vec![entry.clone()],
                         table.object_store(),
                         None, // data_store
                         &table.table_uri(),
-                        &vp.column,
-                        &vp.query,
-                        vp.k,
-                        filter_expr,
-                        vp.metric,
-                        table.query_config().clone(),
-                        vp.ef_search
+                        request,
                     ).await {
                         Ok(batches) => {
                             for batch in batches {
@@ -283,7 +287,7 @@ impl ExecutionPlan for HyperStreamExec {
                     Ok(batches) => {
                         for batch in batches {
                             if batch.schema() != expected_schema_inner {
-                                yield Err(DataFusionError::Execution(format!("Write buffer schema mismatch")));
+                                yield Err(DataFusionError::Execution("Write buffer schema mismatch".to_string()));
                                 return;
                             }
                             yield Ok(batch);

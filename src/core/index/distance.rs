@@ -4,7 +4,6 @@
 /// 
 /// This module provides SIMD-accelerated distance metrics.
 /// We use explicit loop unrolling and suggest the compiler use AVX2/NEON.
-
 #[inline(always)]
 pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     l2_distance_squared(a, b).sqrt()

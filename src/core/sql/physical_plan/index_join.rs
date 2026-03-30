@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use arrow::datatypes::{SchemaRef, DataType};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{ArrayRef, PrimitiveArray, Array};
+use arrow::array::{ArrayRef, Array};
 use arrow::compute::{concat_batches, take};
 use futures::{Stream, StreamExt, Future};
 use datafusion::physical_plan::{
@@ -323,8 +323,8 @@ fn perform_join(
     // Use `take` on each column.
     
     // Reconstruct Left columns
-    let left_indices_arr = PrimitiveArray::<arrow::datatypes::UInt64Type>::from(left_indices);
-    let right_indices_arr = PrimitiveArray::<arrow::datatypes::UInt64Type>::from(right_indices);
+    let left_indices_arr = left_indices;
+    let right_indices_arr = right_indices;
     
     let mut output_columns = Vec::new();
     

@@ -349,11 +349,27 @@ impl PyTable {
         self.table.get_max_parallel_readers()
     }
 
-    /// Add columns to be indexed (triggers backfill)
-    #[pyo3(signature = (columns, device=None))]
-    fn add_index_columns(&mut self, columns: Vec<String>, device: Option<String>) -> PyResult<()> {
-        self.table.add_index_columns(columns, device)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    fn set_index_all(&mut self, enabled: bool) {
+        self.table.set_index_all(enabled);
+    }
+
+    fn get_index_all(&self) -> bool {
+        self.table.get_index_all()
+    }
+
+    /// Set indexing configuration for a specific column
+    #[pyo3(signature = (column, enabled=true, tokenizer=None, device=None))]
+    fn set_index_config(&mut self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
+        self.table.set_index_config(column, enabled, tokenizer, device);
+    }
+
+    /// Set default device for all future indexes in this table
+    fn set_primary_key(&mut self, columns: Vec<String>) {
+        self.table.set_primary_key(columns);
+    }
+
+    fn get_primary_key(&self) -> Vec<String> {
+        self.table.get_primary_key()
     }
 
     /// Set default device for all future indexes in this table
@@ -470,7 +486,7 @@ impl PyTable {
         let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context.clone())
+            Some(ctx_borrow.context)
         } else {
             None
         };
@@ -536,7 +552,7 @@ impl PyTable {
         let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context.clone())
+            Some(ctx_borrow.context)
         } else {
             None
         };
@@ -576,7 +592,7 @@ impl PyTable {
              
              let context_clone = context.as_ref().map(|c| c.clone_ref(py));
              // Let's try arrow first as it's lighter
-             if let Ok(_) = self.write_arrow(py, obj.clone_ref(py), context_clone.as_ref().map(|c| c.clone_ref(py))) {
+             if self.write_arrow(py, obj.clone_ref(py), context_clone.as_ref().map(|c| c.clone_ref(py))).is_ok() {
                  Ok(())
              } else {
                  // Try pandas
@@ -726,10 +742,16 @@ impl PyTable {
     /// Write Pandas DataFrame to table
     #[pyo3(signature = (df, context=None))]
     fn write_pandas(&self, py: Python<'_>, df: Py<PyAny>, context: Option<Py<PyComputeContext>>) -> PyResult<()> {
-        // Convert Pandas -> PyArrow -> Rust Arrow
+        // Provide current table schema to PyArrow for correct type inference (especially for vectors)
         let pyarrow = py.import("pyarrow")?;
+        let schema = self.table.arrow_schema();
         let table_class = pyarrow.getattr("Table")?;
-        let arrow_table = table_class.call_method1("from_pandas", (df,))?.unbind();
+        let arrow_table = if schema.fields().is_empty() {
+             table_class.call_method1("from_pandas", (df.bind(py),))?.unbind()
+        } else {
+             let py_schema = arrow_schema_to_pyarrow(py, schema)?;
+             table_class.call_method1("from_pandas", (df.bind(py), py_schema))?.unbind()
+        };
         self.write_arrow(py, arrow_table, context)
     }
 
@@ -742,7 +764,7 @@ impl PyTable {
         let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context.clone())
+            Some(ctx_borrow.context)
         } else {
             None
         };
@@ -797,8 +819,35 @@ impl PyTable {
 
     /// Delete rows matching the filter (Merge-on-Read)
     fn delete(&self, filter: String) -> PyResult<()> {
-        self.table.delete(&filter)
+        let rt = self.table.rt.as_ref().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Runtime not initialized"))?;
+        rt.block_on(self.table.delete_async(&filter))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    }
+
+    /// Truncate the table (metadata-only operation)
+    fn truncate(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.table.truncate()
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    }
+
+    /// Physically delete unreferenced data and manifest files
+    fn vacuum(&self, py: Python<'_>, retention_versions: usize) -> PyResult<usize> {
+        py.allow_threads(|| {
+            self.table.vacuum(retention_versions)
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    }
+
+    /// Get autocommit setting
+    #[getter]
+    fn get_autocommit(&self) -> bool {
+        self.table.get_autocommit()
+    }
+
+    /// Set autocommit setting
+    #[setter]
+    fn set_autocommit(&self, enabled: bool) {
+        self.table.set_autocommit(enabled)
     }
 
 
@@ -828,7 +877,7 @@ impl PyTable {
         let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context.clone())
+            Some(ctx_borrow.context)
         } else {
             None
         };
@@ -1375,6 +1424,18 @@ impl PyJdbcCatalog {
 }
 
 // Helper functions for Arrow C Data Interface
+
+fn arrow_schema_to_pyarrow(py: Python<'_>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
+    let mut ffi_schema = FFI_ArrowSchema::try_from(schema.as_ref())
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+    
+    let schema_ptr = &mut ffi_schema as *mut _ as Py_uintptr_t;
+    let pyarrow = py.import("pyarrow")?;
+    let schema_class = pyarrow.getattr("Schema")?;
+    let py_schema = schema_class.call_method1("_import_from_c", (schema_ptr,))?.unbind();
+    
+    Ok(py_schema)
+}
 
 fn arrow_batches_to_pyarrow(py: Python<'_>, batches: Vec<RecordBatch>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
     // Use Arrow C Stream Interface for efficient transfer

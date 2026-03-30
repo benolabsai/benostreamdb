@@ -82,8 +82,8 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     // t1: 1, 2, 3, 4, 5
     // t2: 2, 4
     // Matches: 2, 4
-    assert!(!joined.is_empty());
-    let j_batch = &joined[0];
+    assert!(!joined.0.is_empty());
+    let j_batch = &joined.0[0];
     assert_eq!(j_batch.num_rows(), 2);
     
     println!("Rust SQL Test & Join Passed!");

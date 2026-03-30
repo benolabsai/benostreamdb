@@ -35,7 +35,7 @@ async fn test_mor_mixed_deletes_avro() -> anyhow::Result<()> {
     // 3. Perform Equality Delete (Delete id=3)
     let manifest_manager = ManifestManager::new(table.store.clone(), "", &uri);
     let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
-    let entry = all_entries.get(0).expect("Should have one data file");
+    let entry = all_entries.first().expect("Should have one data file");
     
     let delete_writer = IcebergDeleteWriter::new(
         uri.clone(),
@@ -55,6 +55,7 @@ async fn test_mor_mixed_deletes_avro() -> anyhow::Result<()> {
             hyperstreamdb::core::manifest::SchemaField { id: 1, name: "id".to_string(), type_str: "int".to_string(), required: true, fields: vec![], initial_default: None, write_default: None },
             hyperstreamdb::core::manifest::SchemaField { id: 2, name: "name".to_string(), type_str: "string".to_string(), required: true, fields: vec![], initial_default: None, write_default: None },
         ],
+        identifier_field_ids: vec![],
     };
 
     let eq_delete_file = delete_writer.write_equality_delete(
@@ -67,7 +68,7 @@ async fn test_mor_mixed_deletes_avro() -> anyhow::Result<()> {
     let mut updated_entry = entry.clone();
     updated_entry.delete_files.push(eq_delete_file);
     
-    manifest_manager.commit(&[updated_entry], &[entry.file_path.clone()], hyperstreamdb::core::manifest::CommitMetadata::default()).await?;
+    manifest_manager.commit(&[updated_entry], std::slice::from_ref(&entry.file_path), hyperstreamdb::core::manifest::CommitMetadata::default()).await?;
     
     // 4. Verify Reads
     let results = table.read_filter_async(vec![], None, None).await?;

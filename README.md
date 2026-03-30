@@ -572,9 +572,10 @@ hyperstreamdb/
 - [ ] Partition evolution
 
 ### 📋 Planned
-- [ ] Distributed locking
-- [ ] CLI tools
+- [ ] Distributed locking (DynamoDB/Zookeeper)
+- [ ] CLI tools (`hyperstream admin`)
 - [ ] Prometheus metrics
+- [ ] **REST Gateway** (OpenAPI for JS/Frontend RAG integration)
 
 ## 🤝 Contributing
 
@@ -582,7 +583,10 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
-Apache-2.0
+The Python wrapper is licensed under the **MIT License**.
+The underlying Rust engine and core database logic is licensed under the **Apache License 2.0**.
+
+This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. HyperStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
 
 ## 🙏 Acknowledgments
 

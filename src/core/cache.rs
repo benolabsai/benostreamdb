@@ -11,6 +11,63 @@ use hnsw_rs::prelude::Hnsw;
 use hnsw_rs::dist::DistL2;
 use arrow::record_batch::RecordBatch;
 use parquet::file::metadata::ParquetMetaData;
+use std::path::PathBuf;
+use object_store::ObjectStore;
+use anyhow::Result;
+
+pub static DISK_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
+    std::env::var("HYPERSTREAM_DISK_CACHE_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| {
+            let path = std::path::Path::new("/tmp/hdb_cache");
+            if std::fs::create_dir_all(path).is_ok() {
+                Some(path.to_path_buf())
+            } else {
+                None
+            }
+        })
+});
+
+#[derive(Clone)]
+pub struct DiskCache {
+    store: Arc<dyn ObjectStore>,
+    cache_dir: Option<PathBuf>,
+}
+
+impl DiskCache {
+    pub fn new(store: Arc<dyn ObjectStore>) -> Self {
+        Self {
+            store,
+            cache_dir: DISK_CACHE_DIR.clone(),
+        }
+    }
+
+    pub async fn get_bytes(&self, path: &str) -> Result<bytes::Bytes> {
+        use sha2::{Digest, Sha256};
+        
+        if let Some(cache_dir) = &self.cache_dir {
+            let mut hasher = Sha256::new();
+            hasher.update(path);
+            let hash = format!("{:x}", hasher.finalize());
+            let cache_path = cache_dir.join(&hash);
+            
+            if cache_path.exists() {
+                if let Ok(b) = std::fs::read(&cache_path) {
+                    return Ok(bytes::Bytes::from(b));
+                }
+            }
+
+            let b = self.store.get(&object_store::path::Path::from(path)).await?.bytes().await?;
+            let _ = std::fs::write(&cache_path, &b);
+            Ok(b)
+        } else {
+            let res = self.store.get(&object_store::path::Path::from(path)).await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            res.bytes().await.map_err(|e| anyhow::anyhow!(e))
+        }
+    }
+}
 
 // Cache Keys
 // Manifest: "s3://bucket/path/_manifest" -> Manifest

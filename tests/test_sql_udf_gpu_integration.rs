@@ -4,7 +4,6 @@
 /// 
 /// This test verifies that SQL distance UDFs can use GPU acceleration
 /// when a GPU context is configured via the global context.
-
 use hyperstreamdb::core::index::gpu::{ComputeContext, ComputeBackend, set_global_gpu_context, get_global_gpu_context};
 use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
 use datafusion::prelude::*;

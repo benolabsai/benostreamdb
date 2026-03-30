@@ -87,7 +87,7 @@ async fn test_simple_select() {
     }
     assert!(result.is_ok(), "Simple SELECT should work");
     let batches = result.unwrap();
-    assert!(!batches.is_empty(), "Should return results");
+    assert!(!batches.0.is_empty(), "Should return results");
 }
 
 #[tokio::test]
@@ -106,7 +106,7 @@ async fn test_all_distance_operators_l2() {
     }
     assert!(result.is_ok(), "L2 distance query should execute successfully");
     let batches = result.unwrap();
-    assert!(!batches.is_empty(), "Should return results");
+    assert!(!batches.0.is_empty(), "Should return results");
 }
 
 #[tokio::test]
@@ -192,10 +192,10 @@ async fn test_knn_with_limit_pushdown() {
     
     assert!(result.is_ok(), "KNN query with LIMIT should execute");
     let batches = result.unwrap();
-    assert!(!batches.is_empty(), "Should return results");
+    assert!(!batches.0.is_empty(), "Should return results");
     
     // Verify we get exactly 2 results
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let total_rows: usize = batches.0.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 2, "Should return exactly 2 results with LIMIT 2");
 }
 
@@ -213,7 +213,7 @@ async fn test_knn_results_ordered_by_distance() {
     let batches = result.unwrap();
     
     // Extract distances and verify they're in ascending order
-    if let Some(batch) = batches.first() {
+    if let Some(batch) = batches.0.first() {
         let distance_col = batch.column(1)
             .as_any()
             .downcast_ref::<Float32Array>()
@@ -445,7 +445,7 @@ async fn test_knn_with_where_filter() {
     let batches = result.unwrap();
     
     // Verify all returned IDs are > 1
-    if let Some(batch) = batches.first() {
+    if let Some(batch) = batches.0.first() {
         let id_col = batch.column(0)
             .as_any()
             .downcast_ref::<Int32Array>()

@@ -143,7 +143,7 @@ impl IcebergDeleteWriter {
 
         for i in 0..batch.num_rows() {
             let mut record = Record::new(&schema).unwrap();
-            for (_, &id) in equality_ids.iter().enumerate() {
+            for &id in equality_ids.iter() {
                 let field = &table_schema.fields.iter().find(|f| f.id == id).unwrap();
                 let col = batch.column_by_name(&field.name)
                     .ok_or_else(|| anyhow::anyhow!("Column {} not found in batch", field.name))?;

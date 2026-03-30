@@ -594,11 +594,7 @@ pub fn convert_iceberg_to_object(
             for (id, lower_bytes) in lowers {
                 if let Some(field) = field_map.get(id) {
                     let min_val = decode_iceberg_value(&serde_json::json!(field.type_str), lower_bytes); 
-                    let max_val = if let Some(upper_bytes) = uppers.get(id) {
-                        Some(decode_iceberg_value(&serde_json::json!(field.type_str), upper_bytes))
-                    } else {
-                        None
-                    };
+                    let max_val = uppers.get(id).map(|upper_bytes| decode_iceberg_value(&serde_json::json!(field.type_str), upper_bytes));
                     let null_count = *nulls.get(id).unwrap_or(&0);
                     column_stats.insert(field.name.clone(), ColumnStats {
                         min: Some(min_val),
@@ -720,11 +716,11 @@ impl PositionDeleteReader {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         let cursor = bytes;
         let builder = ParquetRecordBatchReaderBuilder::try_new(cursor)?;
-        let mut reader = builder.build()?;
+        let reader = builder.build()?;
         
         let mut deleted_positions = HashSet::new();
         
-        while let Some(batch_res) = reader.next() {
+        for batch_res in reader {
             let batch = batch_res?;
             
             if let (Ok(file_path_col), Ok(pos_col)) = (batch.column_by_name("file_path").ok_or(()), batch.column_by_name("pos").ok_or(())) {
@@ -937,9 +933,9 @@ impl EqualityDeleteReader {
     ) -> Result<Vec<RecordBatch>> {
         use std::collections::HashMap;
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        use bytes::Bytes;
+        
 
-        let cursor = Bytes::from(bytes);
+        let cursor = bytes;
 
         // 1. Resolve column names from IDs
         let mut column_names = Vec::new();
@@ -990,6 +986,12 @@ pub struct GpuPuffinWriter {
     // Orchestrates GPU-based index builds (HNSW, Bloom)
 }
 
+impl Default for GpuPuffinWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuPuffinWriter {
     pub fn new() -> Self {
         Self {}
@@ -1037,6 +1039,12 @@ pub const MANIFEST_LIST_SCHEMA_V2: &str = r#"
 "#;
 
 pub struct IcebergWriter;
+
+impl Default for IcebergWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl IcebergWriter {
     pub fn new() -> Self {

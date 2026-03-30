@@ -36,16 +36,37 @@ impl FilterExpr {
         let sql = format!("SELECT * FROM t WHERE {}", filter);
         
         let ctx = SessionContext::new();
-        let table = datafusion::datasource::empty::EmptyTable::new(schema);
+        let table = datafusion::datasource::empty::EmptyTable::new(schema.clone());
         ctx.register_table(TableReference::bare("t"), Arc::new(table))?;
         let df = ctx.sql(&sql).await?;
         let plan = df.logical_plan();
-        // The plan should be Projection -> Filter -> TableScan
-        if let datafusion::logical_expr::LogicalPlan::Projection(proj) = plan {
-            if let datafusion::logical_expr::LogicalPlan::Filter(filter_node) = &*proj.input {
-                return Ok(FilterExpr::DataFusion(filter_node.predicate.clone()));
+        
+        // Apply type coercion via the analyzer (handles Int32 vs Int64 mismatches, etc.)
+        // but don't run the full optimizer (which pushes filters into TableScan and breaks evaluate_expr)
+        let state = ctx.state();
+        let analyzed_plan = state.analyzer().execute_and_check(plan.clone(), state.config_options(), |_, _| {})?;
+        
+        use datafusion::logical_expr::LogicalPlan;
+        
+        fn find_filter(plan: &LogicalPlan) -> Option<datafusion::logical_expr::Expr> {
+            match plan {
+                LogicalPlan::Filter(f) => Some(f.predicate.clone()),
+                LogicalPlan::Projection(p) => find_filter(&p.input),
+                _ => {
+                    for input in plan.inputs() {
+                        if let Some(f) = find_filter(input) {
+                            return Some(f);
+                        }
+                    }
+                    None
+                }
             }
         }
+
+        if let Some(expr) = find_filter(&analyzed_plan) {
+            return Ok(FilterExpr::DataFusion(expr));
+        }
+
         Err(anyhow::anyhow!("Failed to parse filter expression: '{}'", filter))
     }
 
@@ -157,7 +178,7 @@ impl QueryFilter {
                      col_expr.eq(json_to_scalar(&values[0]))
                  }
              } else {
-                 let list = values.iter().map(|v| json_to_scalar(v)).collect();
+                 let list = values.iter().map(json_to_scalar).collect();
                  if self.negated {
                      col_expr.in_list(list, true)
                  } else {
@@ -225,10 +246,8 @@ fn extract_filters_from_expr(expr: &Expr, filters: &mut Vec<QueryFilter>) {
             if binary.op == datafusion::logical_expr::Operator::And {
                 extract_filters_from_expr(&binary.left, filters);
                 extract_filters_from_expr(&binary.right, filters);
-            } else {
-                if let Some(f) = convert_binary_expr_to_query_filter(binary) {
-                    filters.push(f);
-                }
+            } else if let Some(f) = convert_binary_expr_to_query_filter(binary) {
+                filters.push(f);
             }
         }
         Expr::InList(in_list) => {
@@ -319,7 +338,7 @@ fn convert_in_list_to_query_filter(in_list: &datafusion::logical_expr::expr::InL
     let mut values = Vec::new();
     for v_expr in &in_list.list {
         if let Expr::Literal(scalar, _) = v_expr {
-            if let Some(v) = scalar_to_json_value(&scalar) {
+            if let Some(v) = scalar_to_json_value(scalar) {
                 values.push(v);
             }
         }
@@ -386,6 +405,12 @@ fn scalar_to_json_value(scalar: &datafusion::scalar::ScalarValue) -> Option<Valu
 
 pub struct QueryPlanner {}
 
+impl Default for QueryPlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueryPlanner {
     pub fn new() -> Self {
         Self {}
@@ -406,9 +431,7 @@ impl QueryPlanner {
     }
 
     pub fn evaluate_expr(&self, batch: &arrow::record_batch::RecordBatch, expr: &FilterExpr) -> anyhow::Result<arrow::array::BooleanArray> {
-        let df_expr = match expr {
-            FilterExpr::DataFusion(e) => e,
-        };
+        let FilterExpr::DataFusion(df_expr) = expr;
 
         use datafusion::physical_expr::create_physical_expr;
         use datafusion::prelude::SessionContext;
@@ -449,8 +472,8 @@ impl QueryPlanner {
         let phys_expr = create_physical_expr(
             df_expr,
             &df_schema,
-            &state.execution_props(),
-        )?;
+            state.execution_props(),
+        ).map_err(|e| anyhow::anyhow!("Failed to create physical expression: {}. Expression: {:?}, Schema: {:?}", e, df_expr, df_schema))?;
 
         let result = phys_expr.evaluate(&coerced_batch)?;
         let array = result.into_array(coerced_batch.num_rows())?;
@@ -562,9 +585,7 @@ impl QueryPlanner {
     }
 
     pub fn might_match_expr(&self, entry: &ManifestEntry, expr: &FilterExpr) -> bool {
-        let df_expr = match expr {
-            FilterExpr::DataFusion(e) => e,
-        };
+        let FilterExpr::DataFusion(df_expr) = expr;
         self.might_match_df_expr(entry, df_expr)
     }
 

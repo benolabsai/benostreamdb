@@ -49,9 +49,9 @@ pub fn format_binary_vector(data: &[u8], bits: usize, use_hex: bool) -> String {
     if use_hex {
         // Format as hex string
         let mut result = String::from("0x");
-        let byte_count = (bits + 7) / 8;
-        for i in 0..byte_count.min(data.len()) {
-            result.push_str(&format!("{:02X}", data[i]));
+        let byte_count = bits.div_ceil(8);
+        for byte in &data[0..byte_count.min(data.len())] {
+            result.push_str(&format!("{:02X}", byte));
         }
         result
     } else {
@@ -137,7 +137,7 @@ impl VectorLiteralParser {
             }
             
             // Convert binary string to bytes
-            let byte_count = (bit_count + 7) / 8;
+            let byte_count = bit_count.div_ceil(8);
             let mut bytes = vec![0u8; byte_count];
             
             for (bit_idx, ch) in binary_str.chars().enumerate() {
@@ -2009,7 +2009,7 @@ mod binary_vector_property_tests {
             let bytes = result.unwrap();
             
             // Verify byte count
-            let expected_byte_count = (bits.len() + 7) / 8;
+            let expected_byte_count = bits.len().div_ceil(8);
             prop_assert_eq!(bytes.len(), expected_byte_count,
                 "Byte count mismatch: expected {}, got {}", expected_byte_count, bytes.len());
             
@@ -2218,7 +2218,7 @@ mod binary_vector_property_tests {
             let bytes = result.unwrap();
             
             // Verify byte count (should round up)
-            let expected_byte_count = (bit_count + 7) / 8;
+            let expected_byte_count = bit_count.div_ceil(8);
             prop_assert_eq!(bytes.len(), expected_byte_count,
                 "Byte count should round up for partial bytes");
             

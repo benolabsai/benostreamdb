@@ -160,6 +160,12 @@ macro_rules! make_vector_dist_udf {
             }
         }
 
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
         impl ScalarUDFImpl for $name {
             fn as_any(&self) -> &dyn std::any::Any {
                 self
@@ -435,6 +441,7 @@ macro_rules! create_vector_binary_op_udf {
         impl_dyn_traits!($name);
         
         impl $name { pub fn new() -> Self { Self { signature: Signature::exact(vec![DataType::Float32, DataType::Float32], Volatility::Immutable) } } }
+        impl Default for $name { fn default() -> Self { Self::new() } }
         impl ScalarUDFImpl for $name {
             fn as_any(&self) -> &dyn Any { self }
             fn name(&self) -> &str { $func_name }
@@ -531,6 +538,12 @@ pub struct VectorConcatUDF {
 
 impl_dyn_traits!(VectorConcatUDF);
 
+impl Default for VectorConcatUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorConcatUDF {
     pub fn new() -> Self {
         Self {
@@ -568,7 +581,7 @@ impl ScalarUDFImpl for VectorConcatUDF {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             },
-            _ => return Err(datafusion::error::DataFusionError::Execution(
+            _ => Err(datafusion::error::DataFusionError::Execution(
                 "Unsupported argument combinations for vector_concat".to_string()
             )),
         }
@@ -580,6 +593,12 @@ impl ScalarUDFImpl for VectorConcatUDF {
 #[derive(Debug)]
 pub struct VectorDimsUDF { signature: Signature }
 impl_dyn_traits!(VectorDimsUDF);
+impl Default for VectorDimsUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorDimsUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl ScalarUDFImpl for VectorDimsUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -603,6 +622,12 @@ impl ScalarUDFImpl for VectorDimsUDF {
 #[derive(Debug)]
 pub struct VectorNormUDF { signature: Signature }
 impl_dyn_traits!(VectorNormUDF);
+impl Default for VectorNormUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorNormUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl ScalarUDFImpl for VectorNormUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -630,6 +655,12 @@ impl ScalarUDFImpl for VectorNormUDF {
 #[derive(Debug)]
 pub struct VectorNormalizeUDF { signature: Signature }
 impl_dyn_traits!(VectorNormalizeUDF);
+impl Default for VectorNormalizeUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorNormalizeUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl ScalarUDFImpl for VectorNormalizeUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -670,6 +701,12 @@ impl ScalarUDFImpl for VectorNormalizeUDF {
 #[derive(Debug)]
 pub struct BinaryQuantizeUDF { signature: Signature }
 impl_dyn_traits!(BinaryQuantizeUDF);
+impl Default for BinaryQuantizeUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BinaryQuantizeUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl ScalarUDFImpl for BinaryQuantizeUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -727,7 +764,7 @@ impl ScalarUDFImpl for BinaryQuantizeUDF {
                     ));
                 };
                 
-                let packed_len = if vec_data.is_empty() { 0 } else { (vec_data[0].len() + 7) / 8 };
+                let packed_len = if vec_data.is_empty() { 0 } else { vec_data[0].len().div_ceil(8) };
                 let mut list_builder = ListBuilder::new(arrow::array::UInt8Builder::new());
                 
                 for v in vec_data {
@@ -792,7 +829,7 @@ impl ScalarUDFImpl for BinaryQuantizeUDF {
                     }
                 };
                 
-                let packed_len = (v.len() + 7) / 8;
+                let packed_len = v.len().div_ceil(8);
                 let mut packed = vec![0u8; packed_len];
                 for (j, val) in v.iter().enumerate() {
                     if *val > 0.0 {
@@ -811,6 +848,12 @@ impl ScalarUDFImpl for BinaryQuantizeUDF {
 #[derive(Debug)]
 pub struct SubvectorUDF { signature: Signature }
 impl_dyn_traits!(SubvectorUDF);
+impl Default for SubvectorUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SubvectorUDF { pub fn new() -> Self { Self { signature: Signature::exact(vec![DataType::Float32, DataType::Int32, DataType::Int32], Volatility::Immutable) } } }
 impl ScalarUDFImpl for SubvectorUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -999,7 +1042,7 @@ impl ScalarUDFImpl for VectorToBinaryUDF {
             ColumnarValue::Array(arr) => {
                 let fsl = as_fixed_size_list_array(arr)?;
                 let len = fsl.value_length();
-                let packed_len = (len as usize + 7) / 8;
+                let packed_len = (len as usize).div_ceil(8);
                 let mut list_builder = ListBuilder::new(arrow::array::UInt8Builder::new());
                 
                 for i in 0..fsl.len() {
@@ -1029,6 +1072,12 @@ impl ScalarUDFImpl for VectorToBinaryUDF {
 #[derive(Debug)]
 pub struct VectorSumUDF { signature: Signature }
 impl_dyn_traits!(VectorSumUDF);
+impl Default for VectorSumUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorSumUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl AggregateUDFImpl for VectorSumUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -1136,7 +1185,7 @@ impl Accumulator for VectorSumAccumulator {
                 continue;
             }
             let partial_sum_array = list_array.value(i);
-            if partial_sum_array.len() == 0 {
+            if partial_sum_array.is_empty() {
                 continue;
             }
             
@@ -1160,6 +1209,12 @@ impl Accumulator for VectorSumAccumulator {
 #[derive(Debug)]
 pub struct VectorAvgUDF { signature: Signature }
 impl_dyn_traits!(VectorAvgUDF);
+impl Default for VectorAvgUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorAvgUDF { pub fn new() -> Self { Self { signature: Signature::any(1, Volatility::Immutable) } } }
 impl AggregateUDFImpl for VectorAvgUDF {
     fn as_any(&self) -> &dyn Any { self }
@@ -1292,7 +1347,7 @@ impl Accumulator for VectorAvgAccumulator {
                 continue;
             }
             let partial_sum_array = sum_array.value(i);
-            if partial_sum_array.len() == 0 {
+            if partial_sum_array.is_empty() {
                 continue;
             }
             
@@ -1857,10 +1912,11 @@ mod aggregation_property_tests {
                 
                 // Compare with expected sum (with floating point tolerance)
                 assert_eq!(result_vec.len(), dim);
-                for i in 0..dim {
-                    let diff = (result_vec.value(i) - expected_sum[i]).abs();
-                    assert!(diff < 0.001 || diff / expected_sum[i].abs() < 0.0001, 
-                        "Sum mismatch at index {}: expected {}, got {}", i, expected_sum[i], result_vec.value(i));
+                for (i, &expected) in expected_sum.iter().enumerate().take(dim) {
+                    let got = result_vec.value(i);
+                    let diff = (got - expected).abs();
+                    assert!(diff < 0.001 || diff / expected.abs() < 0.0001, 
+                        "Sum mismatch at index {}: expected {}, got {}", i, expected, got);
                 }
             } else {
                 panic!("Expected List result, got {:?}", result);
@@ -1922,10 +1978,11 @@ mod aggregation_property_tests {
                 
                 // Compare with expected average (with floating point tolerance)
                 assert_eq!(result_vec.len(), dim);
-                for i in 0..dim {
-                    let diff = (result_vec.value(i) - expected_avg[i]).abs();
-                    assert!(diff < 0.001 || diff / expected_avg[i].abs().max(0.001) < 0.0001, 
-                        "Average mismatch at index {}: expected {}, got {}", i, expected_avg[i], result_vec.value(i));
+                for (i, &expected) in expected_avg.iter().enumerate().take(dim) {
+                    let got = result_vec.value(i);
+                    let diff = (got - expected).abs();
+                    assert!(diff < 0.001 || diff / expected.abs().max(0.001) < 0.0001, 
+                        "Average mismatch at index {}: expected {}, got {}", i, expected, got);
                 }
             } else {
                 panic!("Expected List result, got {:?}", result);
@@ -1990,10 +2047,11 @@ mod aggregation_property_tests {
                 
                 // Compare with expected sum
                 assert_eq!(result_vec.len(), dim);
-                for i in 0..dim {
-                    let diff = (result_vec.value(i) - expected_sum[i]).abs();
-                    assert!(diff < 0.001 || diff / expected_sum[i].abs().max(0.001) < 0.0001, 
-                        "Merged sum mismatch at index {}: expected {}, got {}", i, expected_sum[i], result_vec.value(i));
+                for (i, &expected) in expected_sum.iter().enumerate().take(dim) {
+                    let got = result_vec.value(i);
+                    let diff = (got - expected).abs();
+                    assert!(diff < 0.001 || diff / expected.abs().max(0.001) < 0.0001, 
+                        "Merged sum mismatch at index {}: expected {}, got {}", i, expected, got);
                 }
             } else {
                 panic!("Expected List result, got {:?}", result);
@@ -2067,10 +2125,11 @@ mod aggregation_property_tests {
                 
                 // Compare with expected average
                 assert_eq!(result_vec.len(), dim);
-                for i in 0..dim {
-                    let diff = (result_vec.value(i) - expected_avg[i]).abs();
-                    assert!(diff < 0.001 || diff / expected_avg[i].abs().max(0.001) < 0.0001, 
-                        "Merged average mismatch at index {}: expected {}, got {}", i, expected_avg[i], result_vec.value(i));
+                for (i, &expected) in expected_avg.iter().enumerate().take(dim) {
+                    let got = result_vec.value(i);
+                    let diff = (got - expected).abs();
+                    assert!(diff < 0.001 || diff / expected.abs().max(0.001) < 0.0001, 
+                        "Merged average mismatch at index {}: expected {}, got {}", i, expected, got);
                 }
             } else {
                 panic!("Expected List result, got {:?}", result);
@@ -2362,11 +2421,12 @@ mod grouped_aggregation_property_tests {
                     let result_vec = result_vec_array.as_any().downcast_ref::<Float32Array>().unwrap();
                     
                     assert_eq!(result_vec.len(), dim, "Result vector dimension mismatch");
-                    for j in 0..dim {
-                        let diff = (result_vec.value(j) - expected_sum[j]).abs();
-                        assert!(diff < 0.001 || diff / expected_sum[j].abs().max(0.001) < 0.0001,
+                    for (j, &expected) in expected_sum.iter().enumerate().take(dim) {
+                        let got = result_vec.value(j);
+                        let diff = (got - expected).abs();
+                        assert!(diff < 0.001 || diff / expected.abs().max(0.001) < 0.0001,
                             "Group {} sum mismatch at index {}: expected {}, got {}", 
-                            group_id, j, expected_sum[j], result_vec.value(j));
+                            group_id, j, expected, got);
                     }
                 }
             });
@@ -2466,11 +2526,12 @@ mod grouped_aggregation_property_tests {
                     let result_vec = result_vec_array.as_any().downcast_ref::<Float32Array>().unwrap();
                     
                     assert_eq!(result_vec.len(), dim, "Result vector dimension mismatch");
-                    for j in 0..dim {
-                        let diff = (result_vec.value(j) - expected_avg[j]).abs();
-                        assert!(diff < 0.001 || diff / expected_avg[j].abs().max(0.001) < 0.0001,
+                    for (j, &expected) in expected_avg.iter().enumerate().take(dim) {
+                        let got = result_vec.value(j);
+                        let diff = (got - expected).abs();
+                        assert!(diff < 0.001 || diff / expected.abs().max(0.001) < 0.0001,
                             "Group {} avg mismatch at index {}: expected {}, got {}", 
-                            group_id, j, expected_avg[j], result_vec.value(j));
+                            group_id, j, expected, got);
                     }
                 }
             });
@@ -2605,11 +2666,12 @@ mod type_conversion_property_tests {
                 let result_vec = result_vec_array.as_any().downcast_ref::<Float32Array>().unwrap();
                 
                 assert_eq!(result_vec.len(), dim, "Result vector dimension mismatch");
-                for i in 0..dim {
-                    let diff = (result_vec.value(i) - original[i]).abs();
+                for (i, &orig) in original.iter().enumerate().take(dim) {
+                    let got = result_vec.value(i);
+                    let diff = (got - orig).abs();
                     assert!(diff < 0.0001, 
                         "Value mismatch at index {}: original {}, reconstructed {}", 
-                        i, original[i], result_vec.value(i));
+                        i, orig, got);
                 }
             });
         }
@@ -2632,7 +2694,7 @@ mod type_conversion_property_tests {
             let original: Vec<f32> = (0..dim).map(|_| rng.gen_range(-100.0..100.0)).collect();
             
             // Apply binary quantization directly
-            let mut expected_packed = vec![0u8; (dim + 7) / 8];
+            let mut expected_packed = vec![0u8; dim.div_ceil(8)];
             for (i, &val) in original.iter().enumerate() {
                 if val >= 0.0 {
                     expected_packed[i / 8] |= 1 << (i % 8);
@@ -2704,13 +2766,12 @@ mod type_conversion_property_tests {
                 assert_eq!(binary1_bytes.len(), expected_packed.len(), "Binary length mismatch");
                 assert_eq!(binary2_bytes.len(), expected_packed.len(), "Binary length mismatch");
                 
-                for i in 0..expected_packed.len() {
-                    assert_eq!(binary1_bytes.value(i), expected_packed[i], 
-                        "binary_quantize mismatch at byte {}", i);
-                    assert_eq!(binary2_bytes.value(i), expected_packed[i], 
-                        "vector_to_binary mismatch at byte {}", i);
-                    assert_eq!(binary1_bytes.value(i), binary2_bytes.value(i), 
-                        "Results differ at byte {}", i);
+                for (i, &expected) in expected_packed.iter().enumerate() {
+                    let v1 = binary1_bytes.value(i);
+                    let v2 = binary2_bytes.value(i);
+                    assert_eq!(v1, expected, "binary_quantize mismatch at byte {}", i);
+                    assert_eq!(v2, expected, "vector_to_binary mismatch at byte {}", i);
+                    assert_eq!(v1, v2, "Results differ at byte {}", i);
                 }
             });
         }

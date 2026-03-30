@@ -6,7 +6,6 @@
 /// use GPU acceleration when a GPU context is configured.
 /// 
 /// Requirements: 7.6, 7.7
-
 use hyperstreamdb::core::index::gpu::{ComputeContext, ComputeBackend, set_global_gpu_context, get_global_gpu_context};
 use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
 use datafusion::prelude::*;
@@ -250,14 +249,14 @@ async fn test_pgvector_operators_batch_with_gpu() {
     set_global_gpu_context(Some(gpu_ctx));
     
     // Create test data with multiple rows
-    let vectors = vec![
+    let vectors = [
         vec![1.0f32, 0.0, 0.0],
         vec![0.0f32, 1.0, 0.0],
         vec![0.0f32, 0.0, 1.0],
         vec![1.0f32, 1.0, 1.0],
     ];
     
-    let query_vec = vec![1.0f32, 0.0, 0.0];
+    let query_vec = [1.0f32, 0.0, 0.0];
     
     // Flatten vectors for FixedSizeListArray
     let flat_values: Vec<f32> = vectors.iter().flatten().copied().collect();

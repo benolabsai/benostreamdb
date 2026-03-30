@@ -289,11 +289,13 @@ pub struct Schema {
     #[serde(alias = "schema-id")]
     pub schema_id: i32,
     pub fields: Vec<SchemaField>,
+    #[serde(rename = "identifier-field-ids", default, skip_serializing_if = "Vec::is_empty")]
+    pub identifier_field_ids: Vec<i32>,
 }
 
 impl Schema {
-    pub fn new(id: i32, fields: Vec<SchemaField>) -> Self {
-        Self { schema_id: id, fields }
+    pub fn new(id: i32, fields: Vec<SchemaField>, identifier_field_ids: Vec<i32>) -> Self {
+        Self { schema_id: id, fields, identifier_field_ids }
     }
 
     pub fn to_arrow(&self) -> arrow::datatypes::Schema {
@@ -305,7 +307,7 @@ impl Schema {
         let fields = schema.fields().iter().enumerate().map(|(i, f)| {
             SchemaField::from_arrow_field(f, i as i32 + 1)
         }).collect();
-        Self { schema_id: id, fields }
+        Self { schema_id: id, fields, identifier_field_ids: Vec::new() }
     }
 }
 
@@ -340,13 +342,41 @@ impl SchemaField {
             DataType::Float32 => "float".to_string(),
             DataType::Float64 => "double".to_string(),
             DataType::Utf8 => "string".to_string(),
-            DataType::LargeUtf8 => "string".to_string(),
+            DataType::LargeUtf8 => "largeutf8".to_string(),
             DataType::Binary => "binary".to_string(),
-            DataType::LargeBinary => "binary".to_string(),
+            DataType::LargeBinary => "largebinary".to_string(),
             DataType::Boolean => "boolean".to_string(),
             DataType::Date32 => "date".to_string(),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None) => "timestamp".to_string(),
-            DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some(_)) => "timestamptz".to_string(),
+            DataType::Date64 => "date64".to_string(),
+            DataType::Timestamp(unit, tz) => {
+                let unit_str = match unit {
+                    arrow::datatypes::TimeUnit::Second => "second",
+                    arrow::datatypes::TimeUnit::Millisecond => "millisecond",
+                    arrow::datatypes::TimeUnit::Microsecond => "microsecond",
+                    arrow::datatypes::TimeUnit::Nanosecond => "nanosecond",
+                };
+                if let Some(tz_val) = tz {
+                    format!("timestamp({}, {})", unit_str, tz_val.to_lowercase())
+                } else {
+                    format!("timestamp({}, none)", unit_str)
+                }
+            },
+            DataType::Time32(unit) => {
+                let unit_str = match unit {
+                    arrow::datatypes::TimeUnit::Second => "second",
+                    arrow::datatypes::TimeUnit::Millisecond => "millisecond",
+                    _ => "millisecond",
+                };
+                format!("time32({})", unit_str)
+            },
+            DataType::Time64(unit) => {
+                let unit_str = match unit {
+                    arrow::datatypes::TimeUnit::Microsecond => "microsecond",
+                    arrow::datatypes::TimeUnit::Nanosecond => "nanosecond",
+                    _ => "microsecond",
+                };
+                format!("time64({})", unit_str)
+            },
             dt => dt.to_string().to_lowercase(),
         };
 
@@ -377,15 +407,38 @@ impl SchemaField {
              "timestamp(nanosecond, none)" => arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
              // Handle UTC timezone specifically if requested
              "timestamp(microsecond, utc)" => arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
-             "date32" => arrow::datatypes::DataType::Date32,
+             "date" | "date32" => arrow::datatypes::DataType::Date32,
              "date64" => arrow::datatypes::DataType::Date64,
              "binary" => arrow::datatypes::DataType::Binary,
              "largebinary" => arrow::datatypes::DataType::LargeBinary,
-             s if s.contains("time32") => {
-                 if s.contains("second") {
-                     arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Second)
+             "largeutf8" => arrow::datatypes::DataType::LargeUtf8,
+             // Handle all timestamp variants: "timestamp", "timestamptz", "timestamp(unit, tz)"
+             s if s == "timestamp" || s == "timestamptz" || s.starts_with("timestamp(") => {
+                 if s == "timestamptz" {
+                     arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into()))
+                 } else if s == "timestamp" {
+                     arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
                  } else {
+                     // Parse "timestamp(unit, tz_or_none)"
+                     let inner = s.trim_start_matches("timestamp(").trim_end_matches(')');
+                     let parts: Vec<&str> = inner.splitn(2, ',').map(|p| p.trim()).collect();
+                     let unit = match parts.first().map(|s| *s) {
+                         Some("second") => arrow::datatypes::TimeUnit::Second,
+                         Some("millisecond") => arrow::datatypes::TimeUnit::Millisecond,
+                         Some("nanosecond") => arrow::datatypes::TimeUnit::Nanosecond,
+                         _ => arrow::datatypes::TimeUnit::Microsecond,
+                     };
+                     let tz = parts.get(1).and_then(|t| {
+                         if *t == "none" { None } else { Some(t.to_string().into()) }
+                     });
+                     arrow::datatypes::DataType::Timestamp(unit, tz)
+                 }
+             },
+             s if s.contains("time32") => {
+                 if s.contains("millisecond") {
                      arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Millisecond)
+                 } else {
+                     arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Second)
                  }
              },
              s if s.contains("time64") => {
@@ -415,12 +468,12 @@ impl SchemaField {
                  arrow::datatypes::DataType::Struct(arrow_fields)
              },
              "list" => {
-                 let item_field = self.fields.get(0).map(|f| f.to_arrow())
+                 let item_field = self.fields.first().map(|f| f.to_arrow())
                     .unwrap_or(arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Utf8, true));
                  arrow::datatypes::DataType::List(Arc::new(item_field))
              },
              "map" => {
-                 let key_field = self.fields.get(0).map(|f| f.to_arrow())
+                 let key_field = self.fields.first().map(|f| f.to_arrow())
                     .unwrap_or(arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false));
                  let value_field = self.fields.get(1).map(|f| f.to_arrow())
                     .unwrap_or(arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Utf8, true));
@@ -441,7 +494,7 @@ impl SchemaField {
                      .split(',')
                      .map(|p| p.trim())
                      .collect();
-                 let precision = parts.get(0).and_then(|p| p.parse::<u8>().ok()).unwrap_or(38);
+                 let precision = parts.first().and_then(|p| p.parse::<u8>().ok()).unwrap_or(38);
                  let scale = parts.get(1).and_then(|p| p.parse::<i8>().ok()).unwrap_or(10);
                  arrow::datatypes::DataType::Decimal128(precision, scale)
              },
@@ -600,14 +653,33 @@ impl ManifestManager {
         Self {
             store,
             manifest_dir,
-            root_uri: root_uri.to_string(),
+            root_uri: root_uri.trim_end_matches('/').to_string(),
+        }
+    }
+
+    fn get_cache_key(&self, path: &Path) -> String {
+        format!("{}/{}", self.root_uri, path)
+    }
+
+    fn get_dir_cache_key(&self) -> String {
+        format!("{}/{}", self.root_uri, self.manifest_dir)
+    }
+
+    /// Check if any manifests exist in the directory
+    pub async fn exists(&self) -> Result<bool> {
+        let mut stream = self.store.list(Some(&self.manifest_dir));
+        if let Some(meta) = stream.next().await {
+            let _ = meta?;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
     /// Load the latest manifest. Returns (Manifest, version_number).
     /// If no manifest exists, returns an empty Manifest with version 0.
     pub async fn load_latest(&self) -> Result<(Manifest, u64)> {
-        let cache_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+        let cache_key = self.get_dir_cache_key();
 
         // 1. Check Version Cache (Fast Path)
         if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get(&cache_key).await {
@@ -629,7 +701,7 @@ impl ManifestManager {
             let meta = meta?;
             let path_str = meta.location.to_string();
             // Expected format: v{N}.json
-            if let Some(filename) = path_str.split('/').last() {
+            if let Some(filename) = path_str.split('/').next_back() {
                 if filename.starts_with('v') && filename.ends_with(".json") {
                     let ver_str = &filename[1..filename.len()-5]; // strip 'v' and '.json'
                     if let Ok(ver) = ver_str.parse::<u64>() {
@@ -675,7 +747,7 @@ impl ManifestManager {
     pub async fn load_version(&self, version: u64) -> Result<Manifest> {
         let filename = format!("v{}.json", version);
         let path = self.manifest_dir.child(filename);
-        let cache_key = format!("{}/{}", self.root_uri, path);
+        let cache_key = self.get_cache_key(&path);
 
         // 1. Check Data Cache
         if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
@@ -766,7 +838,7 @@ impl ManifestManager {
                     } else {
                         // Log warning or skip stats?
                          println!("Warning: No schema available to decode Avro manifest");
-                         let sub_manifest = self.load_avro_manifest(&entry.manifest_path, &Schema { schema_id: 0, fields: vec![] }, &manifest.partition_spec).await?;
+                          let sub_manifest = self.load_avro_manifest(&entry.manifest_path, &Schema { schema_id: 0, fields: vec![], identifier_field_ids: vec![] }, &manifest.partition_spec).await?;
                          all_entries.extend(sub_manifest.entries);
                     }
                 } else {
@@ -931,7 +1003,36 @@ impl ManifestManager {
             
             // 1. Calculate new state
             // Load ALL entries including those in manifest lists
-            let all_entries = self.load_all_entries(&current_manifest).await?;
+            let mut all_entries = self.load_all_entries(&current_manifest).await?;
+            
+            // --- BOOTSTRAP: If this is the first commit (v1), discover existing files ---
+            if current_ver == 0 && all_entries.is_empty() {
+                // If it's a genesis manifest, check if there's any existing data on disk
+                // This bridges the discovery flow with the versioned flow.
+                let mut stream = self.store.list(None);
+                while let Some(meta) = stream.next().await {
+                    let meta = meta?;
+                    let path_str = meta.location.to_string();
+                    if path_str.ends_with(".parquet") && !path_str.contains("_wal/") {
+                         // Create a basic entry for the discovered file
+                         all_entries.push(ManifestEntry {
+                             file_path: path_str,
+                             record_count: 0, 
+                             file_size_bytes: meta.size as i64,
+                             column_stats: HashMap::new(),
+                             index_files: Vec::new(),
+                             partition_values: HashMap::new(),
+                             clustering_strategy: None,
+                             clustering_columns: None,
+                             min_clustering_score: None,
+                             max_clustering_score: None,
+                             normalization_mins: None,
+                             normalization_maxs: None,
+                             delete_files: Vec::new(),
+                         });
+                    }
+                }
+            }
             
             // Map for easy removal
             let mut active_map: HashMap<String, ManifestEntry> = all_entries.into_iter()
@@ -967,7 +1068,7 @@ impl ManifestManager {
                 let mut manifest_files = Vec::new();
                 let chunks = new_entries.chunks(MAX_ENTRIES_PER_MANIFEST);
 
-                for (_i, chunk) in chunks.enumerate() {
+                for chunk in chunks {
                     let uuid = uuid::Uuid::new_v4();
                     let filename = format!("{}-m0.avro", uuid);
                     let path = self.manifest_dir.child(filename);
@@ -1307,9 +1408,9 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     println!("Committed Manifest v{}", manifest.version);
-                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
-                    let file_key = format!("{}/{}", self.root_uri, path);
+                    let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(manifest.clone())).await;
                     return Ok(());
                 }
@@ -1514,7 +1615,7 @@ mod tests {
 
         // 2. Commit Add
         let entry_a = create_entry("seg_a");
-        let m1 = manager.commit(&[entry_a.clone()], &[], CommitMetadata::default()).await?;
+        let m1 = manager.commit(std::slice::from_ref(&entry_a), &[], CommitMetadata::default()).await?;
         assert_eq!(m1.version, 1);
         
         // Load all entries (including those in manifest lists)
@@ -1525,7 +1626,7 @@ mod tests {
         // 3. Commit Add + Remove
         let entry_b = create_entry("seg_b");
         // Remove seg_a by path
-        let m2 = manager.commit(&[entry_b.clone()], &["seg_a.parquet".to_string()], CommitMetadata::default()).await?;
+        let m2 = manager.commit(std::slice::from_ref(&entry_b), &["seg_a.parquet".to_string()], CommitMetadata::default()).await?;
         assert_eq!(m2.version, 2);
         
         // Load all entries (including those in manifest lists)

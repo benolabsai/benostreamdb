@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "Apache-2.0" }
+license = { text = "MIT AND Apache-2.0" }
 authors = [
     { name = "HyperStream Team" }
 ]
@@ -40,9 +40,12 @@ dev = [
     "pytest-asyncio>=0.21",
     "maturin>=1.7",
 ]
-mps = []
-cuda = []
-rocm = []
+# Hardware acceleration extras
+mps = []   # Apple Silicon (Metal)
+cuda = []  # NVIDIA (CUDA)
+rocm = []  # AMD (via OpenCL/ROCm)
+intel_gpu = [] # Intel (OpenCL)
+all_gpu = ["mps", "cuda", "rocm", "intel_gpu"]
 
 [project.urls]
 Homepage = "https://github.com/rla3rd/hyperstreamdb"
@@ -54,3 +57,8 @@ module-name = "hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings
 bindings = "pyo3"
+sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
+# Optimizations for WHEEL builds
+strip = true
+# Use sccache if available during build
+sccache = true

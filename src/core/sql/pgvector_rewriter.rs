@@ -9,7 +9,6 @@
 /// - Vector literals: Handled through CAST expressions with custom logic
 /// 
 /// This uses DataFusion's TreeNodeRewriter for proper expression tree traversal.
-
 use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{Expr, Operator};
@@ -59,22 +58,20 @@ impl TreeNodeRewriter for PgVectorRewriter {
             // Handle CAST expressions for vector literals
             // Pattern: CAST('[1,2,3]' AS vector)
             Expr::Cast(cast) => {
-                if let Expr::Literal(scalar_value, _metadata) = &*cast.expr {
-                    if let ScalarValue::Utf8(Some(literal_str)) = scalar_value {
-                        // Check if casting to a vector-like type
-                        let type_str = format!("{:?}", cast.data_type);
-                        if type_str.to_lowercase().contains("vector") || 
-                           literal_str.starts_with('[') && literal_str.ends_with(']') {
-                            // Parse the vector literal
-                            match VectorLiteralParser::parse(literal_str) {
-                                Ok(parsed_value) => {
-                                    return Ok(Transformed::yes(Expr::Literal(parsed_value, None)));
-                                }
-                                Err(e) => {
-                                    return Err(DataFusionError::Plan(
-                                        format!("Failed to parse vector literal '{}': {}", literal_str, e)
-                                    ));
-                                }
+                if let Expr::Literal(ScalarValue::Utf8(Some(literal_str)), _metadata) = &*cast.expr {
+                    // Check if casting to a vector-like type
+                    let type_str = format!("{:?}", cast.data_type);
+                    if type_str.to_lowercase().contains("vector") || 
+                       literal_str.starts_with('[') && literal_str.ends_with(']') {
+                        // Parse the vector literal
+                        match VectorLiteralParser::parse(literal_str) {
+                            Ok(parsed_value) => {
+                                return Ok(Transformed::yes(Expr::Literal(parsed_value, None)));
+                            }
+                            Err(e) => {
+                                return Err(DataFusionError::Plan(
+                                    format!("Failed to parse vector literal '{}': {}", literal_str, e)
+                                ));
                             }
                         }
                     }

@@ -51,7 +51,7 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
 
     // 1. Write multiple segments to ensure parallel execution is possible
     for i in 0..5 {
-        let batch = create_vector_batch(i as i32 * 100, 100, dim, i as f32 * 0.1).await;
+        let batch = create_vector_batch(i * 100, 100, dim, i as f32 * 0.1).await;
         table.write_async(vec![batch]).await?;
         table.commit_async().await?;
     }

@@ -133,14 +133,14 @@ pub fn hilbert_index(n: usize, bits: usize, x: &[u64]) -> u64 {
 
     for _j in 0..bits {
         q = 0;
-        for i in 0..n {
-            if (x_vec[i] & m) != 0 {
+        for (i, x) in x_vec.iter().enumerate().take(n) {
+            if (x & m) != 0 {
                 q |= 1 << i;
             }
         }
         
         p = q ^ (q >> 1);
-        h = (h << n) | p as u64;
+        h = (h << n) | p;
         
         m >>= 1;
     }

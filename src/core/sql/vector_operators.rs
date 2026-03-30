@@ -359,7 +359,7 @@ mod property_tests {
             operator in prop::sample::select(vec!["<->", "<=>", "<#>", "<+>", "<~>", "<%>"])
         ) {
             // Verify that each operator has a corresponding UDF mapping
-            let udf_name = get_udf_for_operator(&operator);
+            let udf_name = get_udf_for_operator(operator);
             prop_assert!(udf_name.is_some(), "Operator {} should have a UDF mapping", operator);
             
             // Verify the mapping is bidirectional

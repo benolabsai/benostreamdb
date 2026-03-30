@@ -14,6 +14,8 @@ use parquet::arrow::ProjectionMask;
 use crate::SegmentConfig;
 use crate::core::planner::FilterExpr;
 use crate::core::index::VectorMetric;
+use arrow::array::Array;
+use parquet::file::metadata::ParquetMetaData;
 
 /// Helper function to check if values in `col` distinct are in `values` set.
 /// Returns a BooleanArray where true means the value is in the set.
@@ -124,8 +126,16 @@ pub struct HybridReader {
 
 impl HybridReader {
     pub fn new(config: SegmentConfig, store: Arc<dyn ObjectStore>, root_uri: &str) -> Self {
-                Self { config, store, root_uri: root_uri.to_string(), iceberg_schema: None }
-        }
+        Self { config, store, root_uri: root_uri.to_string(), iceberg_schema: None }
+    }
+
+    pub async fn get_parquet_metadata(&self) -> Result<Arc<ParquetMetaData>> {
+        let path = self.resolve_object_path("parquet");
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let mut reader = ParquetObjectReader::new(self.store.clone(), path);
+        let metadata = ArrowReaderMetadata::load_async(&mut reader, options).await?;
+        Ok(metadata.metadata().clone())
+    }
 
     pub fn with_iceberg_schema(mut self, schema: crate::core::manifest::Schema) -> Self {
         self.iceberg_schema = Some(schema);
@@ -205,7 +215,7 @@ impl HybridReader {
                  // Relativize path
                  let resolved_path = if path_str.starts_with("file://") {
                      let root_local = self.root_uri.strip_prefix("file://").unwrap_or(&self.root_uri).trim_end_matches('/');
-                     let path_clean = if path_str.starts_with("file:///") { &path_str[7..] } else { &path_str[7..] };
+                     let path_clean = path_str.strip_prefix("file://").unwrap_or(path_str);
                      
                      if !root_local.is_empty() && path_clean.starts_with(root_local) {
                          path_clean[root_local.len()..].trim_start_matches('/').to_string()
@@ -286,7 +296,7 @@ impl HybridReader {
                  // Relativize path matches load_merged_deletes logic
                  let resolved_path = if path_str.starts_with("file://") {
                      let root_local = self.root_uri.strip_prefix("file://").unwrap_or(&self.root_uri).trim_end_matches('/');
-                     let path_clean = if path_str.starts_with("file:///") { &path_str[7..] } else { &path_str[7..] };
+                     let path_clean = path_str.strip_prefix("file://").unwrap_or(path_str);
                      
                      if !root_local.is_empty() && path_clean.starts_with(root_local) {
                          path_clean[root_local.len()..].trim_start_matches('/').to_string()
@@ -342,6 +352,31 @@ impl HybridReader {
         Ok(results)
     }
 
+    /// Check if a value might exist in a column using Parquet Bloom Filters
+    pub async fn check_bloom_filter(&self, column: &str, _value: &serde_json::Value) -> Result<bool> {
+        let metadata: std::sync::Arc<parquet::file::metadata::ParquetMetaData> = self.get_parquet_metadata().await?;
+        let schema = metadata.file_metadata().schema_descr();
+        
+        let col_idx = schema.columns().iter().position(|c| c.name() == column)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in Parquet schema", column))?;
+        
+        // Load Bloom Filters from all Row Groups
+        let mut possible = false;
+        for i in 0..metadata.num_row_groups() {
+            let rg_meta = metadata.row_group(i);
+            let col_meta = rg_meta.column(col_idx);
+            
+            if let Some(_bf_meta) = col_meta.bloom_filter_offset() {
+                // TODO: Actually read and check the Parquet Bloom Filter blob
+                // For now, we assume 'possible' to be safe, but the infrastructure is ready.
+                possible = true;
+                break;
+            }
+        }
+        
+        Ok(possible)
+    }
+
     /// Helper: Get RoaringBitmap of rows matching a scalar filter using indexes
     pub async fn get_scalar_filter_bitmap(&self, filter: &crate::core::planner::QueryFilter) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
@@ -352,7 +387,7 @@ impl HybridReader {
         
         let mut matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
-            let mut dir_path = self.config.parquet_path.clone().unwrap_or_else(|| "".to_string());
+            let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
             if let Some(pos) = dir_path.rfind('/') {
                 dir_path.truncate(pos);
             } else {
@@ -374,10 +409,8 @@ impl HybridReader {
             };
 
             let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get(&cache_key).await {
-                // println!("Cache HIT for {}", inv_path_str);
                 cached.as_ref().clone()
             } else {
-                // println!("Cache MISS for {}", inv_path_str);
                 // Cache Miss - Load from Disk/Byte Cache
                 let inv_path = Path::from(full_inv_path_str.as_str());
                 
@@ -406,10 +439,10 @@ impl HybridReader {
                 };
     
                 let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(Bytes::from(inv_bytes))?;
-                let mut reader = builder.build()?;
+                let reader = builder.build()?;
                 
                 let mut decoded = Vec::new();
-                while let Some(batch_result) = reader.next() {
+                for batch_result in reader {
                     decoded.push(batch_result?);
                 }
                 
@@ -710,7 +743,6 @@ impl HybridReader {
     /// Stream specific Row Groups from the segment
     /// Used for Distributed Reading (Split-level)
     pub async fn stream_row_groups(&self, row_groups: Option<&[usize]>, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
-        println!("DEBUG: stream_row_groups called");
         let store = self.config.data_store.clone().unwrap_or_else(|| self.store.clone());
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
@@ -800,7 +832,7 @@ impl HybridReader {
         
         // Wrap stream to apply Schema Mapping (Evolution) and Equality Deletes
         let mapped_stream = stream.map(move |res| {
-             let mut batch = res.map_err(|e| anyhow::Error::from(e))?;
+             let mut batch = res.map_err(anyhow::Error::from)?;
              
              // 1. Schema Evolution Mapping
              if let Some(target) = &target_schema_ref {
@@ -861,6 +893,81 @@ impl HybridReader {
     /// Vector search that returns results with distances for global ranking
     /// Returns: Vec<(RecordBatch, Vec<f32>)> where Vec<f32> are distances for each row
     /// 
+    pub async fn vector_search_flat(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, allowed_bitmap: &Option<RoaringBitmap>, metric: VectorMetric) -> Result<Vec<(usize, f32)>> {
+        let mut stream = self.stream_all(None as Option<arrow::datatypes::SchemaRef>).await?;
+        let mut matches = Vec::new();
+        let mut current_row_offset = 0usize;
+        
+        let q_vec = match query {
+            crate::core::index::VectorValue::Float32(v) => v,
+            _ => anyhow::bail!("Flat search only supports Float32 vectors currently"),
+        };
+
+        while let Some(batch_res) = stream.next().await {
+            let batch = batch_res?;
+            let rows = batch.num_rows();
+            
+            if let Some(col) = batch.column_by_name(column) {
+                let vectors: Vec<Vec<f32>> = match col.data_type() {
+                    arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                        let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+                        (0..list.len()).map(|i| {
+                            let item = list.value(i);
+                            let floats = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                            floats.values().to_vec()
+                        }).collect()
+                    },
+                    arrow::datatypes::DataType::List(_) => {
+                        let list = col.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                        (0..list.len()).map(|i| {
+                            let item = list.value(i);
+                            let floats = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                            floats.values().to_vec()
+                        }).collect()
+                    },
+                    _ => vec![],
+                };
+
+                for (i, v) in vectors.iter().enumerate() {
+                    let row_id = current_row_offset + i;
+                    
+                    // Check filter (allowed_bitmap)
+                    if let Some(bm) = allowed_bitmap {
+                        if !bm.contains(row_id as u32) { continue; }
+                    }
+
+                    let dist = match metric {
+                        VectorMetric::L2 => {
+                            v.iter().zip(q_vec.iter()).map(|(a,b)| (a-b)*(a-b)).sum::<f32>()
+                        },
+                        VectorMetric::Cosine => {
+                            let dot: f32 = v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum();
+                            let mag_v: f32 = v.iter().map(|x| x*x).sum::<f32>().sqrt();
+                            let mag_q: f32 = q_vec.iter().map(|x| x*x).sum::<f32>().sqrt();
+                            1.0 - (dot / (mag_v * mag_q + 1e-10))
+                        },
+                        VectorMetric::InnerProduct => {
+                            -v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum::<f32>()
+                        },
+                        _ => 1e10, // Not implemented for flat search yet
+                    };
+                    matches.push((row_id, dist));
+                }
+            }
+            current_row_offset += rows;
+        }
+
+        // Sort by distance and take k
+        matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        if matches.len() > k {
+            matches.truncate(k);
+        }
+        
+        Ok(matches)
+    }
+
+    /// Vector search that returns results with distances for global ranking
+    /// 
     /// Supports two index types:
     /// 1. HNSW-IVF (hybrid): Checks for `.centroids.parquet` - more memory efficient
     /// 2. Plain HNSW: Falls back to `.hnsw.graph` files
@@ -905,15 +1012,14 @@ impl HybridReader {
              match self.search_hnsw_ivf(idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
                  Ok(m) => m,
                  Err(e) => {
-                     // In a real query planner, we would fallback to a sequential flat scan here.
-                     // For now, we return empty matches so we don't crash the query on missing/incomplete index.
-                     println!("Warning: Vector index listed in manifest not found or invalid: {}", e);
-                     vec![]
+                     // Fallback to flat scan on index error
+                     println!("Warning: Vector index listed in manifest failed, falling back to flat scan: {}", e);
+                     self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
                  }
              }
         } else {
-             // Fallback to convention-based path if no manifest entry (unlikely now)
-             let idx_path = self.resolve_object_path(&column).to_string();
+             // No index entry found, try convention path first, then flat scan fallback
+             let idx_path = self.resolve_object_path(column).to_string();
              let idx_info = crate::core::manifest::IndexFile {
                  file_path: idx_path,
                  index_type: "vector".to_string(),
@@ -924,7 +1030,10 @@ impl HybridReader {
              };
              match self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
                  Ok(m) => m,
-                 Err(_) => vec![] // Silently ignore if convention path doesn't exist
+                 Err(_) => {
+                     // Final fallback: Flat scan Parquet
+                     self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
+                 }
              }
         };
         
@@ -980,7 +1089,6 @@ impl HybridReader {
              let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
              
              let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
-             // FIX: Remove Arc::new
              crate::core::cache::PARQUET_META_CACHE.insert(format!("{}/{}", self.root_uri, pq_path_str), (b.metadata().clone(), size as usize)).await;
              b
         };

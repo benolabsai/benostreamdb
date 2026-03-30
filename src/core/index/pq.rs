@@ -8,7 +8,6 @@
 /// This allows:
 /// 1. Massive memory reduction (e.g., 1536 floats -> 64 bytes = 96x reduction)
 /// 2. Fast search using ADC (Asymmetric Distance Calculation) with lookup tables.
-
 use anyhow::Result;
 use super::distance::{l2_distance_squared};
 use super::ivf::simple_kmeans;

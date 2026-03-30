@@ -26,8 +26,10 @@ pub struct HybridSegmentWriter {
     generated_files: std::sync::Mutex<Vec<String>>,
     // Accumulated Stats
     stats: std::sync::Mutex<HashMap<String, crate::core::manifest::ColumnStats>>,
-    record_count: std::sync::atomic::AtomicUsize,
-    store: Option<Arc<dyn ObjectStore>>,
+    pub record_count: std::sync::atomic::AtomicUsize,
+    pub store: Option<Arc<dyn ObjectStore>>,
+    pub primary_key: Vec<String>,
+    pub index_configs: HashMap<String, crate::core::table::ColumnIndexConfig>,
 }
 
 impl HybridSegmentWriter {
@@ -38,6 +40,8 @@ impl HybridSegmentWriter {
             stats: std::sync::Mutex::new(HashMap::new()),
             record_count: std::sync::atomic::AtomicUsize::new(0),
             store: None,
+            primary_key: Vec::new(),
+            index_configs: HashMap::new(),
         }
     }
 
@@ -72,7 +76,7 @@ impl HybridSegmentWriter {
         let mut total_size = 0;
 
         for f in files {
-            let filename = f.split('/').last().unwrap_or(&f).to_string();
+            let filename = f.split('/').next_back().unwrap_or(&f).to_string();
             
             if filename.ends_with(".inv.parquet") {
                 // Inverted Index
@@ -115,8 +119,8 @@ impl HybridSegmentWriter {
                   
                   // Only add to manifest if it's the main graph file or centroids (to register the index existence for the column)
                   // To avoid duplicates in manifest, we only add the .hnsw.graph or .centroids.parquet once per column.
-                  if filename.ends_with(".hnsw.graph") || filename.ends_with(".centroids.parquet") {
-                      if !index_files.iter().any(|idx| idx.column_name == col && idx.index_type == "vector") {
+                  if (filename.ends_with(".hnsw.graph") || filename.ends_with(".centroids.parquet"))
+                      && !index_files.iter().any(|idx| idx.column_name == col && idx.index_type == "vector") {
                           index_files.push(crate::core::manifest::IndexFile {
                             file_path: filename,
                             index_type: "vector".to_string(),
@@ -126,7 +130,6 @@ impl HybridSegmentWriter {
                             length: None,
                           });
                       }
-                  }
             }
         }
 
@@ -137,7 +140,7 @@ impl HybridSegmentWriter {
             index_files,
             delete_files: self.config.delete_files.clone(),
             column_stats: stats,
-            partition_values: self.config.partition_values.clone().into_iter().map(|(k, v)| (k, v.into())).collect(),
+            partition_values: self.config.partition_values.clone().into_iter().collect(),
             clustering_strategy: None,
             clustering_columns: None,
             min_clustering_score: None,
@@ -301,7 +304,14 @@ impl HybridSegmentWriter {
 
         // Write Data (Parquet) to temporary file
         let file = File::create(&tmp_path).context("Failed to create temporary segment file")?;
-        let props = parquet::file::properties::WriterProperties::builder().build();
+        let mut props_builder = parquet::file::properties::WriterProperties::builder();
+        
+        // Enable Bloom Filters for Primary Keys if defined
+        for pk in &self.primary_key {
+            props_builder = props_builder.set_column_bloom_filter_enabled(parquet::schema::types::ColumnPath::from(pk.clone()), true);
+        }
+
+        let props = props_builder.build();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
         writer.write(batch)?;
         writer.close()?;
@@ -341,7 +351,7 @@ impl HybridSegmentWriter {
                 continue;
             }
 
-            let filename = local_path.split('/').last().unwrap();
+            let filename = local_path.split('/').next_back().unwrap();
             let remote_path = if self.config.base_path.contains("://") {
                  let mut base = self.config.base_path.clone();
                  if !base.ends_with('/') { base.push('/'); }
@@ -403,8 +413,7 @@ impl HybridSegmentWriter {
                         Ok(())
                     }
                 })?;
-        } else {
-        }
+        } 
         
         Ok(())
     }
@@ -429,6 +438,17 @@ impl HybridSegmentWriter {
             } else {
                 println!("Failed to parse default device string: {}", device_str);
             }
+        }
+
+        // OPT-IN CHECK: Only index if configured, or if it's a Vector or Primary Key column
+        let config = self.index_configs.get(col_name);
+        let is_pk = self.primary_key.contains(&col_name.to_string());
+        let is_vector = matches!(col_array.data_type(), arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_));
+        let in_config_list = self.config.columns_to_index.as_ref().map(|cols| cols.contains(&col_name.to_string())).unwrap_or(false);
+        
+        if !is_pk && !is_vector && !self.config.index_all && !in_config_list && (config.is_none() || !config.unwrap().enabled) {
+            // Skip indexing for this column! (Massive speed gain for multi-column tables)
+            return Ok(());
         }
 
         // Create a local staging directory if base_path is a URI
@@ -751,11 +771,19 @@ impl HybridSegmentWriter {
                         .context("Failed to cast column to Utf8 for indexing")?;
                     let array = casted_array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
                     
-                    // Build inverted index: String -> RowIDs
+                    // Fetch tokenizer if configured
+                    let tokenizer_name = config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| "identity".to_string());
+                    let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(&tokenizer_name)
+                        .unwrap_or_else(|| crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get("identity").unwrap());
+
+                    // Build inverted index: Token -> RowIDs
                     let mut inverted_map: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
                     for (row_i, val) in array.iter().enumerate() {
                         if let Some(v) = val {
-                            inverted_map.entry(v.to_string()).or_default().push(row_i as u32);
+                            let tokens = tokenizer.tokenize(v);
+                            for token in tokens {
+                                inverted_map.entry(token).or_default().push(row_i as u32);
+                            }
                         }
                     }
                     
@@ -878,13 +906,13 @@ impl HybridSegmentWriter {
                         
                         // Convert timestamp to days since epoch
                         let day = if let Some(arr) = array.downcast_ref::<arrow::array::TimestampSecondArray>() {
-                            (arr.value(row_i) / 86400) as i32
+                            (arr.value(row_i) / 86_400) as i32
                         } else if let Some(arr) = array.downcast_ref::<arrow::array::TimestampMillisecondArray>() {
-                            (arr.value(row_i) / 86400_000) as i32
+                            (arr.value(row_i) / 86_400_000) as i32
                         } else if let Some(arr) = array.downcast_ref::<arrow::array::TimestampMicrosecondArray>() {
-                            (arr.value(row_i) / 86400_000_000) as i32
+                            (arr.value(row_i) / 86_400_000_000) as i32
                         } else if let Some(arr) = array.downcast_ref::<arrow::array::TimestampNanosecondArray>() {
-                            (arr.value(row_i) / 86400_000_000_000) as i32
+                            (arr.value(row_i) / 86_400_000_000_000) as i32
                         } else {
                             continue;
                         };
@@ -1287,7 +1315,7 @@ mod tests {
         let dim = 4;
         let num_rows = 10;
         
-        let id_array = Int32Array::from((0..num_rows).map(|i| i as i32).collect::<Vec<i32>>());
+        let id_array = Int32Array::from((0..num_rows).collect::<Vec<i32>>());
         
         // 10 vectors of dim 4
         let mut values = Vec::new();

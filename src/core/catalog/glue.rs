@@ -169,8 +169,7 @@ impl Catalog for GlueCatalogClient {
         }
         
         // Update parameters with new metadata location
-        let mut parameters: HashMap<String, String> = existing_table.parameters()
-            .map(|p| p.clone())
+        let mut parameters: HashMap<String, String> = existing_table.parameters().cloned()
             .unwrap_or_default();
         
         if let Some(new_loc) = new_metadata_location {

@@ -142,14 +142,14 @@ impl InMemoryVectorIndex {
             for i in 0..list.len() {
                 if list.is_null(i) {
                      // Fill with zeros to maintain alignment or handle nulls
-                     self.vectors.extend(std::iter::repeat(0.0).take(self.dim));
+                     self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                 } else {
                     let vector_array = list.value(i);
                     if let Some(vector) = vector_array.as_any().downcast_ref::<Float32Array>() {
                         if vector.len() == self.dim {
                             self.vectors.extend_from_slice(vector.values());
                         } else {
-                            self.vectors.extend(std::iter::repeat(0.0).take(self.dim));
+                            self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                         }
                     }
                 }
@@ -199,6 +199,10 @@ impl InMemoryVectorIndex {
 
     pub fn len(&self) -> usize {
         self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
     }
 }
 

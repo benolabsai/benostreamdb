@@ -10,7 +10,6 @@
 ///
 /// These features are part of the HyperStreamDB core to ensure high-performance
 /// vector search is available to everyone.
-
 use anyhow::Result;
 use super::VectorMetric;
 use std::cell::RefCell;
@@ -21,7 +20,7 @@ thread_local! {
     /// This enables SQL UDFs and other operations to access the GPU context
     /// configured from Python without explicitly passing it through all layers.
     /// Each thread maintains its own context, ensuring thread-safety.
-    static GLOBAL_GPU_CONTEXT: RefCell<Option<ComputeContext>> = RefCell::new(None);
+    static GLOBAL_GPU_CONTEXT: RefCell<Option<ComputeContext>> = const { RefCell::new(None) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,7 +159,7 @@ pub fn compute_distance_batch(
         anyhow::bail!("Query vector length {} does not match dimension {}", query.len(), dim);
     }
     
-    if vectors.len() % dim != 0 {
+    if !vectors.len().is_multiple_of(dim) {
         anyhow::bail!("Vectors array length {} is not a multiple of dimension {}", vectors.len(), dim);
     }
     
@@ -910,7 +909,7 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
     
     // Calculate chunk size
     let bytes_per_vector = (dim * std::mem::size_of::<f32>()) + std::mem::size_of::<f32>();
-    let query_bytes = query.len() * std::mem::size_of::<f32>();
+    let query_bytes = std::mem::size_of_val(query);
     let max_vectors_per_chunk = ((available_mem - query_bytes) / bytes_per_vector).max(1000);
     
     // If everything fits in one chunk, use standard implementation
@@ -1035,7 +1034,7 @@ mod tests {
         assert_eq!(distances[0], 0.0);
         // l2_distance returns sqrt(sum((a-b)^2))
         // (3^2 + 3^2 + 3^2) = 27. sqrt(27) ≈ 5.1961524
-        assert!((distances[1] - 5.1961524).abs() < 1e-6);
+        assert!((distances[1] - 5.196_152).abs() < 1e-6);
     }
 
     #[test]
@@ -1052,7 +1051,7 @@ mod tests {
         let distances = compute_distance(&query, &vectors, dim, VectorMetric::L2, &context).unwrap();
         assert_eq!(distances.len(), 2);
         assert_eq!(distances[0], 0.0);
-        assert!((distances[1] - 5.1961524).abs() < 1e-6);
+        assert!((distances[1] - 5.196_152).abs() < 1e-6);
         
         // Test Cosine metric
         let distances = compute_distance(&query, &vectors, dim, VectorMetric::Cosine, &context).unwrap();
@@ -1088,8 +1087,8 @@ mod tests {
     #[test]
     fn test_gpu_backend_fallback_to_cpu() {
         // Test that unimplemented GPU kernels fall back to CPU
-        let _query = vec![1.0, 2.0, 3.0];
-        let _vectors = vec![
+        let _query = [1.0, 2.0, 3.0];
+        let _vectors = [
             1.0, 2.0, 3.0,
             4.0, 5.0, 6.0,
         ];
@@ -1135,7 +1134,7 @@ mod tests {
         let distances = compute_distance_batch(&query, &vectors, dim, VectorMetric::L2, &context).unwrap();
         assert_eq!(distances.len(), 3);
         assert_eq!(distances[0], 0.0);
-        assert!((distances[1] - 5.1961524).abs() < 1e-6);
+        assert!((distances[1] - 5.196_152).abs() < 1e-6);
         assert!((distances[2] - 1.7320508).abs() < 1e-6);
     }
 
@@ -1147,7 +1146,7 @@ mod tests {
         let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
         
         // Test query dimension mismatch
-        let result = compute_distance_batch(&vec![1.0, 2.0], &vectors, dim, VectorMetric::L2, &context);
+        let result = compute_distance_batch(&[1.0, 2.0], &vectors, dim, VectorMetric::L2, &context);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("does not match dimension"));
         

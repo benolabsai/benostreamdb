@@ -2,6 +2,14 @@ from .hyperstreamdb import *
 from .hyperstreamdb import Table as _RustTable
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd
+try:
+    import pyarrow as pa
+except ImportError:
+    pa = None
+try:
+    import polars as pl
+except ImportError:
+    pl = None
 from typing import List, Optional, Union, Dict, Any
 import os
 
@@ -29,19 +37,19 @@ class Query:
             self._filter = expr
         return self
 
-    def vector_search(self, vector: Union[List[float], str], column: Optional[str] = None, k: int = 10, **kwargs) -> 'Query':
+    def vector_search(self, query: Union[List[float], str], column: Optional[str] = None, k: int = 10, **kwargs) -> 'Query':
         """
         Apply a vector search filter.
         
         Args:
-            vector: The query vector (list of floats) or a string to be vectorized.
+            query: The query vector (list of floats) or a string to be vectorized.
             column: The vector column to search against.
             k: Number of nearest neighbors to return.
             **kwargs: Additional parameters (e.g., n_probe).
         """
         self._vector_filter = {
             "column": column,
-            "vector": vector,
+            "query": query,
             "k": k,
             **kwargs
         }
@@ -78,12 +86,18 @@ class Table:
     """
     Enhanced HyperStreamDB Table with auto-vectorization and embedding registry support.
     """
-    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, context: Optional[Any] = None):
+    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, context: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None):
         uri = _resolve_uri(uri)
         if inner_table:
             self._inner = inner_table
         else:
             self._inner = _RustTable(uri, context=context)
+        self._inner.set_index_all(index_all)
+        if primary_key:
+            if isinstance(primary_key, str):
+                self._inner.set_primary_key([primary_key])
+            else:
+                self._inner.set_primary_key(list(primary_key))
         self._embedding_configs = {}
 
     @classmethod
@@ -112,18 +126,129 @@ class Table:
             "vector_column": vector_column or f"{column}_vector"
         }
 
-    def write(self, data: Union[pd.DataFrame, List[Dict[str, Any]]], context: Optional[Any] = None):
+    def write(self, data: Any, context: Optional[Any] = None, mode: str = "append"):
         """
         Write data to the table, automatically generating embeddings for configured columns.
+        
+        Args:
+            data: pandas.DataFrame, pyarrow.Table, polars.DataFrame, or List[Dict].
+            context: Optional ComputeContext for GPU acceleration.
+            mode: 'append' (default) or 'overwrite' (clears table first).
         """
-        processed_data = self._auto_vectorize(data)
-        return self._inner.write(processed_data, context=context)
+        if mode == "overwrite":
+            self.truncate()
+
+        if isinstance(data, pd.DataFrame):
+            return self._write_pandas(data, context=context)
+        elif pa and isinstance(data, pa.Table):
+            return self._write_arrow(data, context=context)
+        elif pl and isinstance(data, pl.DataFrame):
+            return self._write_polars(data, context=context)
+        elif isinstance(data, list):
+            return self._write_list(data, context=context)
+        else:
+            try:
+                import numpy as np
+                if isinstance(data, np.ndarray):
+                    return self.write(pd.DataFrame(data), context=context)
+                
+                import torch
+                if isinstance(data, torch.Tensor):
+                    return self.write(pd.DataFrame(data.detach().cpu().numpy()), context=context)
+            except ImportError:
+                pass
+            raise TypeError(f"Unsupported data type for write: {type(data)}")
+
+    def write_pandas(self, df: pd.DataFrame, context: Optional[Any] = None):
+        """High-level Pandas ingestion with auto-vectorization."""
+        return self._write_pandas(df, context=context)
+
+    def write_arrow(self, table: 'pa.Table', context: Optional[Any] = None):
+        """High-level Arrow ingestion with auto-vectorization."""
+        return self._write_arrow(table, context=context)
+
+    def upsert(self, data: Any, key_column: Union[str, List[str]], mode: str = "merge_on_read", context: Optional[Any] = None):
+        """Update or insert data using a key column (or list of columns) to avoid duplicates."""
+        from .hyperstreamdb import PyMergeMode
+        
+        # Map string mode to Enum
+        enum_mode = PyMergeMode.MergeOnRead
+        if mode.lower() == "merge_on_write":
+            enum_mode = PyMergeMode.MergeOnWrite
+            
+        if isinstance(data, pd.DataFrame):
+            processed_df = self._auto_vectorize(data)
+            # If key_column is a list, join it with commas for the Rust side (or update Rust to take list)
+            if isinstance(key_column, list):
+                key_str = ",".join(key_column)
+            else:
+                key_str = key_column
+            return self._inner.merge_pandas(processed_df, key_str, enum_mode, context=context)
+        
+        df = pd.DataFrame(data)
+        return self.upsert(df, key_column, mode, context=context)
+
+    def commit(self):
+        """Commit temporary segments to the table."""
+        return self._inner.commit()
+
+    def truncate(self):
+        """Clear all data from the table while keeping the schema."""
+        return self._inner.truncate()
+
+    def vacuum(self, retention_versions: int = 1):
+        """
+        Physically delete unreferenced data and manifest files to reclaim space.
+        
+        Args:
+            retention_versions: Number of snapshots to keep (default 1).
+        """
+        return self._inner.vacuum(retention_versions)
+
+    @property
+    def autocommit(self) -> bool:
+        """Get or set the autocommit state of the table."""
+        return self._inner.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value: bool):
+        self._inner.autocommit = value
+
+    def wait_for_background_tasks(self):
+        """Wait for all background tasks (like index building) to complete."""
+        return self._inner.wait_for_background_tasks()
+
+    def delete(self, filter: str):
+        """Delete rows matching the filter expression."""
+        return self._inner.delete(filter)
+
+    def _write_pandas(self, df: pd.DataFrame, context: Optional[Any] = None):
+        processed_df = self._auto_vectorize(df)
+        return self._inner.write_pandas(processed_df, context=context)
+
+    def _write_arrow(self, table: 'pa.Table', context: Optional[Any] = None):
+        if self._embedding_configs:
+            df = table.to_pandas()
+            return self._write_pandas(df, context=context)
+        return self._inner.write_arrow(table, context=context)
+
+    def _write_polars(self, df: 'pl.DataFrame', context: Optional[Any] = None):
+        if self._embedding_configs:
+            pandas_df = df.to_pandas()
+            return self._write_pandas(pandas_df, context=context)
+        return self._inner.write_arrow(df.to_arrow(), context=context)
+
+    def _write_list(self, data: List[Dict[str, Any]], context: Optional[Any] = None):
+        # Convert to pandas first to handle vectorization and type enforcement
+        df = pd.DataFrame(data)
+        return self._write_pandas(df, context=context)
 
     def _auto_vectorize(self, data: Union[pd.DataFrame, List[Dict[str, Any]]]):
         if not self._embedding_configs:
             return data
             
         if isinstance(data, pd.DataFrame):
+            import numpy as np
             df = data.copy()
             for col, config in self._embedding_configs.items():
                 if col in df.columns:
@@ -133,32 +258,14 @@ class Table:
                     
                     if func:
                         vector_col = config["vector_column"]
-                        # Generate embeddings for the entire column
                         embeddings = func(df[col].tolist())
-                        # Convert to list of lists for Arrow/Pandas compatibility
-                        df[vector_col] = embeddings.tolist()
+                        # Enforce Float32 for vector compatibility
+                        if isinstance(embeddings, np.ndarray):
+                            embeddings = embeddings.astype(np.float32)
+                        df[vector_col] = list(embeddings)
             return df
         
-        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
-            # Batch vectorization for performance
-            for col, config in self._embedding_configs.items():
-                texts = [item.get(col) for item in data if col in item]
-                if texts:
-                    func = config["function"]
-                    if isinstance(func, str):
-                        func = registry.get(func)
-                    if func:
-                        vector_col = config["vector_column"]
-                        embeddings = func(texts)
-                        # Distribute back to dicts
-                        emb_list = embeddings.tolist()
-                        idx = 0
-                        for item in data:
-                            if col in item:
-                                item[vector_col] = emb_list[idx]
-                                idx += 1
-            return data
-            
+        # Large list branch omitted for brevity, logic is similar (use pandas path)
         return data
 
     def _prepare_vector_filter(self, vector_filter: Optional[Union[Dict[str, Any], List[float]]], **kwargs) -> Optional[Dict[str, Any]]:
@@ -170,7 +277,7 @@ class Table:
             column = "embedding"
             if self._embedding_configs:
                 column = list(self._embedding_configs.values())[0]["vector_column"]
-            vector_filter = {"column": column, "vector": vector_filter}
+            vector_filter = {"column": column, "query": vector_filter}
             
         # 2. Add extra kwargs (k, n_probe) to vector_filter if present
         if kwargs:
@@ -187,7 +294,7 @@ class Table:
             vector_filter["column"] = column
             
         # Auto-vectorize string query
-        if "vector" in vector_filter and isinstance(vector_filter["vector"], str):
+        if "query" in vector_filter and isinstance(vector_filter["query"], str):
             # Try to find a matching embedding function
             target_col = vector_filter.get("column")
             func = None
@@ -207,7 +314,8 @@ class Table:
                     func = registry.get(func)
                 if func:
                     # Vectorize the query string
-                    vector_filter["vector"] = func([vector_filter["vector"]])[0].tolist()
+                    vector_filter["query"] = func([vector_filter["query"]])[0].tolist()
+                    print(f"DEBUG: Vectorized query to {vector_filter['query']}")
                     
         return vector_filter
 
@@ -256,6 +364,50 @@ class Table:
             # Actually better to be explicit: table.filter(vector_filter=v, k=5)
             pass
         return q
+
+    @property
+    def primary_key(self):
+        """Get the current primary key column."""
+        return self._inner.get_primary_key()
+
+    @primary_key.setter
+    def primary_key(self, columns: Union[str, List[str]]):
+        """Set the primary key column(s)."""
+        if isinstance(columns, str):
+            self._inner.set_primary_key([columns])
+        else:
+            self._inner.set_primary_key(list(columns))
+
+    @property
+    def index_all(self):
+        """Whether to index all compatible columns by default."""
+        return self._inner.get_index_all()
+
+    @index_all.setter
+    def index_all(self, value):
+        self._inner.set_index_all(value)
+
+    @property
+    def row_count(self) -> int:
+        """Get total row count in the table."""
+        return self._inner.get_table_statistics().row_count
+
+    @property
+    def statistics(self):
+        """Get full table statistics."""
+        return self._inner.get_table_statistics()
+
+    def set_index_config(self, column: str, enabled: bool = True, tokenizer: Optional[str] = None, device: Optional[str] = None):
+        """
+        Set indexing configuration for a specific column.
+        
+        Args:
+            column: Name of the column to configure.
+            enabled: Whether to enable indexing for this column (default: True).
+            tokenizer: Tokenizer name from the registry ('identity', 'whitespace', 'standard').
+            device: Compute device ('cpu', 'cuda', 'mps') if specific processing is needed.
+        """
+        self._inner.set_index_config(column, enabled, tokenizer, device)
 
     def __getattr__(self, name):
         """Delegate other calls to the Rust implementation."""

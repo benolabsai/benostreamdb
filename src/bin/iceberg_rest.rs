@@ -145,11 +145,11 @@ async fn get_table(
 
     match metadata_result {
         Ok(metadata) => {
-            return (StatusCode::OK, Json(serde_json::json!({
+            (StatusCode::OK, Json(serde_json::json!({
                 "metadata-location": format!("{}/metadata/v{}.metadata.json", table_full_uri, version),
                 "metadata": metadata,
                 "config": {}
-            }))).into_response();
+            }))).into_response()
         },
         Err(e) => {
             eprintln!("Official metadata NOT found: {}. Falling back to manifest scan.", e);
@@ -365,8 +365,8 @@ async fn update_table(
                         if !entry.index_files.is_empty() {
                             let old_len = entry.index_files.len();
                             entry.index_files.retain(|idx| {
-                                let match_type = index_type.as_ref().map_or(true, |t| idx.index_type == *t);
-                                let match_col = column_name.as_ref().map_or(true, |c| idx.column_name.as_ref().map_or(false, |ic| ic == c));
+                                let match_type = index_type.as_ref().is_none_or(|t| idx.index_type == *t);
+                                let match_col = column_name.as_ref().is_none_or(|c| idx.column_name.as_ref() == Some(c));
                                 !(match_type && match_col) // Keep if NOT matching removal criteria
                             });
                             if entry.index_files.len() < old_len {
@@ -402,15 +402,7 @@ async fn update_table(
                                       ""
                                  };
 
-                                 let path_no_scheme = if raw_path.starts_with("file://") {
-                                      if raw_path.starts_with("file:///") {
-                                          &raw_path[7..]
-                                      } else {
-                                           &raw_path[7..]
-                                      }
-                                 } else {
-                                      raw_path
-                                 };
+                                 let path_no_scheme = raw_path.strip_prefix("file://").unwrap_or(raw_path);
 
                                  let clean_path = if !root_path_str.is_empty() && path_no_scheme.starts_with(root_path_str) {
                                      path_no_scheme.strip_prefix(root_path_str).unwrap_or(path_no_scheme).trim_start_matches('/')

@@ -12,7 +12,6 @@
 /// 
 /// Memory savings: ~10x vs HNSW (no graph structure, just cluster assignments)
 /// Search speed: Slower than HNSW but scales to billions of vectors
-
 use anyhow::Result;
 use std::collections::HashMap;
 use rayon::prelude::*;
@@ -56,7 +55,7 @@ impl IvfIndex {
         for (row_id, (vec, &cluster_id)) in vectors.into_iter().zip(labels.iter()).enumerate() {
             inverted_lists
                 .entry(cluster_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((vec, row_id));
         }
 
@@ -225,8 +224,7 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
     // Initialize centroids randomly
     let mut rng = thread_rng();
     let mut centroids: Vec<Vec<f32>> = vectors
-        .choose_multiple(&mut rng, k)
-        .map(|v| v.clone())
+        .choose_multiple(&mut rng, k).cloned()
         .collect();
     
     let mut labels = vec![0; n];

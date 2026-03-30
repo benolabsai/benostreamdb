@@ -71,7 +71,7 @@ impl Catalog for HiveMetastoreClient {
 
         let sd = StorageDescriptor {
              cols: Some(columns),
-             location: location.map(|s| FastStr::new(s)),
+             location: location.map(FastStr::new),
              input_format: Some(FastStr::from("org.apache.hadoop.mapred.TextInputFormat")), 
              output_format: Some(FastStr::from("org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat")),
              serde_info: Some(SerDeInfo {

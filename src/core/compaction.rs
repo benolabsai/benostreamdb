@@ -105,13 +105,12 @@ impl Compactor {
         let mut current_size = 0_i64;
 
         for candidate in candidates {
-             if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes {
-                 if !current_bin.is_empty() {
+             if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
+                 && !current_bin.is_empty() {
                      bins.push(current_bin);
                      current_bin = Vec::new();
                      current_size = 0;
                  }
-             }
              current_size += candidate.file_size_bytes;
              current_bin.push(candidate);
         }
@@ -193,7 +192,7 @@ impl Compactor {
         
         for entry in &bin {
              let path_str = &entry.file_path;
-             let basename = path_str.split('/').last().unwrap();
+             let basename = path_str.split('/').next_back().unwrap();
              let segment_id = basename.strip_suffix(".parquet").unwrap();
              
              let config = SegmentConfig::new("", segment_id); 
@@ -322,7 +321,7 @@ impl Compactor {
                  crate::core::clustering::compute_hilbert_scores(&merged_batch, &clustering.columns)?
              };
              
-             if scores.len() > 0 {
+             if !scores.is_empty() {
                  min_clustering_score = Some(scores.value(0));
                  max_clustering_score = Some(scores.value(scores.len() - 1));
                  normalization_mins = Some(mins);
@@ -424,7 +423,7 @@ mod tests {
         for i in 0..num_segments {
             let batch = RecordBatch::try_new(
                 schema.clone(),
-                vec![Arc::new(Int32Array::from(vec![i as i32; 10]))]
+                vec![Arc::new(Int32Array::from(vec![i; 10]))]
             )?;
             table.write_async(vec![batch]).await?;
             table.commit_async().await?;

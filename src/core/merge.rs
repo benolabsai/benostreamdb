@@ -13,6 +13,12 @@ pub struct MergePlanner {
     // In a real implementation, this would hold references to the Catalog/Store
 }
 
+impl Default for MergePlanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MergePlanner {
     pub fn new() -> Self {
         Self {}
@@ -139,11 +145,11 @@ impl MergePlanner {
              if std::path::Path::new(&path).exists() {
                  let file = std::fs::File::open(&path)?;
                  let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-                 let mut reader = builder.build()?;
+                 let reader = builder.build()?;
                  
                  let mut map: std::collections::HashMap<i64, Vec<u32>> = std::collections::HashMap::new();
                  
-                 while let Some(batch_res) = reader.next() {
+                 for batch_res in reader {
                      let batch = batch_res?;
                      let lists = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
                      let col0 = batch.column(0);
@@ -383,7 +389,7 @@ mod tests {
             ],
         ).unwrap();
         
-        let source_keys = vec![
+        let source_keys = [
             Value::Number(1.into()),
             Value::Number(1.into()),
             Value::Number(2.into()),

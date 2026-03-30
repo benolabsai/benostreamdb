@@ -4,7 +4,6 @@
 /// 
 /// This module provides Python bindings for all 6 distance metrics with GPU acceleration support.
 /// It uses PyO3 for zero-copy NumPy integration and supports batch operations.
-
 use pyo3::prelude::*;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use crate::core::index::{VectorMetric, distance};
@@ -388,7 +387,7 @@ fn compute_batch_distances(
     }
     
     // Validate vectors array
-    if vectors.len() % dim != 0 {
+    if !vectors.len().is_multiple_of(dim) {
         return Err(pyo3::exceptions::PyValueError::new_err(
             format!("Vectors array length {} is not a multiple of dimension {}", vectors.len(), dim)
         ));
@@ -1087,7 +1086,7 @@ fn is_binary_vector(values: &[f32]) -> bool {
 /// Helper function to pack a binary vector from f32 array to u8 array
 /// Each byte stores 8 bits
 fn pack_binary_vector(values: &[f32]) -> Vec<u8> {
-    let num_bytes = (values.len() + 7) / 8; // Round up to nearest byte
+    let num_bytes = values.len().div_ceil(8); // Round up to nearest byte
     let mut packed = vec![0u8; num_bytes];
     
     for (i, &val) in values.iter().enumerate() {

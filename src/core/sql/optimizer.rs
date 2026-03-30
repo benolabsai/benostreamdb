@@ -43,7 +43,7 @@ impl VectorSearchConfig {
 
     /// Read configuration from DataFusion session config
     pub fn from_session_config(_config: &ConfigOptions) -> Self {
-        let search_config = Self::new();
+        
 
         // DataFusion 52 ConfigOptions doesn't have a simple get_string method
         // We'll use the options() method to access the underlying HashMap
@@ -52,7 +52,7 @@ impl VectorSearchConfig {
         
         // TODO: Implement proper config reading via SessionState extensions
         // For now, return defaults
-        search_config
+        Self::new()
     }
 
     /// Parse configuration from SQL hints (future extension)
@@ -99,13 +99,9 @@ impl Default for VectorSearchConfig {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 pub struct IndexJoinOptimizerRule {}
 
-impl Default for IndexJoinOptimizerRule {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
     fn optimize(
@@ -619,7 +615,7 @@ mod property_tests {
         ) {
             use crate::core::index::{VectorValue, VectorMetric};
             
-            let metrics = vec![
+            let metrics = [
                 VectorMetric::L2,
                 VectorMetric::Cosine,
                 VectorMetric::InnerProduct,
@@ -628,12 +624,12 @@ mod property_tests {
                 VectorMetric::Jaccard,
             ];
             
-            let metric = metrics[metric_idx].clone();
+            let metric = metrics[metric_idx];
             let query_vec = VectorValue::Float32(vec![1.0, 2.0, 3.0]);
             
             // Create VectorSearchParams with the metric
             let params = VectorSearchParams::new("embedding", query_vec, k)
-                .with_metric(metric.clone());
+                .with_metric(metric);
             
             // Verify the metric is set correctly
             prop_assert_eq!(params.metric, metric,
@@ -712,7 +708,7 @@ mod property_tests {
         ) {
             use crate::core::index::{VectorValue, VectorMetric};
             
-            let metrics = vec![
+            let metrics = [
                 VectorMetric::L2,
                 VectorMetric::Cosine,
                 VectorMetric::InnerProduct,
@@ -721,12 +717,12 @@ mod property_tests {
                 VectorMetric::Jaccard,
             ];
             
-            let metric = metrics[metric_idx].clone();
+            let metric = metrics[metric_idx];
             let query_vec = VectorValue::Float32(vec![1.0; dim]);
             
             // Create VectorSearchParams as the optimizer would
             let params = VectorSearchParams::new("embedding", query_vec, k)
-                .with_metric(metric.clone());
+                .with_metric(metric);
             
             // Verify that VectorSearchParams contains the correct information
             prop_assert_eq!(params.k, k,
@@ -813,7 +809,7 @@ mod property_tests {
             let query_vec = VectorValue::Float32(vec![1.0, 2.0, 3.0]);
             
             // Test that index pushdown works with all supported metrics
-            let metrics = vec![
+            let metrics = [
                 VectorMetric::L2,
                 VectorMetric::Cosine,
                 VectorMetric::InnerProduct,
@@ -824,7 +820,7 @@ mod property_tests {
             
             for metric in metrics {
                 let params = VectorSearchParams::new("embedding", query_vec.clone(), k)
-                    .with_metric(metric.clone());
+                    .with_metric(metric);
                 
                 prop_assert_eq!(params.metric, metric,
                     "Index pushdown should support metric {:?}", metric);
@@ -853,7 +849,7 @@ mod property_tests {
             }
             
             // Test Binary vectors
-            let binary_vec = VectorValue::Binary(vec![0xFF; (dim + 7) / 8]);
+            let binary_vec = VectorValue::Binary(vec![0xFF; dim.div_ceil(8)]);
             let params_bin = VectorSearchParams::new("embedding", binary_vec, k);
             
             match params_bin.query {
@@ -942,7 +938,7 @@ mod property_tests {
         ) {
             use crate::core::index::{VectorValue, VectorMetric};
             
-            let metrics = vec![
+            let metrics = [
                 VectorMetric::L2,
                 VectorMetric::Cosine,
                 VectorMetric::InnerProduct,
@@ -951,12 +947,12 @@ mod property_tests {
                 VectorMetric::Jaccard,
             ];
             
-            let metric = metrics[metric_idx].clone();
+            let metric = metrics[metric_idx];
             let query_vec = VectorValue::Float32(vec![1.0, 2.0, 3.0]);
             
             // Create params with metric (simulating query with filters)
             let params = VectorSearchParams::new("embedding", query_vec, k)
-                .with_metric(metric.clone());
+                .with_metric(metric);
             
             // Verify metric is preserved when combined with filters
             prop_assert_eq!(params.metric, metric,
@@ -1015,7 +1011,7 @@ mod property_tests {
         ) {
             use crate::core::index::{VectorValue, VectorMetric};
             
-            let metrics = vec![
+            let metrics = [
                 VectorMetric::L2,
                 VectorMetric::Cosine,
                 VectorMetric::InnerProduct,
@@ -1024,13 +1020,13 @@ mod property_tests {
                 VectorMetric::Jaccard,
             ];
             
-            let metric = metrics[metric_idx].clone();
+            let metric = metrics[metric_idx];
             let query_vec = VectorValue::Float32(vec![1.0, 2.0, 3.0]);
             
             // Create params with all configuration options
             // This simulates a complex query with filters, vector search, and config
             let params = VectorSearchParams::new("embedding", query_vec, k)
-                .with_metric(metric.clone())
+                .with_metric(metric)
                 .with_ef_search(ef_search)
                 .with_probes(probes);
             
@@ -1294,7 +1290,7 @@ mod config_defaults_tests {
     fn test_default_use_index_value() {
         // Test that use_index defaults to true when no config is set
         let config = VectorSearchConfig::new();
-        assert_eq!(config.use_index, true, "use_index should default to true");
+        assert!(config.use_index, "use_index should default to true");
     }
     
     // Requirements: 3.6
@@ -1308,7 +1304,7 @@ mod config_defaults_tests {
             "ef_search should be None when not set in session config");
         assert_eq!(search_config.probes, None, 
             "probes should be None when not set in session config");
-        assert_eq!(search_config.use_index, true, 
+        assert!(search_config.use_index, 
             "use_index should be true when not set in session config");
     }
     
@@ -1337,7 +1333,7 @@ mod config_defaults_tests {
         let config = result.unwrap();
         assert_eq!(config.ef_search, None, "ef_search should be None with empty hints");
         assert_eq!(config.probes, None, "probes should be None with empty hints");
-        assert_eq!(config.use_index, true, "use_index should be true with empty hints");
+        assert!(config.use_index, "use_index should be true with empty hints");
     }
     
     // Requirements: 3.6
@@ -1350,7 +1346,7 @@ mod config_defaults_tests {
         let config = result.unwrap();
         assert_eq!(config.ef_search, None, "ef_search should be None with whitespace hints");
         assert_eq!(config.probes, None, "probes should be None with whitespace hints");
-        assert_eq!(config.use_index, true, "use_index should be true with whitespace hints");
+        assert!(config.use_index, "use_index should be true with whitespace hints");
     }
     
     // Requirements: 3.6
@@ -1539,7 +1535,7 @@ mod fallback_tests {
         
         for metric in metrics {
             let params = VectorSearchParams::new("embedding", query_vec.clone(), 10)
-                .with_metric(metric.clone());
+                .with_metric(metric);
             
             // Each metric should create valid params
             // Fallback behavior is the same regardless of metric
@@ -2092,7 +2088,7 @@ mod empty_aggregation_tests {
         // If no rows are processed, evaluate() returns NULL
         
         // This test documents the expected behavior
-        assert!(true, "Empty aggregation should return NULL");
+        // Placeholder for concept test
     }
     
     #[test]
@@ -2106,7 +2102,7 @@ mod empty_aggregation_tests {
         // - No error is raised
         
         // This is different from NULL input, which is also valid
-        assert!(true, "Empty batches should be handled gracefully");
+        // Placeholder for concept test
     }
     
     #[test]
@@ -2125,7 +2121,7 @@ mod empty_aggregation_tests {
         // SELECT vector_sum(embedding) FROM table
         // Result: Sum of non-NULL vectors (NULLs are skipped)
         
-        assert!(true, "NULL and empty should be handled differently");
+        // assert!(true, "NULL and empty should be handled differently");
     }
     
     #[test]
@@ -2141,7 +2137,7 @@ mod empty_aggregation_tests {
         // category='B': 0 vectors -> no row in result
         // category='C': 2 NULL vectors -> returns NULL
         
-        assert!(true, "Empty groups should not appear in GROUP BY results");
+        // assert!(true, "Empty groups should not appear in GROUP BY results");
     }
     
     #[test]
@@ -2156,7 +2152,7 @@ mod empty_aggregation_tests {
         // SELECT SUM(x) FROM table WHERE 1=0 -> NULL
         // SELECT vector_sum(embedding) FROM table WHERE 1=0 -> NULL
         
-        assert!(true, "VectorSumAccumulator should return NULL for empty input");
+        // assert!(true, "VectorSumAccumulator should return NULL for empty input");
     }
     
     #[test]
@@ -2171,7 +2167,7 @@ mod empty_aggregation_tests {
         // SELECT AVG(x) FROM table WHERE 1=0 -> NULL
         // SELECT vector_avg(embedding) FROM table WHERE 1=0 -> NULL
         
-        assert!(true, "VectorAvgAccumulator should return NULL for empty input");
+        // assert!(true, "VectorAvgAccumulator should return NULL for empty input");
     }
     
     #[test]
@@ -2186,7 +2182,7 @@ mod empty_aggregation_tests {
         // SELECT vector_sum(embedding) FROM table WHERE category = 'nonexistent'
         // Should return NULL, not an error
         
-        assert!(true, "Empty input should return NULL, not error");
+        // assert!(true, "Empty input should return NULL, not error");
     }
     
     #[test]
@@ -2205,7 +2201,7 @@ mod empty_aggregation_tests {
         // - NULL means "no data"
         // - [0,0,0] means "sum of vectors is zero"
         
-        assert!(true, "Empty input (NULL) is different from zero vector");
+        // assert!(true, "Empty input (NULL) is different from zero vector");
     }
     
     #[test]
@@ -2222,7 +2218,7 @@ mod empty_aggregation_tests {
         // 2. Merge non-NULL partitions (1 and 3)
         // 3. Return combined sum
         
-        assert!(true, "merge_batch should skip empty partitions");
+        // assert!(true, "merge_batch should skip empty partitions");
     }
     
     #[test]
@@ -2239,7 +2235,7 @@ mod empty_aggregation_tests {
         // 2. sum remains None
         // 3. evaluate() returns NULL
         
-        assert!(true, "All empty partitions should result in NULL");
+        // assert!(true, "All empty partitions should result in NULL");
     }
     
     #[test]
@@ -2255,7 +2251,7 @@ mod empty_aggregation_tests {
         // - Dimension is inferred from first vector
         // - Subsequent vectors must match this dimension
         
-        assert!(true, "Empty input doesn't need dimension information");
+        // assert!(true, "Empty input doesn't need dimension information");
     }
     
     #[test]
@@ -2272,7 +2268,7 @@ mod empty_aggregation_tests {
         // Returns: NULL of type List<Float32>
         // Not: NULL of unknown type
         
-        assert!(true, "Empty input should maintain type information");
+        // assert!(true, "Empty input should maintain type information");
     }
 }
 
@@ -2293,7 +2289,7 @@ mod binary_vector_display_tests {
         // 2. Hex string: "0xB5"
         
         // This test documents that the functionality exists
-        assert!(true, "Binary vector display formatting is implemented");
+        // assert!(true, "Binary vector display formatting is implemented");
     }
     
     #[test]
@@ -2312,7 +2308,7 @@ mod binary_vector_display_tests {
         // - Standard hex notation with 0x prefix
         // Example: "0xB5"
         
-        assert!(true, "Binary vectors have readable display formats");
+        // assert!(true, "Binary vectors have readable display formats");
     }
     
     #[test]
@@ -2328,7 +2324,7 @@ mod binary_vector_display_tests {
         // format_binary_vector(&bytes, bits, false) -> binary
         // format_binary_vector(&bytes, bits, true) -> hex
         
-        assert!(true, "Display format can be selected based on vector size");
+        // assert!(true, "Display format can be selected based on vector size");
     }
     
     #[test]
@@ -2343,7 +2339,7 @@ mod binary_vector_display_tests {
         // bytes -> format_binary_vector -> parse_binary -> bytes
         // Should recover original bytes
         
-        assert!(true, "Display formats are lossless");
+        // assert!(true, "Display formats are lossless");
     }
     
     #[test]
@@ -2357,7 +2353,7 @@ mod binary_vector_display_tests {
         // The bits parameter specifies how many bits to display
         // Trailing zeros in the last byte are not shown
         
-        assert!(true, "Display handles partial bytes correctly");
+        // assert!(true, "Display handles partial bytes correctly");
     }
     
     #[test]
@@ -2369,7 +2365,7 @@ mod binary_vector_display_tests {
         // Display: "" (empty string)
         
         // This is a valid edge case that should be handled
-        assert!(true, "Empty binary vectors can be displayed");
+        // assert!(true, "Empty binary vectors can be displayed");
     }
     
     #[test]
@@ -2381,7 +2377,7 @@ mod binary_vector_display_tests {
         // Display: "1" or "0"
         
         // Single bits are the smallest binary vectors
-        assert!(true, "Single-bit vectors can be displayed");
+        // assert!(true, "Single-bit vectors can be displayed");
     }
     
     #[test]
@@ -2394,7 +2390,7 @@ mod binary_vector_display_tests {
         // Hex display: "0x00"
         
         // All-zero vectors are valid and should display correctly
-        assert!(true, "All-zero binary vectors display correctly");
+        // assert!(true, "All-zero binary vectors display correctly");
     }
     
     #[test]
@@ -2407,7 +2403,7 @@ mod binary_vector_display_tests {
         // Hex display: "0xFF"
         
         // All-one vectors are valid and should display correctly
-        assert!(true, "All-one binary vectors display correctly");
+        // assert!(true, "All-one binary vectors display correctly");
     }
     
     #[test]
@@ -2421,7 +2417,7 @@ mod binary_vector_display_tests {
         // For large vectors, hex format is more practical
         // Binary format is still supported but less readable
         
-        assert!(true, "Large binary vectors can be displayed");
+        // assert!(true, "Large binary vectors can be displayed");
     }
     
     #[test]
@@ -2438,7 +2434,7 @@ mod binary_vector_display_tests {
         // - Testable behavior
         // - Predictable user experience
         
-        assert!(true, "Display format is consistent and deterministic");
+        // assert!(true, "Display format is consistent and deterministic");
     }
     
     #[test]
@@ -2454,6 +2450,6 @@ mod binary_vector_display_tests {
         // - Format choice depends on client/driver
         
         // The format_binary_vector function provides the formatting
-        assert!(true, "Binary display integrates with SQL queries");
+        // assert!(true, "Binary display integrates with SQL queries");
     }
 }

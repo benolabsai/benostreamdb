@@ -67,7 +67,7 @@ fn test_temporal_transforms() {
     // 2023-11-23 10:00:00 UTC
     // Timestamp micros.
     // 2023-11-23 10:00:00 => 1700733600 seconds
-    let ts_array = TimestampMicrosecondArray::from(vec![1700733600_000_000]).with_timezone("UTC");
+    let ts_array = TimestampMicrosecondArray::from(vec![1_700_733_600_000_000]).with_timezone("UTC");
     let t = IcebergTransform::Hour;
     // Hours from epoch: 1700733600 / 3600 = 472426
     assert_eq!(t.apply(&ts_array, 0), json!(472426));

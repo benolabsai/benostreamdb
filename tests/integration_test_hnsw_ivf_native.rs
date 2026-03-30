@@ -84,7 +84,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
          
          // Helper to build list array
          // (Skipping full vector column creation for brevity, just IDs to verify loop)
-         let id_array = Int32Array::from_iter_values(0..n_vectors as i32);
+         let id_array = Int32Array::from_iter_values(0..n_vectors);
          
          let schema = Arc::new(Schema::new(vec![
              Field::new("id", DataType::Int32, false),
@@ -125,10 +125,10 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     // Check if we found the query vector (ID 50)
     let ids = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
     let mut found = false;
-    for i in 0..ids.len() {
+    for (i, &dist) in dists.iter().enumerate() {
         if ids.value(i) == 50 {
             found = true;
-            println!("Found ID 50 with distance {}", dists[i]);
+            println!("Found ID 50 with distance {}", dist);
             break;
         }
     }
