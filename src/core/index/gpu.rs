@@ -258,7 +258,7 @@ fn compute_cuda(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
             
             // Output Distances
             let n_vectors = vectors.len() / dim;
-            let mut d_distances = DeviceBuffer::<f32>::zeroed(n_vectors)?;
+            let d_distances = DeviceBuffer::<f32>::zeroed(n_vectors)?;
 
             // 4. Launch Kernel
             let function = module.get_function(kernel_name)?;
@@ -666,7 +666,7 @@ fn compute_cuda_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vector
                 
                 // Allocate buffers for this chunk
                 let d_vectors = DeviceBuffer::from_slice(chunk_vectors)?;
-                let mut d_distances = DeviceBuffer::<f32>::zeroed(chunk_size)?;
+                let d_distances = DeviceBuffer::<f32>::zeroed(chunk_size)?;
                 
                 // Launch kernel
                 let grid_size = chunk_size as u32;
