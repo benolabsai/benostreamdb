@@ -222,7 +222,6 @@ fn compute_cuda(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
     #[cfg(feature = "cuda")]
     {
         use cust::prelude::*;
-        use std::error::Error;
 
         // Determine kernel name and PTX based on metric
         let (ptx, kernel_name) = match metric {
@@ -242,7 +241,7 @@ fn compute_cuda(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
             
             // Select device 0 for now
             let device = Device::get_device(0)?;
-            let _ctx = Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO, device)?;
+            let _ctx = Context::new(device)?;
 
             // 2. Load Module & Stream
             let module = Module::from_ptx(ptx, &[])?;
@@ -627,7 +626,7 @@ fn compute_cuda_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vector
             // Initialize CUDA
             cust::init(CudaFlags::empty())?;
             let device = Device::get_device(context.device_id as u32)?;
-            let _ctx = Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO, device)?;
+            let _ctx = Context::new(device)?;
             
             // Get available GPU memory
             let free_mem = device.total_memory()? / 2; // Use half of available memory for safety
@@ -1087,12 +1086,12 @@ mod tests {
     #[test]
     fn test_gpu_backend_fallback_to_cpu() {
         // Test that unimplemented GPU kernels fall back to CPU
-        let _query = [1.0, 2.0, 3.0];
-        let _vectors = [
+        let query = [1.0, 2.0, 3.0];
+        let vectors = [
             1.0, 2.0, 3.0,
             4.0, 5.0, 6.0,
         ];
-        let _dim = 3;
+        let dim = 3;
         
         // Test with CUDA backend (will fall back to CPU for non-L2 metrics)
         #[cfg(feature = "cuda")]
@@ -1619,7 +1618,7 @@ fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize)
 fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
     use cust::prelude::*;
     let _ctx = cust::quick_init()?;
-    let module = Module::from_str(CUDA_KMEANS)?;
+    let module = Module::from_ptx(CUDA_KMEANS, &[])?;
     let stream = Stream::new(StreamFlags::NON_BLOCKING, None)?;
 
     let n_vectors = vectors.len() / dim;
@@ -1627,7 +1626,7 @@ fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize
 
     let d_vectors = DeviceBuffer::from_slice(vectors)?;
     let d_centroids = DeviceBuffer::from_slice(centroids)?;
-    let mut d_labels = DeviceBuffer::from_slice(&vec![0u32; n_vectors])?;
+    let d_labels = DeviceBuffer::from_slice(&vec![0u32; n_vectors])?;
 
     let func = module.get_function("kmeans_assignment")?;
     let grid_size = (n_vectors as u32 + 255) / 256;
