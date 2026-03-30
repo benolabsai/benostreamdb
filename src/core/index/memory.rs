@@ -78,27 +78,17 @@ unsafe fn l2_distance_neon(a: &[f32], b: &[f32]) -> f32 {
 
 fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(target_arch = "x86_64")]
-    {
-        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            return unsafe { l2_distance_avx2(a, b) };
-        }
+    if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+        return unsafe { l2_distance_avx2(a, b) };
     }
 
     #[cfg(target_arch = "aarch64")]
-    {
-        return unsafe { l2_distance_neon(a, b) };
-    }
+    // SAFETY: NEON is always available on aarch64
+    return unsafe { l2_distance_neon(a, b) };
 
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        l2_distance_scalar(a, b)
-    }
-
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    {
-        // Fallback for M-series if neon is disabled or x86 without AVX2
-        l2_distance_scalar(a, b)
-    }
+    // Scalar fallback: used on x86_64 without AVX2/FMA, and any other arch
+    #[allow(unreachable_code)]
+    l2_distance_scalar(a, b)
 }
 
 /// Flat in-memory storage for buffering writes with brute-force search
