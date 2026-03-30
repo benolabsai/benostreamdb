@@ -30,17 +30,9 @@ jobs:
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+            export VERSION=${GITHUB_REF#refs/tags/v}
             echo "Bumping version to $VERSION"
-            python3 - <<EOF
-          import re
-          for f in ['Cargo.toml', 'pyproject.toml']:
-              with open(f, 'r') as fh:
-                  content = fh.read()
-              content = re.sub(r'^version = ".*"', f'version = "{VERSION}"', content, count=1, flags=re.M)
-              with open(f, 'w') as fh:
-                  fh.write(content)
-          EOF
+            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
           fi
       - uses: actions/setup-python@v5
         with:
@@ -69,17 +61,9 @@ jobs:
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+            export VERSION=${GITHUB_REF#refs/tags/v}
             echo "Bumping version to $VERSION"
-            python3 - <<EOF
-          import re
-          for f in ['Cargo.toml', 'pyproject.toml']:
-              with open(f, 'r') as fh:
-                  content = fh.read()
-              content = re.sub(r'^version = ".*"', f'version = "{VERSION}"', content, count=1, flags=re.M)
-              with open(f, 'w') as fh:
-                  fh.write(content)
-          EOF
+            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
           fi
       - uses: actions/setup-python@v5
         with:
@@ -104,17 +88,9 @@ jobs:
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+            export VERSION=${GITHUB_REF#refs/tags/v}
             echo "Bumping version to $VERSION"
-            python3 - <<EOF
-          import re
-          for f in ['Cargo.toml', 'pyproject.toml']:
-              with open(f, 'r') as fh:
-                  content = fh.read()
-              content = re.sub(r'^version = ".*"', f'version = "{VERSION}"', content, count=1, flags=re.M)
-              with open(f, 'w') as fh:
-                  fh.write(content)
-          EOF
+            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
           fi
       - name: Build sdist
         uses: PyO3/maturin-action@v1
