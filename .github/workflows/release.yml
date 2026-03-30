@@ -105,6 +105,10 @@ jobs:
           method: 'network'
           # We only need compilation, not the full driver
           sub-packages: '["nvcc", "cudart-dev"]'
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
       - name: Update version from tag
         shell: bash
         run: |
