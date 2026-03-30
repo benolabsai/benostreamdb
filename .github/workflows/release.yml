@@ -40,7 +40,9 @@ jobs:
         run: cargo test --lib --tests
       - name: Run Cargo Tests (Features)
         # Note: GPU tests might skip on CI runners, but compilation is verified
-        run: cargo test --features intel_gpu,cuda --all-targets -- --skip gpu_execution
+        # Use --nocapture to see live progress and identify potential hangs
+        timeout-minutes: 20
+        run: cargo test --features intel_gpu,cuda --all-targets -- --skip gpu_execution --nocapture
 
   linux:
     needs: [check]
