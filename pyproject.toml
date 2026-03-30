@@ -52,7 +52,7 @@ Homepage = "https://github.com/rla3rd/hyperstreamdb"
 Repository = "https://github.com/rla3rd/hyperstreamdb"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["python"]
 module-name = "hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings

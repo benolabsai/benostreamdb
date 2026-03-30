@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+#![cfg(feature = "java")]
 
 use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};

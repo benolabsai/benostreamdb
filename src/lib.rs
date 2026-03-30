@@ -7,10 +7,13 @@ pub mod enterprise;
 
 pub mod telemetry;
 
+#[cfg(feature = "python")]
 pub mod python_binding;
 
+#[cfg(feature = "python")]
 pub mod python_gpu_context;
 
+#[cfg(feature = "python")]
 pub mod python_distance;
 
 // Re-export main types for convenience
@@ -20,8 +23,10 @@ pub use crate::core::catalog::{CatalogType, create_catalog, create_catalog_async
 
 
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn hyperstreamdb(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
