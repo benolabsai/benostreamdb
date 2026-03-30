@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 02771c4c1f58ab1da7d2549968d93660fdc78f7a6e4d9b76a3b035cea2fba3ac # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 0
 cc 568900dca277d38a11baad3fa7c24267e17c33352c3f8e7317fd763470fdb139 # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 2791878455420188562
+cc 8ee822c1e56de9e901d8f3b8182d4ef8e008920137e080eb136dbe5e9df06490 # shrinks to dim = 1024, n_vectors = 55, metric = InnerProduct, backend = Intel, seed = 15512459855228206826
