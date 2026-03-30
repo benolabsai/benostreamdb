@@ -10,11 +10,24 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  CARGO_TERM_COLOR: always
+  # Reduce disk usage by disabling incremental compilation and heavy debug info
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
 jobs:
   check:
     name: Run Tests
     runs-on: ubuntu-22.04
     steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
