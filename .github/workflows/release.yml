@@ -55,6 +55,9 @@ jobs:
         # Note: GPU tests might skip on CI runners, but compilation is verified
         # Use --nocapture to see live progress and identify potential hangs
         timeout-minutes: 20
+        env:
+          # Point to CUDA stubs so binaries can load even without a GPU
+          LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
         run: cargo test --features intel_gpu,cuda --all-targets -- --skip gpu_execution --nocapture
 
   linux:
