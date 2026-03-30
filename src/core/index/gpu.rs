@@ -1086,12 +1086,12 @@ mod tests {
     #[test]
     fn test_gpu_backend_fallback_to_cpu() {
         // Test that unimplemented GPU kernels fall back to CPU
-        let query = [1.0, 2.0, 3.0];
-        let vectors = [
+        let _query = [1.0, 2.0, 3.0];
+        let _vectors = [
             1.0, 2.0, 3.0,
             4.0, 5.0, 6.0,
         ];
-        let dim = 3;
+        let _dim = 3;
         
         // Test with CUDA backend (will fall back to CPU for non-L2 metrics)
         #[cfg(feature = "cuda")]
@@ -1099,11 +1099,11 @@ mod tests {
             let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
             
             // Cosine should fall back to CPU
-            let distances = compute_distance(&query, &vectors, dim, VectorMetric::Cosine, &context).unwrap();
+            let distances = compute_distance(&_query, &_vectors, _dim, VectorMetric::Cosine, &context).unwrap();
             assert_eq!(distances.len(), 2);
             
             // InnerProduct should fall back to CPU
-            let distances = compute_distance(&query, &vectors, dim, VectorMetric::InnerProduct, &context).unwrap();
+            let distances = compute_distance(&_query, &_vectors, _dim, VectorMetric::InnerProduct, &context).unwrap();
             assert_eq!(distances.len(), 2);
         }
         
@@ -1113,7 +1113,7 @@ mod tests {
             let context = ComputeContext { backend: ComputeBackend::Mps, device_id: 0 };
             
             // Cosine should fall back to CPU
-            let distances = compute_distance(&query, &vectors, dim, VectorMetric::Cosine, &context).unwrap();
+            let distances = compute_distance(&_query, &_vectors, _dim, VectorMetric::Cosine, &context).unwrap();
             assert_eq!(distances.len(), 2);
         }
     }
