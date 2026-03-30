@@ -82,13 +82,15 @@ jobs:
           method: 'network'
           # We only need compilation, not the full driver
           sub-packages: '["nvcc", "cudart-dev"]'
-      - name: Update version
+      - name: Update version from tag
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            export VERSION=${GITHUB_REF#refs/tags/v}
-            echo "Bumping version to $VERSION"
-            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
+            VERSION=${GITHUB_REF#refs/tags/v}
+            CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            perl -i -pe "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" Cargo.toml
+            perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           fi
       - uses: actions/setup-python@v5
         with:
@@ -114,13 +116,15 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
-      - name: Update version
+      - name: Update version from tag
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            export VERSION=${GITHUB_REF#refs/tags/v}
-            echo "Bumping version to $VERSION"
-            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
+            VERSION=${GITHUB_REF#refs/tags/v}
+            CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            perl -i -pe "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" Cargo.toml
+            perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           fi
       - uses: actions/setup-python@v5
         with:
@@ -142,13 +146,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Update version
+      - name: Update version from tag
         shell: bash
         run: |
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
-            export VERSION=${GITHUB_REF#refs/tags/v}
-            echo "Bumping version to $VERSION"
-            perl -i -pe '$done or s/^version = ".*"/version = "$ENV{VERSION}"/ and $done = 1' Cargo.toml pyproject.toml
+            VERSION=${GITHUB_REF#refs/tags/v}
+            CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            perl -i -pe "s/^version = \".*\"/version = \"$CARGO_VERSION\"/" Cargo.toml
+            perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           fi
       - name: Build sdist
         uses: PyO3/maturin-action@v1
