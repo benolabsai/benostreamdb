@@ -41,7 +41,7 @@ fn compute_backend_strategy() -> impl Strategy<Value = ComputeBackend> {
         #[cfg(feature = "mps")]
         ComputeBackend::Mps,
         #[cfg(feature = "rocm")]
-        ComputeBackend::OpenCL,
+        ComputeBackend::Rocm,
         #[cfg(feature = "intel_gpu")]
         ComputeBackend::Intel,
     ])
