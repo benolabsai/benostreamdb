@@ -86,3 +86,14 @@ docs/IN_MEMORY_COMPONENT_ANALYSIS.md
 docs/SUMMARY.md
 benchmarks/competitive/*.md
 benchmarks/competitive/benchmark_results/*.md
+
+# Compiled binaries and debug symbols
+*.dylib
+*.dSYM/
+*.so
+*.dll
+*.exe
+python/hyperstreamdb/*.so
+python/hyperstreamdb/*.pyd
+python/hyperstreamdb/*.dylib
+python/hyperstreamdb/*.dSYM/
