@@ -62,15 +62,11 @@ jobs:
               - 'benches/**'
               - 'build.rs'
 
-      - name: Cache dependencies
+      - name: Cache Rust dependencies
         if: steps.filter.outputs.code == 'true'
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: "check"
 
       - name: Run Cargo Check
         if: steps.filter.outputs.code == 'true'
@@ -99,6 +95,11 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "linux-${{ matrix.target }}"
+          cache-targets: false
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
         id: cuda-toolkit
@@ -175,6 +176,11 @@ jobs:
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "macos-${{ matrix.target }}"
+          cache-targets: false
       - name: Update version from tag
         shell: bash
         run: |
