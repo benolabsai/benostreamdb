@@ -20,15 +20,36 @@ table.write_arrow(arrow_table)
 df = table.to_pandas()
 df = table.to_pandas(filter="id > 100")
 
-# Vector search
+# Vector search with default L2 distance
 df = table.to_pandas(
-    vector_filter={"embedding": query_vec, "k": 10}
+    vector_filter={
+        "column": "embedding",
+        "query": query_vec,
+        "k": 10
+    }
 )
 
-# Hybrid query
+# Vector search with custom metric and index parameters
+df = table.to_pandas(
+    vector_filter={
+        "column": "embedding",
+        "query": query_vec,
+        "k": 10,
+        "metric": "cosine",      # l2, cosine, inner_product, l1, hamming, jaccard
+        "ef_search": 200,        # HNSW parameter (higher = more accurate, slower)
+        "probes": 10             # IVF parameter (higher = more accurate, slower)
+    }
+)
+
+# Hybrid query (scalar + vector)
 df = table.to_pandas(
     filter="category = 'science'",
-    vector_filter={"embedding": query_vec, "k": 10}
+    vector_filter={
+        "column": "embedding",
+        "query": query_vec,
+        "k": 10,
+        "metric": "cosine"
+    }
 )
 
 # Maintenance

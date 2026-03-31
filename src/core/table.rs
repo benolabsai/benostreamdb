@@ -1556,6 +1556,13 @@ impl Table {
             let mut total_hits = 0;
             let base_uri = self.uri.clone();
             
+            // Convert file:// URI to filesystem path for directory listing
+            let fs_path = if base_uri.starts_with("file://") {
+                base_uri.strip_prefix("file://").unwrap_or(&base_uri).to_string()
+            } else {
+                base_uri.clone()
+            };
+            
             // Map to track which index type was used for each sub-filter
             let mut filter_index_types: HashMap<String, HashSet<&'static str>> = HashMap::new();
 
@@ -1578,13 +1585,37 @@ impl Table {
                 
                 let mut seg_bm: Option<roaring::RoaringBitmap> = None;
                 for sub_f in &sub_filters {
-                    // Detect access path for this segment/column
-                    let path = if entry.index_files.iter().any(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(&sub_f.column)) {
-                        "Inverted Index (Parquet)"
-                    } else if entry.index_files.iter().any(|f| f.index_type == "scalar" && f.column_name.as_deref() == Some(&sub_f.column)) {
-                        "Bitmap Index (.idx)"
-                    } else {
-                        "Full Scan"
+                    // Detect access path by checking for actual index files on disk
+                    let path = {
+                        // Check for inverted index (.inv.parquet files)
+                        let inv_pattern = format!("{}.{}.inv.parquet", segment_id, sub_f.column);
+                        let has_inverted = std::fs::read_dir(&fs_path)
+                            .ok()
+                            .and_then(|dir| {
+                                dir.flatten()
+                                    .find(|e| e.file_name().to_string_lossy().contains(&inv_pattern))
+                            })
+                            .is_some();
+                        
+                        if has_inverted {
+                            "Inverted Index (Parquet)"
+                        } else {
+                            // Check for bitmap index (.idx files)
+                            let bitmap_pattern = format!("{}.{}.idx", segment_id, sub_f.column);
+                            let has_bitmap = std::fs::read_dir(&fs_path)
+                                .ok()
+                                .and_then(|dir| {
+                                    dir.flatten()
+                                        .find(|e| e.file_name().to_string_lossy().contains(&bitmap_pattern))
+                                })
+                                .is_some();
+                            
+                            if has_bitmap {
+                                "Bitmap Index (.idx)"
+                            } else {
+                                "Full Scan"
+                            }
+                        }
                     };
                     filter_index_types.entry(sub_f.column.clone()).or_default().insert(path);
 
@@ -1628,9 +1659,43 @@ impl Table {
             plan.push("Vector Execution:".to_string());
             plan.push(format!("  -> VectorSearch (col: {}, k: {}, metric: {:?})", vs.column, vs.k, vs.metric));
             
-            let has_vector_index = pruned_entries.iter().any(|(e, _)| {
-                e.index_files.iter().any(|idx| idx.index_type == "vector" && idx.column_name.as_deref() == Some(&vs.column))
-            });
+            // Check for vector index by detecting .hnsw.graph files on disk
+            let mut has_vector_index = false;
+            
+            // Convert file:// URI to filesystem path
+            let fs_path = if self.uri.starts_with("file://") {
+                self.uri.strip_prefix("file://").unwrap_or(&self.uri)
+            } else {
+                &self.uri
+            };
+            
+            for (entry, _) in &pruned_entries {
+                let segment_id = entry.file_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&entry.file_path)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&entry.file_path);
+                
+                // Look for HNSW graph files for this column: segment_id.{column_name}.cluster_*.hnsw.graph
+                let hnsw_pattern_prefix = format!("{}.{}.cluster_", segment_id, vs.column);
+                let hnsw_pattern_suffix = ".hnsw.graph";
+                
+                // Try to list files in the table directory to detect index files
+                if let Ok(dirs) = std::fs::read_dir(fs_path) {
+                    for entry in dirs.flatten() {
+                        if let Some(filename) = entry.file_name().to_str() {
+                            if filename.starts_with(&hnsw_pattern_prefix) && filename.ends_with(hnsw_pattern_suffix) {
+                                has_vector_index = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if has_vector_index {
+                    break;
+                }
+            }
             
             let access_mode = if has_vector_index { "HNSW-IVF Cluster Index" } else { "Brute Force Scan (No Index)" };
             plan.push(format!("     [Access: {}] [Eligibility: {} rows]", access_mode, scalar_hits));

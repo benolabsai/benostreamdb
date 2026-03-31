@@ -324,6 +324,29 @@ class Table:
     def to_pandas(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, context: Optional[Any] = None, **kwargs):
         """
         Read table to Pandas with auto-vectorization of search queries and flexible parameters.
+        
+        Parameters:
+            filter: Optional scalar WHERE clause (e.g., "category = 'news'")
+            vector_filter: Dict with vector search params:
+                - column: str (required) - vector column name
+                - query: list (required) - query vector
+                - k: int (required) - number of results  
+                - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
+                - ef_search: int (optional) - HNSW ef parameter for tuning
+                - probes: int (optional) - IVF probes parameter for tuning
+            columns: Optional list of column names to select
+            context: Optional compute context (GPU/CPU)
+            **kwargs: Extra params (merged into vector_filter if present)
+        
+        Example:
+            # Vector search with cosine metric
+            df = table.to_pandas(vector_filter={
+                "column": "embedding",
+                "query": [1.0, 2.0, 3.0],
+                "k": 5,
+                "metric": "cosine",
+                "ef_search": 200  # Tune HNSW search quality
+            })
         """
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
         if self.explain:
@@ -336,6 +359,19 @@ class Table:
     def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, context: Optional[Any] = None, **kwargs):
         """
         Read table to Arrow Table with auto-vectorization of search queries and flexible parameters.
+        
+        Parameters:
+            filter: Optional scalar WHERE clause (e.g., "category = 'news'")
+            vector_filter: Dict with vector search params:
+                - column: str (required) - vector column name
+                - query: list (required) - query vector
+                - k: int (required) - number of results  
+                - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
+                - ef_search: int (optional) - HNSW ef parameter for tuning
+                - probes: int (optional) - IVF probes parameter for tuning
+            columns: Optional list of column names to select
+            context: Optional compute context (GPU/CPU)
+            **kwargs: Extra params (merged into vector_filter if present)
         """
         if "filter" in kwargs and filter is None:
             filter = kwargs.pop("filter")

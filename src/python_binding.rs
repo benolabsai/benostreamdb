@@ -4,6 +4,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use crate::core::table::{Table, VectorSearchParams};
 use crate::core::compaction::CompactionOptions;
+use crate::core::index::VectorMetric;
 use arrow::record_batch::RecordBatch;
 use arrow::array::RecordBatchIterator;
 use arrow::ffi_stream::{FFI_ArrowArrayStream, ArrowArrayStreamReader};
@@ -14,6 +15,31 @@ use std::sync::Arc;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use crate::python_gpu_context::PyComputeContext;
+
+// Helper function to parse metric string to VectorMetric enum
+// Uses native Rust names: L2, Cosine, InnerProduct, L1, Hamming, Jaccard
+// Also accepts lowercase aliases for backward compatibility
+fn parse_metric(metric_str: &str) -> PyResult<VectorMetric> {
+    match metric_str {
+        // Lowercase (preferred - Pythonic convention)
+        "l2" => Ok(VectorMetric::L2),
+        "cosine" => Ok(VectorMetric::Cosine),
+        "innerproduct" | "inner_product" => Ok(VectorMetric::InnerProduct),
+        "l1" => Ok(VectorMetric::L1),
+        "hamming" => Ok(VectorMetric::Hamming),
+        "jaccard" => Ok(VectorMetric::Jaccard),
+        // Uppercase aliases (for compatibility with Rust enum names)
+        "L2" => Ok(VectorMetric::L2),
+        "Cosine" => Ok(VectorMetric::Cosine),
+        "InnerProduct" => Ok(VectorMetric::InnerProduct),
+        "L1" => Ok(VectorMetric::L1),
+        "Hamming" => Ok(VectorMetric::Hamming),
+        "Jaccard" => Ok(VectorMetric::Jaccard),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(
+            format!("Invalid metric '{}'. Use: l2, cosine, innerproduct (or inner_product), l1, hamming, jaccard", metric_str)
+        )),
+    }
+}
 
 #[pyclass(eq, eq_int)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,15 +462,21 @@ impl PyTable {
     /// 
     /// Args:
     ///     filter: Optional SQL-like filter string (e.g., "age > 25 AND city = 'NYC'")
-    ///     vector_filter: Optional dict with {"column": str, "query": list, "k": int}
+    ///     vector_filter: Optional dict for vector search:
+    ///         - column: str (required) - vector column name
+    ///         - query: list (required) - query vector
+    ///         - k: int (required) - number of results
+    ///         - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
+    ///         - ef_search: int (optional) - HNSW ef parameter for search quality tuning
+    ///         - probes: int (optional) - IVF probes parameter for search speed tuning
     ///     columns: Optional list of column names to read (skips others like embeddings)
     /// 
     /// Returns:
     ///     PyArrow Table (via Arrow C Data Interface)
     /// 
     /// Example:
-    ///     # Skip reading the 'embedding' column for faster scalar queries
-    ///     df = table.to_pandas(filter="category = 'science'", columns=["doc_id", "title", "category"])
+    ///     # Vector search with cosine metric
+    ///     df = table.to_pandas(vector_filter={"column": "embedding", "query": [1.0, 2.0], "k": 3, "metric": "cosine"})
     #[pyo3(signature = (filter=None, vector_filter=None, columns=None, context=None))]
     fn to_arrow(
         &self,
@@ -466,7 +498,30 @@ impl PyTable {
             let query_obj = vf.get_item("query")?
                 .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key"))?;
             let query: Vec<f32> = query_obj.extract()?;
-            Some(VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k))
+            let mut params = VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k);
+            
+            // Parse optional metric parameter
+            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
+                if let Ok(metric_str) = metric_obj.extract::<String>() {
+                    params = params.with_metric(parse_metric(&metric_str)?);
+                }
+            }
+            
+            // Parse optional ef_search parameter (for HNSW)
+            if let Ok(Some(ef_obj)) = vf.get_item("ef_search") {
+                if let Ok(ef_search) = ef_obj.extract::<usize>() {
+                    params = params.with_ef_search(ef_search);
+                }
+            }
+            
+            // Parse optional probes parameter (for IVF)
+            if let Ok(Some(probes_obj)) = vf.get_item("probes") {
+                if let Ok(probes) = probes_obj.extract::<usize>() {
+                    params = params.with_probes(probes);
+                }
+            }
+            
+            Some(params)
         } else {
             None
         };
@@ -1167,6 +1222,14 @@ impl PyTable {
         self.table.table_uri()
     }
 
+    /// Explain query plan showing index usage and execution strategy
+    /// 
+    /// Args:
+    ///     filter: Optional SQL-like filter string
+    ///     vector_filter: Optional dict for vector search (see to_arrow for parameter details)
+    /// 
+    /// Returns:
+    ///     String explaining the query execution plan with index coverage
     #[pyo3(signature = (filter=None, vector_filter=None))]
     fn explain(&self, filter: Option<String>, vector_filter: Option<Bound<'_, PyDict>>) -> PyResult<String> {
         let vs_params = if let Some(ref vf) = vector_filter {
@@ -1179,7 +1242,30 @@ impl PyTable {
             let query_obj = vf.get_item("query")?
                 .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key"))?;
             let query: Vec<f32> = query_obj.extract()?;
-            Some(VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k))
+            let mut params = VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k);
+            
+            // Parse optional metric parameter
+            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
+                if let Ok(metric_str) = metric_obj.extract::<String>() {
+                    params = params.with_metric(parse_metric(&metric_str)?);
+                }
+            }
+            
+            // Parse optional ef_search parameter (for HNSW)
+            if let Ok(Some(ef_obj)) = vf.get_item("ef_search") {
+                if let Ok(ef_search) = ef_obj.extract::<usize>() {
+                    params = params.with_ef_search(ef_search);
+                }
+            }
+            
+            // Parse optional probes parameter (for IVF)
+            if let Ok(Some(probes_obj)) = vf.get_item("probes") {
+                if let Ok(probes) = probes_obj.extract::<usize>() {
+                    params = params.with_probes(probes);
+                }
+            }
+            
+            Some(params)
         } else {
             None
         };
