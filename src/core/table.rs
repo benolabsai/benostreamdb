@@ -13,7 +13,7 @@
 /// Language bindings (Python, Java, etc.) should be thin wrappers around this core API.
 use anyhow::{Result, Context};
 use roaring::RoaringBitmap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use arrow::record_batch::RecordBatch;
 use arrow::array::Array;
 use object_store::ObjectStore;
@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use crate::core::storage::create_object_store;
-use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager, PartitionSpec, SortOrder, SortField, SortDirection, NullOrder};
+use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager, PartitionSpec, IndexFile, SortOrder, SortField, SortDirection, NullOrder};
 use crate::core::metadata::TableMetadata;
 use crate::core::planner::{QueryPlanner, QueryFilter, FilterExpr};
 use crate::core::reader::HybridReader;
@@ -388,7 +388,7 @@ impl Table {
         // e.g. /local/path/{namespace}_{table}
         let local_uri = format!("file:///tmp/hyperstream_nessie_{}_{}", namespace, table);
         
-        println!("Resolved Nessie table {} to metadata: {}", table, metadata.location);
+        tracing::info!("Resolved Nessie table {} to metadata: {}", table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
         table_obj.catalog = Some(Arc::new(client));
@@ -409,7 +409,7 @@ impl Table {
         
         // Use local path for artifacts
         let local_uri = format!("file:///tmp/hyperstream_glue_{}_{}", namespace, table);
-        println!("Resolved Glue table {}.{} to metadata: {}", namespace, table, metadata.location);
+        tracing::info!("Resolved Glue table {}.{} to metadata: {}", namespace, table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
         table_obj.catalog = Some(Arc::new(client));
@@ -430,7 +430,7 @@ impl Table {
         let metadata = client.load_table(namespace, table).await?;
         
         let local_uri = format!("file:///tmp/hyperstream_hive_{}_{}", namespace, table);
-        println!("Resolved Hive table {}.{} to metadata: {}", namespace, table, metadata.location);
+        tracing::info!("Resolved Hive table {}.{} to metadata: {}", namespace, table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
         table_obj.catalog = Some(Arc::new(client));
@@ -475,7 +475,7 @@ impl Table {
                     format!("{}/metadata", iceberg_metadata_uri.trim_end_matches('/'))
                 };
                 
-                println!("Table location appears to be a directory. Looking for metadata in: {}", metadata_dir);
+                tracing::debug!("Table location appears to be a directory. Looking for metadata in: {}", metadata_dir);
                 
                 // Use v1.metadata.json as default
                 (metadata_dir, "v1.metadata.json".to_string())
@@ -484,7 +484,7 @@ impl Table {
 
         let iceberg_meta_store = create_object_store(&meta_store_uri)?;
         
-        println!("Linking external Iceberg table: {}", iceberg_metadata_uri);
+        tracing::info!("Linking external Iceberg table: {}", iceberg_metadata_uri);
         
         // 1. Load Iceberg Metadata
         let path = object_store::path::Path::from(filename.as_str());
@@ -497,7 +497,7 @@ impl Table {
         let current_schema_json = iceberg_meta.schemas.iter()
             .find(|s| s.get("schema-id").and_then(|v| v.as_i64()) == Some(iceberg_meta.current_schema_id as i64))
             .unwrap_or_else(|| {
-                eprintln!("WARNING: Could not find schema with ID {}, falling back to first schema", iceberg_meta.current_schema_id);
+                tracing::warn!("Could not find schema with ID {}, falling back to first schema", iceberg_meta.current_schema_id);
                 &iceberg_meta.schemas[0]
             });
         let hdb_schema: crate::core::manifest::Schema = serde_json::from_value(current_schema_json.clone())?;
@@ -598,7 +598,7 @@ impl Table {
         } else {
             // Try to open the warehouse location as a HyperStreamDB native table first
             // (REST-created tables are stored as HyperStreamDB tables in the warehouse)
-            println!("Checking if warehouse location is a HyperStreamDB table: {}", metadata.location);
+            tracing::debug!("Checking if warehouse location is a HyperStreamDB table: {}", metadata.location);
             
             match create_object_store(&metadata.location) {
                 Ok(warehouse_store) => {
@@ -611,7 +611,7 @@ impl Table {
                     if let Ok((_, warehouse_version)) = warehouse_manager.load_latest().await {
                         if warehouse_version > 0 {
                             // It's a HyperStreamDB table in the warehouse, open it directly
-                            println!("✅ Opening existing HyperStreamDB table from REST catalog: {}", metadata.location);
+                            tracing::info!("✅ Opening existing HyperStreamDB table from REST catalog: {}", metadata.location);
                             let mut table = Self::new_native_async(metadata.location).await?;
                             table.catalog = Some(Arc::new(client));
                             table.catalog_namespace = Some(namespace);
@@ -620,7 +620,7 @@ impl Table {
                         } else {
                             // Version=0, but this could be an empty newly-created table
                             // Create a new native table at the warehouse location using the metadata schema
-                            println!("✅ Creating new HyperStreamDB table at warehouse location: {}", metadata.location);
+                            tracing::info!("✅ Creating new HyperStreamDB table at warehouse location: {}", metadata.location);
                             let current_schema = metadata.schemas.iter()
                                 .find(|s| s.schema_id == metadata.current_schema_id)
                                 .or_else(|| metadata.schemas.last())
@@ -632,11 +632,11 @@ impl Table {
                             return Ok(table);
                         }
                     } else {
-                        println!("ℹ️  Warehouse location has no manifest, trying external Iceberg import or creating new table");
+                        tracing::debug!("ℹ️  Warehouse location has no manifest, trying external Iceberg import or creating new table");
                     }
                 },
                 Err(e) => {
-                    println!("ℹ️  Could not access warehouse location: {}. Trying external Iceberg import.", e);
+                    tracing::debug!("ℹ️  Could not access warehouse location: {}. Trying external Iceberg import.", e);
                 }
             }
             
@@ -665,9 +665,9 @@ impl Table {
 
             loop {
                 match table.check_and_import_new_snapshot(&iceberg_metadata_uri, &mut last_processed_snapshot).await {
-                    Ok(true) => println!("Snapshot Observer: New snapshot processed."),
+                    Ok(true) => tracing::debug!("Snapshot Observer: New snapshot processed."),
                     Ok(false) => {}, // No new snapshot
-                    Err(e) => eprintln!("Snapshot Observer Error: {}", e),
+                    Err(e) => tracing::error!("Snapshot Observer Error: {}", e),
                 }
                 tokio::time::sleep(interval).await;
             }
@@ -722,7 +722,7 @@ impl Table {
         let snapshot = meta.snapshots.iter().find(|s| s.snapshot_id == snapshot_id)
             .context("Snapshot not found")?;
             
-        println!("Importing Iceberg Snapshot {}...", snapshot_id);
+        tracing::info!("Importing Iceberg Snapshot {}...", snapshot_id);
         
         // Load Manifest List
         let ml_path_str = snapshot.manifest_list.trim_start_matches("file://");
@@ -782,7 +782,7 @@ impl Table {
                          Ok(crate::core::iceberg::IcebergManifestObject::Delete(df)) => {
                              delete_files.push(df);
                          }
-                         Err(e) => println!("Error converting Iceberg entry: {}", e),
+                         Err(e) => tracing::warn!("Error converting Iceberg entry: {}", e),
                      }
                  }
             }
@@ -1508,6 +1508,140 @@ impl Table {
 
     pub fn query(&self) -> TableQuery<'_> {
         TableQuery::new(self)
+    }
+
+    /// Generate a detailed execution plan with hit counts and pruning stats
+    pub async fn explain(&self, filter_str: Option<&str>, vector_param: Option<VectorSearchParams>) -> String {
+        let manifest_manager = crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, version) = manifest_manager.load_latest_full().await.unwrap_or((crate::core::manifest::Manifest::default(), Vec::new(), 0));
+        let total_rows_table: usize = all_entries.iter().map(|e| e.record_count as usize).sum();
+        let total_segments_table = all_entries.len();
+        
+        let mut plan = Vec::new();
+        let divider = "-".repeat(60);
+        plan.push(divider.clone());
+        plan.push(format!("HYPERSTREAM QUERY PLAN [Table: {}]", self.uri));
+        
+        // 1. Initial Pruning (Partition & Stats)
+        let expr = if let Some(f) = filter_str {
+            FilterExpr::parse_sql(f, self.arrow_schema()).await.ok()
+        } else {
+            None
+        };
+
+        let planner = QueryPlanner::new();
+        let pruned_entries: Vec<(ManifestEntry, Option<IndexFile>)> = if version > 0 {
+            planner.prune_entries(&all_entries, expr.as_ref())
+        } else {
+            all_entries.iter().map(|e| (e.clone(), None)).collect()
+        };
+
+        let scanned_segments = pruned_entries.len();
+        let scanned_rows: usize = pruned_entries.iter().map(|(e, _)| e.record_count as usize).sum();
+        
+        plan.push(format!("Context Selection:"));
+        plan.push(format!("  -> Total Table Scope: {} rows in {} segments", total_rows_table, total_segments_table));
+        if scanned_segments < total_segments_table {
+            plan.push(format!("  -> Pruning Activity: {} segments pruned via Partition/Stats mapping", total_segments_table - scanned_segments));
+        }
+        plan.push(format!("  -> Execution Scope: {} rows in {} segments", scanned_rows, scanned_segments));
+        plan.push("".to_string());
+
+        // 2. Index Dry-run of Filters
+        let mut scalar_hits = scanned_rows;
+        let mut access_paths = Vec::new();
+
+        if let Some(ref e) = expr {
+            let sub_filters = e.extract_and_conditions();
+            let mut total_hits = 0;
+            let base_uri = self.uri.clone();
+            
+            // Map to track which index type was used for each sub-filter
+            let mut filter_index_types: HashMap<String, HashSet<&'static str>> = HashMap::new();
+
+            for (entry, _) in &pruned_entries {
+                let file_path_str = entry.file_path.clone();
+                let segment_id = file_path_str
+                   .split('/')
+                   .next_back()
+                   .unwrap_or(&file_path_str)
+                   .strip_suffix(".parquet")
+                   .unwrap_or(&file_path_str);
+
+                let config = SegmentConfig::new(&base_uri, segment_id)
+                   .with_parquet_path(entry.file_path.clone())
+                   .with_index_files(entry.index_files.clone())
+                   .with_delete_files(entry.delete_files.clone())
+                   .with_record_count(entry.record_count as u64);
+
+                let reader = HybridReader::new(config, self.store.clone(), &base_uri);
+                
+                let mut seg_bm: Option<roaring::RoaringBitmap> = None;
+                for sub_f in &sub_filters {
+                    // Detect access path for this segment/column
+                    let path = if entry.index_files.iter().any(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(&sub_f.column)) {
+                        "Inverted Index (Parquet)"
+                    } else if entry.index_files.iter().any(|f| f.index_type == "scalar" && f.column_name.as_deref() == Some(&sub_f.column)) {
+                        "Bitmap Index (.idx)"
+                    } else {
+                        "Full Scan"
+                    };
+                    filter_index_types.entry(sub_f.column.clone()).or_default().insert(path);
+
+                    if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(sub_f).await {
+                        match seg_bm {
+                            Some(ref mut existing) => *existing &= bm,
+                            None => seg_bm = Some(bm),
+                        }
+                    }
+                }
+
+                if let Some(bm) = seg_bm {
+                    total_hits += bm.len() as usize;
+                } else {
+                    total_hits += entry.record_count as usize;
+                }
+            }
+            scalar_hits = total_hits;
+            
+            for sub_f in &sub_filters {
+                let paths: Vec<&'static str> = filter_index_types.get(&sub_f.column)
+                    .map(|s: &HashSet<&'static str>| s.iter().cloned().collect())
+                    .unwrap_or_else(|| vec!["Scan"]);
+                access_paths.push(format!("  -> Filter (col: {}, op: {}, access: {})", sub_f.column, sub_f.op_to_string(), paths.join(", ")));
+            }
+        }
+
+        // 3. Vector Plan
+        if let Some(ref vs) = vector_param {
+            plan.push("Vector Execution:".to_string());
+            plan.push(format!("  -> VectorSearch (col: {}, k: {}, metric: {:?})", vs.column, vs.k, vs.metric));
+            
+            let has_vector_index = pruned_entries.iter().any(|(e, _)| {
+                e.index_files.iter().any(|idx| idx.index_type == "vector" && idx.column_name.as_deref() == Some(&vs.column))
+            });
+            
+            let access_mode = if has_vector_index { "HNSW-IVF Cluster Index" } else { "Brute Force Scan (No Index)" };
+            plan.push(format!("     [Access: {}] [Eligibility: {} rows]", access_mode, scalar_hits));
+            plan.push("".to_string());
+        }
+
+        // 4. Scalar Plan
+        if !access_paths.is_empty() {
+            plan.push("Scalar Execution:".to_string());
+            for path in access_paths {
+                plan.push(path);
+            }
+            let pct = if scanned_rows > 0 { (scalar_hits as f32 / scanned_rows as f32) * 100.0 } else { 0.0 };
+            plan.push(format!("     [Selectivity: {} / {} rows ({:.2}%)]", scalar_hits, scanned_rows, pct));
+            plan.push("".to_string());
+        }
+        
+        plan.push(format!("Final Retrieval:"));
+        plan.push(format!("  -> ParallelRead (threads: {}, format: Parquet)", self.query_config.max_parallel_readers.unwrap_or(16)));
+        plan.push(divider);
+        
+        plan.join("\n")
     }
 
     pub fn filter(&self, expr: &str) -> TableQuery<'_> {
@@ -2768,7 +2902,9 @@ impl Table {
             let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
                 .strip_suffix(".parquet").unwrap_or(&file_path_str);
             
-            let config = SegmentConfig::new(&self.uri, segment_id); 
+            let config = SegmentConfig::new(&self.uri, segment_id)
+                .with_index_files(entry.index_files.clone())
+                .with_record_count(entry.record_count as u64);
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             
             let mut new_deletes = Vec::new();

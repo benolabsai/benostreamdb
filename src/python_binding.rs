@@ -1154,6 +1154,30 @@ impl PyTable {
             },
         })
     }
+
+    fn table_uri(&self) -> String {
+        self.table.table_uri()
+    }
+
+    #[pyo3(signature = (filter=None, vector_filter=None))]
+    fn explain(&self, filter: Option<String>, vector_filter: Option<Bound<'_, PyDict>>) -> PyResult<String> {
+        let vs_params = if let Some(ref vf) = vector_filter {
+            let column: String = vf.get_item("column")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'column' key"))?
+                .extract()?;
+            let k: usize = vf.get_item("k")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'k' key"))?
+                .extract()?;
+            let query_obj = vf.get_item("query")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key"))?;
+            let query: Vec<f32> = query_obj.extract()?;
+            Some(VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k))
+        } else {
+            None
+        };
+
+        Ok(self.query_pool.block_on(self.table.explain(filter.as_deref(), vs_params)))
+    }
 }
 
 /// Python wrapper for Nessie Catalog (Iceberg-compatible)
@@ -1637,6 +1661,14 @@ pub fn load_default_catalog(py: Python<'_>) -> PyResult<Py<PyAny>> {
             Ok(Py::new(py, catalog)?.into_any())
         }
     }
+}
+
+#[pyfunction]
+#[pyo3(signature = (level="INFO"))]
+pub fn init_logging(level: &str) -> PyResult<()> {
+    std::env::set_var("RUST_LOG", level);
+    crate::telemetry::tracing::init_tracing("hyperstreamdb")
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 #[pyfunction]

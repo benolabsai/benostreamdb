@@ -73,7 +73,7 @@ impl HyperStreamSession {
                      self.current_idx = 0;
                  },
                  Err(e) => {
-                     eprintln!("Error reading batches: {}", e);
+                     tracing::error!("Error reading batches: {}", e);
                      return None;
                  }
              }
@@ -101,7 +101,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
         Err(_) => return 0,
     };
     
-    println!("FFI: Opening Session to {}", path_str);
+    tracing::info!("FFI: Opening Session to {}", path_str);
     
     match HyperStreamSession::new(&path_str) {
         Ok(session) => {
@@ -136,7 +136,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
     
     match session.next_batch() {
         Some(batch) => {
-            println!("FFI: Read batch with {} rows", batch.num_rows());
+            tracing::debug!("FFI: Read batch with {} rows", batch.num_rows());
             
             // 1. Convert RecordBatch to StructArray
             let struct_array: arrow::array::StructArray = batch.into();
@@ -149,7 +149,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
             let (ffi_array, ffi_schema) = match to_ffi(&array_data) {
                 Ok(tuple) => tuple,
                 Err(e) => {
-                    eprintln!("FFI Error exporting to C Data Interface: {}", e);
+                    tracing::error!("FFI Error exporting to C Data Interface: {}", e);
                     return 0;
                 }
             };
@@ -181,7 +181,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
     // Default 64MB if invalid
     let split_size = if max_split_size <= 0 { 64 * 1024 * 1024 } else { max_split_size as usize };
 
-    println!("FFI: Getting splits for {} (max size: {})", uri, split_size);
+    tracing::info!("FFI: Getting splits for {} (max size: {})", uri, split_size);
 
     let splits_json = match Table::new(uri.clone()) {
         Ok(table) => {
@@ -190,7 +190,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
                     serde_json::to_string(&splits).unwrap_or_else(|_| "[]".to_string())
                 },
                 Err(e) => {
-                    eprintln!("FFI Error getting splits: {}", e);
+                    tracing::error!("FFI Error getting splits: {}", e);
                     "[]".to_string()
                 }
             }
@@ -216,7 +216,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
         Err(_) => return env.new_string("[]").unwrap().into_raw(),
     };
 
-    println!("FFI: Listing data files for {}", uri);
+    tracing::info!("FFI: Listing data files for {}", uri);
 
     // Call Table API
     // Note: Table::new and list_data_files are currently synchronous, 
@@ -228,7 +228,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
                     serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string())
                 },
                 Err(e) => {
-                    eprintln!("FFI Error listing files: {}", e);
+                    tracing::error!("FFI Error listing files: {}", e);
                     "[]".to_string()
                 }
             }
@@ -263,7 +263,7 @@ fn open_session_helper(mut env: JNIEnv, path: JString) -> jlong {
         Ok(s) => s.into(),
         Err(_) => return 0,
     };
-    println!("FFI(Spark): Opening Session to {}", path_str);
+    tracing::info!("FFI(Spark): Opening Session to {}", path_str);
     match HyperStreamSession::new(&path_str) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
@@ -304,7 +304,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
             let array_data = struct_array.to_data();
             let (ffi_array, ffi_schema) = match arrow::ffi::to_ffi(&array_data) {
                 Ok(tuple) => tuple,
-                Err(e) => { eprintln!("FFI Error: {}", e); return 0; }
+                Err(e) => { tracing::error!("FFI Error: {}", e); return 0; }
             };
             unsafe {
                 std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);

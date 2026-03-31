@@ -166,7 +166,7 @@ impl TableProvider for HyperStreamTableProvider {
             None, // vector_params
             limit,
             self.schema(),
-        )))
+        )?))
     }
 
     fn supports_filters_pushdown(

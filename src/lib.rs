@@ -29,6 +29,7 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 #[pymodule]
 fn hyperstreamdb(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog_from_config, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::load_default_catalog, m)?)?;
@@ -97,6 +98,7 @@ pub struct SegmentConfig {
     pub delete_files: Vec<crate::core::manifest::DeleteFile>,
     pub index_files: Vec<crate::core::manifest::IndexFile>,
     pub file_size: Option<u64>,
+    pub record_count: Option<u64>,
     /// Build indexes for ALL columns (overrides columns_to_index if true)
     pub index_all: bool,
     /// Columns to build indexes for. If None or empty, no indexes are built.
@@ -118,6 +120,7 @@ impl SegmentConfig {
             delete_files: Vec::new(),
             index_files: Vec::new(),
             file_size: None,
+            record_count: None,
             index_all: false,
             columns_to_index: None,
             partition_values: std::collections::HashMap::new(),
@@ -153,6 +156,11 @@ impl SegmentConfig {
     
     pub fn with_file_size(mut self, size: u64) -> Self {
         self.file_size = Some(size);
+        self
+    }
+
+    pub fn with_record_count(mut self, count: u64) -> Self {
+        self.record_count = Some(count);
         self
     }
 

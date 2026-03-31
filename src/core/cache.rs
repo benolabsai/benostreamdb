@@ -135,7 +135,7 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
     // u32::MAX KB = 4TB, which is plenty for a single item.
     let max_kb = cache_gb * 1024 * 1024; 
 
-    println!("Initializing HNSW-IVF Cache with {} GB limit", cache_gb);
+    tracing::info!("Initializing HNSW-IVF Cache with {} GB limit", cache_gb);
 
     Cache::builder()
         .weigher(|_key, value: &Arc<HnswIvfIndex>| -> u32 {

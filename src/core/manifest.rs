@@ -837,7 +837,7 @@ impl ManifestManager {
                         all_entries.extend(sub_manifest.entries);
                     } else {
                         // Log warning or skip stats?
-                         println!("Warning: No schema available to decode Avro manifest");
+                         tracing::warn!("No schema available to decode Avro manifest");
                           let sub_manifest = self.load_avro_manifest(&entry.manifest_path, &Schema { schema_id: 0, fields: vec![], identifier_field_ids: vec![] }, &manifest.partition_spec).await?;
                          all_entries.extend(sub_manifest.entries);
                     }
@@ -927,7 +927,7 @@ impl ManifestManager {
                     current = m;
                 },
                 Err(e) => {
-                    println!("Warning: Broken manifest chain at v{}: {}", prev, e);
+                    tracing::warn!("Broken manifest chain at v{}: {}", prev, e);
                     break;
                 }
             }
@@ -966,7 +966,7 @@ impl ManifestManager {
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Rolled back Manifest to v{} (from snapshot {})", new_ver, version);
+                    tracing::info!("Rolled back Manifest to v{} (from snapshot {})", new_ver, version);
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = format!("{}/{}", self.root_uri, path);
@@ -1052,7 +1052,7 @@ impl ManifestManager {
             // and some paths we intended to remove are ALREADY gone, it means
             // a concurrent compaction or delete happened. We must ABORT to avoid duplication.
             if !add_entries.is_empty() && !remove_paths.is_empty() && some_paths_missing {
-                println!("DEBUG: Aborting commit v{} attempt {}: some remove_paths were already gone", new_ver, attempt);
+                tracing::debug!("Aborting commit v{} attempt {}: some remove_paths were already gone", new_ver, attempt);
                 return Ok(current_manifest); 
             }
 
@@ -1207,7 +1207,7 @@ impl ManifestManager {
             // Apply final properties
             new_manifest.properties = current_manifest.properties.clone();
             if let Some(props) = &metadata.updated_properties {
-                println!("Applying property updates: {:?}", props);
+                tracing::debug!("Applying property updates: {:?}", props);
                 new_manifest.properties.extend(props.clone().into_iter());
             }
             if let Some(removals) = &metadata.removed_properties {
@@ -1241,8 +1241,7 @@ impl ManifestManager {
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest v{}", new_ver);
-                    
+                    println!("Committed Manifest: {}", path);
                     // 5. Update Caches
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
@@ -1257,7 +1256,7 @@ impl ManifestManager {
                 Err(e) if is_already_exists(&e) => {
                     // Conflict logic...
                     if attempt % 10 == 0 || attempt > 90 {
-                        eprintln!("DEBUG: Conflict committing Manifest v{} (attempt {}), retrying...", new_ver, attempt + 1);
+                        tracing::debug!("Conflict committing Manifest v{} (attempt {}), retrying...", new_ver, attempt + 1);
                     }
                     let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
                     let jitter = rand::random::<u64>() % base_delay;
@@ -1315,7 +1314,7 @@ impl ManifestManager {
         };
         
         self.store.put_opts(&path, bytes.into(), opts).await?;
-        println!("Imported {} external entries into Manifest v{}", new_manifest.entries.len(), new_ver);
+        tracing::info!("Imported {} external entries into Manifest v{}", new_manifest.entries.len(), new_ver);
         
         // Update Caches
         let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
@@ -1408,7 +1407,7 @@ impl ManifestManager {
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest v{}", manifest.version);
+                    tracing::info!("Committed Manifest v{}", manifest.version);
                     let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = self.get_cache_key(&path);
@@ -1456,7 +1455,7 @@ impl ManifestManager {
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest v{} (Partition Spec Update)", new_ver);
+                    tracing::info!("Committed Manifest v{} (Partition Spec Update)", new_ver);
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = format!("{}/{}", self.root_uri, path);
@@ -1529,7 +1528,7 @@ impl ManifestManager {
             if path_str.contains("_manifest/v") {
                 // If it's a manifest file, check if we keep it
                 if !manifest_files_to_keep.contains(&path_str) {
-                    println!("Vacuum: Deleting old manifest {}", path_str);
+                    tracing::info!("Vacuum: Deleting old manifest {}", path_str);
                     self.store.delete(&meta.location).await?;
                     deleted_count += 1;
                 }
@@ -1560,7 +1559,7 @@ impl ManifestManager {
                         }
                     }
 
-                    println!("Vacuum: Deleting unreferenced file {}", path_str);
+                    tracing::info!("Vacuum: Deleting unreferenced file {}", path_str);
                     self.store.delete(&meta.location).await?;
                     deleted_count += 1;
                 }

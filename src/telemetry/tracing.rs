@@ -36,8 +36,10 @@ pub fn init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>
 
         tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
     } else {
-         // Standard logging
-         tracing_subscriber::fmt::init();
+         // Standard logging - use try_init to avoid panics on second call
+         let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init();
     }
     
     Ok(())

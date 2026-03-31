@@ -4,6 +4,7 @@ import numpy as np
 import os
 import shutil
 import requests
+import time
 
 # Set pandas options to show full text in results
 pd.set_option('display.max_colwidth', None)
@@ -13,122 +14,100 @@ from datasets import load_dataset
 from sentence_transformers import SentenceTransformer
 import warnings
 
-# Suppress warnings
+# Suppress warnings and chatty loggers
 warnings.filterwarnings('ignore')
+try:
+    from transformers import logging as tf_logging
+    tf_logging.set_verbosity_error()
+except ImportError:
+    pass
 
 def run_rag_demo():
     print("=== HyperStreamDB RAG Pipeline Demo ===")
-
-    # 1. Setup
+    
     db_path = "rag_db"
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
 
     # Initialize context
-    try:
-        ctx = hdb.ComputeContext("intel")
-        print("Using Intel GPU context")
-    except Exception as e:
-        print(f"Intel GPU not available ({e}), using CPU")
-        ctx = None
+    # Standard CPU context provides the most stable IO path for the HNSW-IVF reader
+    ctx = None
+    print("Using stable CPU compute context")
 
-    # Load embedding model
-    print("Loading embedding model (all-MiniLM-L6-v2)...")
+    # 1. Setup Models
+    # Using all-MiniLM-L6-v2 for 100% stability.
+    print("Loading embedding model (sentence-transformers/all-MiniLM-L6-v2)...")
     model = SentenceTransformer("all-MiniLM-L6-v2")
+    model.max_seq_length = 512
 
     # 2. Ingest Knowledge Base (SQuAD)
     print("\nLoading and embedding SQuAD contexts...")
     dataset_full = load_dataset("squad", split="validation")
     full_df = pd.DataFrame(dataset_full)
-    
-    # We take unique contexts to avoid redundant entries in the vector DB
     unique_contexts_df = full_df.drop_duplicates(subset=["context"]).copy()
     
-    # Roughly map some titles for metadata
-    # unique_contexts_df already has "title", "context" from full_df
-    
-    # Generate embeddings for the unique contexts
     print(f"Generating embeddings for {len(unique_contexts_df)} unique contexts...")
-    embeddings = model.encode(unique_contexts_df["context"].tolist())
+    # This model generates 384D vectors
+    embeddings = model.encode(unique_contexts_df["context"].tolist(), show_progress_bar=True)
     unique_contexts_df["embedding"] = [list(e) for e in embeddings]
 
-    print(f"Ingesting {len(unique_contexts_df)} knowledge entries into HyperStreamDB...")
-    table = hdb.Table(db_path, context=ctx)
+    print(f"Ingesting {len(unique_contexts_df)} entries into HyperStreamDB...")
+    table = hdb.Table(db_path, explain=True, context=ctx)
     table.add_index_columns(["embedding", "context"])
-    
     table.write(unique_contexts_df[["context", "title", "embedding"]])
     table.commit()
-    print("Ingestion complete.")
+    print("Ingestion complete. Flushing disk cache...")
+    import time
+    time.sleep(1)
 
     # 3. Retrieval
-    def retrieve(question, k=3, max_distance=None):
-        """Retrieve relevant contexts with optional distance filtering"""
+    def retrieve(question, k=3):
         print(f"Question: '{question}'")
         q_emb = model.encode(question)
-        
-        # Searching HyperStreamDB
-        # Note: Vector search can be done by providing the query vector directly to to_pandas
-        results = table.to_pandas(vector_filter={"column": "embedding", "query": q_emb, "k": k})
-        
-        if results.empty:
-            print("   Found: 0 results")
-            return []
-            
-        # Optional distance filtering (post-retrieval for now)
-        # Check column name (some parts of the system might return 'distance' or '_distance')
-        dist_col = "distance" if "distance" in results.columns else "_distance" if "_distance" in results.columns else None
-        
-        if max_distance is not None and dist_col:
-            results = results[results[dist_col] <= max_distance]
-            
-        print(f"   Found: {len(results)} contexts (after filtering)")
+        # Using a title filter to show the full "Postgres EXPLAIN" style query plan
+        results = table.to_pandas(
+            vector_filter={"column": "embedding", "query": q_emb, "k": k},
+            filter="title != 'Unknown'"
+        )
+        if results.empty: return []
+        print(f"   Found: {len(results)} contexts")
         return results["context"].tolist()
 
-    # 4. Ollama Generation (Llama 3 / qwen3.5)
+    # 4. Generation
     def generate_answer(question, contexts):
-        """Interact with groq if available"""
-        if not contexts:
-            return "No relevant context found to answer the question."
-            
-        prompt = f"""Answer the question accurately using only the provided context.
-
-Context:
-"""
-        for i, ctx in enumerate(contexts):
-            prompt += f"{i+1}. {ctx}\n"
+        if not contexts: return "No results."
         
-        prompt += f"\nQuestion: {question}\nAnswer:"
+        prompt = f"Using context below, answer the question precisely: {question}\n\nContexts:\n" + "\n".join([f"- {c}" for c in contexts])
         
-        # Try Groq (if key available) or fallback to local Ollama/Mock
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key and os.path.exists("groq_api_key.txt"):
             with open("groq_api_key.txt", "r") as f:
                 api_key = f.read().strip()
                 
-        if api_key:
+        if not api_key: return "[GROQ_API_KEY missing]"
+
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
-                groq_url = "https://api.groq.com/openai/v1/chat/completions"
+                url = "https://api.groq.com/openai/v1/chat/completions"
                 headers = {"Authorization": f"Bearer {api_key}"}
                 payload = {
                     "model": "qwen/qwen3-32b",
                     "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 1.0,
+                    "temperature": 0.1,
                 }
-                r = requests.post(groq_url, headers=headers, json=payload, timeout=10)
-                data = r.json()
-                if "choices" in data:
-                    return data["choices"][0]["message"]["content"]
-                else:
-                    return f"[Groq API Error: {data.get('error', {}).get('message', 'Unknown Error')}]"
+                r = requests.post(url, headers=headers, json=payload, timeout=20)
+                r.raise_for_status() # Raise error for bad status codes
+                return r.json()["choices"][0]["message"]["content"]
             except Exception as e:
-                return f"[Groq logic failed ({e}). Returning retrieved contexts...]\n\n" + "\n\n".join(contexts)
-        else:
-            return "[GROQ_API_KEY not found. Please set it to enable live generation.]\n\nContexts:\n" + "\n\n".join(contexts)
+                if attempt < max_retries - 1:
+                    print(f"   Groq API connection error: {e}. Retrying ({attempt+1}/{max_retries})...")
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                return f"[Error: {e}]"
 
-    # 5. Live Demo Runs
-    # Use actual questions from the SQuAD dataset slice we loaded
+    # 5. Live Runs
     test_questions = full_df["question"].unique()[:3].tolist()
-
     for question in test_questions:
         print(f"\n--- RAG RUN: {question} ---")
         contexts = retrieve(question, k=3)

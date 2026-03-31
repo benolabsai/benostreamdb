@@ -232,7 +232,8 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                         if let ScalarValue::FixedSizeList(vec_arr) = l.value() {
                                             // vec_arr is Arc<FixedSizeListArray>
                                             // We need to extract the floats. FixedSizeListArray has 'values()' which returns the flattened array.
-                                            let f32_arr = vec_arr.values().as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                                            let f32_arr = vec_arr.values().as_any().downcast_ref::<arrow::array::Float32Array>()
+                                                .ok_or_else(|| datafusion::error::DataFusionError::Internal("Expected Float32Array in vector literal".to_string()))?;
                                             (Some(m), Some(c.name().to_string()), Some(crate::core::index::VectorValue::Float32(f32_arr.values().to_vec())))
                                         } else {
                                             (None, None, None)
@@ -341,7 +342,7 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                 Some(vp),
                                 Some(k_with_offset),
                                 hs_exec.schema().clone(),
-                            );
+                            )?;
                             
                             println!(
                                 "VectorSearchOptimizer: Created optimized plan with vector search parameters. \

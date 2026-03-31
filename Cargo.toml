@@ -71,7 +71,7 @@ opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
 
 # indexing
 roaring = "0.10.2" # For scalar bitmaps
-hnsw_rs = { path = "vendor/hnsw_rs" } # For vector indexing
+hnsw_rs = { version = "0.1.19", path = "vendor/hnsw_rs" } # For vector indexing
 # lance removed due to missing protoc
 
 # error handling
@@ -148,7 +148,7 @@ optional = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 rand = "0.8"
 rand_distr = "0.4"
-hnsw_rs = { version = "0.1.20", path = "vendor/hnsw_rs" }
+hnsw_rs = { version = "0.1.19", path = "vendor/hnsw_rs" }
 tempfile = "3.10"
 proptest = "1.4"
 

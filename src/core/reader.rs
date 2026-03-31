@@ -26,9 +26,11 @@ fn check_is_in(col: &arrow::array::ArrayRef, values: &arrow::array::ArrayRef) ->
     
     match col.data_type() {
         DataType::Utf8 => {
-             let col_arr = col.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+             let col_arr = col.as_any().downcast_ref::<arrow::array::StringArray>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected StringArray in column for equality check"))?;
              let val_arr = arrow::compute::cast(values, &DataType::Utf8)?; // Ensure type match
-             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::StringArray>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected StringArray in values for equality check"))?;
              
              let mut set = HashSet::with_capacity(val_arr.len());
              for i in 0..val_arr.len() {
@@ -50,10 +52,12 @@ fn check_is_in(col: &arrow::array::ArrayRef, values: &arrow::array::ArrayRef) ->
         DataType::Int64 | DataType::Date64 | DataType::Timestamp(_, _) => {
              // Treat all as Int64 for comparison if possible, or cast
              let col_arr = arrow::compute::cast(col, &DataType::Int64)?;
-             let col_arr = col_arr.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+             let col_arr = col_arr.as_any().downcast_ref::<arrow::array::Int64Array>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected Int64Array in column for equality check"))?;
              
              let val_arr = arrow::compute::cast(values, &DataType::Int64)?;
-             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::Int64Array>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected Int64Array in values for equality check"))?;
              
              let mut set = HashSet::with_capacity(val_arr.len());
              for i in 0..val_arr.len() {
@@ -74,10 +78,12 @@ fn check_is_in(col: &arrow::array::ArrayRef, values: &arrow::array::ArrayRef) ->
         },
         DataType::Int32 | DataType::Date32 | DataType::Time32(_) => {
              let col_arr = arrow::compute::cast(col, &DataType::Int32)?;
-             let col_arr = col_arr.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+             let col_arr = col_arr.as_any().downcast_ref::<arrow::array::Int32Array>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected Int32Array in column for equality check"))?;
              
              let val_arr = arrow::compute::cast(values, &DataType::Int32)?;
-             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+             let val_arr = val_arr.as_any().downcast_ref::<arrow::array::Int32Array>()
+                 .ok_or_else(|| anyhow::anyhow!("Expected Int32Array in values for equality check"))?;
              
              let mut set = HashSet::with_capacity(val_arr.len());
              for i in 0..val_arr.len() {
@@ -98,7 +104,7 @@ fn check_is_in(col: &arrow::array::ArrayRef, values: &arrow::array::ArrayRef) ->
         },
         _ => {
              // Fallback or warning
-             println!("Warning: Unsupported generic equality check for type: {:?}", col.data_type());
+             tracing::warn!("Unsupported generic equality check for type: {:?}", col.data_type());
              // Return false (no match) to be safe (don't delete anything)
              let result = arrow::array::BooleanArray::from(vec![false; col.len()]);
              Ok(result)
@@ -150,7 +156,7 @@ impl HybridReader {
     fn resolve_object_path(&self, extension: &str) -> Path {
         // 1. Get the base string and determine if it includes the filename
         let (base, has_filename) = if extension == "parquet" && self.config.parquet_path.is_some() {
-            (self.config.parquet_path.as_ref().unwrap().as_str(), true)
+            (self.config.parquet_path.as_ref().map(|p| p.as_str()).unwrap_or(""), true)
         } else {
             (self.config.base_path.as_str(), false)
         };
@@ -239,7 +245,7 @@ impl HybridReader {
                              }
                          },
                          Err(e) => {
-                             println!("Warning: Failed to read Iceberg delete file {}: {}", path_str, e);
+                             tracing::warn!("Failed to read Iceberg delete file {}: {}", path_str, e);
                          }
                      }
                  } else {
@@ -269,12 +275,12 @@ impl HybridReader {
                                  deleted_bitmap |= dv_bitmap;
                              },
                              Err(e) => {
-                                 println!("Warning: Failed to deserialize deletion vector from {}: {}", puffin_file_path, e);
+                                 tracing::warn!("Failed to deserialize deletion vector from {}: {}", puffin_file_path, e);
                              }
                          }
                      },
                      Err(e) => {
-                         println!("Warning: Failed to read deletion vector from Puffin file {}: {}", puffin_file_path, e);
+                         tracing::warn!("Failed to read deletion vector from Puffin file {}: {}", puffin_file_path, e);
                      }
                  }
              }
@@ -337,15 +343,15 @@ impl HybridReader {
                                                   values: combined_values,
                                               });
                                           },
-                                          Err(e) => println!("Warning: Failed to concat equality delete values: {}", e),
+                                          Err(e) => tracing::warn!("Failed to concat equality delete values: {}", e),
                                       }
                                   }
                               }
                           } else {
-                              println!("Warning: Multi-column equality deletes not yet optimized");
+                              tracing::warn!("Multi-column equality deletes not yet optimized");
                           }
                       }
-                      Err(e) => println!("Warning: Failed to read equality delete file {}: {}", resolved_path, e),
+                      Err(e) => tracing::warn!("Failed to read equality delete file {}: {}", resolved_path, e),
                  }
              }
         }
@@ -385,7 +391,7 @@ impl HybridReader {
         let inv_idx_info = self.config.index_files.iter()
             .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(filter_column));
         
-        let mut matching_bitmap = if let Some(idx_info) = inv_idx_info {
+        let matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
             let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
             if let Some(pos) = dir_path.rfind('/') {
@@ -455,7 +461,8 @@ impl HybridReader {
             // The inverted index schema is [key, row_ids (List<UInt32>)]
             for batch in batches {
                 let key_array = batch.column(0);
-                let row_ids_list = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                let row_ids_list = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>()
+                    .ok_or_else(|| anyhow::anyhow!("Expected ListArray in inverted index column 1"))?;
                 
                 // Perform range/value filtering on inverted index keys
                 for i in 0..batch.num_rows() {
@@ -476,7 +483,8 @@ impl HybridReader {
                         },
                         // Date32 range
                         (arrow::datatypes::DataType::Date32, Some(min), _) => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap().value(i);
+                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>()
+                                .ok_or_else(|| anyhow::anyhow!("Expected Date32Array"))?.value(i);
                             let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
                             if filter.min_inclusive { val >= min_i } else { val > min_i }
                         },
@@ -566,7 +574,8 @@ impl HybridReader {
 
                     if key_ok {
                         let row_ids = row_ids_list.value(i);
-                        let row_ids_array = row_ids.as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap();
+                         let row_ids_array = row_ids.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                             .ok_or_else(|| anyhow::anyhow!("Expected UInt32Array in inverted index row_ids"))?;
                         for ri in 0..row_ids_array.len() {
                             bitmap.insert(row_ids_array.value(ri));
                         }
@@ -598,13 +607,27 @@ impl HybridReader {
             }
         };
         
-        // Step 1b: Apply Deletes (Difference)
+        // Step 1b: Handle Negation
+        let mut final_bitmap = matching_bitmap;
+        if filter.negated {
+            if let Some(total) = self.config.record_count {
+                let mut all = roaring::RoaringBitmap::new();
+                all.insert_range(0..total as u32);
+                final_bitmap = all - final_bitmap;
+            } else {
+                // If we don't know total rows, we can't safely negate via bitmap
+                // Fallback to full scan by returning None
+                return Ok(None);
+            }
+        }
+
+        // Step 1c: Apply Deletes (Difference)
         let deleted = self.load_merged_deletes().await?;
         if !deleted.is_empty() {
-            matching_bitmap -= deleted;
+            final_bitmap -= deleted;
         }
         
-        Ok(Some(matching_bitmap))
+        Ok(Some(final_bitmap))
     }
 
     /// The "Serverless Selectivity" Filter Query
@@ -876,7 +899,7 @@ impl HybridReader {
                                         }
                                    }
                                },
-                               Err(e) => println!("Warning: Failed to apply equality delete filter on {}: {}", delete.column_name, e),
+                               Err(e) => tracing::warn!("Failed to apply equality delete filter on {}: {}", delete.column_name, e),
                           }
                       }
                   }
@@ -973,14 +996,14 @@ impl HybridReader {
     /// 2. Plain HNSW: Falls back to `.hnsw.graph` files
     pub async fn vector_search_index(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, filter: Option<&FilterExpr>, metric: VectorMetric, ef_search: Option<usize>) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
-        println!("vector_search_index called with filter: {:?}", filter);
+        tracing::debug!("vector_search_index called with filter: {:?}", filter);
         let allowed_bitmap = if let Some(expr) = filter {
              let sub_filters = expr.extract_and_conditions();
              let mut combined_bitmap: Option<RoaringBitmap> = None;
              
              for sub_f in sub_filters {
                  let res = self.get_scalar_filter_bitmap(&sub_f).await;
-                 println!("get_scalar_filter_bitmap returned {:?} for column {:?}", res.is_ok(), sub_f.column);
+                 tracing::debug!("get_scalar_filter_bitmap returned {:?} for column {:?}", res.is_ok(), sub_f.column);
                  if let Ok(Some(bm)) = res {
                      match combined_bitmap {
                          Some(ref mut existing) => { *existing &= bm; },
@@ -1013,7 +1036,7 @@ impl HybridReader {
                  Ok(m) => m,
                  Err(e) => {
                      // Fallback to flat scan on index error
-                     println!("Warning: Vector index listed in manifest failed, falling back to flat scan: {}", e);
+                     tracing::error!("Vector index listed in manifest failed, falling back to flat scan: {}", e);
                      self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
                  }
              }
@@ -1197,7 +1220,7 @@ impl HybridReader {
         
         // Determine n_probe based on filtering or session config
         let n_probe = if allowed_bitmap.is_some() { 20 } else { 10 };
-        println!("search_hnsw_ivf allowed_bitmap is_some={}", allowed_bitmap.is_some());
+        tracing::debug!("search_hnsw_ivf allowed_bitmap is_some={}", allowed_bitmap.is_some());
         
         let matches = tokio::task::spawn_blocking(move || {
             hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref())

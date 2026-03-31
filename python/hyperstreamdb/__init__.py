@@ -86,8 +86,9 @@ class Table:
     """
     Enhanced HyperStreamDB Table with auto-vectorization and embedding registry support.
     """
-    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, context: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None):
+    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, context: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None, explain: bool = False):
         uri = _resolve_uri(uri)
+        self.explain = explain
         if inner_table:
             self._inner = inner_table
         else:
@@ -315,7 +316,8 @@ class Table:
                 if func:
                     # Vectorize the query string
                     vector_filter["query"] = func([vector_filter["query"]])[0].tolist()
-                    print(f"DEBUG: Vectorized query to {vector_filter['query']}")
+                    if self.explain:
+                        print(f"[Explain] Vectorized query using context: {target_col}")
                     
         return vector_filter
 
@@ -323,12 +325,11 @@ class Table:
         """
         Read table to Pandas with auto-vectorization of search queries and flexible parameters.
         """
-        if "filter" in kwargs and filter is None:
-            filter = kwargs.pop("filter")
-            
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
-        # Filter out HyperStreamDB-specific kwargs before passing to inner to_pandas
-        # which passes them to pyarrow.Table.to_pandas
+        if self.explain:
+            # Call native Rust explain logic
+            print(self._inner.explain(filter, vf))
+            
         filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["k", "n_probe", "column"]}
         return self._inner.to_pandas(filter, vf, columns, context=context, **filtered_kwargs)
 

@@ -351,7 +351,7 @@ pub async fn execute_vector_search_with_config(
     
     let max_parallel = request.config.auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
     
-    println!("Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)", 
+    tracing::debug!("Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)", 
              num_segments, avg_rows_per_segment / 1000, embedding_dim, max_parallel); 
     
     // Semaphore to limit concurrent HNSW loads
@@ -384,7 +384,7 @@ pub async fn execute_vector_search_with_config(
                     .strip_suffix(".parquet")
                     .unwrap_or(&file_path_str);
                 
-                println!("Entry index files: {:?}", entry.index_files);
+                tracing::debug!("Entry index files: {:?}", entry.index_files);
                 let config = SegmentConfig::new(&base_uri, segment_id)
                     .with_parquet_path(entry.file_path.clone())
                     .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))

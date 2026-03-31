@@ -39,14 +39,14 @@ impl Maintenance {
         let history = self.manifest_manager.walk_history().await?;
         
         if history.len() <= retain_last {
-            println!("History length ({}) <= retain_last ({}). No action.", history.len(), retain_last);
+            tracing::debug!("History length ({}) <= retain_last ({}). No action.", history.len(), retain_last);
             return Ok(());
         }
 
         // 1. Identify Valid vs Expired
         let (retained, expired) = history.split_at(retain_last); // history is [Latest, ..., Oldest]
         
-        println!("Expiring {} snapshots. Retaining latest {}.", expired.len(), retained.len());
+        tracing::info!("Expiring {} snapshots. Retaining latest {}.", expired.len(), retained.len());
 
         // 2. Collect Valid Files (All files referenced in Retained Manifests)
         let mut valid_files = HashSet::new();
@@ -83,7 +83,7 @@ impl Maintenance {
             }
         }
 
-        println!("Found {} files to expire/delete.", to_delete.len());
+        tracing::info!("Found {} files to expire/delete.", to_delete.len());
 
         // 5. Delete Data Files
         // We have exact paths now!
@@ -93,14 +93,14 @@ impl Maintenance {
              // Ensure it's not root matching something weird
              // Ignore errors (file might be already gone)
              if let Err(e) = self.store.delete(&p).await {
-                 println!("Warning: Failed to delete expired file {}: {}", path_str, e);
+                 tracing::warn!("Failed to delete expired file {}: {}", path_str, e);
              } else {
                  deletions += 1;
-                 println!("Deleted: {}", path_str);
+                 tracing::debug!("Deleted: {}", path_str);
              }
         }
         
-        println!("Expired {} data/index files.", deletions);
+        tracing::info!("Expired {} data/index files.", deletions);
 
         // 6. Delete Expired Manifest Files
         for m in expired {
@@ -138,7 +138,7 @@ impl Maintenance {
             }
         }
         
-        println!("Valid files in history: {}", all_valid_files.len());
+        tracing::debug!("Valid files in history: {}", all_valid_files.len());
 
         // 2. Scan All Files
         let list_path = Path::from("/"); 
@@ -161,14 +161,14 @@ impl Maintenance {
                 // Orphan candidate. Check age.
                 let age = now - meta.last_modified.timestamp_millis();
                 if age > older_than_ms {
-                    println!("Found Orphan: {} (Age: {}ms)", path_str, age);
+                    tracing::info!("Found Orphan: {} (Age: {}ms)", path_str, age);
                     self.store.delete(&meta.location).await?;
                     deletions += 1;
                 }
             }
         }
         
-        println!("Removed {} orphan files.", deletions);
+        tracing::info!("Removed {} orphan files.", deletions);
         Ok(())
     }
 }

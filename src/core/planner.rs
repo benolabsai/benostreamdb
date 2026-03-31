@@ -231,6 +231,24 @@ impl QueryFilter {
 
         expr
     }
+
+    pub fn op_to_string(&self) -> String {
+        if self.values.is_some() {
+             if self.negated { "NOT IN".to_string() } else { "IN".to_string() }
+        } else if self.min.is_some() && self.max.is_some() {
+             if self.min == self.max {
+                 if self.negated { "!=".to_string() } else { "=".to_string() }
+             } else {
+                 "RANGE".to_string()
+             }
+        } else if self.min.is_some() {
+             if self.min_inclusive { ">=".to_string() } else { ">".to_string() }
+        } else if self.max.is_some() {
+             if self.max_inclusive { "<=".to_string() } else { "<".to_string() }
+        } else {
+             "TRUE".to_string()
+        }
+    }
 }
 
 fn json_to_scalar(v: &Value) -> Expr {

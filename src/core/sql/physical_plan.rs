@@ -44,7 +44,7 @@ impl HyperStreamExec {
         vector_params: Option<VectorSearchParams>,
         limit: Option<usize>,
         base_schema: SchemaRef,
-    ) -> Self {
+    ) -> Result<Self> {
         // Calculate projected schema
         let projected_schema = if let Some(ref proj) = projection {
             // Validate projection indices
@@ -52,7 +52,8 @@ impl HyperStreamExec {
                 // If projection is invalid, use base schema
                 base_schema.clone()
             } else {
-                Arc::new(base_schema.project(proj).unwrap())
+                Arc::new(base_schema.project(proj)
+                    .map_err(|e| DataFusionError::from(e))?)
             }
         } else {
             base_schema.clone()
@@ -67,7 +68,7 @@ impl HyperStreamExec {
             Boundedness::Bounded,
         );
 
-        Self {
+        Ok(Self {
             table,
             partitions,
             projection,
@@ -77,7 +78,7 @@ impl HyperStreamExec {
             base_schema,
             schema: projected_schema,
             properties,
-        }
+        })
     }
     pub fn projection(&self) -> Option<&Vec<usize>> {
         self.projection.as_ref()
@@ -136,7 +137,7 @@ impl ExecutionPlan for HyperStreamExec {
             self.vector_params.clone(),
             self.limit,
             self.base_schema.clone(),  // Use base schema for reprojection
-        )))
+        )?))
     }
 
     fn execute(
@@ -192,7 +193,7 @@ impl ExecutionPlan for HyperStreamExec {
                 
                 let query_filter = if let Some(ref f) = filter {
                      use crate::core::planner::QueryFilter;
-                     Some(QueryFilter::parse(f).ok_or("Parse Error").unwrap()) // TODO: proper error
+                     Some(QueryFilter::parse(f).ok_or_else(|| DataFusionError::Execution(format!("Failed to parse filter: {}", f)))?)
                 } else {
                     None
                 };
