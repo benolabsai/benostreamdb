@@ -408,6 +408,13 @@ impl PyTable {
         Ok(())
     }
 
+    /// Add columns to indexing configuration
+    #[pyo3(signature = (columns, tokenizer=None))]
+    fn add_index_columns(&mut self, columns: Vec<String>, tokenizer: Option<String>) -> PyResult<()> {
+        self.table.add_index_columns(columns, tokenizer)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    }
+
     /// Remove columns from indexing configuration
     fn remove_index_columns(&mut self, columns: Vec<String>) {
         self.table.remove_index_columns(columns);

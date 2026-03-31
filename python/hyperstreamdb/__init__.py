@@ -397,6 +397,16 @@ class Table:
         """Get full table statistics."""
         return self._inner.get_table_statistics()
 
+    def add_index_columns(self, columns: List[str], tokenizer: Optional[str] = None):
+        """
+        Add columns to the indexing configuration.
+        
+        Args:
+            columns: List of column names to index.
+            tokenizer: Optional tokenizer name from the registry.
+        """
+        return self._inner.add_index_columns(columns, tokenizer)
+
     def set_index_config(self, column: str, enabled: bool = True, tokenizer: Optional[str] = None, device: Optional[str] = None):
         """
         Set indexing configuration for a specific column.
