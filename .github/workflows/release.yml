@@ -101,7 +101,7 @@ jobs:
           shared-key: "linux-x86_64"
           cache-targets: false
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.30
+        uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
           cuda: '12.1.0'
