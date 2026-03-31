@@ -11,6 +11,7 @@ pub mod maintenance;
 pub mod compaction;
 pub mod merge;
 pub mod query;
+#[cfg(feature = "java")]
 pub mod ffi;
 pub mod index;
 pub mod sql;

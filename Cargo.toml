@@ -14,6 +14,10 @@ categories = ["database-implementations", "data-structures", "concurrency"]
 name = "hyperstreamdb"
 crate-type = ["cdylib", "rlib"]
 
+[[test]]
+name = "test_connector_ffi"
+required-features = ["java"]
+
 [features]
 default = ["intel_gpu", "candle"]
 candle = []
