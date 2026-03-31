@@ -1612,7 +1612,18 @@ impl Table {
             }
         }
 
-        // 3. Vector Plan
+        // 3. Scalar Plan (First: Pre-filter the dataset)
+        if !access_paths.is_empty() {
+            plan.push("Scalar Execution:".to_string());
+            for path in access_paths {
+                plan.push(path);
+            }
+            let pct = if scanned_rows > 0 { (scalar_hits as f32 / scanned_rows as f32) * 100.0 } else { 0.0 };
+            plan.push(format!("     [Selectivity: {} / {} rows ({:.2}%)]", scalar_hits, scanned_rows, pct));
+            plan.push("".to_string());
+        }
+
+        // 4. Vector Plan (Second: Vector search on pre-filtered rows)
         if let Some(ref vs) = vector_param {
             plan.push("Vector Execution:".to_string());
             plan.push(format!("  -> VectorSearch (col: {}, k: {}, metric: {:?})", vs.column, vs.k, vs.metric));
@@ -1623,17 +1634,6 @@ impl Table {
             
             let access_mode = if has_vector_index { "HNSW-IVF Cluster Index" } else { "Brute Force Scan (No Index)" };
             plan.push(format!("     [Access: {}] [Eligibility: {} rows]", access_mode, scalar_hits));
-            plan.push("".to_string());
-        }
-
-        // 4. Scalar Plan
-        if !access_paths.is_empty() {
-            plan.push("Scalar Execution:".to_string());
-            for path in access_paths {
-                plan.push(path);
-            }
-            let pct = if scanned_rows > 0 { (scalar_hits as f32 / scanned_rows as f32) * 100.0 } else { 0.0 };
-            plan.push(format!("     [Selectivity: {} / {} rows ({:.2}%)]", scalar_hits, scanned_rows, pct));
             plan.push("".to_string());
         }
         

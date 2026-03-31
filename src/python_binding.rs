@@ -785,9 +785,14 @@ impl PyTable {
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
-    /// Commit buffered writes to disk (flush)
+    /// Commit buffered writes to disk (automatically flushes first, then finalizes metadata)
     fn commit(&self, py: Python<'_>) -> PyResult<()> {
-        // Release GIL during commit to allow other Python threads to run
+        // Flush write buffer to disk first (triggers vector shuffling and index building)
+        py.allow_threads(|| {
+            self.query_pool.block_on(self.table.flush_async())
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+        
+        // Finalize metadata
         py.allow_threads(|| {
             self.table.commit()
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
@@ -800,10 +805,13 @@ impl PyTable {
         self.wait_for_background_tasks(py)
     }
 
-    /// Async commit
+    /// Async commit (flushes then finalizes metadata asynchronously)
     fn commit_async(&self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.commit_async())
+            self.query_pool.block_on(async {
+                self.table.flush_async().await?;
+                self.table.commit_async().await
+            })
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         

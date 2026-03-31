@@ -55,10 +55,9 @@ def run_rag_demo():
     table = hdb.Table(db_path, explain=True, context=ctx)
     table.add_index_columns(["embedding", "context"])
     table.write(unique_contexts_df[["context", "title", "embedding"]])
+    print("Committing table (flushes data and builds vector indexes)...")
     table.commit()
-    print("Ingestion complete. Flushing disk cache...")
-    import time
-    time.sleep(1)
+    print("Ingestion complete.")
 
     # 3. Retrieval
     def retrieve(question, k=3):
