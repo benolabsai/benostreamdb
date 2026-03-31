@@ -327,7 +327,10 @@ class Table:
             filter = kwargs.pop("filter")
             
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
-        return self._inner.to_pandas(filter, vf, columns, context=context)
+        # Filter out HyperStreamDB-specific kwargs before passing to inner to_pandas
+        # which passes them to pyarrow.Table.to_pandas
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["k", "n_probe", "column"]}
+        return self._inner.to_pandas(filter, vf, columns, context=context, **filtered_kwargs)
 
     def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, context: Optional[Any] = None, **kwargs):
         """
@@ -337,6 +340,7 @@ class Table:
             filter = kwargs.pop("filter")
             
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
+        # to_arrow in Rust doesn't currently take **kwargs
         return self._inner.to_arrow(filter, vf, columns, context=context)
 
     def query(self) -> Query:

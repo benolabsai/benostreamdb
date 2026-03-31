@@ -32,7 +32,7 @@ impl Tokenizer for StandardTokenizer {
 pub struct IdentityTokenizer;
 impl Tokenizer for IdentityTokenizer {
     fn tokenize(&self, text: &str) -> Vec<String> {
-        vec![text.to_string()]
+        vec![text.trim().to_string()]
     }
 }
 

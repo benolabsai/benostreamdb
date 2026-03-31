@@ -241,11 +241,23 @@ impl Table {
         self.memory_index.read().unwrap().is_some()
     }
 
-    /// Create a new Table instance (Synchronous)
-    /// This blocks the current thread to load the schema.
-    /// CAUTION: Do not call this from within an async runtime. Use `new_async` instead.
     pub fn new(uri: String) -> Result<Self> {
-        // 1. Check if it's an Iceberg REST URI
+        // Normalize URI to absolute path if it is local
+        let uri = if !uri.contains("://") || uri.starts_with("file://") {
+            let path = uri.strip_prefix("file://").unwrap_or(&uri);
+            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| {
+                // If path doesn't exist yet (e.g. create_async), we manually build absolute path
+                if let Ok(current) = std::env::current_dir() {
+                    current.join(path)
+                } else {
+                    std::path::PathBuf::from(path)
+                }
+            });
+            format!("file://{}", abs_path.display())
+        } else {
+            uri
+        };
+
         if let Some((base, prefix, ns, table)) = Self::detect_iceberg_rest(&uri) {
             let rt = Arc::new(Runtime::new()?);
             let rest_uri = uri.clone();
@@ -796,6 +808,21 @@ impl Table {
     /// Create a new Table instance (Asynchronous)
     /// This is safe to call from within an async runtime.
     pub async fn new_async(uri: String) -> Result<Self> {
+        // Normalize URI to absolute path if it is local
+        let uri = if !uri.contains("://") || uri.starts_with("file://") {
+            let path = uri.strip_prefix("file://").unwrap_or(&uri);
+            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| {
+                if let Ok(current) = std::env::current_dir() {
+                    current.join(path)
+                } else {
+                    std::path::PathBuf::from(path)
+                }
+            });
+            format!("file://{}", abs_path.display())
+        } else {
+            uri
+        };
+
         // 1. Check if it's an Iceberg REST URI
         if let Some((base, prefix, ns, table)) = Self::detect_iceberg_rest(&uri) {
             return Self::new_from_rest(base, prefix, ns, table, &uri).await;

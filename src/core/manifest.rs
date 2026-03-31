@@ -1245,6 +1245,7 @@ impl ManifestManager {
                     
                     // 5. Update Caches
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     crate::core::cache::LATEST_VERSION_CACHE.insert(dir_key, new_ver).await;
                     
                     // Cache the new manifest file eagerly

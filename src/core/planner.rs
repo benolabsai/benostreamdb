@@ -35,8 +35,20 @@ impl FilterExpr {
 
         let sql = format!("SELECT * FROM t WHERE {}", filter);
         
+        // Normalize schema to use standard Utf8 for string columns to avoid Utf8/LargeUtf8 confusion
+        let normalized_fields: Vec<arrow::datatypes::Field> = schema.fields().iter().map(|f| {
+            if let arrow::datatypes::DataType::LargeUtf8 = f.data_type() {
+                let mut nf = f.as_ref().clone();
+                nf.set_data_type(arrow::datatypes::DataType::Utf8);
+                nf
+            } else {
+                f.as_ref().clone()
+            }
+        }).collect();
+        let normalized_schema = Arc::new(arrow::datatypes::Schema::new(normalized_fields));
+
         let ctx = SessionContext::new();
-        let table = datafusion::datasource::empty::EmptyTable::new(schema.clone());
+        let table = datafusion::datasource::empty::EmptyTable::new(normalized_schema);
         ctx.register_table(TableReference::bare("t"), Arc::new(table))?;
         let df = ctx.sql(&sql).await?;
         let plan = df.logical_plan();
@@ -452,6 +464,13 @@ impl QueryPlanner {
                 coerced_columns.push(casted);
                 let mut new_field = field.as_ref().clone();
                 new_field.set_data_type(arrow::datatypes::DataType::Utf8);
+                coerced_fields.push(Arc::new(new_field));
+                changed = true;
+            } else if let arrow::datatypes::DataType::LargeBinary = field.data_type() {
+                let casted = arrow::compute::cast(batch.column(i), &arrow::datatypes::DataType::Binary)?;
+                coerced_columns.push(casted);
+                let mut new_field = field.as_ref().clone();
+                new_field.set_data_type(arrow::datatypes::DataType::Binary);
                 coerced_fields.push(Arc::new(new_field));
                 changed = true;
             } else {

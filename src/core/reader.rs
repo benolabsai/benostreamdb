@@ -1124,20 +1124,42 @@ impl HybridReader {
                 batch_distances.push(distance);
             }
             
-            // Extract distances for this batch
-
-            
-            let final_batch = if rows_to_process < num_rows {
-                // If we coalesced segments in RowSelection, we must slice the batch
-                // to match the specific rows in the bitmap.
-                // NOTE: This assumes RowSelection and Bitmap iteration are perfectly aligned.
+            let mut final_batch = if rows_to_process < num_rows {
                 batch.slice(0, rows_to_process)
             } else {
                 batch
             };
             
             current_offset += rows_to_process;
-            results.push((final_batch, batch_distances));
+
+            // --- BUG FIX: Apply post-filtering if a filter was provided ---
+            // This ensures correctness even if the index search was overly permissive (e.g. missing inverted indexes for some terms)
+            if let Some(expr) = filter {
+                let planner = crate::core::planner::QueryPlanner::new();
+                match planner.evaluate_expr(&final_batch, expr) {
+                    Ok(mask) => {
+                        // Filter the batch
+                        let prev_rows = final_batch.num_rows();
+                        final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
+                        
+                        // Filter the distances to match the new batch
+                        let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                        for i in 0..prev_rows {
+                            if mask.value(i) {
+                                filtered_distances.push(batch_distances[i]);
+                            }
+                        }
+                        batch_distances = filtered_distances;
+                    },
+                    Err(_) => {
+                        // Silently skip if evaluation fails (to maintain backward compatibility with unknown exprs)
+                    },
+                }
+            }
+
+            if final_batch.num_rows() > 0 {
+                results.push((final_batch, batch_distances));
+            }
         }
         
         Ok(results)
