@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+#![cfg(feature = "java")]
 
 use hyperstreamdb::Table;
-use hyperstreamdb::core::ffi::HyperStreamSession; // Requires pub usage of implementation details
+use hyperstreamdb::core::ffi::HyperStreamSession;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
@@ -64,7 +65,7 @@ async fn test_connector_simulation() -> Result<(), Box<dyn std::error::Error>> {
     assert!(splits.len() >= 2, "Expected at least 2 splits for 2 segments");
 
     // Worker Simulation
-    let (total_rows, seen_ids) = tokio::task::spawn_blocking(move || {
+    let (total_rows, seen_ids): (usize, std::collections::HashSet<i32>) = tokio::task::spawn_blocking(move || {
         let mut total_rows = 0;
         let mut seen_ids = std::collections::HashSet::new();
 
