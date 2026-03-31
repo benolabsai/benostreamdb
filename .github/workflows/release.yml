@@ -92,13 +92,13 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        target: [x86_64, aarch64]
+        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-${{ matrix.target }}"
+          shared-key: "linux-x86_64"
           cache-targets: false
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
@@ -130,19 +130,15 @@ jobs:
           # Create a platform-specific stub dir
           mkdir -p /tmp/stubs
           
-          # Target architectures
-          if [ "${{ matrix.target }}" = "aarch64" ]; then
-            ZIG_TARGET="aarch64-linux-gnu.2.17"
-          else
-            ZIG_TARGET="x86_64-linux-gnu.2.17"
-          fi
+          # We only build x86_64 now
+          ZIG_TARGET="x86_64-linux-gnu.2.17"
           
           # 1. Create OpenCL stub (with more common symbols)
           echo 'void clGetPlatformIDs() {} void clGetDeviceIDs() {} void clCreateContext() {}' > /tmp/stubs/opencl_stub.c
           zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libOpenCL.so /tmp/stubs/opencl_stub.c
           ln -sf libOpenCL.so /tmp/stubs/libOpenCL.so.1
           
-          # 2. Create CUDA stub (to avoid taking incompatible host stubs)
+          # 2. Create CUDA stub
           echo 'void cuInit() {} void cuDeviceGet() {} void cuCtxCreate_v2() {}' > /tmp/stubs/cuda_stub.c
           zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libcuda.so /tmp/stubs/cuda_stub.c
           ln -sf libcuda.so /tmp/stubs/libcuda.so.1
