@@ -97,3 +97,4 @@ python/hyperstreamdb/*.so
 python/hyperstreamdb/*.pyd
 python/hyperstreamdb/*.dylib
 python/hyperstreamdb/*.dSYM/
+groq_api_key.txt
