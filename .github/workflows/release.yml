@@ -203,6 +203,46 @@ jobs:
           name: wheels-macos-${{ matrix.target }}
           path: dist
 
+  windows:
+    needs: [check]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [x64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-${{ matrix.target }}"
+          cache-targets: false
+      - name: Update version from tag
+        shell: bash
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            export VERSION=${GITHUB_REF#refs/tags/v}
+            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            # Only replace the FIRST occurrence in each file
+            perl -i -pe "$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1" Cargo.toml
+            perl -i -pe "$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1" pyproject.toml
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter
+          sccache: 'false'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}
+          path: dist
+
   sdist:
     needs: [check]
     runs-on: ubuntu-latest
@@ -258,7 +298,7 @@ jobs:
     name: Final Release
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [linux, macos, sdist]
+    needs: [linux, macos, windows, sdist]
     environment: release_pypi
     steps:
       - uses: actions/download-artifact@v4
