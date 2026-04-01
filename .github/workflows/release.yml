@@ -225,8 +225,8 @@ jobs:
             export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
-            perl -i -pe "$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1" Cargo.toml
-            perl -i -pe "$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1" pyproject.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
           fi
       - uses: actions/setup-python@v5
         with:
