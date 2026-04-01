@@ -98,3 +98,8 @@ python/hyperstreamdb/*.pyd
 python/hyperstreamdb/*.dylib
 python/hyperstreamdb/*.dSYM/
 groq_api_key.txt
+\n# Local Vector DBs\nrag_db/\nnewd_db/
+
+# Local Vector DBs
+rag_db/
+newd_db/
