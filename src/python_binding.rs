@@ -1036,6 +1036,16 @@ impl PyTable {
             let provider = Arc::new(crate::core::sql::HyperStreamTableProvider::new(Arc::new(self.table.clone())));
             ctx.register_table("t", provider).map_err(|e| e.to_string())?;
             
+            // Register vector UDFs (dist_l2, dist_cosine, etc.)
+            for udf in crate::core::sql::vector_udf::all_vector_udfs() {
+                ctx.register_udf(udf);
+            }
+            
+            // Register vector aggregates (vector_avg, etc.)
+            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
+                ctx.register_aggregate_udf(udf);
+            }
+            
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
             let schema: arrow::datatypes::SchemaRef = std::sync::Arc::new(df.schema().as_arrow().clone());
