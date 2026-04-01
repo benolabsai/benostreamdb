@@ -256,7 +256,7 @@ class CompetitiveBenchmark:
                 start = time.time()
                 results = table.sql(f"""
                     SELECT id, category, price, dist_l2(embedding, {query_vector.tolist()}) as distance
-                    FROM table
+                    FROM t
                     WHERE category = 'A' AND price > 100
                     ORDER BY distance
                     LIMIT {k}

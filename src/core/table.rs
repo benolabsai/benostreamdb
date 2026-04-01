@@ -1495,7 +1495,8 @@ impl Table {
         use datafusion::prelude::SessionContext;
         use crate::core::sql::HyperStreamTableProvider;
 
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
         let df = ctx.sql(query).await?;

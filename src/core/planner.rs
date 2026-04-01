@@ -47,7 +47,8 @@ impl FilterExpr {
         }).collect();
         let normalized_schema = Arc::new(arrow::datatypes::Schema::new(normalized_fields));
 
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let table = datafusion::datasource::empty::EmptyTable::new(normalized_schema);
         ctx.register_table(TableReference::bare("t"), Arc::new(table))?;
         let df = ctx.sql(&sql).await?;
@@ -466,7 +467,8 @@ impl QueryPlanner {
         use datafusion::physical_expr::create_physical_expr;
         use datafusion::prelude::SessionContext;
 
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let state = ctx.state();
         
         // Type Coercion: DataFusion sometimes struggles with LargeUtf8 vs Utf8 in direct physical expr evaluation.
