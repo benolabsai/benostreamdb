@@ -9,6 +9,21 @@ homepage = "https://github.com/rla3rd/hyperstreamdb"
 readme = "README.md"
 keywords = ["database", "vector-search", "iceberg", "parquet", "indexing"]
 categories = ["database-implementations", "data-structures", "concurrency"]
+exclude = [
+    ".venv",
+    "venv",
+    "target",
+    ".git",
+    ".github",
+    "*.db",
+    "test_*",
+    "rag_db",
+    "news_db",
+    "demo",
+    "docker",
+    "benchmarks",
+    "examples"
+]
 
 [lib]
 name = "hyperstreamdb"
