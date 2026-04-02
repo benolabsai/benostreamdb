@@ -1,11 +1,12 @@
 import os
+import shutil
 import pandas as pd
 import numpy as np
 import hyperstreamdb as hdb
 
-DB_PATH = "test_unified_ingest_db"
+DB_PATH = "test_unified_verify_db"
 if os.path.exists(DB_PATH):
-    pass
+    shutil.rmtree(DB_PATH)
 
 # Setup
 table = hdb.Table.create(DB_PATH, hdb.Schema([

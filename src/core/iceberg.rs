@@ -80,6 +80,8 @@ pub struct IcebergDataFile {
     pub referenced_data_file: Option<String>,
     pub content_offset: Option<i64>,
     pub content_size_in_bytes: Option<i64>,
+    /// HyperStream Extension: Serialized Index Files (JSON)
+    pub index_files: Option<String>,
 }
 
 pub fn read_manifest_list<R: Read>(reader: R) -> Result<Vec<IcebergManifestListEntry>> {
@@ -197,6 +199,7 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
     let mut referenced_data_file = None;
     let mut content_offset = None;
     let mut content_size_in_bytes = None;
+    let mut index_files = None;
 
     for (name, val) in fields {
         match name.as_str() {
@@ -245,6 +248,12 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
                     content_size_in_bytes = Some(s);
                 }
             },
+            "index_files" => {
+                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                if let AvroValue::String(s) = inner {
+                    index_files = Some(s);
+                }
+            },
             _ => {}
         }
     }
@@ -266,6 +275,7 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
         referenced_data_file,
         content_offset,
         content_size_in_bytes,
+        index_files,
     })
 }
 
@@ -600,26 +610,26 @@ pub fn convert_iceberg_to_object(
                         min: Some(min_val),
                         max: max_val,
                         null_count,
-                        distinct_count: None,
+                        ..Default::default()
                     });
                 }
             }
         }
 
+        let index_files = if let Some(idx_json) = &df.index_files {
+            serde_json::from_str(idx_json).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        
         Ok(IcebergManifestObject::Data(ManifestEntry {
             file_path: df.file_path.clone(),
             file_size_bytes: df.file_size_in_bytes,
             record_count: df.record_count,
-            index_files: Vec::new(),
-            delete_files: Vec::new(),
             column_stats,
             partition_values,
-            clustering_strategy: None,
-            clustering_columns: None,
-            min_clustering_score: None,
-            max_clustering_score: None,
-            normalization_mins: None,
-            normalization_maxs: None,
+            index_files,
+            ..Default::default()
         }))
     } else {
         // Delete File
@@ -1139,6 +1149,14 @@ impl IcebergWriter {
             data_file.put("partition", apache_avro::types::Value::Record(partition_record_values));
             data_file.put("equality_ids", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
 
+            // Populate index_files if present
+            if !entry.index_files.is_empty() {
+                let index_json = serde_json::to_string(&entry.index_files).unwrap_or_else(|_| "[]".to_string());
+                data_file.put("index_files", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::String(index_json))));
+            } else {
+                data_file.put("index_files", apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)));
+            }
+
             record.put("data_file", data_file);
             writer.append(record)?;
 
@@ -1268,7 +1286,8 @@ impl IcebergWriter {
                 {{"name": "nan_value_counts", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k4", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"long"}}]}}}}], "default": null}},
                 {{"name": "lower_bounds", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k5", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"bytes"}}]}}}}], "default": null}},
                 {{"name": "upper_bounds", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k6", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"bytes"}}]}}}}], "default": null}},
-                {{"name": "equality_ids", "type": ["null", {{"type": "array", "items": "int"}}], "default": null}}
+                {{"name": "equality_ids", "type": ["null", {{"type": "array", "items": "int"}}], "default": null}},
+                {{"name": "index_files", "type": ["null", "string"], "default": null}}
             ]
         }}
     }}]
