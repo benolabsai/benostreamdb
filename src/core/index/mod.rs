@@ -7,6 +7,7 @@ pub mod distance;
 pub mod pq;
 pub mod memory;
 pub mod gpu;
+pub mod hnsw_rs;
 
 use anyhow::Result;
 use roaring::RoaringBitmap;

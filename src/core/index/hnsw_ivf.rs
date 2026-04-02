@@ -17,7 +17,7 @@
 use anyhow::{Result, Context};
 use std::collections::HashMap;
 use std::sync::Arc;
-use hnsw_rs::prelude::*;
+use crate::core::index::hnsw_rs::prelude::*;
 use super::ivf::simple_kmeans;
 use super::pq::{PqEncoder, PqConfig};
 use super::{VectorMetric, VectorValue};
@@ -547,21 +547,21 @@ impl HnswIvfIndex {
             let mut graph_reader = std::io::BufReader::new(Cursor::new(graph_bytes));
             let mut data_reader = std::io::BufReader::new(Cursor::new(data_bytes));
             
-            let description = hnsw_rs::hnswio::load_description(&mut graph_reader)
+            let description = crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
                 .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
             
             let hnsw = match metric {
-                VectorMetric::L2 => HnswGraph::L2(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
+                VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Cosine => HnswGraph::Cosine(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
+                VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::InnerProduct => HnswGraph::Dot(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
+                VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::L1 => HnswGraph::L1(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
+                VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Hamming => HnswGraph::Hamming(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
+                VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Jaccard => HnswGraph::Jaccard(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
+                VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
             };
             
@@ -711,7 +711,7 @@ impl HnswIvfIndex {
                     let mut graph_reader = std::io::BufReader::new(graph_cursor);
                     let mut data_reader = std::io::BufReader::new(data_cursor);
                     
-                    let description = hnsw_rs::hnswio::load_description(&mut graph_reader)
+                    let description = crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
                         .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
                     
                     let metric = metric; // Use the metric loaded from centroids metadata
@@ -719,17 +719,17 @@ impl HnswIvfIndex {
                     // Better: HnswIvfIndex should save metric in centroids parquet metadata.
                     
                     let hnsw = match metric {
-                        VectorMetric::L2 => HnswGraph::L2(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
+                        VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Cosine => HnswGraph::Cosine(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
+                        VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::InnerProduct => HnswGraph::Dot(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
+                        VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::L1 => HnswGraph::L1(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
+                        VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Hamming => HnswGraph::Hamming(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
+                        VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Jaccard => HnswGraph::Jaccard(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
+                        VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
                     };
                         
@@ -844,22 +844,22 @@ impl HnswIvfIndex {
             let mut graph_reader = BufReader::new(graph_file);
             let mut data_reader = BufReader::new(data_file);
             
-            let description = hnsw_rs::hnswio::load_description(&mut graph_reader)
+            let description = crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
                 .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
             
             // Use the metric loaded from centroids metadata
             let hnsw = match metric {
-                VectorMetric::L2 => HnswGraph::L2(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
+                VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Cosine => HnswGraph::Cosine(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
+                VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::InnerProduct => HnswGraph::Dot(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
+                VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::L1 => HnswGraph::L1(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
+                VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Hamming => HnswGraph::Hamming(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
+                VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Jaccard => HnswGraph::Jaccard(hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
+                VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
             };
             

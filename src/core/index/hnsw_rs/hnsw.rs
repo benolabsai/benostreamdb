@@ -27,7 +27,7 @@ use std::collections::HashSet;
 // use log::debug;
 use log::trace;
 
-pub use crate::dist::Distance;
+pub use crate::core::index::hnsw_rs::dist::Distance;
 
 
 // TODO
@@ -1509,7 +1509,7 @@ pub(crate) fn check_graph_equality<T1, D1, T2, D2>(hnsw1:&Hnsw<T1,D1>, hnsw2: &H
 mod tests {
 
 use super::*;
-use crate::dist;
+use crate::core::index::hnsw_rs::dist;
 
 use rand::distributions::{Uniform};
 

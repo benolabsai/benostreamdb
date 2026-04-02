@@ -1,8 +1,5 @@
+//
 //! This file provides hdf5 utilities to load ann-benchmarks hdf5 data files
-//! As the libray does not depend on hdf5 nor on ndarray, it is nearly the same for both
-//! ann benchmarks.  
-//! The only way I found make the library independant and ndarray.
-
 
 use ndarray::{Array2};
 
@@ -10,6 +7,12 @@ use ::hdf5::*;
 
 
 
+use crate::core::index::hnsw_rs::hnsw;
+
+#[allow(unused_imports)]    // necessary for rls
+use crate::core::index::hnsw_rs::dist;
+
+pub use self::hnsw::*;
 
 // datasets 
 //   . distances (nbojects, dim)   f32 matrix    for tests objects
@@ -178,7 +181,17 @@ impl AnnBenchmarkData {
          Ok(AnnBenchmarkData{fname:fname.clone(), test_distances, test_neighbours, test_data, train_data, searched_neighbours, searched_distances})     
         } // end new
 
+    /// do l2 normalisation of test and train vector to use DistDot metrinc instead DistCosine to spare cpu
+        pub fn do_l2_normalization(&mut self) {
+        for i in 0..self.test_data.len() {
+            dist::l2_normalize(&mut self.test_data[i]);
+        }
+        for i in 0..self.train_data.len() {
+            dist::l2_normalize(&mut self.train_data[i].0);
+        }
+    }
 }  // end of impl block
+
 
 
 
