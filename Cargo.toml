@@ -34,7 +34,7 @@ name = "test_connector_ffi"
 required-features = ["java"]
 
 [features]
-default = ["intel_gpu", "candle"]
+default = ["candle"]
 candle = []
 cuda = ["dep:cust", "intel_gpu"]
 rocm = ["dep:opencl3", "intel_gpu"] # Fallback to OpenCL for now
@@ -45,6 +45,8 @@ python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize"]
 java = ["dep:jni"]
 simdeez_f = []
 stdsimd = []
+intel_cpu = ["simdeez_f", "stdsimd"]
+simd = ["intel_cpu"]
 
 [dependencies]
 # core columnar memory format
