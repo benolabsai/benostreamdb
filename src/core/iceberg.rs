@@ -712,7 +712,10 @@ impl PositionDeleteReader {
                 }
 
                 if let (Some(fp), Some(p)) = (file_path, pos) {
-                    if fp == target_data_file_path {
+                    let fp_clean = fp.replace("file://", "");
+                    let target_clean = target_data_file_path.replace("file://", "");
+                    
+                    if fp_clean == target_clean || target_clean.ends_with(&fp_clean) || fp_clean.ends_with(&target_clean) {
                         deleted_positions.insert(p);
                     }
                 }
@@ -740,7 +743,11 @@ impl PositionDeleteReader {
                     .ok_or_else(|| anyhow::anyhow!("pos column is not int64"))?;
                 
                 for i in 0..batch.num_rows() {
-                    if file_paths.value(i) == target_data_file_path {
+                    let fp = file_paths.value(i);
+                    let fp_clean = fp.replace("file://", "");
+                    let target_clean = target_data_file_path.replace("file://", "");
+                    
+                    if fp_clean == target_clean || target_clean.ends_with(&fp_clean) || fp_clean.ends_with(&target_clean) {
                         deleted_positions.insert(positions.value(i));
                     }
                 }
