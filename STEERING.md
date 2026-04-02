@@ -3,6 +3,9 @@
 
 This file serves as the "steering" document for all development on HyperStreamDB. Every contribution, refactor, and release should align with these principles.
 
+## 👤 Development Identity
+- **Use the Correct Identity**: All contributions, PRs, and commits must be issued using the `rla3rd` GitHub account. This ensures consistent ownership and correct collaborator permissions across the project infrastructure.
+
 ## 🛠️ The Craft of Programming
 - **Care About Your Craft**: We are building a database. Reliability, performance, and correctness are not features; they are foundational.
 - **Think! About Your Work**: Never program on autopilot. Every line of code, every SQL optimization, and every CI change should be done with intent.
