@@ -24,6 +24,7 @@ data = pd.DataFrame({
 print(f"Ingesting {len(data)} rows with Compound PK...")
 table.write(data)
 table.commit()
+table.wait_for_background_tasks()
 
 # 3. Verify PK 
 print(f"Current PK: {table.primary_key}")

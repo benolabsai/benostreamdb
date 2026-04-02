@@ -57,7 +57,7 @@ Repository = "https://github.com/rla3rd/hyperstreamdb"
 features = ["python"]
 # Map Python extras to Rust features
 extra-features = { mps = ["mps"], cuda = ["cuda"], rocm = ["rocm"], intel_gpu = ["intel_gpu"], intel_cpu = ["intel_cpu"] }
-module-name = "hyperstreamdb"
+module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings
 bindings = "pyo3"
