@@ -182,3 +182,6 @@ harness = false
 [[bench]]
 name = "bench_table"
 harness = false
+
+[patch.crates-io]
+hnsw_rs = { path = "vendor/hnsw_rs" }
