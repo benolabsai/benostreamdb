@@ -68,7 +68,7 @@ impl TableProvider for HyperStreamTableProvider {
         let partitions: Vec<_> = partitions.into_iter().filter(|p| !p.is_empty()).collect();
 
         // fetch index columns to prioritize filters
-        let index_cols = self.table.get_index_columns(); // This returns Vec<String>
+        let _index_cols = self.table.get_index_columns(); // This returns Vec<String>
 
         // Convert DataFusion filters to HyperStream SQL-like filter string
         // Returns Option<(ColumnName, SQLString)>
@@ -136,27 +136,19 @@ impl TableProvider for HyperStreamTableProvider {
         }
 
         // Selection Logic:
-        // 1. Pick first filter that targets an indexed column.
-        // 2. If none, pick first valid filter.
-        // 3. Ignore others (DataFusion will re-apply them anyway).
-        
-        let mut best_filter: Option<String> = None;
-
+        // Aggregate all pushable filters
+        let mut all_filters = Vec::new();
         for filter in filters {
-            if let Some((col, sql)) = expr_to_sql(filter) {
-                let is_indexed = index_cols.contains(&col);
-                
-                if is_indexed {
-                    best_filter = Some(sql);
-                    // found_indexed = true;
-                    break; // Found the golden ticket
-                }
-                
-                if best_filter.is_none() {
-                    best_filter = Some(sql);
-                }
+            if let Some((_col, sql)) = expr_to_sql(filter) {
+                all_filters.push(sql);
             }
         }
+        
+        let best_filter = if all_filters.is_empty() {
+            None
+        } else {
+            Some(all_filters.join(" AND "))
+        };
         
         Ok(Arc::new(HyperStreamExec::new(
             self.table.clone(),

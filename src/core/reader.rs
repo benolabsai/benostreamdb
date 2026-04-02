@@ -387,10 +387,10 @@ impl HybridReader {
     pub async fn get_scalar_filter_bitmap(&self, filter: &crate::core::planner::QueryFilter) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
         
-        // Step 1: Check if we have inverted index files for this column
+        eprintln!("DEBUG: Searching for index for column: {}. Available index files: {:?}", filter_column, self.config.index_files);
         let inv_idx_info = self.config.index_files.iter()
             .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(filter_column));
-        
+            
         let matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
             let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
@@ -467,44 +467,74 @@ impl HybridReader {
                 // Perform range/value filtering on inverted index keys
                 for i in 0..batch.num_rows() {
                     let key_ok = match (key_array.data_type(), &filter.min, &filter.max) {
-                        // String equality
-                        (arrow::datatypes::DataType::Utf8, Some(min_val), Some(max_val)) 
-                            if min_val == max_val && filter.min_inclusive && filter.max_inclusive => {
+                        (arrow::datatypes::DataType::Utf8, Some(min_val), _) => {
                             let val = key_array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(i);
-                            let target = min_val.as_str().unwrap_or("");
-                            val == target
+                            let mut ok = true;
+                            if let Some(min_s) = min_val.as_str() {
+                                if filter.min_inclusive { ok &= val >= min_s; } else { ok &= val > min_s; }
+                            }
+                            if let Some(max_val) = &filter.max {
+                                if let Some(max_s) = max_val.as_str() {
+                                    if filter.max_inclusive { ok &= val <= max_s; } else { ok &= val < max_s; }
+                                }
+                            }
+                            ok
                         },
-                        // Date32 equality
-                        (arrow::datatypes::DataType::Date32, Some(min_val), Some(max_val))
-                            if min_val == max_val && filter.min_inclusive && filter.max_inclusive => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap().value(i);
-                            let target = min_val.as_i64().unwrap_or(0) as i32;
-                            val == target
+                        (arrow::datatypes::DataType::Int32, Some(min_v), _) => {
+                            let val = key_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap().value(i);
+                            let mut ok = true;
+                            if let Some(min_i) = min_v.as_i64() {
+                                let min_i = min_i as i32;
+                                if filter.min_inclusive { ok &= val >= min_i; } else { ok &= val > min_i; }
+                            }
+                            if let Some(max_v) = &filter.max {
+                                if let Some(max_i) = max_v.as_i64() {
+                                    let max_i = max_i as i32;
+                                    if filter.max_inclusive { ok &= val <= max_i; } else { ok &= val < max_i; }
+                                }
+                            }
+                            ok
                         },
-                        // Date32 range
-                        (arrow::datatypes::DataType::Date32, Some(min), _) => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>()
-                                .ok_or_else(|| anyhow::anyhow!("Expected Date32Array"))?.value(i);
-                            let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
-                            if filter.min_inclusive { val >= min_i } else { val > min_i }
-                        },
-                        // Float64 range
-                        (arrow::datatypes::DataType::Float64, Some(min), _) => {
-                             let val = key_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap().value(i);
-                             let min_f = min.as_f64().unwrap_or(f64::MIN);
-                             val > min_f
-                        },
-                        // Int64 range
-                        (arrow::datatypes::DataType::Int64, Some(min), _) => {
+                        (arrow::datatypes::DataType::Int64, Some(min_v), _) => {
                              let val = key_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(i);
-                             let min_i = min.as_i64().unwrap_or(i64::MIN);
-                             val > min_i
+                             let mut ok = true;
+                             if let Some(min_i) = min_v.as_i64() {
+                                 if filter.min_inclusive { ok &= val >= min_i; } else { ok &= val > min_i; }
+                             }
+                             if let Some(max_v) = &filter.max {
+                                 if let Some(max_i) = max_v.as_i64() {
+                                     if filter.max_inclusive { ok &= val <= max_i; } else { ok &= val < max_i; }
+                                 }
+                             }
+                             ok
                         },
-                        // Int32 range
-                        (arrow::datatypes::DataType::Int32, Some(min), _) => {
-                             let val = key_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap().value(i);
-                             let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
-                             val > min_i
+                        (arrow::datatypes::DataType::Float64, Some(min_v), _) => {
+                             let val = key_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap().value(i);
+                             let mut ok = true;
+                             if let Some(min_f) = min_v.as_f64() {
+                                 if filter.min_inclusive { ok &= val >= min_f; } else { ok &= val > min_f; }
+                             }
+                             if let Some(max_v) = &filter.max {
+                                 if let Some(max_f) = max_v.as_f64() {
+                                     if filter.max_inclusive { ok &= val <= max_f; } else { ok &= val < max_f; }
+                                 }
+                             }
+                             ok
+                        },
+                        (arrow::datatypes::DataType::Date32, Some(min_v), _) => {
+                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap().value(i);
+                            let mut ok = true;
+                            if let Some(min_i) = min_v.as_i64() {
+                                let min_i = min_i as i32;
+                                if filter.min_inclusive { ok &= val >= min_i; } else { ok &= val > min_i; }
+                            }
+                            if let Some(max_v) = &filter.max {
+                                if let Some(max_i) = max_v.as_i64() {
+                                    let max_i = max_i as i32;
+                                    if filter.max_inclusive { ok &= val <= max_i; } else { ok &= val < max_i; }
+                                }
+                            }
+                            ok
                         },
                          // Time32 range
                         (arrow::datatypes::DataType::Time32(unit), Some(min), _) => {
@@ -576,8 +606,11 @@ impl HybridReader {
                         let row_ids = row_ids_list.value(i);
                          let row_ids_array = row_ids.as_any().downcast_ref::<arrow::array::UInt32Array>()
                              .ok_or_else(|| anyhow::anyhow!("Expected UInt32Array in inverted index row_ids"))?;
+                        
+                        let mut current_id = 0;
                         for ri in 0..row_ids_array.len() {
-                            bitmap.insert(row_ids_array.value(ri));
+                            current_id += row_ids_array.value(ri);
+                            bitmap.insert(current_id);
                         }
                     }
                 }
@@ -1003,7 +1036,6 @@ impl HybridReader {
              
              for sub_f in sub_filters {
                  let res = self.get_scalar_filter_bitmap(&sub_f).await;
-                 tracing::debug!("get_scalar_filter_bitmap returned {:?} for column {:?}", res.is_ok(), sub_f.column);
                  if let Ok(Some(bm)) = res {
                      match combined_bitmap {
                          Some(ref mut existing) => { *existing &= bm; },

@@ -34,7 +34,6 @@ use serde::{Serialize, Deserialize};
 use serde_json::Value; // Keep Value
 use arrow::datatypes::{Schema, SchemaRef};
 use crate::core::index::memory::InMemoryVectorIndex;
-use crate::core::index::VectorMetric;
 use crate::core::wal::WriteAheadLog;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -1129,8 +1128,12 @@ impl Table {
     /// * `ascending` - Whether each column should be sorted in ascending order
     /// 
     /// # Example
-    /// ```
+    /// ```no_run
+    /// # use hyperstreamdb::core::table::Table;
+    /// # fn example(table: &Table) -> anyhow::Result<()> {
     /// table.replace_sort_order(&["timestamp", "user_id"], &[false, true])?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn replace_sort_order(&self, columns: &[&str], ascending: &[bool]) -> Result<()> {
         if columns.len() != ascending.len() {
@@ -1495,8 +1498,7 @@ impl Table {
         use datafusion::prelude::SessionContext;
         use crate::core::sql::HyperStreamTableProvider;
 
-        let mut ctx = SessionContext::new();
-        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        let mut ctx = SessionContext::new();        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
         let df = ctx.sql(query).await?;
@@ -1532,7 +1534,7 @@ impl Table {
 
         let planner = QueryPlanner::new();
         let pruned_entries: Vec<(ManifestEntry, Option<IndexFile>)> = if version > 0 {
-            planner.prune_entries(&all_entries, expr.as_ref())
+            planner.prune_entries(&all_entries, expr.as_ref(), vector_param.as_ref())
         } else {
             all_entries.iter().map(|e| (e.clone(), None)).collect()
         };
@@ -1757,9 +1759,9 @@ impl Table {
 
         // 1. Read from Physical Storage (Snapshot Isolation)
         let entries_to_read = if version > 0 {
-            if let Some(ref e) = expr {
+            if expr.is_some() || vector_filter.is_some() {
                 let planner = QueryPlanner::new();
-                planner.prune_entries(&all_entries, Some(e)).into_iter().map(|(e, _)| e).collect()
+                planner.prune_entries(&all_entries, expr.as_ref(), vector_filter.as_ref()).into_iter().map(|(e, _)| e).collect()
             } else {
                 all_entries.clone()
             }
@@ -2084,17 +2086,7 @@ impl Table {
                        entries.push(ManifestEntry {
                            file_path: path,
                            file_size_bytes: meta.size as i64,
-                           record_count: 0,
-                           index_files: vec![],
-                           delete_files: vec![],
-                           column_stats: std::collections::HashMap::new(),
-                           partition_values: std::collections::HashMap::new(),
-                           clustering_strategy: None,
-                           clustering_columns: None,
-                           min_clustering_score: None,
-                           max_clustering_score: None,
-                           normalization_mins: None,
-                           normalization_maxs: None,
+                           ..Default::default()
                        });
                 }
             }
@@ -2231,10 +2223,15 @@ impl Table {
     /// * `fields` - Partition field definitions (source_id, name, transform)
     /// 
     /// # Example
-    /// ```
-    /// table.set_partition_spec(&[
-    ///     PartitionField { source_id: 1, field_id: 1000, name: "month".into(), transform: "month".into() },
+    /// ```no_run
+    /// # use hyperstreamdb::core::table::Table;
+    /// # use hyperstreamdb::core::manifest::PartitionField;
+    /// # async fn example(table: &Table) -> anyhow::Result<()> {
+    /// table.update_spec(&[
+    ///     PartitionField::new_single(1, Some(1000), "month".into(), "month".into()),
     /// ]).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn update_spec(&self, fields: &[crate::core::manifest::PartitionField]) -> Result<()> {
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -2732,8 +2729,8 @@ impl Table {
                     match index_res {
                         Ok(Ok((updated_entry, _files))) => {
                             // Atomic metadata update: Add index files to the existing entry
-                            // (Using commit logic that handles merges)
                             let mut merged_entry = entry_clone;
+                            eprintln!("DEBUG: Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_entry.index_files);
                             merged_entry.index_files = updated_entry.index_files;
                             merged_entry.column_stats = updated_entry.column_stats; 
                             
@@ -2742,10 +2739,13 @@ impl Table {
                             commit_metadata.updated_schemas = Some(vec![manifest_schema]);
                             commit_metadata.updated_schema_id = Some(0);
 
+                            let file_path = merged_entry.file_path.clone();
+                            let index_count = merged_entry.index_files.len();
+
                             match manifest_manager_clone.commit(&[merged_entry], &[], commit_metadata).await {
-                                Ok(_) => println!("Successfully attached indexes to manifest for segment {}", 
-                                                 segment_id_clone),
-                                Err(e) => eprintln!("Failed to attach indexes for segment {}: {}", segment_id_clone, e),
+                                Ok(_) => eprintln!("Successfully attached {} indexes to manifest for segment {}", 
+                                                 index_count, file_path),
+                                Err(e) => eprintln!("Failed to attach indexes for segment {}: {}", file_path, e),
                             }
                         }
                         _ => {
@@ -2960,7 +2960,7 @@ impl Table {
         let arrow_schema = self.arrow_schema();
         let expr = FilterExpr::parse_sql(filter, arrow_schema).await.context("Failed to parse delete filter")?;
         
-        let candidates = planner.prune_entries(&all_entries, Some(&expr));
+        let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
         let mut all_new_entries = Vec::new();
 
         for (entry, _index_file) in candidates {
@@ -3183,18 +3183,7 @@ impl Table {
                 // In a perfect system, writer.to_manifest_entry() should be used.
                 let entry = ManifestEntry {
                     file_path: format!("{}.parquet", new_seg),
-                    file_size_bytes: 0, // Unknown
-                    record_count: 0,
-                    index_files: vec![],
-                    delete_files: vec![],
-                    column_stats: std::collections::HashMap::new(),
-                    partition_values: std::collections::HashMap::new(),
-                    clustering_strategy: None,
-                    clustering_columns: None,
-                    min_clustering_score: None,
-                    max_clustering_score: None,
-                    normalization_mins: None,
-                    normalization_maxs: None,
+                    ..Default::default()
                 };
                 new_entries.push(entry);
             }
@@ -3221,44 +3210,7 @@ pub enum MergeMode {
     MergeOnWrite,
 }
 
-/// Vector search parameters
-#[derive(Debug, Clone)]
-pub struct VectorSearchParams {
-    pub column: String,
-    pub query: crate::core::index::VectorValue,
-    pub k: usize,
-    pub metric: VectorMetric,
-    pub ef_search: Option<usize>,
-    pub probes: Option<usize>,
-}
-
-impl VectorSearchParams {
-    pub fn new(column: &str, query: crate::core::index::VectorValue, k: usize) -> Self {
-        Self {
-            column: column.to_string(),
-            query,
-            k,
-            metric: VectorMetric::L2,
-            ef_search: None,
-            probes: None,
-        }
-    }
-    
-    pub fn with_metric(mut self, metric: VectorMetric) -> Self {
-        self.metric = metric;
-        self
-    }
-
-    pub fn with_ef_search(mut self, ef_search: usize) -> Self {
-        self.ef_search = Some(ef_search);
-        self
-    }
-
-    pub fn with_probes(mut self, probes: usize) -> Self {
-        self.probes = Some(probes);
-        self
-    }
-}
+pub use crate::core::planner::VectorSearchParams;
 
 // ============================================================================
 // Connector APIs for Spark/Trino Integration

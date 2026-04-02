@@ -160,6 +160,28 @@ pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>
         .build()
 });
 
+/// Doris-inspired Block Cache for decoded RecordBatches.
+/// Bypasses Parquet decoding/decompression for frequently accessed blocks.
+pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
+    // Default to 4GB cache if not set
+    let cache_gb: u64 = std::env::var("HYPERSTREAM_BLOCK_CACHE_GB")
+        .unwrap_or_else(|_| "4".to_string())
+        .parse()
+        .unwrap_or(4);
+    
+    let max_kb = cache_gb * 1024 * 1024;
+
+    tracing::info!("Initializing Block Cache with {} GB limit", cache_gb);
+
+    Cache::builder()
+        .weigher(|_key, value: &Arc<RecordBatch>| -> u32 {
+            (value.get_array_memory_size() / 1024) as u32
+        })
+        .max_capacity(max_kb)
+        .time_to_idle(Duration::from_secs(60 * 15))
+        .build()
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;

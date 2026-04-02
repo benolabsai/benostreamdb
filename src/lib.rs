@@ -7,6 +7,9 @@ pub mod enterprise;
 
 pub mod telemetry;
 
+// Include the generated version from build.rs
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
+
 #[cfg(feature = "python")]
 pub mod python_binding;
 
@@ -82,6 +85,9 @@ fn hyperstreamdb(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_packed, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_auto, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_auto, m)?)?;
+    
+    // Add version constant from build.rs
+    m.add("__version__", VERSION)?;
     
     Ok(())
 }

@@ -1013,9 +1013,21 @@ mod tests {
         // On a standard test environment without special flags, this should be CPU
         #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel_gpu")))]
         {
-            assert_eq!(ctx.backend, ComputeBackend::Cpu);
-            assert_eq!(ctx.device_id, -1);
+            assert_eq!(_ctx.backend, ComputeBackend::Cpu);
+            assert_eq!(_ctx.device_id, -1);
         }
+    }
+
+    #[test]
+    fn test_auto_detect_fallback() {
+        // Test that auto_detect returns CPU backend when no real hardware is found 
+        // (This happens in standard CI environments without GPUs)
+        let _ctx = ComputeContext::auto_detect();
+        
+        // Assert that the default is either Cpu or at least has a valid field access
+        // We use -1 for non-hardware specific IDs usually.
+        assert_eq!(_ctx.backend, ComputeBackend::Cpu);
+        assert_eq!(_ctx.device_id, -1);
     }
 
     #[test]

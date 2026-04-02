@@ -19,12 +19,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use hnsw_rs::prelude::*;
 use super::ivf::simple_kmeans;
-use super::distance::{l2_distance, cosine_distance, dot_product, l1_distance, hamming_distance, jaccard_distance};
 use super::pq::{PqEncoder, PqConfig};
 use super::{VectorMetric, VectorValue};
+use rayon::prelude::*;
 use arrow::record_batch::RecordBatch;
 use arrow::array::{Array, AsArray};
-use rayon::prelude::*;
 use object_store::{path::Path, ObjectStore};
 use futures::{StreamExt, TryStreamExt};
 use std::io::Cursor;
@@ -293,12 +292,12 @@ impl HnswIvfIndex {
         let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric, &context)
             .unwrap_or_else(|_| {
                 match self.metric {
-                    VectorMetric::L2 => self.centroids.par_iter().map(|c| l2_distance(query_f32, c)).collect(),
-                    VectorMetric::Cosine => self.centroids.par_iter().map(|c| cosine_distance(query_f32, c)).collect(),
-                    VectorMetric::InnerProduct => self.centroids.par_iter().map(|c| dot_product(query_f32, c)).collect(),
-                    VectorMetric::L1 => self.centroids.par_iter().map(|c| l1_distance(query_f32, c)).collect(),
-                    VectorMetric::Hamming => self.centroids.par_iter().map(|c| hamming_distance(query_f32, c)).collect(),
-                    VectorMetric::Jaccard => self.centroids.par_iter().map(|c| jaccard_distance(query_f32, c)).collect(),
+                    VectorMetric::L2 => crate::core::index::distance::l2_distance_batch(query_f32, &self.centroids),
+                    VectorMetric::Cosine => crate::core::index::distance::cosine_similarity_batch(query_f32, &self.centroids),
+                    VectorMetric::InnerProduct => crate::core::index::distance::dot_product_batch(query_f32, &self.centroids),
+                    VectorMetric::L1 => self.centroids.par_iter().map(|c| crate::core::index::distance::l1_distance(query_f32, c)).collect(),
+                    VectorMetric::Hamming => self.centroids.par_iter().map(|c| crate::core::index::distance::hamming_distance(query_f32, c)).collect(),
+                    VectorMetric::Jaccard => self.centroids.par_iter().map(|c| crate::core::index::distance::jaccard_distance(query_f32, c)).collect(),
                 }
             });
 

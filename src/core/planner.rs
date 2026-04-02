@@ -25,6 +25,47 @@ pub struct QueryFilter {
 }
 
 #[derive(Debug, Clone)]
+pub struct VectorSearchParams {
+    pub column: String,
+    pub query: crate::core::index::VectorValue,
+    pub k: usize,
+    pub metric: crate::core::index::VectorMetric,
+    pub ef_search: Option<usize>,
+    pub probes: Option<usize>,
+    /// Optimization: Metadata-only search (don't load vectors if stats alone guarantee match)
+    pub stats_only: bool,
+}
+
+impl VectorSearchParams {
+    pub fn new(column: &str, query: crate::core::index::VectorValue, k: usize) -> Self {
+        Self {
+            column: column.to_string(),
+            query,
+            k,
+            metric: crate::core::index::VectorMetric::L2,
+            ef_search: None,
+            probes: None,
+            stats_only: false,
+        }
+    }
+
+    pub fn with_metric(mut self, metric: crate::core::index::VectorMetric) -> Self {
+        self.metric = metric;
+        self
+    }
+
+    pub fn with_ef_search(mut self, ef_search: usize) -> Self {
+        self.ef_search = Some(ef_search);
+        self
+    }
+
+    pub fn with_probes(mut self, probes: usize) -> Self {
+        self.probes = Some(probes);
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum FilterExpr {
     DataFusion(Expr),
 }
@@ -48,7 +89,7 @@ impl FilterExpr {
         let normalized_schema = Arc::new(arrow::datatypes::Schema::new(normalized_fields));
 
         let mut ctx = SessionContext::new();
-        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let table = datafusion::datasource::empty::EmptyTable::new(normalized_schema);
         ctx.register_table(TableReference::bare("t"), Arc::new(table))?;
         let df = ctx.sql(&sql).await?;
@@ -178,6 +219,13 @@ impl QueryFilter {
         }
     }
 
+    pub fn parse_multi(filter: &str) -> Vec<Self> {
+        // Handle "A = 1 AND B = 2"
+        filter.split(" AND ")
+            .filter_map(|s| Self::parse(s.trim()))
+            .collect()
+    }
+
     pub fn to_expr(&self) -> Expr {
         use datafusion::prelude::*;
         
@@ -291,17 +339,49 @@ fn extract_filters_from_expr(expr: &Expr, filters: &mut Vec<QueryFilter>) {
 }
 
 fn convert_binary_expr_to_query_filter(binary: &datafusion::logical_expr::BinaryExpr) -> Option<QueryFilter> {
-    let col = match &*binary.left {
-        Expr::Column(c) => c.name.clone(),
-        _ => return None,
+    // Helper to strip casts and find column name
+    fn get_col(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Column(c) => Some(c.name.clone()),
+            Expr::Cast(cast) => get_col(&cast.expr),
+            Expr::TryCast(cast) => get_col(&cast.expr),
+            _ => None,
+        }
+    }
+
+    fn get_lit(expr: &Expr) -> Option<Value> {
+        match expr {
+            Expr::Literal(scalar, _) => scalar_to_json_value(scalar),
+            Expr::Cast(cast) => get_lit(&cast.expr),
+            Expr::TryCast(cast) => get_lit(&cast.expr),
+            _ => None,
+        }
+    }
+
+    let (col, val, op) = if let Some(c) = get_col(&binary.left) {
+        if let Some(v) = get_lit(&binary.right) {
+            (c, v, binary.op)
+        } else { return None; }
+    } else if let Some(c) = get_col(&binary.right) {
+        if let Some(v) = get_lit(&binary.left) {
+            // Swap operator if literal is on the left
+            use datafusion::logical_expr::Operator;
+            let swapped_op = match binary.op {
+                Operator::Eq => Operator::Eq,
+                Operator::NotEq => Operator::NotEq,
+                Operator::Gt => Operator::Lt,
+                Operator::GtEq => Operator::LtEq,
+                Operator::Lt => Operator::Gt,
+                Operator::LtEq => Operator::GtEq,
+                _ => return None,
+            };
+            (c, v, swapped_op)
+        } else { return None; }
+    } else {
+        return None;
     };
 
-    let val = match &*binary.right {
-        Expr::Literal(scalar, _) => scalar_to_json_value(scalar)?,
-        _ => return None,
-    };
-
-    match binary.op {
+    match op {
         datafusion::logical_expr::Operator::Eq => Some(QueryFilter {
             column: col,
             min: Some(val.clone()),
@@ -468,7 +548,7 @@ impl QueryPlanner {
         use datafusion::prelude::SessionContext;
 
         let mut ctx = SessionContext::new();
-        crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let state = ctx.state();
         
         // Type Coercion: DataFusion sometimes struggles with LargeUtf8 vs Utf8 in direct physical expr evaluation.
@@ -593,17 +673,31 @@ impl QueryPlanner {
     }
     /// Prune manifest entries based on the filters.
     /// Returns a list of (Entry, Option<IndexFile>) tuples.
-    pub fn prune_entries(&self, entries: &[ManifestEntry], expr: Option<&FilterExpr>) -> Vec<(ManifestEntry, Option<IndexFile>)> {
+    pub fn prune_entries(&self, entries: &[ManifestEntry], expr: Option<&FilterExpr>, vector_params: Option<&VectorSearchParams>) -> Vec<(ManifestEntry, Option<IndexFile>)> {
         let mut candidates = Vec::new();
-
+        
+        eprintln!("DEBUG: Total entries to prune: {}", entries.len());
         for entry in entries {
-            let matches = if let Some(e) = expr {
-                self.might_match_expr(entry, e)
+            eprintln!("DEBUG: Entry {}: partitions={:?}, index_files={:?}", entry.file_path, entry.partition_values, entry.index_files);
+            let mut matches_scalar = true;
+            if let Some(f) = expr {
+                if !self.might_match_expr(entry, f) {
+                    matches_scalar = false;
+                    eprintln!("DEBUG: Pruning segment {} due to SCALAR filter expr", entry.file_path);
+                }
+            }
+            
+            let vector_matches = if let Some(vp) = vector_params {
+                self.might_match_vector(entry, vp)
             } else {
                 true
             };
-            
-            if matches {
+
+            if !vector_matches {
+                eprintln!("DEBUG: Pruning segment {} due to VECTOR params", entry.file_path);
+            }
+
+            if matches_scalar && vector_matches {
                 // Select an index if possible. 
                 // We'll extract flat AND conditions to look for candidates.
                 let mut selected_index = None;
@@ -621,6 +715,51 @@ impl QueryPlanner {
         }
         
         candidates
+    }
+
+    pub fn might_match_vector(&self, entry: &ManifestEntry, params: &VectorSearchParams) -> bool {
+        let stats = if let Some(s) = entry.column_stats.get(&params.column) {
+            s
+        } else {
+            return true; // No stats, must scan
+        };
+
+        let vs = if let Some(v) = &stats.vector_stats {
+            v
+        } else {
+            return true; // No vector stats, must scan
+        };
+
+        // 1. Norm-based pruning for L2 Distance
+        // |q - v| >= ||q| - |v||
+        // If we have a rough estimate or if k=1 and we want to be aggressive.
+        // For now, we'll use a very conservative heuristic: 
+        // if query norm is 10x larger than max_norm or 10x smaller than min_norm, 
+        // it MIGHT NOT be a good candidate if other segments are closer.
+        // But true pruning requires a global "best distance".
+        
+        // 2. Per-dimension range pruning (Zone Maps for vectors)
+        // If query point is very far from the bounding box of the segment's vectors.
+        if let (Some(dim_min), Some(dim_max)) = (&vs.dim_min, &vs.dim_max) {
+             if let crate::core::index::VectorValue::Float32(q_vec) = &params.query {
+                 for (i, &q_val) in q_vec.iter().enumerate() {
+                     if i < dim_min.len() && i < dim_max.len() {
+                         if q_val < dim_min[i] {
+                             let _diff_sq = (dim_min[i] - q_val).powi(2);
+                             // Future optimization: accumulate diff_sq for early pruning threshold
+                         } else if q_val > dim_max[i] {
+                             let _diff_sq = (q_val - dim_max[i]).powi(2);
+                         }
+                     }
+                 }
+             }
+             
+             // If minimum possible distance to ANY point in this segment's box is too high, prune.
+             // We need a threshold. For now, since we don't have global top-k yet, we just return true.
+             // But we're ready for threshold-based pruning!
+        }
+
+        true
     }
 
     pub fn might_match_expr(&self, entry: &ManifestEntry, expr: &FilterExpr) -> bool {
@@ -679,6 +818,7 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res { 
+                    eprintln!("DEBUG: Pruning segment due to PARTITION column {}. Entry val: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_val, min_val, filter.min_inclusive);
                     return false; 
                 }
             }
@@ -691,14 +831,14 @@ impl QueryPlanner {
                      ord == Some(std::cmp::Ordering::Greater) || ord == Some(std::cmp::Ordering::Equal)
                  };
                  if res { 
-
+                     eprintln!("DEBUG: Pruning segment due to PARTITION column {} (MAX). Entry val: {:?}, Max filter: {:?}, Max inclusive: {}", filter.column, entry_val, max_val, filter.max_inclusive);
                      return false; 
                 }
             }
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
-
+                    eprintln!("DEBUG: Pruning segment due to PARTITION column {}. Entry val: {:?} not in values: {:?}", filter.column, entry_val, values);
                     return false;
                 }
             }
@@ -708,6 +848,7 @@ impl QueryPlanner {
         if let Some(stats) = entry.column_stats.get(&filter.column) {
 
             if stats.null_count == entry.record_count {
+                 eprintln!("DEBUG: Pruning segment due to NULL column {}. Null count: {}, Record count: {}", filter.column, stats.null_count, entry.record_count);
                  return false;
             }
 
@@ -722,7 +863,7 @@ impl QueryPlanner {
                          ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_small { 
-
+                        eprintln!("DEBUG: Pruning segment due to STATS column {}. Max val in segment: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_max, filter_min, filter.min_inclusive);
                         return false; 
                     }
                 }
@@ -739,7 +880,7 @@ impl QueryPlanner {
                         ord == Some(std::cmp::Ordering::Greater) || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_large { 
-
+                        eprintln!("DEBUG: Pruning segment due to STATS column {} (MIN). Min val in segment: {:?}, Max filter: {:?}, Max inclusive: {}", filter.column, entry_min, filter_max, filter.max_inclusive);
                         return false; 
                     }
                 }

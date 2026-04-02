@@ -179,6 +179,8 @@ impl ExecutionPlan for HyperStreamExec {
         
         let expected_schema = self.schema.clone();
         let expected_schema_inner = expected_schema.clone();
+        use crate::core::planner::{QueryFilter, FilterExpr};
+        
         let stream = async_stream::stream! {            
             // For each segment in this partition
             for entry in entries {
@@ -191,9 +193,9 @@ impl ExecutionPlan for HyperStreamExec {
                 // Better to parse once? 
                 // Table::read_segment takes `query_filter_opt: Option<&QueryFilter>`
                 
-                let query_filter = if let Some(ref f) = filter {
-                     use crate::core::planner::QueryFilter;
-                     Some(QueryFilter::parse(f).ok_or_else(|| DataFusionError::Execution(format!("Failed to parse filter: {}", f)))?)
+                let filter_expr = if let Some(ref f) = filter {
+                     let filters = QueryFilter::parse_multi(f);
+                     FilterExpr::from_filters(filters)
                 } else {
                     None
                 };
@@ -202,9 +204,6 @@ impl ExecutionPlan for HyperStreamExec {
                 if let Some(ref vp) = vector_params {
                     // Hybrid Search: Vector + Scalar
                     use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
-                    use crate::core::planner::FilterExpr;
-                    
-                    let filter_expr = query_filter.as_ref().and_then(|f| FilterExpr::from_filters(vec![f.clone()]));
                     
                     let request = VectorSearchRequest::new(
                         vp.column.clone(),
@@ -247,6 +246,10 @@ impl ExecutionPlan for HyperStreamExec {
                 } else {
                     // Standard scan
                     let version = 1; 
+                    let query_filter = if let Some(ref f) = filter {
+                         QueryFilter::parse_multi(f).into_iter().next()
+                    } else { None };
+                    
                     match table.read_segment(&entry, query_filter.as_ref(), version, col_slice).await {
                         Ok(batches) => {
                             for batch in batches {

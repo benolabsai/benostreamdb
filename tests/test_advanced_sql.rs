@@ -81,6 +81,7 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
     table.write_async(vec![create_complex_batch(11, 10, "B", 2022, dim).await]).await?;
     table.write_async(vec![create_complex_batch(21, 10, "A", 2023, dim).await]).await?;
     table.commit_async().await?;
+    table.wait_for_background_tasks_async().await?;
 
     // 3. Complex Query: year=2022 AND category='A' AND id > 5 + Vector Search
     let query_vec = vec![0.1; dim];

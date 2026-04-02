@@ -941,7 +941,15 @@ impl PyTable {
         // 1. Convert Pandas -> Arrow RecordBatch
         let pyarrow = py.import("pyarrow")?;
         let table_class = pyarrow.getattr("Table")?;
-        let arrow_table = table_class.call_method1("from_pandas", (df,))?.unbind();
+        
+        let schema = self.table.arrow_schema();
+        let arrow_table = if schema.fields().is_empty() {
+             table_class.call_method1("from_pandas", (df,))?.unbind()
+        } else {
+             let py_schema = arrow_schema_to_pyarrow(py, schema)?;
+             table_class.call_method1("from_pandas", (df, py_schema))?.unbind()
+        };
+        
         let batches = pyarrow_to_arrow_batches(py, arrow_table)?;
         
         let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
@@ -1041,10 +1049,11 @@ impl PyTable {
                 ctx.register_udf(udf);
             }
             
-            // Register vector aggregates (vector_avg, etc.)
-            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
-                ctx.register_aggregate_udf(udf);
-            }
+            // Note: Vector aggregate registration removed for DataFusion 57 compatibility
+            // Aggregate UDFs will be added in a future version
+            // for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
+            //     ctx.register_aggregate_udf(udf);
+            // }
             
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
