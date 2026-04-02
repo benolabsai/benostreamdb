@@ -11,7 +11,7 @@ use chrono::Utc;
 
 pub type SegmentId = String;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct IndexFile {
     pub file_path: String,
     pub index_type: String, // e.g. "scalar", "vector", "bloom"
@@ -141,7 +141,7 @@ pub struct SortOrder {
     pub fields: Vec<SortField>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ManifestEntry {
     pub file_path: String,
     pub file_size_bytes: i64,
@@ -233,7 +233,7 @@ impl From<Value> for ManifestValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ColumnStats {
     pub min: Option<ManifestValue>,
     pub max: Option<ManifestValue>,
@@ -241,6 +241,21 @@ pub struct ColumnStats {
     /// Number of distinct values (NDV) - Iceberg V2 spec field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distinct_count: Option<i64>,
+    /// HyperStream Extension: Vector-specific statistics
+    #[serde(default)]
+    pub vector_stats: Option<VectorStats>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct VectorStats {
+    pub min_norm: f32,
+    pub max_norm: f32,
+    pub mean_norm: f32,
+    /// HyperStream Extension: Per-dimension ranges for advanced pruning
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dim_min: Option<Vec<f32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dim_max: Option<Vec<f32>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -683,11 +698,9 @@ impl ManifestManager {
 
         // 1. Check Version Cache (Fast Path)
         if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get(&cache_key).await {
-            // We have a "hint" of what the latest version is. 
-            // We can try to load that directly.
-            // Note: In strict consistency systems, we might want to re-check List occasionally?
-            // But for now, we trust the cache for its TTL duration (2s).
+            eprintln!("DEBUG: ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
             if let Ok(manifest) = self.load_version(ver).await {
+                eprintln!("DEBUG: ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
                 return Ok((manifest, ver));
             }
         }
@@ -719,11 +732,15 @@ impl ManifestManager {
             crate::core::cache::LATEST_VERSION_CACHE.insert(cache_key, max_ver).await;
         }
 
-        if let Some(path) = latest_path { // Only used if not using cache for retrieving body?
-            // Actually, we can just use load_version(max_ver) which handles caching of body
-             return match self.load_version(max_ver).await {
-                 Ok(m) => Ok((m, max_ver)),
-                 Err(_) => {
+        if let Some(path) = latest_path { 
+             eprintln!("DEBUG: ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
+              return match self.load_version(max_ver).await {
+                 Ok(m) => {
+                     eprintln!("DEBUG: ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
+                     Ok((m, max_ver))
+                 },
+                 Err(e) => {
+                     eprintln!("DEBUG: ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
                      // Fallback if somehow listing said it exists but we can't read it
                      let bytes = self.store.get(&path).await?.bytes().await?;
                      let manifest: Manifest = serde_json::from_slice(&bytes)?;
@@ -1456,9 +1473,9 @@ impl ManifestManager {
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Partition Spec Update)", new_ver);
-                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    let dir_key = self.get_dir_cache_key();
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
-                    let file_key = format!("{}/{}", self.root_uri, path);
+                    let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
                     return Ok(new_manifest);
                 }
@@ -1583,7 +1600,7 @@ mod tests {
     use object_store::memory::InMemory;
 
     fn create_entry(id: &str) -> ManifestEntry {
-        ManifestEntry {
+         ManifestEntry {
             file_path: format!("{}.parquet", id),
             file_size_bytes: 100,
             record_count: 10,
@@ -1591,12 +1608,7 @@ mod tests {
             delete_files: vec![],
             column_stats: HashMap::new(),
             partition_values: HashMap::new(),
-            clustering_strategy: None,
-            clustering_columns: None,
-            min_clustering_score: None,
-            max_clustering_score: None,
-            normalization_mins: None,
-            normalization_maxs: None,
+            ..Default::default()
         }
     }
 

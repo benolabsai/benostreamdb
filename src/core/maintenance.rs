@@ -190,23 +190,9 @@ mod tests {
         
         // Return matching entry
         Ok(ManifestEntry {
-            file_path: format!("{}.parquet", id), // use relative for LocalFS if using empty base_path or similar
-            // In the test setup: uri = file://{temp_dir}, so base_path = "".
-            // store.list() returns filenames like "seg_a.parquet".
-            // So we should use "seg_a.parquet" here.
-            
+            file_path: format!("{}.parquet", id),
             file_size_bytes: 13,
-            record_count: 0,
-            index_files: vec![],
-            delete_files: vec![],
-            column_stats: std::collections::HashMap::new(),
-            partition_values: std::collections::HashMap::new(),
-            clustering_strategy: None,
-            clustering_columns: None,
-            min_clustering_score: None,
-            max_clustering_score: None,
-            normalization_mins: None,
-            normalization_maxs: None,
+            ..Default::default()
         })
     }
 
