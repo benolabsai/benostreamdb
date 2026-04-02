@@ -83,6 +83,38 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     sum
 }
 
+/// Vectorized batch L2 distance calculation
+pub fn l2_distance_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &[V]) -> Vec<f32> {
+    use rayon::prelude::*;
+    vectors.par_iter().map(|vec| l2_distance(query, vec.as_ref())).collect()
+}
+
+/// Vectorized batch dot product calculation
+pub fn dot_product_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &[V]) -> Vec<f32> {
+    use rayon::prelude::*;
+    vectors.par_iter().map(|vec| dot_product(query, vec.as_ref())).collect()
+}
+
+/// Vectorized batch cosine similarity calculation
+pub fn cosine_similarity_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &[V]) -> Vec<f32> {
+    use rayon::prelude::*;
+    let norm_q = dot_product(query, query).sqrt();
+    if norm_q == 0.0 {
+        return vec![0.0; vectors.len()];
+    }
+
+    vectors.par_iter().map(|vec| {
+        let v = vec.as_ref();
+        let dot = dot_product(query, v);
+        let norm_v = dot_product(v, v).sqrt();
+        if norm_v == 0.0 {
+            0.0
+        } else {
+            dot / (norm_q * norm_v)
+        }
+    }).collect()
+}
+
 #[inline(always)]
 pub fn l1_distance(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len();

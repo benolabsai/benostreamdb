@@ -75,14 +75,14 @@ impl HybridSegmentWriter {
         let mut parquet_file = String::new();
         let mut total_size = 0;
 
-        for f in files {
+        for f in &files {
             let filename = f.split('/').next_back().unwrap_or(&f).to_string();
             
             if filename.ends_with(".inv.parquet") {
                 // Inverted Index
                 let col = filename.split('.').nth(1).map(|c| c.to_string());
                 index_files.push(crate::core::manifest::IndexFile {
-                    file_path: filename,
+                    file_path: filename.clone(),
                     index_type: "inverted".to_string(),
                     column_name: col,
                     blob_type: None,
@@ -90,20 +90,18 @@ impl HybridSegmentWriter {
                     length: None,
                 });
             } else if filename.ends_with(".centroids.parquet") || filename.ends_with(".mapping.parquet") {
-                  // HNSW-IVF Auxiliary Parquet Files - these are part of the 'vector' index type.
-                  // We don't need to add them to index_files twice, but we MUST ensure they don't overwrite parquet_file.
-                  // They are correctly ignored here.
+                // HNSW-IVF Auxiliary Parquet Files
             } else if filename.ends_with(".parquet") {
-                // Main Data File (strictly segment_id.parquet usually, but verify it's not an index)
-                parquet_file = filename;
-                if let Ok(meta) = std::fs::metadata(&f) {
+                // Main Data File
+                parquet_file = filename.clone();
+                if let Ok(meta) = std::fs::metadata(f) {
                     total_size = meta.len() as i64;
                 }
             } else if filename.contains(".idx") {
                 // Scalar Bitmap Index
                 let col = filename.split('.').nth(1).and_then(|c| if c == "idx" { None } else { Some(c.to_string()) });
                 index_files.push(crate::core::manifest::IndexFile {
-                    file_path: filename,
+                    file_path: filename.clone(),
                     index_type: "scalar".to_string(),
                     column_name: col,
                     blob_type: None,
@@ -111,18 +109,14 @@ impl HybridSegmentWriter {
                     length: None,
                 });
             } else if filename.contains(".hnsw.") {
-                 // Vector Index (embedding.hnsw.graph -> column embedding)
+                  // Vector Index
                   let parts: Vec<&str> = filename.split('.').collect();
-                  // Expected format: segment_id.column_name.cluster_N... or segment_id.column_name.centroids...
-                  // parts[0] is segment_id, parts[1] is column_name
                   let col = parts.get(1).map(|s| s.to_string());
                   
-                  // Only add to manifest if it's the main graph file or centroids (to register the index existence for the column)
-                  // To avoid duplicates in manifest, we only add the .hnsw.graph or .centroids.parquet once per column.
                   if (filename.ends_with(".hnsw.graph") || filename.ends_with(".centroids.parquet"))
                       && !index_files.iter().any(|idx| idx.column_name == col && idx.index_type == "vector") {
                           index_files.push(crate::core::manifest::IndexFile {
-                            file_path: filename,
+                            file_path: filename.clone(),
                             index_type: "vector".to_string(),
                             column_name: col,
                             blob_type: None,
@@ -131,6 +125,10 @@ impl HybridSegmentWriter {
                           });
                       }
             }
+        }
+        
+        if !index_files.is_empty() {
+            eprintln!("DEBUG: to_manifest_entry: segment_id={}, generated index_files={:?}", self.config.segment_id, index_files);
         }
 
         crate::core::manifest::ManifestEntry {
@@ -194,6 +192,70 @@ impl HybridSegmentWriter {
                 _ => (None, None),
             };
 
+            // Vector Stats (HyperStream Extension)
+            let vector_stats: Option<crate::core::manifest::VectorStats> = match field.data_type() {
+                arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_) => {
+                    let mut min_norm = f32::MAX;
+                    let mut max_norm = f32::MIN;
+                    let mut sum_norm = 0.0;
+                    let count = array.len();
+                    
+                    let mut dim_min: Option<Vec<f32>> = None;
+                    let mut dim_max: Option<Vec<f32>> = None;
+
+                    // Helper to get float vectors regardless of list type
+                    let get_vector = |i: usize| -> Option<Vec<f32>> {
+                        if array.is_null(i) { return None; }
+                        let val = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+                            arr.value(i)
+                        } else if let Some(arr) = array.as_any().downcast_ref::<arrow::array::ListArray>() {
+                            arr.value(i)
+                        } else {
+                            return None;
+                        };
+                        let floats = val.as_any().downcast_ref::<arrow::array::Float32Array>()?;
+                        Some(floats.values().to_vec())
+                    };
+
+                    for i in 0..count {
+                        if let Some(v) = get_vector(i) {
+                            let norm = crate::core::index::distance::dot_product(&v, &v).sqrt();
+                            min_norm = min_norm.min(norm);
+                            max_norm = max_norm.max(norm);
+                            sum_norm += norm;
+
+                            // Initialize dimension stats on first vector
+                            if dim_min.is_none() {
+                                dim_min = Some(v.clone());
+                                dim_max = Some(v.clone());
+                            } else {
+                                let d_min = dim_min.as_mut().unwrap();
+                                let d_max = dim_max.as_mut().unwrap();
+                                for (j, &val) in v.iter().enumerate() {
+                                    if j < d_min.len() {
+                                        d_min[j] = d_min[j].min(val);
+                                        d_max[j] = d_max[j].max(val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if count > 0 && min_norm != f32::MAX {
+                        Some(crate::core::manifest::VectorStats {
+                            min_norm,
+                            max_norm,
+                            mean_norm: sum_norm / count as f32,
+                            dim_min,
+                            dim_max,
+                        })
+                    } else {
+                        None
+                    }
+                },
+                _ => None,
+            };
+
             // Compute NDV (Number of Distinct Values) using HyperLogLog
             // Memory-efficient: O(1) space (~1.5KB) vs O(n) for HashSet
             // Accuracy: ~1-2% error with precision 14
@@ -240,15 +302,21 @@ impl HybridSegmentWriter {
             // new_max = max(old_max, batch_max)
             
             // Getting previous stats
-            let entry = stats_guard.entry(col_name.clone()).or_insert(ColumnStats {
+            let entry = stats_guard.entry(col_name.clone()).or_insert(crate::core::manifest::ColumnStats {
                 min: None,
                 max: None,
                 null_count: 0,
                 distinct_count: None,
+                vector_stats: None,
             });
             
             // Null Count
             entry.null_count += array.null_count() as i64;
+            
+            // Vector Stats
+            if let Some(vs) = vector_stats {
+                entry.vector_stats = Some(vs);
+            }
 
             // Min
             if let Some(new_min_val) = min {
@@ -487,7 +555,7 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<i32> = None;
-                    let _count = 0;
+                    let mut last_row_id = 0;
 
                     for i in 0..sort_indices.len() {
                         let row_idx = sort_indices.value(i);
@@ -500,8 +568,10 @@ impl HybridSegmentWriter {
                                 list_builder.append(true);
                             }
                             current_val = Some(val);
+                            last_row_id = 0; // Reset delta baseline for new key
                         }
-                        list_builder.values().append_value(row_idx);
+                        list_builder.values().append_value(row_idx - last_row_id);
+                        last_row_id = row_idx;
                     }
                     if let Some(v) = current_val {
                         key_builder.append_value(v);
@@ -601,6 +671,7 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<i64> = None;
+                    let mut last_row_id = 0;
                     for i in 0..sort_indices.len() {
                         let row_idx = sort_indices.value(i);
                         if array.is_null(row_idx as usize) { continue; }
@@ -612,8 +683,10 @@ impl HybridSegmentWriter {
                                 list_builder.append(true);
                             }
                             current_val = Some(val);
+                            last_row_id = 0;
                         }
-                        list_builder.values().append_value(row_idx);
+                        list_builder.values().append_value(row_idx - last_row_id);
+                        last_row_id = row_idx;
                     }
                     if let Some(v) = current_val {
                         key_builder.append_value(v);
@@ -662,6 +735,7 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<u64> = None; // Store as bits for comparison
+                    let mut last_row_id = 0;
                     for i in 0..sort_indices.len() {
                         let row_idx = sort_indices.value(i);
                         if array.is_null(row_idx as usize) { continue; }
@@ -674,8 +748,10 @@ impl HybridSegmentWriter {
                                 list_builder.append(true);
                             }
                             current_val = Some(val_bits);
+                            last_row_id = 0;
                         }
-                        list_builder.values().append_value(row_idx);
+                        list_builder.values().append_value(row_idx - last_row_id);
+                        last_row_id = row_idx;
                     }
                     if let Some(v_bits) = current_val {
                         key_builder.append_value(f64::from_bits(v_bits));
@@ -727,10 +803,13 @@ impl HybridSegmentWriter {
                     let value_builder = arrow::array::UInt32Builder::new();
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-                    for (key_bits, row_ids) in inverted_map {
+                    for (key_bits,mut row_ids) in inverted_map {
                         key_builder.append_value(f32::from_bits(key_bits));
+                        row_ids.sort_unstable();
+                        let mut last_id = 0;
                         for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                            list_builder.values().append_value(row_id - last_id);
+                            last_id = row_id;
                         }
                         list_builder.append(true);
                     }
@@ -794,10 +873,13 @@ impl HybridSegmentWriter {
                     let value_builder = arrow::array::UInt32Builder::new();
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-                    for (key, row_ids) in inverted_map {
+                    for (key, mut row_ids) in inverted_map {
                         key_builder.append_value(&key);
+                        row_ids.sort_unstable();
+                        let mut last_id = 0;
                         for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                            list_builder.values().append_value(row_id - last_id);
+                            last_id = row_id;
                         }
                         list_builder.append(true);
                     }
