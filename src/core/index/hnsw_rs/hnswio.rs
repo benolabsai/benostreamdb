@@ -625,11 +625,10 @@ pub fn load_hnsw<T:'static+Serialize+DeserializeOwned+Clone+Sized+Send+Sync, D:D
     // for that we check for short names equality stripping 
     log::debug!("distance in description = {:?}", distname);
     let d_type_name = type_name::<D>().to_string();
-    let v: Vec<&str> = d_type_name.rsplit_terminator("::").collect();
-    for s in v {
-        log::info!(" distname in generic type argument {:?}", s);
-    }
-    if (std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>())  &&  (d_type_name != distname) {
+    let d_short_name = d_type_name.rsplit("::").next().unwrap_or(&d_type_name);
+    let dist_short_name = distname.rsplit("::").next().unwrap_or(&distname);
+
+    if (std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>())  &&  (d_short_name != dist_short_name) {
         // for all types except NoData , distance asked in reload declaration and distance in dump must be equal!
         let mut errmsg = String::from("error in distances : dumped distance is : ");
         errmsg.push_str(&distname);
@@ -687,11 +686,10 @@ pub fn load_hnsw_with_dist<T:'static+Serialize+DeserializeOwned+Clone+Sized+Send
     // for that we check for short names equality stripping 
     log::debug!("distance in description = {:?}", distname);
     let d_type_name = type_name::<D>().to_string();
-    let v: Vec<&str> = d_type_name.rsplit_terminator("::").collect();
-    for s in v {
-        log::info!(" distname in generic type argument {:?}", s);
-    }
-    if (std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>())  &&  (d_type_name != distname) {
+    let d_short_name = d_type_name.rsplit("::").next().unwrap_or(&d_type_name);
+    let dist_short_name = distname.rsplit("::").next().unwrap_or(&distname);
+
+    if (std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>())  &&  (d_short_name != dist_short_name) {
         // for all types except NoData , distance asked in reload declaration and distance in dump must be equal!
         let mut errmsg = String::from("error in distances : dumped distance is : ");
         errmsg.push_str(&distname);

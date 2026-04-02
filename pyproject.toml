@@ -47,6 +47,7 @@ rocm = []  # AMD (via OpenCL/ROCm)
 intel_gpu = [] # Intel (OpenCL)
 intel_cpu = [] # Intel (SIMD/AVX2)
 all_gpu = ["mps", "cuda", "rocm", "intel_gpu"]
+src = ["maturin>=1.7"]
 
 [project.urls]
 Homepage = "https://github.com/rla3rd/hyperstreamdb"
@@ -62,6 +63,6 @@ python-source = "python"
 bindings = "pyo3"
 sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
 # Optimizations for WHEEL builds
-strip = true
+strip = false
 # Use sccache if available during build
 sccache = false

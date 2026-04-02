@@ -113,7 +113,7 @@ impl TableMetadata {
             last_updated_ms: chrono::Utc::now().timestamp_millis(),
             last_column_id: schema.fields.iter().map(|f| f.id).max().unwrap_or(0),
             current_schema_id: schema.schema_id,
-            schemas: vec![schema],
+            schemas: vec![schema.clone()],
             default_spec_id: partition_spec.spec_id,
             partition_specs: vec![partition_spec],
             default_sort_order_id: sort_order.order_id,
@@ -124,6 +124,7 @@ impl TableMetadata {
             snapshot_log: Vec::new(),
             metadata_log: Vec::new(),
             next_row_id: if format_version >= 3 { Some(0) } else { None },
+            identifier_field_ids: schema.identifier_field_ids.clone(),
         }
     }
 

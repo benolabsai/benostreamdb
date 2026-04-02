@@ -2705,7 +2705,8 @@ impl Table {
             all_new_entries.push(entry.clone());
 
             // 2. Queue index building asynchronously (if needed)
-            if index_all_flag || !index_cols.is_empty() {
+            let has_pks = !self.primary_key.read().unwrap().is_empty();
+            if index_all_flag || !index_cols.is_empty() || has_pks {
                 let index_cols_clone = index_cols.clone();
                 let base_path_clone = base_path.to_string();
                 let segment_id_clone = segment_id.clone();
@@ -3092,11 +3093,9 @@ impl Table {
 
     /// Check if any keys in the batch already exist in the table (Primary Key Enforcement)
     async fn check_primary_key_uniqueness_async(&self, batch: &RecordBatch, columns: &[String]) -> Result<()> {
-        use arrow::array::AsArray;
         
         if batch.num_rows() == 0 { return Ok(()); }
         
-        let mut conflicts = Vec::new();
         let schema = batch.schema();
         let col_indices: Vec<usize> = columns.iter()
             .map(|c| schema.index_of(c))
@@ -3106,9 +3105,9 @@ impl Table {
         // For now, we take the first row as a sample check to avoid huge expression generation 
         // until we have a proper Row-Value In-List implementation.
         for i in 0..batch.num_rows().min(100) { // Limit samples for performance in MVP
-            let mut filters = Vec::new();
-            for (&col_name, &col_idx) in columns.iter().zip(col_indices.iter()) {
-                let col = batch.column(col_idx);
+            let mut filters_str_vec = Vec::new();
+            for (col_name, col_idx) in columns.iter().zip(col_indices.iter()) {
+                let col = batch.column(*col_idx);
                 let val = if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
                     format!("{}", arr.value(i))
                 } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
@@ -3118,11 +3117,11 @@ impl Table {
                 } else {
                     continue;
                 };
-                filters.push(format!("{} = {}", col_name, val));
+                filters_str_vec.push(format!("{} = {}", col_name, val));
             }
             
-            if !filters.is_empty() {
-                let filter_str = filters.join(" AND ");
+            if !filters_str_vec.is_empty() {
+                let filter_str = filters_str_vec.join(" AND ");
                 let expr = FilterExpr::parse_sql(&filter_str, self.arrow_schema()).await?;
                 
                 // Check manifests
@@ -3137,10 +3136,27 @@ impl Table {
                         let config = SegmentConfig::new(&self.uri, &entry.file_path.replace(".parquet", ""))
                             .with_index_files(entry.index_files.clone());
                         let reader = HybridReader::new(config, self.store.clone(), &self.uri);
-                        if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&expr).await {
+                        
+                        let filters = expr.extract_and_conditions();
+                        let mut bitmap_opt: Option<roaring::RoaringBitmap> = None;
+                        
+                        for f in filters {
+                            if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&f).await {
+                                if let Some(current) = bitmap_opt {
+                                    bitmap_opt = Some(current & bm);
+                                } else {
+                                    bitmap_opt = Some(bm);
+                                }
+                            } else {
+                                bitmap_opt = None;
+                                break;
+                            }
+                        }
+
+                        if let Some(bm) = bitmap_opt {
                             if !bm.is_empty() {
-                                let pk_val = columns.iter().zip(filters.iter())
-                                    .map(|(c, f)| f.clone())
+                                let pk_val = columns.iter().zip(filters_str_vec.iter())
+                                    .map(|(c, f)| format!("{}={}", c, f))
                                     .collect::<Vec<_>>().join(", ");
                                 return Err(anyhow::anyhow!("Duplicate primary key error: {} already exists", pk_val));
                             }
