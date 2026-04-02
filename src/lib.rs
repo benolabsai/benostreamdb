@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use std::sync::Arc;
+extern crate log;
 pub mod core;
 
 pub mod enterprise;

@@ -3549,26 +3549,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hnsw_rs"
-version = "0.1.19"
-dependencies = [
- "bincode",
- "cpu-time",
- "env_logger",
- "hashbrown 0.9.1",
- "lazy_static",
- "log",
- "num-traits",
- "num_cpus",
- "parking_lot",
- "rand 0.8.5",
- "rayon",
- "roaring",
- "serde",
- "skiplist",
-]
-
-[[package]]
 name = "home"
 version = "0.5.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3790,28 +3770,34 @@ dependencies = [
  "aws-sdk-glue",
  "axum 0.7.9",
  "base64 0.22.1",
+ "bincode",
  "bytes",
  "candle-core",
  "candle-nn",
  "candle-transformers",
  "chrono",
  "clap",
+ "cpu-time",
  "criterion",
  "cust",
  "datafusion",
  "datafusion-expr-common",
  "datafusion-functions-aggregate-common",
  "dirs",
+ "env_logger",
  "faststr",
  "futures",
+ "hashbrown 0.9.1",
  "hive_metastore",
- "hnsw_rs",
  "hyperloglogplus",
  "jni",
  "lazy_static",
+ "log",
  "metal",
  "moka",
  "murmur3",
+ "num-traits",
+ "num_cpus",
  "numpy",
  "object_store",
  "once_cell",
@@ -3819,6 +3805,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parking_lot",
  "parquet",
  "pilota",
  "prometheus",
@@ -3835,6 +3822,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "skiplist",
  "smartcore",
  "sqlx",
  "tempfile",

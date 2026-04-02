@@ -86,7 +86,16 @@ opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
 
 # indexing
 roaring = "0.10.2" # For scalar bitmaps
-hnsw_rs = { version = "0.1.19", path = "vendor/hnsw_rs" } # For vector indexing
+# hnsw_rs removed and internalized to src/core/index/hnsw_rs
+bincode = "1.3"
+cpu-time = "1.0"
+env_logger = "0.10"
+log = "0.4"
+hashbrown = "0.9"
+num-traits = "0.2"
+num_cpus = "1.16"
+parking_lot = "0.12"
+skiplist = "0.3"
 # lance removed due to missing protoc
 
 # error handling
@@ -163,7 +172,7 @@ optional = true
 criterion = { version = "0.5", features = ["async_tokio"] }
 rand = "0.8"
 rand_distr = "0.4"
-hnsw_rs = { version = "0.1.19", path = "vendor/hnsw_rs" }
+# hnsw_rs removed and internalized
 tempfile = "3.10"
 proptest = "1.4"
 
@@ -183,5 +192,3 @@ harness = false
 name = "bench_table"
 harness = false
 
-[patch.crates-io]
-hnsw_rs = { path = "vendor/hnsw_rs" }
