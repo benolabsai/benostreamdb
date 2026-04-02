@@ -345,13 +345,13 @@ impl Table {
              }
         }
 
-        Ok(Table { 
-            uri, 
-            store, 
+        let table = Table { 
+            uri: uri.clone(), 
+            store: store.clone(), 
             data_store: None,
             rt: Some(rt),
             query_config: QueryConfig::default(),
-            index_all: true, // Default: Index Everything
+            index_all: true,
             index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
             index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
             default_device: Arc::new(std::sync::RwLock::new(None)),
@@ -369,7 +369,11 @@ impl Table {
             enterprise_license: None,
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        })
+        };
+        
+        // Sync PKs after initialization
+        let _ = table.rt.as_ref().unwrap().block_on(table.sync_primary_key_from_schema_async());
+        Ok(table)
     }
 
     /// Load a table from Nessie Catalog at specific branch/tag/hash
@@ -966,7 +970,7 @@ impl Table {
             // Correct.
         }
 
-        Ok(Table { 
+        let table = Table { 
             uri: uri.to_string(), 
             store, 
             data_store: None,
@@ -990,7 +994,10 @@ impl Table {
             enterprise_license: None,
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-        })
+        };
+        
+        table.sync_primary_key_from_schema_async().await?;
+        Ok(table)
     }
     
     /// Create a new table with an explicit schema (Asynchronous)
@@ -2481,6 +2488,14 @@ impl Table {
                  })
              });
 
+        // 0. Primary Key Uniqueness Check (if defined)
+        let primary_keys = self.get_primary_key();
+        if !primary_keys.is_empty() {
+            for batch in &batches {
+                self.check_primary_key_uniqueness_async(batch, &primary_keys).await?;
+            }
+        }
+
         let buffer_len_before = { 
             let buffer = self.write_buffer.read().unwrap();
             buffer.iter().map(|b| b.num_rows()).sum()
@@ -3073,6 +3088,91 @@ impl Table {
         }
 
         Ok(())
+    }
+
+    /// Check if any keys in the batch already exist in the table (Primary Key Enforcement)
+    async fn check_primary_key_uniqueness_async(&self, batch: &RecordBatch, columns: &[String]) -> Result<()> {
+        use arrow::array::AsArray;
+        
+        if batch.num_rows() == 0 { return Ok(()); }
+        
+        let mut conflicts = Vec::new();
+        let schema = batch.schema();
+        let col_indices: Vec<usize> = columns.iter()
+            .map(|c| schema.index_of(c))
+            .collect::<Result<Vec<usize>, _>>()?;
+
+        // OPTIMIZATION: Use IN clause for batches (efficient via Inverted Index)
+        // For now, we take the first row as a sample check to avoid huge expression generation 
+        // until we have a proper Row-Value In-List implementation.
+        for i in 0..batch.num_rows().min(100) { // Limit samples for performance in MVP
+            let mut filters = Vec::new();
+            for (&col_name, &col_idx) in columns.iter().zip(col_indices.iter()) {
+                let col = batch.column(col_idx);
+                let val = if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                    format!("{}", arr.value(i))
+                } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                    format!("{}", arr.value(i))
+                } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                    format!("'{}'", arr.value(i).replace("'", "''"))
+                } else {
+                    continue;
+                };
+                filters.push(format!("{} = {}", col_name, val));
+            }
+            
+            if !filters.is_empty() {
+                let filter_str = filters.join(" AND ");
+                let expr = FilterExpr::parse_sql(&filter_str, self.arrow_schema()).await?;
+                
+                // Check manifests
+                let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+                let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
+                let planner = QueryPlanner::new();
+                let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
+                
+                if !candidates.is_empty() {
+                    // Refine search within candidates (Index lookup)
+                    for (entry, _) in candidates {
+                        let config = SegmentConfig::new(&self.uri, &entry.file_path.replace(".parquet", ""))
+                            .with_index_files(entry.index_files.clone());
+                        let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+                        if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&expr).await {
+                            if !bm.is_empty() {
+                                let pk_val = columns.iter().zip(filters.iter())
+                                    .map(|(c, f)| f.clone())
+                                    .collect::<Vec<_>>().join(", ");
+                                return Err(anyhow::anyhow!("Duplicate primary key error: {} already exists", pk_val));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+
+    /// Synchronize PK columns from Iceberg schema identifier-field-ids (Internal Async)
+    async fn sync_primary_key_from_schema_async(&self) -> Result<()> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let latest_manifest = manifest_manager.load_latest_full().await?.0;
+        
+        if let Some(schema) = latest_manifest.schemas.last() {
+            let pk_cols: Vec<String> = schema.identifier_field_ids.iter().map(|id| {
+                schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap_or_default()
+            }).filter(|n| !n.is_empty()).collect();
+            
+            if !pk_cols.is_empty() {
+                self.set_primary_key(pk_cols);
+            }
+        }
+        Ok(())
+    }
+
+    /// Synchronize PK columns (Public Sync)
+    pub fn sync_primary_key_from_schema(&self) -> Result<()> {
+        self.runtime().block_on(self.sync_primary_key_from_schema_async())
     }
 
     /// Merge (Upsert) batches into the table

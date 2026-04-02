@@ -61,6 +61,10 @@ pub struct TableMetadata {
     pub default_sort_order_id: i32,
     pub sort_orders: Vec<SortOrder>,
     
+    // Primary Key (Iceberg Identifier Fields)
+    #[serde(rename = "identifier-field-ids", default, skip_serializing_if = "Vec::is_empty")]
+    pub identifier_field_ids: Vec<i32>,
+    
     // Properties
     #[serde(default)]
     pub properties: HashMap<String, String>,
