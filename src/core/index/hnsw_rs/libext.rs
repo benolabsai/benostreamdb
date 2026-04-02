@@ -10,14 +10,14 @@ use std::path::{PathBuf};
 
 use log;
 
-use crate::api::*;
-use crate::dist::*;
-use crate::hnsw::*;
-use crate::hnswio::*;
+use crate::core::index::hnsw_rs::api::*;
+use crate::core::index::hnsw_rs::dist::*;
+use crate::core::index::hnsw_rs::hnsw::*;
+use crate::core::index::hnsw_rs::hnswio::*;
 
 
 
-// the export macro makes the macro global in crate and accecssible via crate::declare_myapi_type!
+// the export macro makes the macro global in crate and accecssible via crate::core::index::hnsw_rs::declare_myapi_type!
 #[macro_export]
 macro_rules! declare_myapi_type(
     ($name:ident, $ty:ty) => (
@@ -86,8 +86,8 @@ pub struct Neighbour_api_parsearch_answer {
 
 
 // macros have been exported to the root of the crate so we do not refer to them via api::
-super::declare_myapi_type!(HnswApif32, f32);
-super::declare_myapi_type!(HnswApif64, f64);
+declare_myapi_type!(HnswApif32, f32);
+declare_myapi_type!(HnswApif64, f64);
 
 
 
@@ -287,39 +287,39 @@ macro_rules! generate_loadhnsw(
 // here we must generate as many function as there are couples (type, distance) to be accessed from our needs in Julia
 
 // f32
-generate_loadhnsw!(load_hnswdump_f32_DistL1, HnswApif32, f32, crate::dist::DistL1);
-generate_loadhnsw!(load_hnswdump_f32_DistL2, HnswApif32, f32, crate::dist::DistL2);
-generate_loadhnsw!(load_hnswdump_f32_DistCosine, HnswApif32, f32, crate::dist::DistCosine);
-generate_loadhnsw!(load_hnswdump_f32_DistDot, HnswApif32, f32, crate::dist::DistDot);
-generate_loadhnsw!(load_hnswdump_f32_DistJensenShannon, HnswApif32, f32, crate::dist::DistJensenShannon);
-generate_loadhnsw!(load_hnswdump_f32_DistJeffreys, HnswApif32, f32, crate::dist::DistJeffreys);
+generate_loadhnsw!(load_hnswdump_f32_DistL1, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistL1);
+generate_loadhnsw!(load_hnswdump_f32_DistL2, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistL2);
+generate_loadhnsw!(load_hnswdump_f32_DistCosine, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistCosine);
+generate_loadhnsw!(load_hnswdump_f32_DistDot, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistDot);
+generate_loadhnsw!(load_hnswdump_f32_DistJensenShannon, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistJensenShannon);
+generate_loadhnsw!(load_hnswdump_f32_DistJeffreys, HnswApif32, f32, crate::core::index::hnsw_rs::dist::DistJeffreys);
 
 // i32
-generate_loadhnsw!(load_hnswdump_i32_DistL1, HnswApii32, i32, crate::dist::DistL1);
-generate_loadhnsw!(load_hnswdump_i32_DistL2, HnswApii32, i32, crate::dist::DistL2);
-generate_loadhnsw!(load_hnswdump_i32_DistHamming, HnswApii32, i32, crate::dist::DistHamming);
+generate_loadhnsw!(load_hnswdump_i32_DistL1, HnswApii32, i32, crate::core::index::hnsw_rs::dist::DistL1);
+generate_loadhnsw!(load_hnswdump_i32_DistL2, HnswApii32, i32, crate::core::index::hnsw_rs::dist::DistL2);
+generate_loadhnsw!(load_hnswdump_i32_DistHamming, HnswApii32, i32, crate::core::index::hnsw_rs::dist::DistHamming);
 
 // u32
-generate_loadhnsw!(load_hnswdump_u32_DistL1, HnswApiu32, u32, crate::dist::DistL1);
-generate_loadhnsw!(load_hnswdump_u32_DistL2, HnswApiu32, u32, crate::dist::DistL2);
-generate_loadhnsw!(load_hnswdump_u32_DistHamming, HnswApiu32, u32, crate::dist::DistHamming);
-generate_loadhnsw!(load_hnswdump_u32_DistJaccard, HnswApiu32, u32, crate::dist::DistJaccard);
+generate_loadhnsw!(load_hnswdump_u32_DistL1, HnswApiu32, u32, crate::core::index::hnsw_rs::dist::DistL1);
+generate_loadhnsw!(load_hnswdump_u32_DistL2, HnswApiu32, u32, crate::core::index::hnsw_rs::dist::DistL2);
+generate_loadhnsw!(load_hnswdump_u32_DistHamming, HnswApiu32, u32, crate::core::index::hnsw_rs::dist::DistHamming);
+generate_loadhnsw!(load_hnswdump_u32_DistJaccard, HnswApiu32, u32, crate::core::index::hnsw_rs::dist::DistJaccard);
 
 // u16
-generate_loadhnsw!(load_hnswdump_u16_DistL1, HnswApiu16, u16, crate::dist::DistL1);
-generate_loadhnsw!(load_hnswdump_u16_DistL2, HnswApiu16, u16, crate::dist::DistL2);
-generate_loadhnsw!(load_hnswdump_u16_DistHamming, HnswApiu16, u16, crate::dist::DistHamming);
-generate_loadhnsw!(load_hnswdump_u16_DistLevenshtein, HnswApiu16, u16, crate::dist::DistLevenshtein);
+generate_loadhnsw!(load_hnswdump_u16_DistL1, HnswApiu16, u16, crate::core::index::hnsw_rs::dist::DistL1);
+generate_loadhnsw!(load_hnswdump_u16_DistL2, HnswApiu16, u16, crate::core::index::hnsw_rs::dist::DistL2);
+generate_loadhnsw!(load_hnswdump_u16_DistHamming, HnswApiu16, u16, crate::core::index::hnsw_rs::dist::DistHamming);
+generate_loadhnsw!(load_hnswdump_u16_DistLevenshtein, HnswApiu16, u16, crate::core::index::hnsw_rs::dist::DistLevenshtein);
 
 // u8
-generate_loadhnsw!(load_hnswdump_u8_DistL1, HnswApiu8, u8, crate::dist::DistL1);
-generate_loadhnsw!(load_hnswdump_u8_DistL2, HnswApiu8, u8, crate::dist::DistL2);
-generate_loadhnsw!(load_hnswdump_u8_DistHamming, HnswApiu8, u8, crate::dist::DistHamming);
-generate_loadhnsw!(load_hnswdump_u8_DistJaccard, HnswApiu8, u8, crate::dist::DistJaccard);
+generate_loadhnsw!(load_hnswdump_u8_DistL1, HnswApiu8, u8, crate::core::index::hnsw_rs::dist::DistL1);
+generate_loadhnsw!(load_hnswdump_u8_DistL2, HnswApiu8, u8, crate::core::index::hnsw_rs::dist::DistL2);
+generate_loadhnsw!(load_hnswdump_u8_DistHamming, HnswApiu8, u8, crate::core::index::hnsw_rs::dist::DistHamming);
+generate_loadhnsw!(load_hnswdump_u8_DistJaccard, HnswApiu8, u8, crate::core::index::hnsw_rs::dist::DistJaccard);
 
 
 // Reload only graph
-generate_loadhnsw!(load_hnswdump_NoData_DistNoDist, HnswApiNodata, NoData, crate::dist::NoDist);
+generate_loadhnsw!(load_hnswdump_NoData_DistNoDist, HnswApiNodata, NoData, crate::core::index::hnsw_rs::dist::NoDist);
 
 //=============== implementation for i32
 
@@ -576,7 +576,7 @@ pub extern "C" fn init_hnsw_ptrdist_i32(max_nb_conn : usize, ef_const:usize,
 
 //==generation of function for i32
 
-super::declare_myapi_type!(HnswApii32, i32);
+declare_myapi_type!(HnswApii32, i32);
 
 generate_insert!(insert_i32, HnswApii32, i32);
 generate_parallel_insert!(parallel_insert_i32, HnswApii32, i32);
@@ -633,7 +633,7 @@ pub extern "C" fn init_hnsw_ptrdist_u32(max_nb_conn : usize, ef_const:usize,
 }
 
 
-super::declare_myapi_type!(HnswApiu32, u32);
+declare_myapi_type!(HnswApiu32, u32);
 
 generate_insert!(insert_u32, HnswApiu32, u32);
 generate_parallel_insert!(parallel_insert_u32, HnswApiu32, u32);
@@ -645,7 +645,7 @@ generate_file_dump!(file_dump_u32, HnswApiu32, u32);
 
 //============== generation of function for u16 =====================
 
-super::declare_myapi_type!(HnswApiu16, u16);
+declare_myapi_type!(HnswApiu16, u16);
 
 
 #[no_mangle]
@@ -743,7 +743,7 @@ generate_file_dump!(file_dump_u16, HnswApiu16, u16);
 
 //============== generation of function for u8 =====================
 
-super::declare_myapi_type!(HnswApiu8, u8);
+declare_myapi_type!(HnswApiu8, u8);
 
 
 #[no_mangle]

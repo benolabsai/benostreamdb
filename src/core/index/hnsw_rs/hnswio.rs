@@ -32,9 +32,9 @@ use std::path::PathBuf;
 use std::any::{type_name};
 
 use std::io::prelude::*;
-use crate::hnsw;
+use crate::core::index::hnsw_rs::hnsw;
 use self::hnsw::*;
-use crate::dist::Distance;
+use crate::core::index::hnsw_rs::dist::Distance;
 
 // magic before each graph point data for each point
 const MAGICPOINT : u32 = 0x000a678f;
@@ -662,7 +662,7 @@ pub fn load_hnsw<T:'static+Serialize+DeserializeOwned+Clone+Sized+Send+Sync, D:D
 
 
 /// This function makes reload of a Hnsw dump with a given Dist.  
-/// It is dedicated to distance of type  [crate::dist::DistPtr] that cannot implement Default.  
+/// It is dedicated to distance of type  [crate::core::index::hnsw_rs::dist::DistPtr] that cannot implement Default.  
 /// **It is the user responsability to reload with the same function as used in the dump**
 /// 
 pub fn load_hnsw_with_dist<T:'static+Serialize+DeserializeOwned+Clone+Sized+Send+Sync, D:Distance<T>+Send+Sync>(graph_in: &mut dyn Read, 
@@ -734,15 +734,15 @@ pub fn load_hnsw_with_dist<T:'static+Serialize+DeserializeOwned+Clone+Sized+Send
 mod tests {
 
 use super::*;
-use crate::dist;
+use crate::core::index::hnsw_rs::dist;
 
 
 use std::fs::OpenOptions;
 use std::io::{BufReader};
 use std::path::PathBuf;
 
-pub use crate::dist::*;
-pub use crate::api::AnnT;
+pub use crate::core::index::hnsw_rs::dist::*;
+pub use crate::core::index::hnsw_rs::api::AnnT;
 
 use rand::distributions::{Distribution, Uniform};
 

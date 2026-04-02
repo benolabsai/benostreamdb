@@ -1062,7 +1062,7 @@ impl <T:Copy+Clone+Sized+Send+Sync, F: Float> Distance<T> for DistPtr<T, F> {
 
 mod tests {
 use super::*;
-use crate::hnsw::*;
+use crate::core::index::hnsw_rs::hnsw::*;
 
 fn init_log() -> u64 {
     let mut builder = env_logger::Builder::from_default_env();

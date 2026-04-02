@@ -9,8 +9,8 @@ use std::path::{PathBuf};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::hnsw::*;
-use crate::hnswio::*;
+use crate::core::index::hnsw_rs::hnsw::*;
+use crate::core::index::hnsw_rs::hnswio::*;
 
 
 pub trait AnnT {
@@ -87,16 +87,16 @@ impl <T,D> AnnT for Hnsw<T,D>  where T:Serialize+DeserializeOwned+Clone+Send+Syn
 // macro export makes the macro export t the root of the crate
 #[macro_export]
 macro_rules! mapdist_t(
-    ("DistL1")       => (crate::dist::DistL1);
-    ("DistL2")       => (crate::dist::DistL2);
-    ("DistL2")       => (crate::dist::DistL2);
-    ("DistDot")      => (crate::dist::DistDot);
-    ("DistHamming")  => (crate::dist::DistHamming);
-    ("DistJaccard")  => (crate::dist::DistJaccard);
-    ("DistPtr")      => (crate::dist::DistPtr);
-    ("DistLevenshtein") => (crate::dist::DistLevenshtein);
-    ("DistJensenShannon") => (crate::dist::DistJensenShannon);
-    ("DistHellinger") => (crate::dist::DistHellinger);
+    ("DistL1")       => (crate::core::index::hnsw_rs::dist::DistL1);
+    ("DistL2")       => (crate::core::index::hnsw_rs::dist::DistL2);
+    ("DistL2")       => (crate::core::index::hnsw_rs::dist::DistL2);
+    ("DistDot")      => (crate::core::index::hnsw_rs::dist::DistDot);
+    ("DistHamming")  => (crate::core::index::hnsw_rs::dist::DistHamming);
+    ("DistJaccard")  => (crate::core::index::hnsw_rs::dist::DistJaccard);
+    ("DistPtr")      => (crate::core::index::hnsw_rs::dist::DistPtr);
+    ("DistLevenshtein") => (crate::core::index::hnsw_rs::dist::DistLevenshtein);
+    ("DistJensenShannon") => (crate::core::index::hnsw_rs::dist::DistJensenShannon);
+    ("DistHellinger") => (crate::core::index::hnsw_rs::dist::DistHellinger);
 );
 
 

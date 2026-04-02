@@ -9,7 +9,7 @@
 use hashbrown::HashMap;
 use std::cmp::Ordering;
 
-use crate::hnsw;
+use crate::core::index::hnsw_rs::hnsw;
 use hnsw::*;
 
 
@@ -155,18 +155,18 @@ impl <T:Clone+Send+Sync,D:Distance<T>+Send+Sync> From<&Hnsw<T,D>> for FlatNeighb
 mod tests {
 
 use super::*;
-use crate::dist;
+use crate::core::index::hnsw_rs::dist;
 
 
 use std::fs::OpenOptions;
 use std::io::{BufReader};
 use std::path::PathBuf;
 
-pub use crate::dist::*;
-pub use crate::api::AnnT;
+pub use crate::core::index::hnsw_rs::dist::*;
+pub use crate::core::index::hnsw_rs::api::AnnT;
 
 use rand::distributions::{Distribution, Uniform};
-use crate::hnswio::*;
+use crate::core::index::hnsw_rs::hnswio::*;
 
 
 fn log_init_test() {

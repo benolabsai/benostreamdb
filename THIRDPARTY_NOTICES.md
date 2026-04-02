@@ -20,4 +20,4 @@ HyperStreamDB relies on the open-source `hnsw_rs` library for core Hierarchical 
 - **Project URL**: [https://github.com/jean-pierreBoth/hnswlib-rs](https://github.com/jean-pierreBoth/hnswlib-rs)
 - **Copyright**: Copyright Jean-Pierre Both and the hnsw_rs authors
 
-The source code is vendored under `vendor/hnsw_rs/` and integrated into HyperStreamDB's graph partitioning strategies in `src/core/index/hnsw_ivf.rs`.
+The source code is internalized under `src/core/index/hnsw_rs/` and integrated into HyperStreamDB's graph partitioning strategies in `src/core/index/hnsw_ivf.rs`.

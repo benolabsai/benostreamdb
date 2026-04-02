@@ -11,10 +11,10 @@ use skiplist::OrderedSkipList;
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::hnsw;
+use crate::core::index::hnsw_rs::hnsw;
 
 #[allow(unused_imports)]    // necessary for rls
-use crate::dist;
+use crate::core::index::hnsw_rs::dist;
 
 pub use self::hnsw::*;
 
