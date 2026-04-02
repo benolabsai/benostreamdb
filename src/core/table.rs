@@ -3134,7 +3134,8 @@ impl Table {
                     // Refine search within candidates (Index lookup)
                     for (entry, _) in candidates {
                         let config = SegmentConfig::new(&self.uri, &entry.file_path.replace(".parquet", ""))
-                            .with_index_files(entry.index_files.clone());
+                            .with_index_files(entry.index_files.clone())
+                            .with_delete_files(entry.delete_files.clone());
                         let reader = HybridReader::new(config, self.store.clone(), &self.uri);
                         
                         let filters = expr.extract_and_conditions();
@@ -3142,10 +3143,17 @@ impl Table {
                         
                         for f in filters {
                             if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(&f).await {
+                                // Subtract logically deleted rows!
+                                let deleted = reader.load_merged_deletes().await?;
+                                let alive_bm = bm.clone() - deleted.clone();
+                                
+                                println!("DEBUG: PK Check for {}: Index bits: {}, Deleted bits: {}, Alive bits: {}", 
+                                    f.column, bm.len(), deleted.len(), alive_bm.len());
+                                
                                 if let Some(current) = bitmap_opt {
-                                    bitmap_opt = Some(current & bm);
+                                    bitmap_opt = Some(current & alive_bm);
                                 } else {
-                                    bitmap_opt = Some(bm);
+                                    bitmap_opt = Some(alive_bm);
                                 }
                             } else {
                                 bitmap_opt = None;

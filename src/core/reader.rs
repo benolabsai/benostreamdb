@@ -203,7 +203,7 @@ impl HybridReader {
     }
 
     /// Load and merge all .del files into a single RoaringBitmap
-    async fn load_merged_deletes(&self) -> Result<RoaringBitmap> {
+    pub async fn load_merged_deletes(&self) -> Result<RoaringBitmap> {
         let mut deleted_bitmap = RoaringBitmap::new();
         
         // Determine target path for Iceberg delete matching
