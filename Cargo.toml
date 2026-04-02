@@ -43,6 +43,8 @@ intel_gpu = ["dep:opencl3"]
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize"]
 java = ["dep:jni"]
+simdeez_f = []
+stdsimd = []
 
 [dependencies]
 # core columnar memory format
