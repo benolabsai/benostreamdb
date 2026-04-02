@@ -464,24 +464,21 @@ impl HybridSegmentWriter {
 
         // Build Indexes
 
-        if self.config.index_all {
-            batch.schema().fields().iter().enumerate().collect::<Vec<_>>().into_par_iter()
-                .try_for_each(|(i, field)| {
-                    let col_name = field.name();
-                    let col = batch.column(i);
+        batch.schema().fields().iter().enumerate().collect::<Vec<_>>().into_par_iter()
+            .try_for_each(|(i, field)| {
+                let col_name = field.name();
+                let col = batch.column(i);
+                
+                let is_pk = self.primary_key.contains(&col_name.to_string());
+                let is_vector = matches!(col.data_type(), arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_));
+                let in_config_list = self.config.columns_to_index.as_ref().map(|cols| cols.contains(&col_name.to_string())).unwrap_or(false);
+                
+                if self.config.index_all || is_pk || is_vector || in_config_list {
                     self.index_column(col_name, col)
-                })?;
-        } else if let Some(ref cols) = self.config.columns_to_index {
-            cols.into_par_iter()
-                .try_for_each(|col_name| {
-                    if let Ok(idx) = batch.schema().index_of(col_name) {
-                        let col = batch.column(idx);
-                        self.index_column(col_name, col)
-                    } else {
-                        Ok(())
-                    }
-                })?;
-        } 
+                } else {
+                    Ok(())
+                }
+            })?;
         
         Ok(())
     }

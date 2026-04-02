@@ -14,6 +14,7 @@ use simdeez::sse2::*;
 use simdeez::*;
 
 
+
 /// The trait describing distance.
 /// For example for the L1 distance
 /// 
@@ -1222,7 +1223,7 @@ fn test_jaccard_u16() {
 
 
 
-extern "C" fn dist_func_float(va : *const f32, vb : *const f32, len : c_ulonglong) -> f32 {
+extern "C" fn dist_func_float(va : *const f32, vb : *const f32, len : u64) -> f32 {
     let mut dist : f32 = 0.;
     let sa = unsafe {std::slice::from_raw_parts(va, len as usize) };
     let sb = unsafe { std::slice::from_raw_parts(vb, len as usize) };
