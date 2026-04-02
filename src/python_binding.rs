@@ -1038,7 +1038,7 @@ impl PyTable {
         let batch_result: Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> = rt.block_on(async {
             use datafusion::prelude::SessionContext;
             let mut ctx = SessionContext::new();
-            crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+            let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
             
             // Register table as 't' (short alias, safe from keywords)
             let provider = Arc::new(crate::core::sql::HyperStreamTableProvider::new(Arc::new(self.table.clone())));
