@@ -37,29 +37,42 @@ pip install .
 ```python
 import hyperstreamdb as hdb
 import pyarrow as pa
+import pandas as pd
+import numpy as np
 
-# 1. Create a Table
+# 1. Create a Table with AG News Schema
 schema = pa.schema([
     ('id', pa.int32()), 
-    ('content', pa.string()),
-    ('embedding', pa.list_(pa.float32(), 768))
+    ('label', pa.int32()),   # 1:World, 2:Sports, 3:Business, 4:Sci/Tech
+    ('title', pa.string()),
+    ('description', pa.string()),
+    ('embedding', pa.list_(pa.float32(), 384)) # SBERT/all-MiniLM-L6-v2 size
 ])
-table = hdb.Table.create("file:///tmp/my_table", schema)
 
-# 2. Ingest Data
-data = generate_batch(1000) # Returns RecordBatch
-table.write(data)
+table = hdb.Table.create("file:///tmp/ag_news", schema)
+
+# 2. Ingest Real Data (Example: AG News Sample)
+df = pd.DataFrame({
+    'id': [1, 2],
+    'label': [3, 4],
+    'title': ["Wall St. Bears Claw Back", "SpaceX Launches New Falcon"],
+    'description': ["Stocks fell today as inflation concerns...", "The private space company successfully..."],
+    'embedding': [np.random.rand(384).tolist() for _ in range(2)]
+})
+
+table.write(df)
 table.commit()
 
-# 3. Query (Scalar + Vector)
-# Find nearest neighbors to 'query_vec' where content contains "AI"
+# 3. Hybrid Search (Scalar + Vector)
+# Search for "Space" related news in "Sci/Tech" category (label=4)
+query_vec = np.random.rand(384).tolist()
 results = table.search(
     vector_column="embedding",
     query_vector=query_vec,
-    k=10,
-    filter="content LIKE '%AI%'"
+    k=5,
+    filter="label = 4 AND description LIKE '%Space%'"
 )
-print(results.to_pandas())
+print(results.to_pandas()[['title', 'description']])
 ```
 
 ---

@@ -225,18 +225,16 @@ impl ExecutionPlan for HyperStreamExec {
                         Ok(batches) => {
                             for batch in batches {
                                 let mut b = batch;
-                                if b.schema() != expected_schema_inner {
-                                    if b.schema().fields().len() == expected_schema_inner.fields().len() {
-                                        if let Ok(new_batch) = datafusion::arrow::record_batch::RecordBatch::try_new(expected_schema_inner.clone(), b.columns().to_vec()) {
-                                            b = new_batch;
-                                        } else {
-                                            yield Err(DataFusionError::Execution(format!("Schema mismatch in Vector Search: Expected {:?} got {:?}", expected_schema_inner, b.schema())));
-                                            return;
-                                        }
-                                    } else {
-                                        yield Err(DataFusionError::Execution(format!("Schema mismatch in Vector Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
-                                        return;
-                                    }
+                                if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                    // Soft-replace schema to ignore metadata mismatches
+                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
+                                    options.row_count = Some(b.num_rows());
+                                    let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
+                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in Vector Search: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
+                                    b = b_new;
+                                } else {
+                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in Vector Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                    return;
                                 }
                                 yield Ok(b);
                             }
@@ -254,18 +252,16 @@ impl ExecutionPlan for HyperStreamExec {
                         Ok(batches) => {
                             for batch in batches {
                                 let mut b = batch;
-                                if b.schema() != expected_schema_inner {
-                                    if b.schema().fields().len() == expected_schema_inner.fields().len() {
-                                        if let Ok(new_batch) = datafusion::arrow::record_batch::RecordBatch::try_new(expected_schema_inner.clone(), b.columns().to_vec()) {
-                                            b = new_batch;
-                                        } else {
-                                            yield Err(DataFusionError::Execution(format!("Schema mismatch in standard scan: Expected {:?} got {:?}", expected_schema_inner, b.schema())));
-                                            return;
-                                        }
-                                    } else {
-                                        yield Err(DataFusionError::Execution(format!("Schema mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
-                                        return;
-                                    }
+                                if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                    // Soft-replace schema to ignore metadata mismatches
+                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
+                                    options.row_count = Some(b.num_rows());
+                                    let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
+                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in standard scan: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
+                                    b = b_new;
+                                } else {
+                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                    return;
                                 }
                                 yield Ok(b);
                             }

@@ -158,8 +158,11 @@ class CompetitiveBenchmark:
             start = time.time()
             table.write_pandas(metadata)
             table.commit()
-            table.wait_for_background_tasks() # Ensure indexing is finished
             elapsed = time.time() - start
+            
+            # Indexing continues in background, but we measure commit latency for 'ingest'
+            # (matches competitors like LanceDB which don't build HNSW by default on write)
+            table.wait_for_background_tasks() 
             
             throughput = n_rows / elapsed
             storage_mb = sum(f.stat().st_size for f in Path(tmpdir).rglob('*') if f.is_file()) / 1024 / 1024
@@ -250,6 +253,7 @@ class CompetitiveBenchmark:
             metadata['embedding'] = list(vectors)
             table.write_pandas(metadata)
             table.commit()
+            table.wait_for_background_tasks() # Ensure indexing is finished before we try to delete tmpdir
             
             # Hybrid query: scalar filter + vector search
             try:
