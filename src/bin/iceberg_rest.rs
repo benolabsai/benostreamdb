@@ -538,6 +538,7 @@ async fn update_table(
         updated_default_sort_order_id,
         removed_properties,
         updated_last_column_id,
+        is_fast_append: false,
     };
 
     match manager.commit(&new_entries, &[], commit_metadata).await {
