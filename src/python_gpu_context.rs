@@ -130,11 +130,11 @@ impl PyComputeContext {
                 }
             }
             "intel" => {
-                #[cfg(feature = "intel_gpu")]
+                #[cfg(feature = "intel")]
                 {
                     ComputeBackend::Intel
                 }
-                #[cfg(not(feature = "intel_gpu"))]
+                #[cfg(not(feature = "intel"))]
                 {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         format!("Backend 'intel' not available. Available backends: {:?}", 
@@ -377,7 +377,7 @@ impl PyComputeContext {
         #[cfg(feature = "mps")]
         backends.push("mps".to_string());
         
-        #[cfg(feature = "intel_gpu")]
+        #[cfg(feature = "intel")]
         backends.push("intel".to_string());
         
         backends
