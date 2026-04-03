@@ -36,10 +36,10 @@ required-features = ["java"]
 [features]
 default = ["candle"]
 candle = []
-cuda = ["dep:cust", "intel_gpu"]
-rocm = ["dep:opencl3", "intel_gpu"] # Fallback to OpenCL for now
+cuda = ["dep:cust", "intel"]
+rocm = ["dep:opencl3", "intel"] # Fallback to OpenCL for now
 mps = ["metal"]
-intel_gpu = ["dep:opencl3"]
+intel = ["dep:opencl3"]
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize"]
 java = ["dep:jni"]

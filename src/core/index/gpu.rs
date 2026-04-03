@@ -39,20 +39,114 @@ pub struct ComputeContext {
 }
 
 impl ComputeContext {
+    /// Check if the specified backend and device are actually available on this system
+    pub fn is_available(&self) -> bool {
+        match self.backend {
+            ComputeBackend::Cpu => true,
+            
+            ComputeBackend::Cuda => {
+                #[cfg(feature = "cuda")]
+                {
+                    return cust::init(cust::CudaFlags::empty()).is_ok();
+                }
+                #[cfg(not(feature = "cuda"))]
+                false
+            },
+            
+            ComputeBackend::Mps => {
+                #[cfg(all(target_os = "macos", feature = "mps"))]
+                return true; 
+                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                false
+            },
+
+            ComputeBackend::Intel => {
+                #[cfg(feature = "intel")]
+                {
+                    use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
+                    if let Ok(devices) = get_all_devices(CL_DEVICE_TYPE_GPU) {
+                        for id in devices {
+                            let device = Device::new(id);
+                            if let Ok(vendor) = device.vendor() {
+                                if vendor.to_lowercase().contains("intel") {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    // Diagnostic: No Intel GPU found in OpenCL devices
+                }
+                false
+            },
+
+            ComputeBackend::Rocm => {
+                #[cfg(feature = "rocm")]
+                {
+                    use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
+                    if let Ok(devices) = get_all_devices(CL_DEVICE_TYPE_GPU) {
+                        for id in devices {
+                            let device = Device::new(id);
+                            if let Ok(vendor) = device.vendor() {
+                                let v = vendor.to_lowercase();
+                                if v.contains("amd") || v.contains("advanced micro devices") || v.contains("rocm") {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+                false
+            },
+        }
+    }
+
     pub fn auto_detect() -> Self {
+        // Priority order: Cuda > Mps > Intel > Rocm > Cpu
+        
+        #[cfg(feature = "cuda")]
+        {
+            let ctx = Self { backend: ComputeBackend::Cuda, device_id: 0 };
+            if ctx.is_available() { return ctx; }
+        }
+        
+        #[cfg(all(target_os = "macos", feature = "mps"))]
+        {
+            let ctx = Self { backend: ComputeBackend::Mps, device_id: 0 };
+            if ctx.is_available() { return ctx; }
+        }
+
+        #[cfg(feature = "intel")]
+        {
+            let ctx = Self { backend: ComputeBackend::Intel, device_id: 0 };
+            if ctx.is_available() { return ctx; }
+        }
+
+        #[cfg(feature = "rocm")]
+        {
+            let ctx = Self { backend: ComputeBackend::Rocm, device_id: 0 };
+            if ctx.is_available() { return ctx; }
+        }
+
         Self { backend: ComputeBackend::Cpu, device_id: -1 }
     }
 
     pub fn from_device_str(device: &str) -> Result<Self> {
-        match device.to_lowercase().as_str() {
-            "cpu" => Ok(Self { backend: ComputeBackend::Cpu, device_id: -1 }),
-            "gpu" | "auto" => Ok(Self::auto_detect()),
-            "cuda" => Ok(Self { backend: ComputeBackend::Cuda, device_id: 0 }),
-            "mps" | "metal" => Ok(Self { backend: ComputeBackend::Mps, device_id: 0 }),
-            "rocm" => Ok(Self { backend: ComputeBackend::Rocm, device_id: 0 }),
-            "intel" | "opencl" => Ok(Self { backend: ComputeBackend::Intel, device_id: 0 }),
+        let ctx = match device.to_lowercase().as_str() {
+            "cpu" => Self { backend: ComputeBackend::Cpu, device_id: -1 },
+            "gpu" | "auto" => Self::auto_detect(),
+            "cuda" => Self { backend: ComputeBackend::Cuda, device_id: 0 },
+            "mps" | "metal" => Self { backend: ComputeBackend::Mps, device_id: 0 },
+            "rocm" => Self { backend: ComputeBackend::Rocm, device_id: 0 },
+            "intel" | "opencl" => Self { backend: ComputeBackend::Intel, device_id: 0 },
             _ => anyhow::bail!("Unsupported device: {}", device),
+        };
+        
+        // Final sanity check - if the user explicitly requested a backend, make sure it's there!
+        if !ctx.is_available() && ctx.backend != ComputeBackend::Cpu {
+             anyhow::bail!("Requested backend '{:?}' is not available on this system (probed hardware returned false). Try 'cpu' if hardware acceleration is not set up.", ctx.backend);
         }
+        
+        Ok(ctx)
     }
 }
 
@@ -352,7 +446,7 @@ static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
 #[cfg(feature = "cuda")]
 static CUDA_KMEANS: &str = include_str!("cuda/kmeans_assignment.cu");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
 
 #[cfg(all(target_os = "macos", feature = "mps"))]
@@ -481,25 +575,25 @@ fn compute_mps(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric)
     }
 }
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_L2: &str = include_str!("opencl/l2_distance.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_COSINE: &str = include_str!("opencl/cosine_distance.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_INNER_PRODUCT: &str = include_str!("opencl/inner_product.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_L1: &str = include_str!("opencl/l1_distance.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_HAMMING: &str = include_str!("opencl/hamming_distance.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_JACCARD: &str = include_str!("opencl/jaccard_distance.cl");
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 fn compute_opencl(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, _platform_filter: Option<&str>) -> Result<Vec<f32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -581,7 +675,7 @@ fn compute_opencl(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetr
 
 #[allow(unused_variables)]
 fn compute_intel(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
-    #[cfg(feature = "intel_gpu")]
+    #[cfg(feature = "intel")]
     {
         // Try Intel GPU, fall back to CPU if not available
         match compute_opencl(query, vectors, dim, metric, Some("Intel")) {
@@ -593,7 +687,7 @@ fn compute_intel(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetri
             }
         }
     }
-    #[cfg(not(feature = "intel_gpu"))]
+    #[cfg(not(feature = "intel"))]
     {
         // Fall back to CPU if Intel GPU feature is not enabled
         compute_cpu(query, vectors, dim, metric)
@@ -858,7 +952,7 @@ fn compute_mps_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorM
 }
 
 /// OpenCL batch implementation with chunked processing
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, platform_filter: Option<&str>, _context: &ComputeContext) -> Result<Vec<f32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -985,7 +1079,7 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
 /// Intel GPU batch implementation (uses OpenCL with chunking)
 #[allow(unused_variables)]
 fn compute_intel_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, context: &ComputeContext) -> Result<Vec<f32>> {
-    #[cfg(feature = "intel_gpu")]
+    #[cfg(feature = "intel")]
     {
         // Try Intel GPU batch, fall back to CPU if not available
         match compute_opencl_batch(query, vectors, dim, metric, Some("Intel"), context) {
@@ -996,7 +1090,7 @@ fn compute_intel_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vecto
             }
         }
     }
-    #[cfg(not(feature = "intel_gpu"))]
+    #[cfg(not(feature = "intel"))]
     {
         // Fall back to CPU if Intel GPU feature is not enabled
         compute_cpu(query, vectors, dim, metric)
@@ -1010,12 +1104,12 @@ mod tests {
     #[test]
     fn test_compute_context_auto_detect() {
         let _ctx = ComputeContext::auto_detect();
-        // On a standard test environment without special flags, this should be CPU
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel_gpu")))]
-        {
-            assert_eq!(_ctx.backend, ComputeBackend::Cpu);
-            assert_eq!(_ctx.device_id, -1);
-        }
+        // On a standard test environment without special flags, this should match the enabled feature
+        #[cfg(feature = "intel")]
+        assert_eq!(_ctx.backend, ComputeBackend::Intel);
+        
+        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel")))]
+        assert_eq!(_ctx.backend, ComputeBackend::Cpu);
     }
 
     #[test]
@@ -1024,10 +1118,14 @@ mod tests {
         // (This happens in standard CI environments without GPUs)
         let _ctx = ComputeContext::auto_detect();
         
-        // Assert that the default is either Cpu or at least has a valid field access
-        // We use -1 for non-hardware specific IDs usually.
-        assert_eq!(_ctx.backend, ComputeBackend::Cpu);
-        assert_eq!(_ctx.device_id, -1);
+        #[cfg(feature = "intel")]
+        assert_eq!(_ctx.backend, ComputeBackend::Intel);
+
+        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel")))]
+        {
+            assert_eq!(_ctx.backend, ComputeBackend::Cpu);
+            assert_eq!(_ctx.device_id, -1);
+        }
     }
 
     #[test]
@@ -1491,7 +1589,7 @@ mod property_tests {
                 }
             }
             
-            #[cfg(feature = "intel_gpu")]
+            #[cfg(feature = "intel")]
             {
                 let intel_context = ComputeContext { backend: ComputeBackend::Intel, device_id: 0 };
                 
@@ -1667,7 +1765,7 @@ fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize
     compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }
 
-#[cfg(any(feature = "intel_gpu", feature = "rocm"))]
+#[cfg(any(feature = "intel", feature = "rocm"))]
 fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, platform_filter: Option<&str>) -> Result<Vec<u32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -1721,7 +1819,7 @@ fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usi
     }
 }
 
-#[cfg(not(any(feature = "intel_gpu", feature = "rocm")))]
+#[cfg(not(any(feature = "intel", feature = "rocm")))]
 fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, _pf: Option<&str>) -> Result<Vec<u32>> {
     compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }
