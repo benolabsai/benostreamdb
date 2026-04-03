@@ -7,18 +7,15 @@ use parquet::arrow::ArrowWriter;
 use anyhow::{Context, Result};
 use crate::SegmentConfig;
 use arrow::array::Array;
-// use hnsw_rs::prelude::*; // Unused
 use rayon::prelude::*; // used in join
 // allow wide imports to find standard items
 use std::collections::HashMap;
-use serde_json::json;
-use crate::core::manifest::ColumnStats;
 use std::sync::Arc;
+use crate::core::manifest::{ColumnStats, ManifestEntry, VectorStats, ManifestValue};
 use object_store::ObjectStore;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
-use hyperloglogplus::{HyperLogLog, HyperLogLogPlus};
-use std::collections::hash_map::RandomState;
 use crate::core::index::gpu::{ComputeContext, set_global_gpu_context};
+use parquet::file::statistics::Statistics as ParquetStats;
 
 pub struct HybridSegmentWriter {
     config: SegmentConfig,
@@ -66,7 +63,7 @@ impl HybridSegmentWriter {
         self.record_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn to_manifest_entry(&self) -> crate::core::manifest::ManifestEntry {
+    pub fn to_manifest_entry(&self) -> ManifestEntry {
         let stats = self.get_stats();
         let record_count = self.get_record_count() as i64;
         let files = self.get_generated_files();
@@ -131,7 +128,7 @@ impl HybridSegmentWriter {
             eprintln!("DEBUG: to_manifest_entry: segment_id={}, generated index_files={:?}", self.config.segment_id, index_files);
         }
 
-        crate::core::manifest::ManifestEntry {
+        ManifestEntry {
             file_path: self.config.parquet_path.clone().unwrap_or(parquet_file),
             file_size_bytes: total_size,
             record_count,
@@ -148,52 +145,18 @@ impl HybridSegmentWriter {
         }
     }
 
-    fn compute_stats(&self, batch: &RecordBatch) -> Result<()> {
+    /// Compute vector statistics (HyperStream exclusive) while delegating 
+    /// scalar statistics to the Parquet writer metadata (Zero-Copy).
+    fn compute_vector_stats(&self, batch: &RecordBatch) -> Result<HashMap<String, VectorStats>> {
         let schema = batch.schema();
-        let mut stats_guard = self.stats.lock().unwrap();
+        let mut vector_stats_map = HashMap::new();
 
         for (i, field) in schema.fields().iter().enumerate() {
             let col_name = field.name();
             let array = batch.column(i);
             
-            // Calculate Min/Max based on Type
-            // For MVP, we support Int32, Int64, Float32, Float64
-            let (min, max): (Option<serde_json::Value>, Option<serde_json::Value>) = match field.data_type() {
-                arrow::datatypes::DataType::Int32 => {
-                    let arr = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
-                    let min = arrow::compute::min(arr).map(|v| json!(v));
-                    let max = arrow::compute::max(arr).map(|v| json!(v));
-                    (min, max)
-                },
-                arrow::datatypes::DataType::Int64 => {
-                    let arr = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
-                    let min = arrow::compute::min(arr).map(|v| json!(v));
-                    let max = arrow::compute::max(arr).map(|v| json!(v));
-                    (min, max)
-                },
-                arrow::datatypes::DataType::Float32 => {
-                    let arr = array.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
-                    let min = arrow::compute::min(arr).map(|v| json!(v));
-                    let max = arrow::compute::max(arr).map(|v| json!(v));
-                    (min, max)
-                },
-                 arrow::datatypes::DataType::Float64 => {
-                    let arr = array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
-                    let min = arrow::compute::min(arr).map(|v| json!(v));
-                    let max = arrow::compute::max(arr).map(|v| json!(v));
-                    (min, max)
-                },
-                arrow::datatypes::DataType::Utf8 => {
-                     let arr = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
-                     let min = arrow::compute::min_string(arr).map(|v| json!(v));
-                     let max = arrow::compute::max_string(arr).map(|v| json!(v));
-                     (min, max)
-                },
-                _ => (None, None),
-            };
-
             // Vector Stats (HyperStream Extension)
-            let vector_stats: Option<crate::core::manifest::VectorStats> = match field.data_type() {
+            match field.data_type() {
                 arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_) => {
                     let mut min_norm = f32::MAX;
                     let mut max_norm = f32::MIN;
@@ -218,11 +181,14 @@ impl HybridSegmentWriter {
                     };
 
                     // Parallelize vector stats calculation using Rayon
+                    let zero = vec![0.0; if array.len() > 0 { get_vector(0).map(|v| v.len()).unwrap_or(0) } else { 0 }];
+
                     let vector_results: Vec<(f32, Vec<f32>)> = (0..count)
                         .into_par_iter()
                         .filter_map(|i| {
                             get_vector(i).map(|v| {
-                                let norm = crate::core::index::distance::dot_product(&v, &v).sqrt();
+                                // Norm is distance from zero vector
+                                let norm = crate::core::index::distance::l2_distance(&v, &zero);
                                 (norm, v)
                             })
                         })
@@ -233,7 +199,6 @@ impl HybridSegmentWriter {
                         max_norm = max_norm.max(norm);
                         sum_norm += norm;
 
-                        // Initialize dimension stats on first vector
                         if dim_min.is_none() {
                             dim_min = Some(v.clone());
                             dim_max = Some(v.clone());
@@ -250,102 +215,70 @@ impl HybridSegmentWriter {
                     }
 
                     if count > 0 && min_norm != f32::MAX {
-                        Some(crate::core::manifest::VectorStats {
-                            min_norm,
-                            max_norm,
-                            mean_norm: sum_norm / count as f32,
-                            dim_min,
-                            dim_max,
-                        })
-                    } else {
-                        None
+                         if let Some(dim_m) = dim_min {
+                             vector_stats_map.insert(col_name.to_string(), VectorStats {
+                                 min_norm,
+                                 max_norm,
+                                 mean_norm: sum_norm / count as f32,
+                                 dim_min: Some(dim_m),
+                                 dim_max,
+                             });
+                        }
                     }
                 },
-                _ => None,
+                _ => {}
             };
+        }
+        Ok(vector_stats_map)
+    }
 
-            // Compute NDV (Number of Distinct Values) using HyperLogLog
-            // Memory-efficient: O(1) space (~1.5KB) vs O(n) for HashSet
-            // Accuracy: ~1-2% error with precision 14
-            let distinct_count: Option<i64> = (|| {
-                let mut hll = HyperLogLogPlus::<String, _>::new(14, RandomState::new()).ok()?;
-                
-                match array.data_type() {
-                    arrow::datatypes::DataType::Int32 => {
-                        let arr = array.as_any().downcast_ref::<arrow::array::Int32Array>()?;
-                        for i in 0..arr.len() {
-                            if !arr.is_null(i) {
-                                hll.insert_any(&arr.value(i).to_string());
-                            }
-                        }
-                    },
-                    arrow::datatypes::DataType::Int64 => {
-                        let arr = array.as_any().downcast_ref::<arrow::array::Int64Array>()?;
-                        for i in 0..arr.len() {
-                            if !arr.is_null(i) {
-                                hll.insert_any(&arr.value(i).to_string());
-                            }
-                        }
-                    },
-                    arrow::datatypes::DataType::Utf8 => {
-                        let arr = array.as_any().downcast_ref::<arrow::array::StringArray>()?;
-                        for i in 0..arr.len() {
-                            if !arr.is_null(i) {
-                                hll.insert_any(&arr.value(i).to_string());
-                            }
-                        }
-                    },
-                    _ => return None,
-                };
-                
-                Some(hll.count() as i64)
-            })();
+    fn merge_parquet_stats(&self, metadata: &parquet::file::metadata::ParquetMetaData, vector_stats_map: HashMap<String, VectorStats>) -> Result<()> {
+        let mut final_stats = self.stats.lock().unwrap();
+        
+        if let Some(rg) = metadata.row_groups().first() {
+            for col in rg.columns() {
+                let col_name = col.column_path().string();
+                let mut col_stats = ColumnStats::default();
 
-            // Update stats
-            // If entry exists, update min/max (Global stats for segment)
-            // But wait, write_batch overwrites the file -> means simplistic writers
-            // But if we ever append, we need to merge min/max
-            // Logic:
-            // new_min = min(old_min, batch_min)
-            // new_max = max(old_max, batch_max)
-            
-            // Getting previous stats
-            let entry = stats_guard.entry(col_name.clone()).or_insert(crate::core::manifest::ColumnStats {
-                min: None,
-                max: None,
-                null_count: 0,
-                distinct_count: None,
-                vector_stats: None,
-            });
-            
-            // Null Count
-            entry.null_count += array.null_count() as i64;
-            
-            // Vector Stats
-            if let Some(vs) = vector_stats {
-                entry.vector_stats = Some(vs);
-            }
+                if let Some(stats) = col.statistics() {
+                    // Extract common statistics regardless of type
+                    // In parquet 57.x, these methods have _opt suffix on the enum
+                    col_stats.null_count = stats.null_count_opt().unwrap_or(0) as i64;
+                    col_stats.distinct_count = stats.distinct_count_opt().map(|v| v as i64);
 
-            // Min
-            if let Some(new_min_val) = min {
-                // If old_min is None, take new_min. Else take proper min.
-                // Comparing JSON Values correctly is hard (Types).
-                // Let's assume types are consistent.
-                // NOTE: Implementing robust Min/Max accumulation on JSON values is tricky but doable for primitive types
-                
-                // For MVP, if we overwrite files (write_batch creates new), we don't accumulate? 
-                // But Writer is stateful struct.
-                // Let's implement assume overwrite for now -> Just Set.
-                // Because `Compactor` bug forces 1-batch-per-segment.
-                entry.min = Some(new_min_val.into());
-            }
-            if let Some(new_max_val) = max {
-                entry.max = Some(new_max_val.into());
-            }
-            
-            // Distinct Count (NDV) from HyperLogLog
-            if let Some(ndv) = distinct_count {
-                entry.distinct_count = Some(ndv);
+                    match stats {
+                        ParquetStats::Int32(s) => {
+                            col_stats.min = s.min_opt().map(|&v| ManifestValue::Int32(v));
+                            col_stats.max = s.max_opt().map(|&v| ManifestValue::Int32(v));
+                        },
+                        ParquetStats::Int64(s) => {
+                            col_stats.min = s.min_opt().map(|&v| ManifestValue::Int64(v));
+                            col_stats.max = s.max_opt().map(|&v| ManifestValue::Int64(v));
+                        },
+                        ParquetStats::Float(s) => {
+                            col_stats.min = s.min_opt().map(|&v| ManifestValue::Float32(v));
+                            col_stats.max = s.max_opt().map(|&v| ManifestValue::Float32(v));
+                        },
+                        ParquetStats::Double(s) => {
+                            col_stats.min = s.min_opt().map(|&v| ManifestValue::Float64(v));
+                            col_stats.max = s.max_opt().map(|&v| ManifestValue::Float64(v));
+                        },
+                        ParquetStats::ByteArray(s) => {
+                             if let (Some(min_val), Some(max_val)) = (s.min_opt(), s.max_opt()) {
+                                 col_stats.min = std::str::from_utf8(min_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
+                                 col_stats.max = std::str::from_utf8(max_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
+                             }
+                        },
+                        _ => {}
+                    }
+                }
+
+                // Merge in HyperStream-specific vector stats if applicable
+                if let Some(v_stats) = vector_stats_map.get(&col_name) {
+                    col_stats.vector_stats = Some(v_stats.clone());
+                }
+
+                final_stats.insert(col_name, col_stats);
             }
         }
         Ok(())
@@ -378,6 +311,9 @@ impl HybridSegmentWriter {
         
         let tmp_path = format!("{}.tmp", path.to_str().unwrap());
 
+        // Zero-Copy Stats: Calculate vector stats using Rayon
+        let vec_stats = self.compute_vector_stats(batch)?;
+        
         // Write Data (Parquet) to temporary file
         let file = File::create(&tmp_path).context("Failed to create temporary segment file")?;
         let mut props_builder = parquet::file::properties::WriterProperties::builder()
@@ -393,8 +329,11 @@ impl HybridSegmentWriter {
         let props = props_builder.build();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
         writer.write(batch)?;
-        writer.close()?;
+        let metadata = writer.close()?; // Capture Zero-Copy metadata
         
+        // Extract and Merge Parquet Stats
+        self.merge_parquet_stats(&metadata, vec_stats)?;
+
         // Atomic rename
         std::fs::rename(&tmp_path, &path).context("Failed to atomically rename segment file")?;
 
@@ -405,9 +344,6 @@ impl HybridSegmentWriter {
 
         println!("Written data to {} ({} rows)", path.display(), batch.num_rows());
         self.record_count.fetch_add(batch.num_rows(), std::sync::atomic::Ordering::Relaxed);
-        
-        // Compute stats (fast, keep synchronous)
-        self.compute_stats(batch)?;
         
         Ok(())
     }

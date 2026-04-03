@@ -654,6 +654,7 @@ pub struct CommitMetadata {
     pub updated_sort_orders: Option<Vec<SortOrder>>,
     pub updated_default_sort_order_id: Option<i32>,
     pub updated_last_column_id: Option<i32>,
+    pub is_fast_append: bool,
 }
 
 impl ManifestManager {
@@ -1040,11 +1041,19 @@ impl ManifestManager {
             let (current_manifest, current_ver) = self.load_latest().await?;
             
             // 1. Calculate new state
-            // Load ALL entries including those in manifest lists
-            let mut all_entries = self.load_all_entries(&current_manifest).await?;
+            let mut active_map: HashMap<String, ManifestEntry> = if metadata.is_fast_append && !current_manifest.entries.is_empty() {
+                // Fast Path: Only load the top-level entries (assumes they are the most recent/relevant)
+                // and skip loading from manifest lists for now. 
+                // We will merge new entries and then split into a new manifest list.
+                current_manifest.entries.clone().into_iter().map(|e| (e.file_path.clone(), e)).collect()
+            } else {
+                // Slow Path: Load ALL entries including those in manifest lists
+                let all_entries = self.load_all_entries(&current_manifest).await?;
+                all_entries.into_iter().map(|e| (e.file_path.clone(), e)).collect()
+            };
             
             // --- BOOTSTRAP: If this is the first commit (v1), discover existing files ---
-            if current_ver == 0 && all_entries.is_empty() {
+            if current_ver == 0 && active_map.is_empty() {
                 // If it's a genesis manifest, check if there's any existing data on disk
                 // This bridges the discovery flow with the versioned flow.
                 let mut stream = self.store.list(None);
@@ -1053,7 +1062,7 @@ impl ManifestManager {
                     let path_str = meta.location.to_string();
                     if path_str.ends_with(".parquet") && !path_str.contains("_wal/") {
                          // Create a basic entry for the discovered file
-                         all_entries.push(ManifestEntry {
+                         active_map.insert(path_str.clone(), ManifestEntry {
                              file_path: path_str,
                              record_count: 0, 
                              file_size_bytes: meta.size as i64,
@@ -1072,32 +1081,16 @@ impl ManifestManager {
                 }
             }
             
-            // Map for easy removal
-            let mut active_map: HashMap<String, ManifestEntry> = all_entries.into_iter()
-                .map(|e| (e.file_path.clone(), e))
-                .collect();
-            
-            let mut some_paths_missing = false;
+            // Hardened De-duplication: Always filter out items in remove_paths AND de-duplicate new/existing by path
             for path in remove_paths {
-                if active_map.remove(path).is_none() {
-                    some_paths_missing = true;
-                }
+                active_map.remove(path);
             }
             
-            let new_ver = current_ver + 1;
-            
-            // If this is a compaction/replacement (has add_entries and remove_paths)
-            // and some paths we intended to remove are ALREADY gone, it means
-            // a concurrent compaction or delete happened. We must ABORT to avoid duplication.
-            if !add_entries.is_empty() && !remove_paths.is_empty() && some_paths_missing {
-                tracing::debug!("Aborting commit v{} attempt {}: some remove_paths were already gone", new_ver, attempt);
-                return Ok(current_manifest); 
-            }
-
+            // Add new entries to state (overwrites if path exists)
             for entry in add_entries {
                 active_map.insert(entry.file_path.clone(), entry.clone());
             }
-            
+            let new_ver = current_ver + 1;
             let new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
             
             // 2. Decide if we need a ManifestList (Scalability)

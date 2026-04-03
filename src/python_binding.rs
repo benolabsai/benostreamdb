@@ -850,10 +850,7 @@ impl PyTable {
         // Finalize metadata
         py.allow_threads(|| {
             self.table.commit()
-        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
-        
-        // Ensure all background indexing tasks complete before returning to Python
-        self.wait_for_background_tasks(py)
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     /// Wait for any background indexing or maintenance tasks to complete.
     fn wait_for_indexes(&self, py: Python<'_>) -> PyResult<()> {
@@ -868,9 +865,7 @@ impl PyTable {
                 self.table.commit_async().await
             })
         })
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
-        
-        self.wait_for_background_tasks(py)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
     /// Compact the WAL (consolidate log entries into single batch)

@@ -2262,9 +2262,16 @@ impl Table {
         
         // Commit the partition spec evolution
         let metadata = crate::core::manifest::CommitMetadata {
+            updated_schemas: Some(manifest.schemas.clone()),
+            updated_schema_id: Some(manifest.current_schema_id),
             updated_partition_specs: Some(updated_specs),
             updated_default_spec_id: Some(new_spec_id),
-            ..Default::default()
+            updated_properties: None,
+            removed_properties: None,
+            updated_sort_orders: Some(manifest.sort_orders.clone()),
+            updated_default_sort_order_id: Some(manifest.default_sort_order_id),
+            updated_last_column_id: None,
+            is_fast_append: false,
         };
         
         manifest_manager.commit(&[], &[], metadata).await?;
@@ -2748,7 +2755,8 @@ impl Table {
                             let mut merged_entry = entry_clone;
                             eprintln!("DEBUG: Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_entry.index_files);
                             merged_entry.index_files = updated_entry.index_files;
-                            merged_entry.column_stats = updated_entry.column_stats; 
+                            // NOTE: We MUST preserve the record_count and column_stats from entry_clone,
+                            // as updated_entry (from index_writer) only contains the index metadata.
                             
                             let mut commit_metadata = crate::core::manifest::CommitMetadata::default();
                             let manifest_schema = crate::core::manifest::Schema::from_arrow(&table_schema, 0);
@@ -2758,7 +2766,8 @@ impl Table {
                             let file_path = merged_entry.file_path.clone();
                             let index_count = merged_entry.index_files.len();
 
-                            match manifest_manager_clone.commit(&[merged_entry], &[], commit_metadata).await {
+                            let remove_paths = vec![merged_entry.file_path.clone()];
+                            match manifest_manager_clone.commit(&[merged_entry], &remove_paths, commit_metadata).await {
                                 Ok(_) => eprintln!("Successfully attached {} indexes to manifest for segment {}", 
                                                  index_count, file_path),
                                 Err(e) => eprintln!("Failed to attach indexes for segment {}: {}", file_path, e),
@@ -2799,7 +2808,14 @@ impl Table {
         let commit_metadata = crate::core::manifest::CommitMetadata {
             updated_schemas: final_schemas,
             updated_schema_id: final_schema_id,
-            ..Default::default()
+            updated_partition_specs: None,
+            updated_default_spec_id: None,
+            updated_properties: None,
+            removed_properties: None,
+            updated_sort_orders: None,
+            updated_default_sort_order_id: None,
+            updated_last_column_id: None,
+            is_fast_append: false,
         };
         
         let new_manifest = manifest_manager.commit(&all_new_entries, &[], commit_metadata).await?;
