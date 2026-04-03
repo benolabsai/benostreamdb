@@ -109,19 +109,37 @@ impl HnswGraph {
     pub fn insert(&self, data: (VectorValue, usize)) {
         let (val, local_id) = data;
         match (self, val) {
-            (HnswGraph::L2(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
-            (HnswGraph::Cosine(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
-            (HnswGraph::Dot(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
-            (HnswGraph::L1(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
-            (HnswGraph::Hamming(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
-            (HnswGraph::Jaccard(h), VectorValue::Float32(v)) => h.insert((&v, local_id)),
+            (HnswGraph::L2(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Cosine(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Dot(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::L1(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Hamming(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Jaccard(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
             
-            (HnswGraph::BinaryHamming(h), VectorValue::Binary(v)) => h.insert((&v, local_id)),
-            (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert((&vec![v], local_id)),
+            (HnswGraph::BinaryHamming(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&vec![v], local_id)),
             
-            (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert((&v, local_id)),
+            (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
             
             _ => eprintln!("Error: HnswGraph / insert value type mismatch"),
+        }
+    }
+
+    pub fn parallel_insert(&self, data: Vec<(&[f32], usize)>) {
+        if data.is_empty() { return; }
+        
+        match self {
+            HnswGraph::L2(h) => h.parallel_insert_slice(&data),
+            HnswGraph::Cosine(h) => h.parallel_insert_slice(&data),
+            HnswGraph::Dot(h) => h.parallel_insert_slice(&data),
+            HnswGraph::L1(h) => h.parallel_insert_slice(&data),
+            _ => {
+                // Fallback to sequential for other types
+                for (v, id) in data {
+                    let val = VectorValue::Float32(v.to_vec());
+                    self.insert((val, id));
+                }
+            }
         }
     }
 
@@ -175,16 +193,17 @@ impl HnswIvfIndex {
         let dim = vectors[0].len();
         let n_vectors = vectors.len();
         
-        // Auto-detect optimal cluster count based on dataset size
+        // Auto-detect optimal cluster count based on dataset size and CPU cores
+        let num_cpus = num_cpus::get();
         let n_lists = n_lists.unwrap_or_else(|| {
-            if n_vectors < 10_000 {
-                10  // Small dataset: few clusters
+            if n_vectors < 1000 {
+                num_cpus.min(4) // Very small
+            } else if n_vectors < 10_000 {
+                num_cpus.max(16) // Small: match core count
             } else if n_vectors < 100_000 {
-                ((n_vectors as f64).sqrt() / 10.0) as usize  // Medium: sqrt(N)/10
-            } else if n_vectors < 1_000_000 {
-                ((n_vectors as f64).sqrt() / 5.0) as usize   // Large: sqrt(N)/5
+                (num_cpus * 2).max((n_vectors as f64).sqrt() as usize / 10).max(32)
             } else {
-                (((n_vectors as f64).sqrt() / 8.0) as usize).min(500)
+                ((n_vectors as f64).sqrt() / 5.0) as usize
             }
         }).max(1).min(n_vectors / 10).max(1);
         
@@ -204,6 +223,7 @@ impl HnswIvfIndex {
         } else {
             10 // Large: 10 iterations for very large datasets
         };
+        
         let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
         
         // Train PQ encoder if requested
@@ -219,16 +239,28 @@ impl HnswIvfIndex {
 
         println!("  - K-Means took: {:.2?} ({} iterations, {} clusters)", t0.elapsed(), max_iters, n_lists);
 
-        // Step 2: Group vectors by cluster
+        // Step 2: Group vectors by cluster in parallel
         let t1 = std::time::Instant::now();
-        let mut cluster_vectors: HashMap<usize, Vec<(Vec<f32>, usize)>> = HashMap::new();
-        for (row_id, (vec, cluster_id_ref)) in vectors.into_iter().zip(labels.iter()).enumerate() {
-            let cluster_id = *cluster_id_ref;
-            cluster_vectors
-                .entry(cluster_id)
-                .or_default()
-                .push((vec, row_id));
-        }
+        let cluster_vectors: HashMap<usize, Vec<(Vec<f32>, usize)>> = vectors
+            .into_par_iter()
+            .zip(labels.into_par_iter())
+            .enumerate()
+            .fold(
+                || HashMap::<usize, Vec<(Vec<f32>, usize)>>::new(),
+                |mut acc, (row_id, (vec, cluster_id))| {
+                    acc.entry(cluster_id as usize).or_default().push((vec, row_id));
+                    acc
+                }
+            )
+            .reduce(
+                || HashMap::new(),
+                |mut a, b| {
+                    for (k, v) in b {
+                        a.entry(k).or_default().extend(v);
+                    }
+                    a
+                }
+            );
         println!("  - Grouping vectors took: {:.2?}", t1.elapsed());
 
         // Step 3: Build HNSW graph for each cluster in parallel
@@ -248,14 +280,11 @@ impl HnswIvfIndex {
                     VectorMetric::Jaccard => HnswGraph::Jaccard(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistJaccard)),
                 };
                 
-                let data_with_ids: Vec<(&Vec<f32>, usize)> = vecs
-                    .iter()
-                    .enumerate()
-                    .map(|(local_id, (vec, _))| (vec, local_id))
-                    .collect();
-                
-                for (vec, local_id) in &data_with_ids {
-                    hnsw.insert((VectorValue::Float32((*vec).clone()), *local_id));
+                // Build locally sequential to avoid Rayon nested parallelism overhead
+                // Since Step 3 is already in parallel (one cluster per core), 
+                // this saturates the CPU optimally.
+                for (local_id, (vec, _)) in vecs.iter().enumerate() {
+                    hnsw.insert((crate::core::index::VectorValue::Float32(vec.clone()), local_id));
                 }
                 
                 let row_id_mapping: Vec<usize> = vecs.iter().map(|(_, row_id)| *row_id).collect();

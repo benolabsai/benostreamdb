@@ -32,7 +32,7 @@ use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn hyperstreamdb_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog_from_config, m)?)?;

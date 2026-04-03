@@ -270,11 +270,12 @@ jobs:
           name: wheels-sdist
           path: dist
 
-  crates-io:
-    name: Publish to crates.io
+
+  release:
+    name: Final Release
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [check]
+    needs: [linux, macos, windows, sdist]
     environment: release_pypi
     steps:
       - uses: actions/checkout@v4
@@ -286,22 +287,17 @@ jobs:
           if [[ $GITHUB_REF == refs/tags/v* ]]; then
             export VERSION=${GITHUB_REF#refs/tags/v}
             export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
-            echo "Bumping version to $CARGO_VERSION"
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
           fi
       - name: Publish to crates.io
         run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  release:
-    name: Final Release
-    runs-on: ubuntu-latest
-    if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [linux, macos, windows, sdist]
-    environment: release_pypi
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Download wheels
+        uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           merge-multiple: true
