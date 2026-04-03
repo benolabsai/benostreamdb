@@ -1,7 +1,7 @@
 # HyperStreamDB Comprehensive Guide
 
-**Version:** 0.1.0 (Alpha)  
-**Last Updated:** 2026-01-27
+**Version:** 0.1.8 (Alpha)  
+**Last Updated:** 2026-04-03
 
 HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
 
