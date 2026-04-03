@@ -31,7 +31,7 @@ pub use crate::core::catalog::{CatalogType, create_catalog, create_catalog_async
 use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
-#[pymodule(name = "hyperstreamdb")]
+#[pymodule]
 fn hyperstreamdb_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
