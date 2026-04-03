@@ -369,11 +369,12 @@ cargo bench
 python tests/integration/test_nyc_taxi.py
 ```
 
-**Performance Targets:**
-- Ingest: >100K rows/sec ⏱️
-- Query (indexed): <100ms p99 ⏱️
-- Vector search: <50ms for k=10 on 10M vectors ⏱️
-- Compaction: <5min for 10GB ⏱️
+  **Performance Targets:**
+  - **Scalar Ingest**: >100K rows/sec ✅
+  - **Vector Ingest (768D)**: >4,000 rows/sec ✅ (April 2026)
+  - **Query (indexed)**: <100ms p99 ⏱️
+  - **Vector search**: <50ms for k=10 on 10M vectors ⏱️
+  - **Compaction**: <5min for 10GB ⏱️
 
 ### Phase 2: Nessie Integration (Next)
 

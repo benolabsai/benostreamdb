@@ -684,7 +684,7 @@ impl ManifestManager {
     pub async fn exists(&self) -> Result<bool> {
         let mut stream = self.store.list(Some(&self.manifest_dir));
         if let Some(meta) = stream.next().await {
-            let _ = meta?;
+            let _n = meta?.location.as_ref().len();
             Ok(true)
         } else {
             Ok(false)
@@ -842,26 +842,40 @@ impl ManifestManager {
         if let Some(list_path) = &manifest.manifest_list_path {
             let list = self.load_manifest_list(list_path).await?;
             
+            // Parallelize manifest loading using FuturesUnordered
+            let mut futures = futures::stream::FuturesUnordered::new();
+            
             // Resolve schema for stats decoding
             let schema = manifest.schemas.iter()
                 .find(|s| s.schema_id == manifest.current_schema_id)
-                .or(manifest.schemas.last()); // Fallback
+                .or(manifest.schemas.last())
+                .cloned();
 
             for entry in list.manifest_files {
-                if entry.manifest_path.ends_with(".avro") {
-                    if let Some(s) = schema {
-                        let sub_manifest = self.load_avro_manifest(&entry.manifest_path, s, &manifest.partition_spec).await?;
-                        all_entries.extend(sub_manifest.entries);
+                let entry_path = entry.manifest_path.clone();
+                let table_spec = manifest.partition_spec.clone();
+                let table_schema = schema.clone();
+                let store = self.store.clone();
+                let root_uri = self.root_uri.clone();
+
+                futures.push(async move {
+                    if entry_path.ends_with(".avro") {
+                        if let Some(s) = table_schema {
+                             // Re-implement load_avro_manifest logic inline or call a static helper
+                             // to avoid &self capturing issues in move closure
+                             Self::load_avro_manifest_static(store, entry_path, s, table_spec, root_uri).await
+                        } else {
+                             Self::load_avro_manifest_static(store, entry_path, Schema::default(), table_spec, root_uri).await
+                        }
                     } else {
-                        // Log warning or skip stats?
-                         tracing::warn!("No schema available to decode Avro manifest");
-                          let sub_manifest = self.load_avro_manifest(&entry.manifest_path, &Schema { schema_id: 0, fields: vec![], identifier_field_ids: vec![] }, &manifest.partition_spec).await?;
-                         all_entries.extend(sub_manifest.entries);
+                        Self::load_manifest_static(store, entry_path, root_uri).await
                     }
-                } else {
-                    let sub_manifest = self.load_manifest_from_path(&entry.manifest_path).await?;
-                    all_entries.extend(sub_manifest.entries);
-                }
+                });
+            }
+
+            while let Some(res) = futures.next().await {
+                let sub_manifest = res?;
+                all_entries.extend(sub_manifest.entries);
             }
         }
         
@@ -869,30 +883,23 @@ impl ManifestManager {
     }
 
     /// Helper to load a manifest from an arbitrary path
-    async fn load_manifest_from_path(&self, path_str: &str) -> Result<Manifest> {
-        let path = Path::from(path_str);
-        let cache_key = format!("{}/{}", self.root_uri, path);
-
-        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
-            return Ok(manifest.as_ref().clone());
-        }
-
-        let bytes = self.store.get(&path).await?.bytes().await?;
-        let manifest: Manifest = serde_json::from_slice(&bytes)?;
-        
-        crate::core::cache::MANIFEST_CACHE.insert(cache_key, Arc::new(manifest.clone())).await;
-        Ok(manifest)
+    pub async fn load_manifest_from_path(&self, path_str: &str) -> Result<Manifest> {
+        Self::load_manifest_static(self.store.clone(), path_str.to_string(), self.root_uri.clone()).await
     }
 
-    async fn load_avro_manifest(&self, path_str: &str, schema: &Schema, spec: &PartitionSpec) -> Result<Manifest> {
+    pub async fn load_avro_manifest(&self, path_str: &str, schema: &Schema, spec: &PartitionSpec) -> Result<Manifest> {
+          Self::load_avro_manifest_static(self.store.clone(), path_str.to_string(), schema.clone(), spec.clone(), self.root_uri.clone()).await
+    }
+
+    async fn load_avro_manifest_static(store: Arc<dyn ObjectStore>, path_str: String, schema: Schema, spec: PartitionSpec, root_uri: String) -> Result<Manifest> {
          let path = Path::from(path_str);
-         let cache_key = format!("{}/{}", self.root_uri, path);
+         let cache_key = format!("{}/{}", root_uri, path);
          
          if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
              return Ok(manifest.as_ref().clone());
          }
 
-         let bytes = self.store.get(&path).await?.bytes().await?;
+         let bytes = store.get(&path).await?.bytes().await?;
          let iceberg_entries = crate::core::iceberg::read_manifest(&bytes[..])?;
          
          let mut data_entries = Vec::new();
@@ -900,7 +907,7 @@ impl ManifestManager {
          
          for ie in iceberg_entries {
              if ie.status == 0 || ie.status == 1 { // EXISTING or ADDED
-                 match crate::core::iceberg::convert_iceberg_to_object(&ie, schema, spec)? {
+                 match crate::core::iceberg::convert_iceberg_to_object(&ie, &schema, &spec)? {
                      crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(me),
                      crate::core::iceberg::IcebergManifestObject::Delete(df) => delete_files.push(df),
                  }
@@ -908,7 +915,6 @@ impl ManifestManager {
          }
          
          // Simple linking of equality deletes to data files in same partition
-         // Matches logic in iceberg_rest.rs
          for data in &mut data_entries {
              for delete in &delete_files {
                  if data.partition_values == delete.partition_values {
@@ -920,6 +926,21 @@ impl ManifestManager {
          let manifest = Manifest::new(0, data_entries, None);
          crate::core::cache::MANIFEST_CACHE.insert(cache_key, Arc::new(manifest.clone())).await;
          Ok(manifest)
+    }
+
+    async fn load_manifest_static(store: Arc<dyn ObjectStore>, path_str: String, root_uri: String) -> Result<Manifest> {
+        let path = Path::from(path_str);
+        let cache_key = format!("{}/{}", root_uri, path);
+
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
+            return Ok(manifest.as_ref().clone());
+        }
+
+        let bytes = store.get(&path).await?.bytes().await?;
+        let manifest: Manifest = serde_json::from_slice(&bytes)?;
+        
+        crate::core::cache::MANIFEST_CACHE.insert(cache_key, Arc::new(manifest.clone())).await;
+        Ok(manifest)
     }
 
     /// Walk back history starting from the latest version.
@@ -1083,38 +1104,50 @@ impl ManifestManager {
             let (final_entries, manifest_list_path) = if new_entries.len() > MAX_ENTRIES_PER_MANIFEST {
                 // Split entries into multiple manifests
                 let mut manifest_files = Vec::new();
+                let mut futures = futures::stream::FuturesUnordered::new();
                 let chunks = new_entries.chunks(MAX_ENTRIES_PER_MANIFEST);
-
-                for chunk in chunks {
+                
+                for (chunk_idx, chunk) in chunks.enumerate() {
                     let uuid = uuid::Uuid::new_v4();
-                    let filename = format!("{}-m0.avro", uuid);
+                    let filename = format!("{}-m{}.avro", uuid, chunk_idx);
                     let path = self.manifest_dir.child(filename);
                     
                     let writer = crate::core::iceberg::IcebergWriter::new();
                     let default_schema = crate::core::manifest::Schema::default();
-                    let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema);
-                    let bytes = writer.write_manifest_file(chunk, &current_manifest.partition_spec, table_schema, new_ver as i64, new_ver as i64)?;
-                    let manifest_length = bytes.len() as i64;
-                    let rows_count: i64 = chunk.iter().map(|e| e.record_count).sum();
-                    
-                    self.store.put(&path, bytes.into()).await?;
-                    
-                    manifest_files.push(ManifestListEntry {
-                        manifest_path: path.to_string(),
-                        manifest_length,
-                        partition_spec_id: current_manifest.partition_spec.spec_id,
-                        content: 0, // Data
-                        sequence_number: new_ver as i64,
-                        min_sequence_number: new_ver as i64,
-                        added_snapshot_id: new_ver as i64,
-                        added_files_count: chunk.len() as i32,
-                        existing_files_count: 0,
-                        deleted_files_count: 0,
-                        added_rows_count: rows_count,
-                        existing_rows_count: 0,
-                        deleted_rows_count: 0,
-                        partition_stats: HashMap::new(), 
+                    let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema).clone();
+                    let table_spec = current_manifest.partition_spec.clone();
+                    let new_ver_i64 = new_ver as i64;
+                    let store = self.store.clone();
+                    let chunk_owned: Vec<ManifestEntry> = chunk.to_vec();
+
+                    futures.push(async move {
+                        let bytes = writer.write_manifest_file(&chunk_owned, &table_spec, &table_schema, new_ver_i64, new_ver_i64)?;
+                        let manifest_length = bytes.len() as i64;
+                        let rows_count: i64 = chunk_owned.iter().map(|e| e.record_count).sum();
+                        
+                        store.put(&path, bytes.into()).await?;
+                        
+                        Result::<ManifestListEntry>::Ok(ManifestListEntry {
+                            manifest_path: path.to_string(),
+                            manifest_length,
+                            partition_spec_id: table_spec.spec_id,
+                            content: 0, // Data
+                            sequence_number: new_ver_i64,
+                            min_sequence_number: new_ver_i64,
+                            added_snapshot_id: new_ver_i64,
+                            added_files_count: chunk_owned.len() as i32,
+                            existing_files_count: 0,
+                            deleted_files_count: 0,
+                            added_rows_count: rows_count,
+                            existing_rows_count: 0,
+                            deleted_rows_count: 0,
+                            partition_stats: HashMap::new(), 
+                        })
                     });
+                }
+
+                while let Some(res) = futures.next().await {
+                    manifest_files.push(res?);
                 }
                 
                 let list_uuid = uuid::Uuid::new_v4();
