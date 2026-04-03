@@ -11,22 +11,31 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
 
 #[inline(always)]
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
-    let n = a.len();
-    assert_eq!(n, b.len(), "Vectors must have the same length");
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return unsafe { l2_distance_squared_avx2(a, b) };
+        }
+    }
+    
+    // Fallback to portable unrolled implementation
+    l2_distance_squared_portable(a, b)
+}
 
-    // Optimization: Standard iterator with manual unrolling for common dimensions
-    // The compiler can usually vectorize this well-structured loop.
+/// Portable, manually unrolled L2 distance implementation (works on all CPUs)
+#[inline(always)]
+fn l2_distance_squared_portable(a: &[f32], b: &[f32]) -> f32 {
+    let _n = a.len();
     let mut sum = 0.0;
     
-    // Chunked for better vectorization
-    let chunks = a.chunks_exact(8);
-    let b_chunks = b.chunks_exact(8);
+    let chunks = a.chunks_exact(16);
+    let b_chunks = b.chunks_exact(16);
     let rem_a = chunks.remainder();
     let rem_b = b_chunks.remainder();
 
     for (a_chunk, b_chunk) in chunks.zip(b_chunks) {
         let mut local_sum = 0.0;
-        for i in 0..8 {
+        for i in 0..16 {
             let diff = a_chunk[i] - b_chunk[i];
             local_sum += diff * diff;
         }
@@ -37,8 +46,14 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
         let diff = x - y;
         sum += diff * diff;
     }
-
     sum
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn l2_distance_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
+    // LLVM will now generate aggressive AVX2/FMA instructions here
+    l2_distance_squared_portable(a, b)
 }
 
 #[inline(always)]
@@ -65,15 +80,17 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(n, b.len(), "Vectors must have the same length");
 
     let mut sum = 0.0;
-    let chunks = a.chunks_exact(8);
-    let b_chunks = b.chunks_exact(8);
+    let chunks = a.chunks_exact(16);
+    let b_chunks = b.chunks_exact(16);
     let rem_a = chunks.remainder();
     let rem_b = b_chunks.remainder();
 
     for (a_chunk, b_chunk) in chunks.zip(b_chunks) {
-        for i in 0..8 {
-            sum += a_chunk[i] * b_chunk[i];
+        let mut local_sum = 0.0;
+        for i in 0..16 {
+            local_sum += a_chunk[i] * b_chunk[i];
         }
+        sum += local_sum;
     }
 
     for (x, y) in rem_a.iter().zip(rem_b.iter()) {
@@ -121,7 +138,20 @@ pub fn l1_distance(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(n, b.len(), "Vectors must have the same length");
 
     let mut sum = 0.0;
-    for (x, y) in a.iter().zip(b.iter()) {
+    let chunks = a.chunks_exact(16);
+    let b_chunks = b.chunks_exact(16);
+    let rem_a = chunks.remainder();
+    let rem_b = b_chunks.remainder();
+
+    for (a_chunk, b_chunk) in chunks.zip(b_chunks) {
+        let mut local_sum = 0.0;
+        for i in 0..16 {
+            local_sum += (a_chunk[i] - b_chunk[i]).abs();
+        }
+        sum += local_sum;
+    }
+
+    for (x, y) in rem_a.iter().zip(rem_b.iter()) {
         sum += (x - y).abs();
     }
     sum
@@ -133,7 +163,22 @@ pub fn hamming_distance(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(n, b.len(), "Vectors must have the same length");
 
     let mut count = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
+    let chunks = a.chunks_exact(16);
+    let b_chunks = b.chunks_exact(16);
+    let rem_a = chunks.remainder();
+    let rem_b = b_chunks.remainder();
+
+    for (a_chunk, b_chunk) in chunks.zip(b_chunks) {
+        let mut local_count = 0;
+        for i in 0..16 {
+            if a_chunk[i] != b_chunk[i] {
+                local_count += 1;
+            }
+        }
+        count += local_count;
+    }
+
+    for (x, y) in rem_a.iter().zip(rem_b.iter()) {
         if x != y {
             count += 1;
         }

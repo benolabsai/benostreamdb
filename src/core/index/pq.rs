@@ -32,27 +32,24 @@ pub struct PqEncoder {
 impl PqEncoder {
     pub fn train(vectors: &[Vec<f32>], config: PqConfig) -> Result<Self> {
         let sub_dim = config.dim / config.m;
-        let mut codebooks = Vec::with_capacity(config.m);
-
         println!("Training PQ: m={}, k={}, dim={}, sub_dim={}", config.m, config.k, config.dim, sub_dim);
+        use rayon::prelude::*;
 
-        for i in 0..config.m {
+        let codebooks: Result<Vec<Vec<Vec<f32>>>> = (0..config.m).into_par_iter().map(|i| {
             let start = i * sub_dim;
             let end = (i + 1) * sub_dim;
             
-            // Extract sub-vectors for this subspace
+            // Extract sub-vectors for this subspace (Still a copy, but parallel)
             let sub_vectors: Vec<Vec<f32>> = vectors.iter()
                 .map(|v| v[start..end].to_vec())
                 .collect();
             
-            // Train codebook for this subspace
-            // Optimization: Use fewer iterations for PQ training speed
+            // Train codebook for this subspace using ultra-fast mini-batch K-Means
             let (centroids, _) = simple_kmeans(&sub_vectors, config.k, 5)?;
-            codebooks.push(centroids);
-            println!("  - Trained codebook for subspace {}/{}", i + 1, config.m);
-        }
+            Ok(centroids)
+        }).collect();
 
-        Ok(Self { config, codebooks })
+        Ok(Self { config, codebooks: codebooks? })
     }
 
     pub fn encode(&self, vector: &[f32]) -> Vec<u8> {

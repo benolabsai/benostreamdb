@@ -14,6 +14,13 @@ HyperStreamDB adds a sophisticated sidecar index (Roaring + HNSW) *on top* of st
 
 Data is written in immutable **Segments**. Each segment is a self-contained unit comprising:
 
+### Ingestion Pipeline: Delayed Indexing
+
+HyperStreamDB uses a **non-blocking ingestion architecture** similar to modern vector databases like LanceDB to achieve maximum throughput:
+- **Instant Flush**: Incoming data is written directly to high-performance Parquet files for immediate durability.
+- **Background Indexing**: High-dimensional vector indexes (HNSW-IVF) are built asynchronously in the background using a parallelized worker pool (Rayon + Parallel PQ) that scales to all available CPU cores.
+- **Atomic Patching**: Once background builds complete, the segment manifest is atomically patched to register the new indexes without stopping active writes.
+
 1.  **Raw Data**:
     *   `segment_id.parquet`: Main data storage.
 2.  **Indexes**:

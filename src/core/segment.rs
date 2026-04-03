@@ -217,25 +217,33 @@ impl HybridSegmentWriter {
                         Some(floats.values().to_vec())
                     };
 
-                    for i in 0..count {
-                        if let Some(v) = get_vector(i) {
-                            let norm = crate::core::index::distance::dot_product(&v, &v).sqrt();
-                            min_norm = min_norm.min(norm);
-                            max_norm = max_norm.max(norm);
-                            sum_norm += norm;
+                    // Parallelize vector stats calculation using Rayon
+                    let vector_results: Vec<(f32, Vec<f32>)> = (0..count)
+                        .into_par_iter()
+                        .filter_map(|i| {
+                            get_vector(i).map(|v| {
+                                let norm = crate::core::index::distance::dot_product(&v, &v).sqrt();
+                                (norm, v)
+                            })
+                        })
+                        .collect();
 
-                            // Initialize dimension stats on first vector
-                            if dim_min.is_none() {
-                                dim_min = Some(v.clone());
-                                dim_max = Some(v.clone());
-                            } else {
-                                let d_min = dim_min.as_mut().unwrap();
-                                let d_max = dim_max.as_mut().unwrap();
-                                for (j, &val) in v.iter().enumerate() {
-                                    if j < d_min.len() {
-                                        d_min[j] = d_min[j].min(val);
-                                        d_max[j] = d_max[j].max(val);
-                                    }
+                    for (norm, v) in vector_results {
+                        min_norm = min_norm.min(norm);
+                        max_norm = max_norm.max(norm);
+                        sum_norm += norm;
+
+                        // Initialize dimension stats on first vector
+                        if dim_min.is_none() {
+                            dim_min = Some(v.clone());
+                            dim_max = Some(v.clone());
+                        } else {
+                            let d_min = dim_min.as_mut().unwrap();
+                            let d_max = dim_max.as_mut().unwrap();
+                            for (j, &val) in v.iter().enumerate() {
+                                if j < d_min.len() {
+                                    d_min[j] = d_min[j].min(val);
+                                    d_max[j] = d_max[j].max(val);
                                 }
                             }
                         }
@@ -372,7 +380,10 @@ impl HybridSegmentWriter {
 
         // Write Data (Parquet) to temporary file
         let file = File::create(&tmp_path).context("Failed to create temporary segment file")?;
-        let mut props_builder = parquet::file::properties::WriterProperties::builder();
+        let mut props_builder = parquet::file::properties::WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::try_new(3)?))
+            .set_dictionary_enabled(true)
+            .set_data_page_size_limit(1024 * 1024); // 1MB pages for better random access
         
         // Enable Bloom Filters for Primary Keys if defined
         for pk in &self.primary_key {
@@ -552,26 +563,37 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<i32> = None;
-                    let mut last_row_id = 0;
+                    let mut current_rows = Vec::new();
 
                     for i in 0..sort_indices.len() {
-                        let row_idx = sort_indices.value(i);
+                        let row_idx = sort_indices.value(i) as u32;
                         if array.is_null(row_idx as usize) { continue; }
                         let val = array.value(row_idx as usize);
 
                         if Some(val) != current_val {
                             if let Some(v) = current_val {
                                 key_builder.append_value(v);
+                                current_rows.sort_unstable();
+                                let mut last = 0;
+                                for &rid in &current_rows {
+                                    list_builder.values().append_value(rid - last);
+                                    last = rid;
+                                }
                                 list_builder.append(true);
+                                current_rows.clear();
                             }
                             current_val = Some(val);
-                            last_row_id = 0; // Reset delta baseline for new key
                         }
-                        list_builder.values().append_value(row_idx - last_row_id);
-                        last_row_id = row_idx;
+                        current_rows.push(row_idx);
                     }
                     if let Some(v) = current_val {
                         key_builder.append_value(v);
+                        current_rows.sort_unstable();
+                        let mut last = 0;
+                        for &rid in &current_rows {
+                            list_builder.values().append_value(rid - last);
+                            last = rid;
+                        }
                         list_builder.append(true);
                     }
 
@@ -636,20 +658,27 @@ impl HybridSegmentWriter {
                         if vectors.is_empty() { return Ok(()); }
                         let _dim = vectors[0].len();
 
-                        let use_pq = vectors.len() > 100_000;
-                        if use_pq {
-                            println!("Auto-enabling PQ for large segment ({} vectors)", vectors.len());
-                        }
-                        let hnsw_ivf_index = HnswIvfIndex::build(vectors, crate::core::index::VectorMetric::L2, None, None, use_pq)
-                            .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
-                        
-                        let local_base_path = local_staging_dir.join(format!("{}.{}", self.config.segment_id, col_name));
-                        let saved_files = hnsw_ivf_index.save(local_base_path.to_str().unwrap())
-                            .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
-                        
-                        {
-                            let mut files = self.generated_files.lock().unwrap();
-                            files.extend(saved_files);
+                        // Build vector index ONLY if configured for immediate indexing
+                        let in_config = self.config.columns_to_index.as_ref().map(|cols| cols.iter().any(|c| c == col_name)).unwrap_or(false);
+                        if self.config.index_all || in_config {
+                            let use_pq = vectors.len() > 5_000;
+                            if use_pq {
+                                println!("Auto-enabling PQ for segment ({} vectors)", vectors.len());
+                            }
+                            println!("Building HNSW-IVF index (blocking): {} vectors, {} dims, use_pq={}", vectors.len(), _dim, use_pq);
+                            let hnsw_ivf_index = HnswIvfIndex::build(vectors, crate::core::index::VectorMetric::L2, None, None, use_pq)
+                                .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
+                            
+                            let local_base_path = local_staging_dir.join(format!("{}.{}", self.config.segment_id, col_name));
+                            let saved_files = hnsw_ivf_index.save(local_base_path.to_str().unwrap())
+                                .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
+                            
+                            {
+                                let mut files = self.generated_files.lock().unwrap();
+                                files.extend(saved_files);
+                            }
+                        } else {
+                            println!("Skipping vector indexing for column {} (delayed/background mode)", col_name);
                         }
                      }
                 },
@@ -668,25 +697,37 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<i64> = None;
-                    let mut last_row_id = 0;
+                    let mut current_rows = Vec::new();
+
                     for i in 0..sort_indices.len() {
-                        let row_idx = sort_indices.value(i);
+                        let row_idx = sort_indices.value(i) as u32;
                         if array.is_null(row_idx as usize) { continue; }
                         let val = array.value(row_idx as usize);
 
                         if Some(val) != current_val {
                             if let Some(v) = current_val {
                                 key_builder.append_value(v);
+                                current_rows.sort_unstable();
+                                let mut last = 0;
+                                for &rid in &current_rows {
+                                    list_builder.values().append_value(rid - last);
+                                    last = rid;
+                                }
                                 list_builder.append(true);
+                                current_rows.clear();
                             }
                             current_val = Some(val);
-                            last_row_id = 0;
                         }
-                        list_builder.values().append_value(row_idx - last_row_id);
-                        last_row_id = row_idx;
+                        current_rows.push(row_idx);
                     }
                     if let Some(v) = current_val {
                         key_builder.append_value(v);
+                        current_rows.sort_unstable();
+                        let mut last = 0;
+                        for &rid in &current_rows {
+                            list_builder.values().append_value(rid - last);
+                            last = rid;
+                        }
                         list_builder.append(true);
                     }
 
@@ -732,9 +773,10 @@ impl HybridSegmentWriter {
                     let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
                     let mut current_val: Option<u64> = None; // Store as bits for comparison
-                    let mut last_row_id = 0;
+                    let mut current_rows = Vec::new();
+
                     for i in 0..sort_indices.len() {
-                        let row_idx = sort_indices.value(i);
+                        let row_idx = sort_indices.value(i) as u32;
                         if array.is_null(row_idx as usize) { continue; }
                         let val = array.value(row_idx as usize);
                         let val_bits = val.to_bits();
@@ -742,16 +784,27 @@ impl HybridSegmentWriter {
                         if Some(val_bits) != current_val {
                             if let Some(v_bits) = current_val {
                                 key_builder.append_value(f64::from_bits(v_bits));
+                                current_rows.sort_unstable();
+                                let mut last = 0;
+                                for &rid in &current_rows {
+                                    list_builder.values().append_value(rid - last);
+                                    last = rid;
+                                }
                                 list_builder.append(true);
+                                current_rows.clear();
                             }
                             current_val = Some(val_bits);
-                            last_row_id = 0;
                         }
-                        list_builder.values().append_value(row_idx - last_row_id);
-                        last_row_id = row_idx;
+                        current_rows.push(row_idx);
                     }
                     if let Some(v_bits) = current_val {
                         key_builder.append_value(f64::from_bits(v_bits));
+                        current_rows.sort_unstable();
+                        let mut last = 0;
+                        for &rid in &current_rows {
+                            list_builder.values().append_value(rid - last);
+                            last = rid;
+                        }
                         list_builder.append(true);
                     }
 
