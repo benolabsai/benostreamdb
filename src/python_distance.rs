@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use crate::core::index::{VectorMetric, distance};
 use crate::core::index::gpu::{compute_distance, compute_distance_batch, ComputeBackend};
-use crate::python_gpu_context::PyComputeContext;
+use crate::python_gpu_context::PyDevice;
 
 /// Helper function to validate vector dimensions
 fn validate_dimensions(a_len: usize, b_len: usize) -> PyResult<()> {
@@ -42,7 +42,7 @@ fn compute_single_distance(
     a: &[f32],
     b: &[f32],
     metric: VectorMetric,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     // Validate dimensions
     validate_dimensions(a.len(), b.len())?;
@@ -52,8 +52,8 @@ fn compute_single_distance(
     validate_values(b, "vector b")?;
 
     
-    // Compute distance using GPU if context provided, otherwise CPU
-    if let Some(ctx) = context {
+    // Compute distance using GPU if device provided, otherwise CPU
+    if let Some(ctx) = device {
         // Use GPU acceleration
         let gpu_context = ctx.get_context();
         let mut vectors = Vec::with_capacity(a.len() * 2);
@@ -93,7 +93,7 @@ fn compute_single_distance(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -118,15 +118,15 @@ fn compute_single_distance(
 /// >>> print(f"{distance:.3f}")
 /// 5.196
 #[pyfunction]
-#[pyo3(name = "l2", signature = (a, b, context=None))]
+#[pyo3(name = "l2", signature = (a, b, device=None))]
 pub fn py_l2(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::L2, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::L2, device)
 }
 
 /// Compute cosine distance between two vectors
@@ -141,7 +141,7 @@ pub fn py_l2(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -166,15 +166,15 @@ pub fn py_l2(
 /// >>> print(distance)
 /// 1.0
 #[pyfunction]
-#[pyo3(name = "cosine", signature = (a, b, context=None))]
+#[pyo3(name = "cosine", signature = (a, b, device=None))]
 pub fn py_cosine(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::Cosine, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::Cosine, device)
 }
 
 /// Compute inner product (dot product) between two vectors
@@ -188,7 +188,7 @@ pub fn py_cosine(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -213,15 +213,15 @@ pub fn py_cosine(
 /// >>> print(product)
 /// 32.0
 #[pyfunction]
-#[pyo3(name = "inner_product", signature = (a, b, context=None))]
+#[pyo3(name = "inner_product", signature = (a, b, device=None))]
 pub fn py_inner_product(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::InnerProduct, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::InnerProduct, device)
 }
 
 /// Compute L1 (Manhattan) distance between two vectors
@@ -235,7 +235,7 @@ pub fn py_inner_product(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -260,15 +260,15 @@ pub fn py_inner_product(
 /// >>> print(distance)
 /// 9.0
 #[pyfunction]
-#[pyo3(name = "l1", signature = (a, b, context=None))]
+#[pyo3(name = "l1", signature = (a, b, device=None))]
 pub fn py_l1(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::L1, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::L1, device)
 }
 
 /// Compute Hamming distance between two vectors
@@ -282,7 +282,7 @@ pub fn py_l1(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -307,15 +307,15 @@ pub fn py_l1(
 /// >>> print(distance)
 /// 2.0
 #[pyfunction]
-#[pyo3(name = "hamming", signature = (a, b, context=None))]
+#[pyo3(name = "hamming", signature = (a, b, device=None))]
 pub fn py_hamming(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::Hamming, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::Hamming, device)
 }
 
 /// Compute Jaccard distance between two vectors
@@ -330,7 +330,7 @@ pub fn py_hamming(
 ///     First vector (NumPy array, list, or array-like)
 /// b : array_like
 ///     Second vector (NumPy array, list, or array-like)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -355,15 +355,15 @@ pub fn py_hamming(
 /// >>> print(f"{distance:.3f}")
 /// 0.667
 #[pyfunction]
-#[pyo3(name = "jaccard", signature = (a, b, context=None))]
+#[pyo3(name = "jaccard", signature = (a, b, device=None))]
 pub fn py_jaccard(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
-    compute_single_distance(a_slice, b_slice, VectorMetric::Jaccard, context)
+    compute_single_distance(a_slice, b_slice, VectorMetric::Jaccard, device)
 }
 
 
@@ -377,7 +377,7 @@ fn compute_batch_distances(
     vectors: &[f32],
     dim: usize,
     metric: VectorMetric,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Vec<f32>> {
     // Validate query dimension
     if query.len() != dim {
@@ -397,8 +397,8 @@ fn compute_batch_distances(
     validate_values(query, "query vector")?;
     validate_values(vectors, "database vectors")?;
     
-    // Compute distances using GPU if context provided, otherwise CPU
-    if let Some(ctx) = context {
+    // Compute distances using GPU if device provided, otherwise CPU
+    if let Some(ctx) = device {
         let gpu_context = ctx.get_context();
         let start = std::time::Instant::now();
         
@@ -444,7 +444,7 @@ fn compute_batch_distances(
             distances.push(dist);
         }
         
-        // Note: CPU path without context doesn't track stats since there's no tracker
+        // Note: CPU path without device doesn't track stats since there's no tracker
         
         Ok(distances)
     }
@@ -462,7 +462,7 @@ fn compute_batch_distances(
 ///     Query vector (1D NumPy array)
 /// vectors : array_like
 ///     Database vectors (2D NumPy array, shape: [n_vectors, dim])
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration
 /// 
 /// Returns
@@ -487,12 +487,12 @@ fn compute_batch_distances(
 /// >>> print(distances)
 /// [0.0, 5.196...]
 #[pyfunction]
-#[pyo3(name = "l2_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "l2_batch", signature = (query, vectors, device=None))]
 pub fn py_l2_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -502,7 +502,7 @@ pub fn py_l2_batch<'py>(
     // Flatten the 2D array to 1D for processing
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::L2, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::L2, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -516,7 +516,7 @@ pub fn py_l2_batch<'py>(
 /// Args:
 ///     query: Query vector (1D NumPy array)
 ///     vectors: Database vectors (2D NumPy array, shape: [n_vectors, dim])
-///     context: Optional ComputeContext for GPU acceleration
+///     device: Optional ComputeContext for GPU acceleration
 /// 
 /// Returns:
 ///     np.ndarray: 1D array of cosine distances, one per database vector
@@ -533,12 +533,12 @@ pub fn py_l2_batch<'py>(
 ///     >>> distances = hdb.cosine_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 1.0, 1.0]
 #[pyfunction]
-#[pyo3(name = "cosine_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "cosine_batch", signature = (query, vectors, device=None))]
 pub fn py_cosine_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -546,7 +546,7 @@ pub fn py_cosine_batch<'py>(
     let dim = shape[1];
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Cosine, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Cosine, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -560,7 +560,7 @@ pub fn py_cosine_batch<'py>(
 /// Args:
 ///     query: Query vector (1D NumPy array)
 ///     vectors: Database vectors (2D NumPy array, shape: [n_vectors, dim])
-///     context: Optional ComputeContext for GPU acceleration
+///     device: Optional ComputeContext for GPU acceleration
 /// 
 /// Returns:
 ///     np.ndarray: 1D array of inner products, one per database vector
@@ -577,12 +577,12 @@ pub fn py_cosine_batch<'py>(
 ///     >>> products = hdb.inner_product_batch(query, vectors)
 ///     >>> print(products)  # [14.0, 32.0]
 #[pyfunction]
-#[pyo3(name = "inner_product_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "inner_product_batch", signature = (query, vectors, device=None))]
 pub fn py_inner_product_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -590,7 +590,7 @@ pub fn py_inner_product_batch<'py>(
     let dim = shape[1];
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::InnerProduct, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::InnerProduct, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -604,7 +604,7 @@ pub fn py_inner_product_batch<'py>(
 /// Args:
 ///     query: Query vector (1D NumPy array)
 ///     vectors: Database vectors (2D NumPy array, shape: [n_vectors, dim])
-///     context: Optional ComputeContext for GPU acceleration
+///     device: Optional ComputeContext for GPU acceleration
 /// 
 /// Returns:
 ///     np.ndarray: 1D array of L1 distances, one per database vector
@@ -621,12 +621,12 @@ pub fn py_inner_product_batch<'py>(
 ///     >>> distances = hdb.l1_batch(query, vectors)
 ///     >>> print(distances)  # [6.0, 15.0]
 #[pyfunction]
-#[pyo3(name = "l1_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "l1_batch", signature = (query, vectors, device=None))]
 pub fn py_l1_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -634,7 +634,7 @@ pub fn py_l1_batch<'py>(
     let dim = shape[1];
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::L1, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::L1, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -647,7 +647,7 @@ pub fn py_l1_batch<'py>(
 /// Args:
 ///     query: Query vector (1D NumPy array)
 ///     vectors: Database vectors (2D NumPy array, shape: [n_vectors, dim])
-///     context: Optional ComputeContext for GPU acceleration
+///     device: Optional ComputeContext for GPU acceleration
 /// 
 /// Returns:
 ///     np.ndarray: 1D array of Hamming distances, one per database vector
@@ -664,12 +664,12 @@ pub fn py_l1_batch<'py>(
 ///     >>> distances = hdb.hamming_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 4.0]
 #[pyfunction]
-#[pyo3(name = "hamming_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "hamming_batch", signature = (query, vectors, device=None))]
 pub fn py_hamming_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -677,7 +677,7 @@ pub fn py_hamming_batch<'py>(
     let dim = shape[1];
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Hamming, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Hamming, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -690,7 +690,7 @@ pub fn py_hamming_batch<'py>(
 /// Args:
 ///     query: Query vector (1D NumPy array)
 ///     vectors: Database vectors (2D NumPy array, shape: [n_vectors, dim])
-///     context: Optional ComputeContext for GPU acceleration
+///     device: Optional ComputeContext for GPU acceleration
 /// 
 /// Returns:
 ///     np.ndarray: 1D array of Jaccard distances, one per database vector
@@ -707,12 +707,12 @@ pub fn py_hamming_batch<'py>(
 ///     >>> distances = hdb.jaccard_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 0.667]
 #[pyfunction]
-#[pyo3(name = "jaccard_batch", signature = (query, vectors, context=None))]
+#[pyo3(name = "jaccard_batch", signature = (query, vectors, device=None))]
 pub fn py_jaccard_batch<'py>(
     py: Python<'py>,
     query: PyReadonlyArray1<f32>,
     vectors: PyReadonlyArray2<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<Bound<'py, PyArray1<f32>>> {
     let query_slice = query.as_slice()?;
     let vectors_array = vectors.as_array();
@@ -720,7 +720,7 @@ pub fn py_jaccard_batch<'py>(
     let dim = shape[1];
     let vectors_slice = vectors.as_slice()?;
     
-    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Jaccard, context)?;
+    let distances = compute_batch_distances(query_slice, vectors_slice, dim, VectorMetric::Jaccard, device)?;
     
     Ok(PyArray1::from_vec(py, distances))
 }
@@ -907,7 +907,7 @@ fn validate_sparse_indices(indices: &[u32], dim: usize) -> PyResult<()> {
 ///     First sparse vector
 /// b : SparseVector
 ///     Second sparse vector
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration (currently unused for sparse)
 /// 
 /// Returns
@@ -929,11 +929,11 @@ fn validate_sparse_indices(indices: &[u32], dim: usize) -> PyResult<()> {
 /// >>> print(f"{distance:.3f}")
 /// 3.606
 #[pyfunction]
-#[pyo3(name = "l2_sparse", signature = (a, b, context=None))]
+#[pyo3(name = "l2_sparse", signature = (a, b, device=None))]
 pub fn py_l2_sparse(
     a: &PySparseVector,
     b: &PySparseVector,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     // Validate dimensions match
     if a.dim != b.dim {
@@ -945,7 +945,7 @@ pub fn py_l2_sparse(
     
     // Note: GPU acceleration for sparse vectors is not yet implemented
     // Always use CPU computation
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     let dist_squared = distance::sparse_l2_distance_squared(
         &a.indices, &a.values,
@@ -965,7 +965,7 @@ pub fn py_l2_sparse(
 /// Args:
 ///     a: First sparse vector
 ///     b: Second sparse vector
-///     context: Optional ComputeContext for GPU acceleration (currently unused for sparse)
+///     device: Optional ComputeContext for GPU acceleration (currently unused for sparse)
 /// 
 /// Returns:
 ///     float: Cosine distance between sparse vectors (0 = identical direction, 2 = opposite)
@@ -981,11 +981,11 @@ pub fn py_l2_sparse(
 ///     >>> b = hdb.SparseVector([0, 200, 500], [1.0, 1.0, 3.0], 1000)
 ///     >>> distance = hdb.cosine_sparse(a, b)
 #[pyfunction]
-#[pyo3(name = "cosine_sparse", signature = (a, b, context=None))]
+#[pyo3(name = "cosine_sparse", signature = (a, b, device=None))]
 pub fn py_cosine_sparse(
     a: &PySparseVector,
     b: &PySparseVector,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     // Validate dimensions match
     if a.dim != b.dim {
@@ -995,7 +995,7 @@ pub fn py_cosine_sparse(
         ));
     }
     
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     // Compute dot product
     let dot = distance::sparse_dot_product(
@@ -1033,7 +1033,7 @@ pub fn py_cosine_sparse(
 /// Args:
 ///     a: First sparse vector
 ///     b: Second sparse vector
-///     context: Optional ComputeContext for GPU acceleration (currently unused for sparse)
+///     device: Optional ComputeContext for GPU acceleration (currently unused for sparse)
 /// 
 /// Returns:
 ///     float: Inner product of sparse vectors
@@ -1050,11 +1050,11 @@ pub fn py_cosine_sparse(
 ///     >>> product = hdb.inner_product_sparse(a, b)
 ///     >>> print(product)  # 8.0 (1*2 + 2*3 + 0)
 #[pyfunction]
-#[pyo3(name = "inner_product_sparse", signature = (a, b, context=None))]
+#[pyo3(name = "inner_product_sparse", signature = (a, b, device=None))]
 pub fn py_inner_product_sparse(
     a: &PySparseVector,
     b: &PySparseVector,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     // Validate dimensions match
     if a.dim != b.dim {
@@ -1064,7 +1064,7 @@ pub fn py_inner_product_sparse(
         ));
     }
     
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     let dot = distance::sparse_dot_product(
         &a.indices, &a.values,
@@ -1114,7 +1114,7 @@ fn pack_binary_vector(values: &[f32]) -> Vec<u8> {
 ///     First binary vector (NumPy uint8 array, bit-packed)
 /// b : array_like
 ///     Second binary vector (NumPy uint8 array, bit-packed)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration (currently unused)
 /// 
 /// Returns
@@ -1138,11 +1138,11 @@ fn pack_binary_vector(values: &[f32]) -> Vec<u8> {
 /// >>> print(distance)
 /// 3
 #[pyfunction]
-#[pyo3(name = "hamming_packed", signature = (a, b, context=None))]
+#[pyo3(name = "hamming_packed", signature = (a, b, device=None))]
 pub fn py_hamming_packed(
     a: PyReadonlyArray1<u8>,
     b: PyReadonlyArray1<u8>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<u32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
@@ -1157,7 +1157,7 @@ pub fn py_hamming_packed(
     
     // Note: GPU acceleration for binary vectors is not yet implemented
     // Always use CPU computation
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     let distance = distance::hamming_distance_packed(a_slice, b_slice);
     Ok(distance)
@@ -1176,7 +1176,7 @@ pub fn py_hamming_packed(
 ///     First binary vector (NumPy array, uint8 or f32 with 0.0/1.0 values)
 /// b : array_like
 ///     Second binary vector (NumPy array, uint8 or f32 with 0.0/1.0 values)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration (currently unused)
 /// 
 /// Returns
@@ -1200,11 +1200,11 @@ pub fn py_hamming_packed(
 /// >>> print(distance)
 /// 3
 #[pyfunction]
-#[pyo3(name = "hamming_auto", signature = (a, b, context=None))]
+#[pyo3(name = "hamming_auto", signature = (a, b, device=None))]
 pub fn py_hamming_auto(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<u32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
@@ -1224,7 +1224,7 @@ pub fn py_hamming_auto(
     let b_packed = pack_binary_vector(b_slice);
     
     // Note: GPU acceleration for binary vectors is not yet implemented
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     let distance = distance::hamming_distance_packed(&a_packed, &b_packed);
     Ok(distance)
@@ -1241,7 +1241,7 @@ pub fn py_hamming_auto(
 ///     First binary vector (NumPy uint8 array, bit-packed)
 /// b : array_like
 ///     Second binary vector (NumPy uint8 array, bit-packed)
-/// context : ComputeContext, optional
+/// device : ComputeContext, optional
 ///     Optional ComputeContext for GPU acceleration (currently unused)
 /// 
 /// Returns
@@ -1264,11 +1264,11 @@ pub fn py_hamming_auto(
 /// >>> print(f"{distance:.3f}")
 /// 0.429
 #[pyfunction]
-#[pyo3(name = "jaccard_packed", signature = (a, b, context=None))]
+#[pyo3(name = "jaccard_packed", signature = (a, b, device=None))]
 pub fn py_jaccard_packed(
     a: PyReadonlyArray1<u8>,
     b: PyReadonlyArray1<u8>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
@@ -1283,7 +1283,7 @@ pub fn py_jaccard_packed(
     
     // Note: GPU acceleration for binary vectors is not yet implemented
     // Always use CPU computation
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     // Compute intersection and union using bit operations
     let mut intersection = 0u32;
@@ -1311,7 +1311,7 @@ pub fn py_jaccard_packed(
 /// Args:
 ///     a: First binary vector (NumPy array, uint8 or f32 with 0.0/1.0 values)
 ///     b: Second binary vector (NumPy array, uint8 or f32 with 0.0/1.0 values)
-///     context: Optional ComputeContext for GPU acceleration (currently unused)
+///     device: Optional ComputeContext for GPU acceleration (currently unused)
 /// 
 /// Returns:
 ///     float: Jaccard distance (0.0 = identical sets, 1.0 = completely different)
@@ -1328,11 +1328,11 @@ pub fn py_jaccard_packed(
 ///     >>> distance = hdb.jaccard_auto(a, b)  # Auto-packs and computes
 ///     >>> print(distance)  # Jaccard distance based on set overlap
 #[pyfunction]
-#[pyo3(name = "jaccard_auto", signature = (a, b, context=None))]
+#[pyo3(name = "jaccard_auto", signature = (a, b, device=None))]
 pub fn py_jaccard_auto(
     a: PyReadonlyArray1<f32>,
     b: PyReadonlyArray1<f32>,
-    context: Option<&PyComputeContext>,
+    device: Option<&PyDevice>,
 ) -> PyResult<f32> {
     let a_slice = a.as_slice()?;
     let b_slice = b.as_slice()?;
@@ -1352,7 +1352,7 @@ pub fn py_jaccard_auto(
     let b_packed = pack_binary_vector(b_slice);
     
     // Note: GPU acceleration for binary vectors is not yet implemented
-    let _ = context; // Suppress unused warning
+    let _ = device; // Suppress unused warning
     
     // Compute intersection and union using bit operations
     let mut intersection = 0u32;
