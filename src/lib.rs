@@ -56,8 +56,8 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyField>()?;
     m.add_class::<python_binding::PySchema>()?;
     
-    // GPU Context API
-    m.add_class::<python_gpu_context::PyComputeContext>()?;
+    // Device API
+    m.add_class::<python_gpu_context::PyDevice>()?;
     
     // Distance API - Single-pair functions
     m.add_function(wrap_pyfunction!(python_distance::py_l2, m)?)?;

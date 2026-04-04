@@ -67,10 +67,10 @@ impl ComputeContext {
                     if let Ok(devices) = get_all_devices(CL_DEVICE_TYPE_GPU) {
                         for id in devices {
                             let device = Device::new(id);
-                            if let Ok(vendor) = device.vendor() {
-                                if vendor.to_lowercase().contains("intel") {
-                                    return true;
-                                }
+                            let v = device.vendor().unwrap_or_default().to_lowercase();
+                            let n = device.name().unwrap_or_default().to_lowercase();
+                            if v.contains("intel") || n.contains("intel") || n.contains("graphics") || n.contains("uhd") || n.contains("iris") || n.contains("arc") {
+                                return true;
                             }
                         }
                     }

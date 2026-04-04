@@ -92,13 +92,14 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        target: [x86_64]
+        target: [x86_64, aarch64]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "linux-x86_64"
+          shared-key: "linux-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.35
@@ -130,8 +131,13 @@ jobs:
           # Create a platform-specific stub dir
           mkdir -p /tmp/stubs
           
-          # We only build x86_64 now
-          ZIG_TARGET="x86_64-linux-gnu.2.17"
+          if [ "${{ matrix.target }}" = "x86_64" ]; then
+            ZIG_TARGET="x86_64-linux-gnu.2.17"
+          else
+            ZIG_TARGET="aarch64-linux-gnu.2.17"
+          fi
+          
+          echo "Building stubs for $ZIG_TARGET"
           
           # 1. Create OpenCL stub (with more common symbols)
           echo 'void clGetPlatformIDs() {} void clGetDeviceIDs() {} void clCreateContext() {}' > /tmp/stubs/opencl_stub.c
@@ -146,7 +152,7 @@ jobs:
           ls -la /tmp/stubs/
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python-version }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
@@ -160,7 +166,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.target }}
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
 
   macos:
@@ -170,12 +176,13 @@ jobs:
       fail-fast: true
       matrix:
         target: [x86_64, aarch64]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "macos-${{ matrix.target }}"
+          shared-key: "macos-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
       - name: Update version from tag
         shell: bash
@@ -190,7 +197,7 @@ jobs:
           fi
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python-version }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -200,7 +207,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.target }}
+          name: wheels-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
 
   windows:
@@ -210,12 +217,13 @@ jobs:
       fail-fast: true
       matrix:
         target: [x64]
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13', '3.14']
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "windows-${{ matrix.target }}"
+          shared-key: "windows-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
       - name: Update version from tag
         shell: bash
@@ -230,7 +238,7 @@ jobs:
           fi
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python-version }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -240,7 +248,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-${{ matrix.target }}
+          name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
 
   sdist:
