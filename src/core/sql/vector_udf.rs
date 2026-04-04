@@ -238,12 +238,22 @@ macro_rules! make_vector_dist_udf {
                 // Helper to extract vector from scalar value
                 let extract_scalar_vec = |scalar: &ScalarValue| -> Result<Vec<f32>> {
                     match scalar {
-                        ScalarValue::FixedSizeList(arr) => {
-                            if let Some(f32_arr) = arr.as_any().downcast_ref::<Float32Array>() {
+                        ScalarValue::FixedSizeList(fsl_arc) => {
+                            let fsl_array = fsl_arc.as_any().downcast_ref::<FixedSizeListArray>()
+                                .ok_or_else(|| datafusion::error::DataFusionError::Execution("Failed to downcast FixedSizeList scalar".to_string()))?;
+                            
+                            if fsl_array.len() == 0 {
+                                return Err(datafusion::error::DataFusionError::Execution(
+                                    "Empty FixedSizeList scalar".to_string()
+                                ));
+                            }
+                            
+                            let inner_array = fsl_array.value(0);
+                            if let Some(f32_arr) = inner_array.as_any().downcast_ref::<Float32Array>() {
                                 Ok(f32_arr.values().to_vec())
                             } else {
                                 Err(datafusion::error::DataFusionError::Execution(
-                                    "Unsupported scalar FixedSizeList inner type".to_string()
+                                    format!("Unsupported scalar FixedSizeList inner array type: {:?}", inner_array.data_type())
                                 ))
                             }
                         }
