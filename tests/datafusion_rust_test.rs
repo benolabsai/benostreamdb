@@ -16,14 +16,14 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     use datafusion::arrow::record_batch::RecordBatch;
 
     let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
+        Field::new("id", DataType::Int64, false),
         Field::new("name", DataType::Utf8, false),
     ]));
 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(datafusion::arrow::array::Int64Array::from(vec![1, 2, 3, 4, 5])),
             Arc::new(StringArray::from(vec!["A", "B", "C", "D", "E"])),
         ],
     )?;
@@ -48,7 +48,7 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     // 1, 2, 3, 4, 5.
     // Offset 1 skips 1. Starts at 2.
     // Limit 2 takes 2, 3.
-    let ids = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+    let ids = batch.column(0).as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
     assert_eq!(ids.value(0), 2);
     assert_eq!(ids.value(1), 3);
 
@@ -63,14 +63,14 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     let table2 = Table::new_async(format!("file://{}", path2)).await?;
     
     let schema2 = Arc::new(Schema::new(vec![
-        Field::new("user_id", DataType::Int32, false),
+        Field::new("user_id", DataType::Int64, false),
         Field::new("amount", DataType::Float64, false),
     ]));
     
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![2, 4])),
+            Arc::new(datafusion::arrow::array::Int64Array::from(vec![2, 4])),
             Arc::new(datafusion::arrow::array::Float64Array::from(vec![20.5, 40.0])),
         ],
     )?;
