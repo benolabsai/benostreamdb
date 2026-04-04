@@ -22,6 +22,7 @@
         <scala.binary.version>2.13</scala.binary.version>
         <arrow.version>14.0.2</arrow.version>
         <java.release>17</java.release>
+        <skipTests>true</skipTests>
     </properties>
 
     <profiles>

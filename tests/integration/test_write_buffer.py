@@ -68,8 +68,7 @@ def test_write_buffer_and_index():
     assert len(search_results) > 0
     print(f"Buffer Vector Search returned {len(search_results)} rows.")
     # Verify ID is correct (should be 0..9)
-    res_batch = search_results[0]
-    res_ids = res_batch["id"].to_pylist()
+    res_ids = search_results["id"].tolist()
     print("Result IDs:", res_ids)
     assert 0 in res_ids
     
@@ -81,7 +80,8 @@ def test_write_buffer_and_index():
     # We can check by reading again (should still find data, but from disk now)
     print("Reading after commit...")
     results_disk = table.read()
-    assert sum(b.num_rows for b in results_disk) == rows
+    total_rows_disk = results_disk.num_rows if hasattr(results_disk, "num_rows") else sum(b.num_rows for b in results_disk)
+    assert total_rows_disk == rows
     
     # 7. Verify Vector Search on Disk
     print("Executing Vector Search on Disk...")

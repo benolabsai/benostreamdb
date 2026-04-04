@@ -36,6 +36,7 @@ fn main() {
             "l1_distance",
             "hamming_distance",
             "jaccard_distance",
+            "kmeans_assignment",
         ];
 
         // Compile each kernel

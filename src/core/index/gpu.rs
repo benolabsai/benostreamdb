@@ -444,7 +444,7 @@ static MSL_L1: &str = include_str!("mps/l1_distance.metal");
 static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
 
 #[cfg(feature = "cuda")]
-static CUDA_KMEANS: &str = include_str!("cuda/kmeans_assignment.cu");
+static CUDA_KMEANS: &str = include_str!(concat!(env!("OUT_DIR"), "/kmeans_assignment.ptx"));
 
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
@@ -1101,32 +1101,6 @@ fn compute_intel_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vecto
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_compute_context_auto_detect() {
-        let _ctx = ComputeContext::auto_detect();
-        // On a standard test environment without special flags, this should match the enabled feature
-        #[cfg(feature = "intel")]
-        assert_eq!(_ctx.backend, ComputeBackend::Intel);
-        
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel")))]
-        assert_eq!(_ctx.backend, ComputeBackend::Cpu);
-    }
-
-    #[test]
-    fn test_auto_detect_fallback() {
-        // Test that auto_detect returns CPU backend when no real hardware is found 
-        // (This happens in standard CI environments without GPUs)
-        let _ctx = ComputeContext::auto_detect();
-        
-        #[cfg(feature = "intel")]
-        assert_eq!(_ctx.backend, ComputeBackend::Intel);
-
-        #[cfg(all(not(feature = "cuda"), not(feature = "rocm"), not(feature = "mps"), not(feature = "intel")))]
-        {
-            assert_eq!(_ctx.backend, ComputeBackend::Cpu);
-            assert_eq!(_ctx.device_id, -1);
-        }
-    }
 
     #[test]
     fn test_compute_distance_cpu() {

@@ -143,6 +143,16 @@ impl HybridReader {
         Ok(metadata.metadata().clone())
     }
 
+    pub async fn get_arrow_schema(&self) -> Result<arrow::datatypes::SchemaRef> {
+        if let Some(s) = &self.iceberg_schema {
+             return Ok(Arc::new(s.to_arrow()));
+        }
+        let meta = self.get_parquet_metadata().await?;
+        let options = ArrowReaderOptions::new();
+        let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
+        Ok(arrow_meta.schema().clone())
+    }
+
     pub fn with_iceberg_schema(mut self, schema: crate::core::manifest::Schema) -> Self {
         self.iceberg_schema = Some(schema);
         self
@@ -969,16 +979,26 @@ impl HybridReader {
                         let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
                         (0..list.len()).map(|i| {
                             let item = list.value(i);
-                            let floats = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
-                            floats.values().to_vec()
+                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                floats.values().to_vec()
+                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                doubles.values().iter().map(|&d| d as f32).collect()
+                            } else {
+                                vec![0.0; item.len()]
+                            }
                         }).collect()
                     },
                     arrow::datatypes::DataType::List(_) => {
                         let list = col.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
                         (0..list.len()).map(|i| {
                             let item = list.value(i);
-                            let floats = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
-                            floats.values().to_vec()
+                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                floats.values().to_vec()
+                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                doubles.values().iter().map(|&d| d as f32).collect()
+                            } else {
+                                vec![0.0; item.len()]
+                            }
                         }).collect()
                     },
                     _ => vec![],
@@ -1027,7 +1047,7 @@ impl HybridReader {
     /// Supports two index types:
     /// 1. HNSW-IVF (hybrid): Checks for `.centroids.parquet` - more memory efficient
     /// 2. Plain HNSW: Falls back to `.hnsw.graph` files
-    pub async fn vector_search_index(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, filter: Option<&FilterExpr>, metric: VectorMetric, ef_search: Option<usize>) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
+    pub async fn vector_search_index(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, filter: Option<&FilterExpr>, metric: VectorMetric, ef_search: Option<usize>, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
         let allowed_bitmap = if let Some(expr) = filter {
@@ -1151,6 +1171,19 @@ impl HybridReader {
         let selection = self.bitmap_to_row_selection(&bitmap, builder.metadata().file_metadata().num_rows() as usize);
         builder = builder.with_row_selection(selection);
         
+        // Apply column projection if specified (skip reading unused columns like embeddings)
+        let target_schema_ref = target_schema.clone();
+        if let Some(schema) = &target_schema_ref {
+            let parquet_schema = builder.metadata().file_metadata().schema_descr();
+            let file_arrow_schema = builder.schema();
+            let column_indices: Vec<usize> = schema.fields().iter()
+                .filter_map(|field| file_arrow_schema.index_of(field.name()).ok())
+                .collect();
+            
+            let projection = ProjectionMask::roots(parquet_schema, column_indices);
+            builder = builder.with_projection(projection);
+        }
+        
         let mut stream = builder.build()?;
         
         // Collect bitmap row IDs into a Vec for O(1) indexing
@@ -1184,6 +1217,25 @@ impl HybridReader {
             } else {
                 batch
             };
+            
+            // Schema Evolution Mapping
+            if let Some(target) = &target_schema_ref {
+                 let mut new_columns = Vec::new();
+                 for field in target.fields() {
+                     if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
+                         if col.data_type() != field.data_type() {
+                              let casted = arrow::compute::cast(col, field.data_type())?;
+                              new_columns.push(casted);
+                         } else {
+                              new_columns.push(col.clone());
+                         }
+                     } else {
+                         let null_arr = arrow::array::new_null_array(field.data_type(), final_batch.num_rows());
+                         new_columns.push(null_arr);
+                     }
+                 }
+                final_batch = arrow::record_batch::RecordBatch::try_new(target.clone(), new_columns)?;
+            }
             
             current_offset += rows_to_process;
 

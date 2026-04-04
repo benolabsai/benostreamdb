@@ -78,8 +78,10 @@ class Query:
             device=device
         )
 
-    def execute(self, device: Optional[Any] = None):
-        """Execute the query and return results as a Pandas DataFrame (alias for to_pandas)."""
+    def execute(self, device: Optional[Any] = None, to_arrow: bool = False):
+        """Execute the query and return results as a Pandas DataFrame (default) or Arrow Table."""
+        if to_arrow:
+            return self.to_arrow(device)
         return self.to_pandas(device)
 
 class Table:
@@ -239,8 +241,21 @@ class Table:
             return self._write_pandas(pandas_df, device=device)
         return self._inner.write_arrow(df.to_arrow(), device=device)
 
-    def _write_list(self, data: List[Dict[str, Any]], device: Optional[Any] = None):
-        # Convert to pandas first to handle vectorization and type enforcement
+    def _write_list(self, data: List[Any], device: Optional[Any] = None):
+        if not data:
+            return
+        
+        # Check if first element is an Arrow object
+        first = data[0]
+        if (pa and isinstance(first, (pa.RecordBatch, pa.Table))):
+            from pyarrow import Table as paTable
+            if isinstance(first, pa.RecordBatch):
+                combined = paTable.from_batches(data)
+            else:
+                combined = pa.concat_tables(data)
+            return self._write_arrow(combined, device=device)
+            
+        # Default to pandas for List[Dict] or other types
         df = pd.DataFrame(data)
         return self._write_pandas(df, device=device)
 
@@ -383,6 +398,22 @@ class Table:
     def query(self) -> Query:
         """Start a fluent query."""
         return Query(self)
+
+    def read(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
+        """
+        Read table to Arrow Table (alias for to_arrow).
+        """
+        return self.to_arrow(filter, vector_filter, columns, device=device, **kwargs)
+
+    def vector_search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, device: Optional[Any] = None, **kwargs):
+        """Backward compatibility alias for to_pandas with vector filter."""
+        vf = {"column": column, "query": query, "k": k}
+        vf.update(kwargs)
+        return self.to_pandas(filter=filter, vector_filter=vf, device=device)
+
+    def search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, device: Optional[Any] = None, **kwargs):
+        """Alias for vector_search."""
+        return self.vector_search(column, query, k, filter, device, **kwargs)
 
     def filter(self, expr: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, **kwargs) -> 'Query':
         """

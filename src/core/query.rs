@@ -272,6 +272,7 @@ pub struct VectorSearchRequest {
     pub metric: VectorMetric,
     pub config: QueryConfig,
     pub ef_search: Option<usize>,
+    pub columns: Option<Vec<String>>,
 }
 
 impl VectorSearchRequest {
@@ -289,6 +290,7 @@ impl VectorSearchRequest {
             metric,
             config: QueryConfig::default(),
             ef_search: None,
+            columns: None,
         }
     }
 
@@ -304,6 +306,11 @@ impl VectorSearchRequest {
 
     pub fn with_ef_search(mut self, ef_search: Option<usize>) -> Self {
         self.ef_search = ef_search;
+        self
+    }
+
+    pub fn with_columns(mut self, columns: Option<Vec<String>>) -> Self {
+        self.columns = columns;
         self
     }
 }
@@ -370,6 +377,8 @@ pub async fn execute_vector_search_with_config(
             let ef_search_val = request.ef_search;
             let metric = request.metric;
             
+            let columns_clone = request.columns.clone();
+            
             let data_store_clone = data_store.clone();
             
             async move {
@@ -392,7 +401,18 @@ pub async fn execute_vector_search_with_config(
                     .with_index_files(entry.index_files.clone());
                 
                 let reader = HybridReader::new(config, store, &base_uri);
-                reader.vector_search_index(&column, &query_clone, request.k, filter_ref.as_ref(), metric, ef_search_val).await
+                
+                let target_schema = if let Some(cols) = &columns_clone {
+                    let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::new(Vec::<arrow::datatypes::Field>::new())));
+                    let fields: Vec<arrow::datatypes::Field> = cols.iter()
+                        .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                        .collect();
+                    Some(Arc::new(arrow::datatypes::Schema::new(fields)))
+                } else {
+                    None
+                };
+
+                reader.vector_search_index(&column, &query_clone, request.k, filter_ref.as_ref(), metric, ef_search_val, target_schema).await
                 // _permit dropped here, releasing the semaphore slot
             }
         })

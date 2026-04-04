@@ -1791,7 +1791,8 @@ impl Table {
              )
              .with_filter(expr.clone())
              .with_config(config.clone())
-             .with_ef_search(vs_params.ef_search);
+             .with_ef_search(vs_params.ef_search)
+             .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect()));
              
              let mut results = query::execute_vector_search_with_config(
                 entries_to_read,
@@ -2118,6 +2119,19 @@ impl Table {
     /// Async commit
     pub async fn commit_async(&self) -> Result<()> {
         self.flush_async().await?;
+        
+        // Wait for all background indexing tasks to finish (ensures manifest consistency in tests)
+        let tasks = {
+            let mut lock = self.background_tasks.lock().await;
+            std::mem::take(&mut *lock)
+        };
+        
+        for task in tasks {
+            if let Err(e) = task.await {
+                eprintln!("Warning: Background indexing task failed: {}", e);
+            }
+        }
+        
         Ok(())
     }
 
@@ -2441,11 +2455,50 @@ impl Table {
 
         let mut target_schema = self.arrow_schema();
         
-        // Simple Implicit Schema Evolution
         if let Some(first_batch) = batches.first() {
-            if first_batch.schema().fields().len() > target_schema.fields().len() {
+            let incoming_schema = first_batch.schema();
+            let mut evolved_schema = (*target_schema).clone();
+            let mut changed = false;
+
+            for field in incoming_schema.fields() {
+                let existing_field_info = evolved_schema.field_with_name(field.name()).ok().map(|f| (f.data_type().clone(), f.is_nullable()));
+                
+                if let Some((existing_dtype, existing_nullable)) = existing_field_info {
+                    // Check if we need to widen the type (e.g. Int32 -> Int64)
+                    if existing_dtype != *field.data_type() {
+                        println!("Schema Evolution: Widening column '{}' from {:?} to {:?}", field.name(), existing_dtype, field.data_type());
+                        
+                        let idx = evolved_schema.index_of(field.name()).unwrap();
+                        let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
+                        fields[idx] = (**field).clone();
+                        evolved_schema = Schema::new(fields);
+                        changed = true;
+                    }
+                    
+                    // Check if we need to change Nullability (Required -> Nullable)
+                    if !existing_nullable && field.is_nullable() {
+                        println!("Schema Evolution: Changing column '{}' to nullable", field.name());
+                        let idx = evolved_schema.index_of(field.name()).unwrap();
+                        let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
+                        let mut new_field = (**field).clone();
+                        new_field.set_nullable(true);
+                        fields[idx] = new_field;
+                        evolved_schema = Schema::new(fields);
+                        changed = true;
+                    }
+                } else {
+                    // New column added
+                    println!("Schema Evolution: Adding new column '{}'", field.name());
+                    let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
+                    fields.push((**field).clone());
+                    evolved_schema = Schema::new(fields);
+                    changed = true;
+                }
+            }
+
+            if changed {
                 let mut lock = self.schema.write().unwrap();
-                *lock = first_batch.schema();
+                *lock = Arc::new(evolved_schema);
                 drop(lock);
                 target_schema = self.arrow_schema();
             }
@@ -2725,7 +2778,6 @@ impl Table {
                 let entry_clone = entry.clone();
                 let manifest_manager_clone = manifest_manager.clone();
 
-                let table_schema = self.schema.read().unwrap().clone();
                 let pk_clone = self.primary_key.read().unwrap().clone();
                 let table_store = self.store.clone();
 
@@ -2758,10 +2810,7 @@ impl Table {
                             // NOTE: We MUST preserve the record_count and column_stats from entry_clone,
                             // as updated_entry (from index_writer) only contains the index metadata.
                             
-                            let mut commit_metadata = crate::core::manifest::CommitMetadata::default();
-                            let manifest_schema = crate::core::manifest::Schema::from_arrow(&table_schema, 0);
-                            commit_metadata.updated_schemas = Some(vec![manifest_schema]);
-                            commit_metadata.updated_schema_id = Some(0);
+                            let commit_metadata = crate::core::manifest::CommitMetadata::default();
 
                             let file_path = merged_entry.file_path.clone();
                             let index_count = merged_entry.index_files.len();

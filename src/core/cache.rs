@@ -83,7 +83,7 @@ impl DiskCache {
 pub static MANIFEST_CACHE: Lazy<Cache<String, Arc<Manifest>>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(1000)
-        .time_to_live(Duration::from_secs(60 * 60)) // 1 hour for immutable vN.json
+        .time_to_live(Duration::from_millis(0)) // Disabled for consistency
         .build()
 });
 
@@ -97,7 +97,7 @@ pub static MANIFEST_LIST_CACHE: Lazy<Cache<String, Arc<ManifestList>>> = Lazy::n
 pub static LATEST_VERSION_CACHE: Lazy<Cache<String, u64>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(500)
-        .time_to_live(Duration::from_secs(2)) // 2 seconds TTL for consistency
+        .time_to_live(Duration::from_millis(0)) // Disabled for consistency
         .build()
 });
 
@@ -266,22 +266,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_latest_version_cache_hit_miss() {
+        // Use a local cache instance for this test because the global LATEST_VERSION_CACHE
+        // has a TTL of 0 which breaks hit/miss assertions.
+        let test_cache: Cache<String, u64> = Cache::builder()
+            .max_capacity(10)
+            .time_to_live(StdDuration::from_secs(60))
+            .build();
+
         let key = "test_version_cache_key_1".to_string();
         let version = 42u64;
         
         // Miss
-        assert!(LATEST_VERSION_CACHE.get(&key).await.is_none());
+        assert!(test_cache.get(&key).await.is_none());
         
         // Insert
-        LATEST_VERSION_CACHE.insert(key.clone(), version).await;
+        test_cache.insert(key.clone(), version).await;
         
         // Hit
-        let cached = LATEST_VERSION_CACHE.get(&key).await;
+        let cached = test_cache.get(&key).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap(), version);
         
         // Cleanup
-        LATEST_VERSION_CACHE.invalidate(&key).await;
+        test_cache.invalidate(&key).await;
     }
 
     #[tokio::test]

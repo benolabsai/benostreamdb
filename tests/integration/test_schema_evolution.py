@@ -61,15 +61,18 @@ class TestSchemaEvolution:
         
         # Read all data - should handle schema evolution
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        if hasattr(result, "num_rows"):
+            total_rows = result.num_rows
+            result_schema = result.schema
+        else:
+            total_rows = sum(len(batch) for batch in result)
+            result_schema = result[0].schema
         
         assert total_rows == 5
         
         # Verify schema contains all columns
-        result_schema = result[0].schema
         assert "id" in result_schema.names
         assert "name" in result_schema.names
-        # Note: Old batches may not have "age" column
         
         print(f"\n✓ Successfully added column 'age' to existing table")
         print(f"  Total rows: {total_rows}")
@@ -115,7 +118,10 @@ class TestSchemaEvolution:
         
         # Read and verify
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        if hasattr(result, "num_rows"):
+            total_rows = result.num_rows
+        else:
+            total_rows = sum(len(batch) for batch in result)
         
         assert total_rows == 4
         
@@ -149,14 +155,12 @@ class TestSchemaEvolution:
         result = table.read(columns=["id", "name", "value"])
         
         # Verify the deprecated column is not in result
-        for batch in result:
-            assert "deprecated_field" not in batch.schema.names
-            assert "id" in batch.schema.names
-            assert "name" in batch.schema.names
-            assert "value" in batch.schema.names
-            assert batch.num_columns == 3
+        assert "deprecated_field" not in result.schema.names
+        assert "id" in result.schema.names
+        assert "name" in result.schema.names
+        assert "value" in result.schema.names
         
-        total_rows = sum(len(batch) for batch in result)
+        total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
         assert total_rows == 3
         
         print(f"\n✓ Successfully read data without deprecated column")
@@ -196,7 +200,7 @@ class TestSchemaEvolution:
         
         # Read all data
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
         
         assert total_rows == 5
         
@@ -243,7 +247,7 @@ class TestSchemaEvolution:
             
             # If it succeeds, verify data integrity
             result = table.read()
-            total_rows = sum(len(batch) for batch in result)
+            total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
             
             print(f"\n⚠ Type narrowing allowed (system handled gracefully)")
             print(f"  Total rows: {total_rows}")
@@ -288,7 +292,7 @@ class TestSchemaEvolution:
         
         # Reading should work - old data still has nulls
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
         
         assert total_rows == 5
         
@@ -330,7 +334,7 @@ class TestSchemaEvolution:
         
         # Read all data - should work seamlessly
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
         
         assert total_rows == 6
         
@@ -387,7 +391,7 @@ class TestSchemaEvolution:
         
         # Read all data - system should merge schemas
         result = table.read()
-        total_rows = sum(len(batch) for batch in result)
+        total_rows = result.num_rows if hasattr(result, "num_rows") else sum(len(batch) for batch in result)
         
         assert total_rows == 6
         
