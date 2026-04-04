@@ -47,7 +47,7 @@ def run_demo():
 
     # 4. Ingest into HyperStreamDB
     print("\nIngesting into HyperStreamDB...")
-    table = hdb.Table(db_path, context=ctx)
+    table = hdb.Table(db_path, device=ctx)
     
     # Enable Vector Indexing for the embedding column and Inverted Index for category
     # Note: Use add_index_columns for multiple columns

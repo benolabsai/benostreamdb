@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import os
 import time
+import glob
 
 def test_wal_durability():
     print("="*60)
@@ -12,15 +13,19 @@ def test_wal_durability():
     print("="*60)
 
     # Setup
-    uri = f"file:///tmp/test_wal_{int(time.time())}"
-    if os.path.exists("/tmp/test_wal_" + str(int(time.time()))):
-        shutil.rmtree("/tmp/test_wal_" + str(int(time.time())))
+    ts = int(time.time())
+    uri = f"file:///tmp/test_wal_{ts}"
+    base_path = f"/tmp/test_wal_{ts}"
+    if os.path.exists(base_path):
+        shutil.rmtree(base_path)
     
     # 1. Write Data (Unflushed)
     print("\nPhase 1: Writing Data (Buffered)...")
     table = hdb.Table(uri)
+    table.autocommit = False
     df = pd.DataFrame({'id': range(10), 'val': range(10)})
     table.write_pandas(df)
+    time.sleep(0.2) # Allow WAL worker to finish writing
     
     # Verify it's in buffer (via read)
     res = table.to_pandas()
@@ -31,9 +36,9 @@ def test_wal_durability():
     # URI is file:///tmp/test_wal_...
     # Path logic in Rust: uri.strip_prefix("file://")... join("_wal").join("log.arrow")
     base_path = uri.replace("file://", "")
-    wal_path = os.path.join(base_path, "_wal", "log.arrow")
-    
-    assert os.path.exists(wal_path), f"WAL file missing at {wal_path}"
+    wal_files = glob.glob(os.path.join(base_path, "_wal", "log_*.arrow"))
+    assert len(wal_files) > 0, f"WAL file missing in {os.path.join(base_path, '_wal')}"
+    wal_path = wal_files[0]
     print(f"✓ WAL file verified at {wal_path}")
     wal_size = os.path.getsize(wal_path)
     print(f"✓ WAL size: {wal_size} bytes")
