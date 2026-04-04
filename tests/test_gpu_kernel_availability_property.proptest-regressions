@@ -7,3 +7,5 @@
 cc 02771c4c1f58ab1da7d2549968d93660fdc78f7a6e4d9b76a3b035cea2fba3ac # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 0
 cc 568900dca277d38a11baad3fa7c24267e17c33352c3f8e7317fd763470fdb139 # shrinks to dim = 1, n_vectors = 1, metric = Cosine, backend = Intel, seed = 2791878455420188562
 cc 8ee822c1e56de9e901d8f3b8182d4ef8e008920137e080eb136dbe5e9df06490 # shrinks to dim = 1024, n_vectors = 55, metric = InnerProduct, backend = Intel, seed = 15512459855228206826
+cc 2628132f0ef56529a5b8ecc6c8c6997d2a372fbe6cc17a40e08f88f1c38e75e4 # shrinks to dim = 128, n_vectors = 7, metric = L1, backend = Cuda, seed = 763681550553766699
+cc 817c3e2069fc84b3ed87e8639a005e15c45f052a160a6c9943fadef486c5fcde # shrinks to dim = 256, n_vectors = 2, metric = L1, backend = Cuda, seed = 869444845993895441
