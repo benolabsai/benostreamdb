@@ -84,7 +84,7 @@ jobs:
         env:
           # Point to CUDA stubs so binaries can load even without a GPU
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
-        run: cargo test --features intel_gpu,cuda --lib --tests -- --skip gpu_execution --nocapture
+        run: cargo test --features intel,cuda --lib --tests -- --skip gpu_execution --nocapture
 
   linux:
     needs: [check]
@@ -154,7 +154,7 @@ jobs:
           RUSTFLAGS: -L /tmp/stubs
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --features intel_gpu,cuda --zig
+          args: --release --out dist --find-interpreter --features intel,cuda --zig
           sccache: 'false'
           manylinux: auto
       - name: Upload wheels
