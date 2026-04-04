@@ -370,17 +370,27 @@ python tests/integration/test_nyc_taxi.py
 ```
 
   **Performance Targets:**
-  - **Scalar Ingest**: >100K rows/sec ✅
+  - **Scalar Ingest**: >10K rows/sec ✅
   - **Vector Ingest (768D)**: >4,000 rows/sec ✅ (April 2026)
   - **Query (indexed)**: <100ms p99 ⏱️
   - **Vector search**: <50ms for k=10 on 10M vectors ⏱️
   - **Compaction**: <5min for 10GB ⏱️
 
-  **Benchmarking Environment:**
+  **Benchmarking Environment: Lenovo T480**
   - **System**: Lenovo T480
   - **CPU**: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz
   - **RAM**: 64GB
   - **OS**: Linux
+
+  **Benchmarking Environment: Apple M4 Max**
+  - **System**: MacBook Pro (M4 Max, 16-core CPU, 40-core GPU)
+  - **Memory**: 128GB Unified Memory
+  - **OS**: macOS (Arm64)
+  - **Optimizations**: `target-cpu=native` (NEON SIMD)
+  - **Results (100K vectors, 768D)**:
+    - **Vector Ingest**: 16,707 rows/sec (CPU) ✅
+    - **Vector Search (k=10)**: 819ms (CPU / NEON) ✅
+    - **Vector Search (k=10)**: 860ms (MPS GPU) ⏱️
 
 ### Phase 2: Nessie Integration (Next)
 

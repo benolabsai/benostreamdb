@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -118,6 +118,8 @@ once_cell = "1.19"
 async-trait = "0.1.89"
 datafusion = "52.0.0"
 datafusion-expr-common = "52.0.0"
+datafusion-functions = "52.0.0"
+datafusion-functions-aggregate = "52.0.0"
 datafusion-functions-aggregate-common = "52.0.0"
 async-stream = "0.3.6"
 smartcore = "0.3"  # For k-means clustering (IVF index)

@@ -259,6 +259,58 @@ impl PySchema {
     }
 }
 
+#[pyclass(name = "ManifestEntry")]
+#[derive(Clone, Debug)]
+pub struct PyManifestEntry {
+    #[pyo3(get)]
+    pub file_path: String,
+    #[pyo3(get)]
+    pub file_size_bytes: i64,
+    #[pyo3(get)]
+    pub record_count: i64,
+    #[pyo3(get)]
+    pub index_files_count: usize,
+    #[pyo3(get)]
+    pub delete_files_count: usize,
+}
+
+#[pymethods]
+impl PyManifestEntry {
+    fn __repr__(&self) -> String {
+        format!("ManifestEntry(path={}, rows={})", self.file_path, self.record_count)
+    }
+}
+
+#[pyclass(name = "Manifest")]
+#[derive(Clone, Debug)]
+pub struct PyManifest {
+    #[pyo3(get)]
+    pub version: u64,
+    #[pyo3(get)]
+    pub timestamp_ms: i64,
+    #[pyo3(get)]
+    pub current_schema_id: i32,
+    #[pyo3(get)]
+    pub partition_spec_id: i32,
+    #[pyo3(get)]
+    pub entries: Vec<PyManifestEntry>,
+    #[pyo3(get)]
+    pub properties: std::collections::HashMap<String, String>,
+}
+
+#[pymethods]
+impl PyManifest {
+    fn __repr__(&self) -> String {
+        format!("Manifest(version={}, entries={})", self.version, self.entries.len())
+    }
+    
+    /// Compatibility alias for 'entries'
+    #[getter]
+    fn files(&self) -> Vec<PyManifestEntry> {
+        self.entries.clone()
+    }
+}
+
 #[pymethods]
 impl PySchema {
     #[new]
@@ -324,17 +376,40 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
+    #[staticmethod]
+    #[pyo3(signature = (uri, schema, partition_spec, device=None))]
+    fn create_partitioned(uri: &str, schema: Bound<'_, PyAny>, partition_spec: Bound<'_, PyAny>, device: Option<Py<PyDevice>>) -> PyResult<Self> {
+        let rust_schema = extract_schema(schema)?;
+        let rust_spec = extract_partition_spec(partition_spec)?;
+        
+        let rt = Arc::new(Runtime::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?);
+        
+        let mut table = rt.block_on(Table::create_partitioned_async(uri.to_string(), rust_schema, rust_spec))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            
+        // CRITICAL: Attach the runtime to the table so sync methods don't panic
+        table.rt = Some(rt.clone());
+        println!("DEBUG: Rust Table created with runtime: {}", table.rt.is_some());
+        
+        let query_pool = rt;
+        Ok(PyTable { table, query_pool, device })
+    }
+
     /// Register an existing Iceberg table
     #[staticmethod]
     #[pyo3(signature = (uri, iceberg_metadata_uri))]
     fn register_external(uri: &str, iceberg_metadata_uri: &str) -> PyResult<Self> {
-        let rt = Runtime::new()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?;
+        let rt = Arc::new(Runtime::new()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?);
         
-        let table = rt.block_on(Table::register_external(uri.to_string(), iceberg_metadata_uri))
+        let mut table = rt.block_on(Table::register_external(uri.to_string(), iceberg_metadata_uri))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             
-        let query_pool = Arc::new(rt);
+        // CRITICAL: Attach the runtime to the table
+        table.rt = Some(rt.clone());
+            
+        let query_pool = rt;
         Ok(PyTable { table, query_pool, device: None })
     }
     
@@ -1063,6 +1138,11 @@ impl PyTable {
         let batch_result: Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> = rt.block_on(async {
             use datafusion::prelude::SessionContext;
             let mut ctx = SessionContext::new();
+            
+            // Register standard functions and aggregates
+            datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;
+            datafusion_functions_aggregate::register_all(&mut ctx).map_err(|e| e.to_string())?;
+            
             let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
             
             // Register table as 't' (short alias, safe from keywords)
@@ -1074,11 +1154,10 @@ impl PyTable {
                 ctx.register_udf(udf);
             }
             
-            // Note: Vector aggregate registration removed for DataFusion 57 compatibility
-            // Aggregate UDFs will be added in a future version
-            // for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
-            //     ctx.register_aggregate_udf(udf);
-            // }
+            // Register Vector Aggregate functions (Additive in DF 52)
+            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
+                ctx.register_udaf(udf);
+            }
             
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
@@ -1093,7 +1172,7 @@ impl PyTable {
         }
     }
 
-    fn manifest(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+    fn manifest(&self, _py: Python<'_>) -> PyResult<PyManifest> {
         // Load manifest info from table
         let rt = self.table.runtime();
         let manifest_result: Result<(crate::core::manifest::Manifest, u64), anyhow::Error> = rt.block_on(async {
@@ -1102,52 +1181,36 @@ impl PyTable {
         
         match manifest_result {
             Ok((manifest, version)) => {
-                let dict = PyDict::new(py);
-                
-                // Basic info
-                dict.set_item("version", version)?;
-                dict.set_item("timestamp_ms", manifest.timestamp_ms)?;
-                dict.set_item("current_schema_id", manifest.current_schema_id)?;
-                dict.set_item("partition_spec_id", manifest.partition_spec.spec_id)?;
-                dict.set_item("entries_count", manifest.entries.len())?;
-                
-                // Data files summary
-                let total_rows: i64 = manifest.entries.iter().map(|e| e.record_count).sum();
-                let total_bytes: i64 = manifest.entries.iter().map(|e| e.file_size_bytes).sum();
-                dict.set_item("total_rows", total_rows)?;
-                dict.set_item("total_bytes", total_bytes)?;
-                
-                // List of data files
-                let files_list = pyo3::types::PyList::empty(py);
+                let mut entries = Vec::new();
                 for entry in &manifest.entries {
-                    let file_dict = PyDict::new(py);
-                    file_dict.set_item("file_path", &entry.file_path)?;
-                    file_dict.set_item("file_size_bytes", entry.file_size_bytes)?;
-                    file_dict.set_item("record_count", entry.record_count)?;
-                    file_dict.set_item("index_files_count", entry.index_files.len())?;
-                    file_dict.set_item("delete_files_count", entry.delete_files.len())?;
-                    files_list.append(file_dict)?;
+                    entries.push(PyManifestEntry {
+                        file_path: entry.file_path.clone(),
+                        file_size_bytes: entry.file_size_bytes,
+                        record_count: entry.record_count,
+                        index_files_count: entry.index_files.len(),
+                        delete_files_count: entry.delete_files.len(),
+                    });
                 }
-                dict.set_item("files", files_list)?;
                 
-                // Properties
-                let props_dict = PyDict::new(py);
-                for (k, v) in &manifest.properties {
-                    props_dict.set_item(k, v)?;
-                }
-                dict.set_item("properties", props_dict)?;
-                
-                Ok(dict.unbind().into())
+                Ok(PyManifest {
+                    version,
+                    timestamp_ms: manifest.timestamp_ms,
+                    current_schema_id: manifest.current_schema_id,
+                    partition_spec_id: manifest.partition_spec.spec_id,
+                    entries,
+                    properties: manifest.properties.clone(),
+                })
             }
             Err(_) => {
                 // Empty manifest for new/empty tables
-                let dict = PyDict::new(py);
-                dict.set_item("version", 0)?;
-                dict.set_item("entries_count", 0)?;
-                dict.set_item("total_rows", 0)?;
-                dict.set_item("total_bytes", 0)?;
-                dict.set_item("files", pyo3::types::PyList::empty(py))?;
-                Ok(dict.unbind().into())
+                Ok(PyManifest {
+                    version: 0,
+                    timestamp_ms: 0,
+                    current_schema_id: 0,
+                    partition_spec_id: 0,
+                    entries: Vec::new(),
+                    properties: std::collections::HashMap::new(),
+                })
             }
         }
     }
@@ -1872,4 +1935,43 @@ fn extract_schema(schema_obj: Bound<'_, PyAny>) -> PyResult<arrow::datatypes::Sc
     Err(pyo3::exceptions::PyTypeError::new_err(
         "Expected hyperstreamdb.Schema or pyarrow.Schema object"
     ))
+}
+
+fn extract_partition_spec(spec_obj: Bound<'_, PyAny>) -> PyResult<crate::core::manifest::PartitionSpec> {
+    let dict = spec_obj.downcast::<pyo3::types::PyDict>()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("partition_spec must be a dictionary"))?;
+
+    let fields_obj = dict.get_item("fields")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("partition_spec must contain 'fields'"))?;
+    let fields_list = fields_obj.downcast::<pyo3::types::PyList>()
+        .map_err(|_| pyo3::exceptions::PyTypeError::new_err("'fields' must be a list"))?;
+
+    let mut fields = Vec::new();
+    for item in fields_list {
+        let f_dict = item.downcast::<pyo3::types::PyDict>()
+            .map_err(|_| pyo3::exceptions::PyTypeError::new_err("Each partition field must be a dictionary"))?;
+
+        let name = f_dict.get_item("name")?
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Missing 'name' in partition field"))?
+            .extract::<String>()?;
+        let transform = f_dict.get_item("transform")?
+            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("Missing 'transform' in partition field"))?
+            .extract::<String>()?;
+        
+        let source_id = f_dict.get_item("source_id")?.and_then(|i| i.extract::<i32>().ok());
+        let field_id = f_dict.get_item("field_id")?.and_then(|i| i.extract::<i32>().ok());
+
+        fields.push(crate::core::manifest::PartitionField {
+            source_ids: source_id.map(|id| vec![id]).unwrap_or_default(),
+            source_id,
+            field_id,
+            name,
+            transform,
+        });
+    }
+
+    Ok(crate::core::manifest::PartitionSpec {
+        spec_id: 0,
+        fields,
+    })
 }
