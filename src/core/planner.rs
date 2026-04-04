@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use crate::core::manifest::{ManifestEntry, IndexFile};
+use crate::core::manifest::{ManifestEntry, IndexFile, ManifestValue};
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -305,11 +305,7 @@ fn json_to_scalar(v: &Value) -> Expr {
     match v {
         Value::Number(n) => {
             if let Some(i) = n.as_i64() { 
-                if i >= i32::MIN as i64 && i <= i32::MAX as i64 {
-                    lit(i as i32)
-                } else {
-                    lit(i)
-                }
+                lit(i as i64)
             }
             else { lit(n.as_f64().unwrap_or(0.0)) }
         }
@@ -853,7 +849,6 @@ impl QueryPlanner {
             }
 
             if let Some(entry_max) = &stats.max {
-
                 if let Some(filter_min) = &filter.min {
                     let entry_max_val = serde_json::Value::from(entry_max);
                     let too_small = if filter.min_inclusive {
@@ -862,9 +857,14 @@ impl QueryPlanner {
                          let ord = self.compare_values(&entry_max_val, filter_min);
                          ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                     };
+                    
+                    if matches!(entry_max, ManifestValue::Boolean(_)) {
+                         println!("DEBUG: Boolean Pruning Check (MAX): entry_max={:?} ({:?}), filter_min={:?}, too_small={}", entry_max, entry_max_val, filter_min, too_small);
+                    }
+
                     if too_small { 
-                        eprintln!("DEBUG: Pruning segment due to STATS column {}. Max val in segment: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_max, filter_min, filter.min_inclusive);
-                        return false; 
+                         eprintln!("DEBUG: Pruning segment due to STATS column {}. Max val in segment: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_max, filter_min, filter.min_inclusive);
+                         return false; 
                     }
                 }
             }

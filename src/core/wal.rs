@@ -177,9 +177,9 @@ impl WriteAheadLog {
 
     /// Replay all log files in the WAL directory and return all batches.
     /// This should be called on startup.
-    pub fn replay(&self) -> Result<Vec<RecordBatch>> {
+    pub fn replay(&self) -> Result<(Vec<RecordBatch>, Vec<String>)> {
         if !self.dir.exists() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         let mut all_batches = Vec::new();
@@ -199,6 +199,8 @@ impl WriteAheadLog {
         // Sort for deterministic replay (optional but good)
         wal_files.sort();
 
+        let mut replayed_paths = Vec::new();
+
         for path in wal_files {
             let file = File::open(&path)?;
             if file.metadata()?.len() == 0 {
@@ -217,6 +219,7 @@ impl WriteAheadLog {
                     }
                     if count > 0 {
                         println!("WAL: Replayed {} batches from {:?}", count, path);
+                        replayed_paths.push(path.to_str().unwrap().to_string());
                     }
                 },
                 Err(e) => {
@@ -225,7 +228,7 @@ impl WriteAheadLog {
             }
         }
 
-        Ok(all_batches)
+        Ok((all_batches, replayed_paths))
     }
 
     /// Initialize the writer with a schema.
@@ -322,7 +325,7 @@ impl WriteAheadLog {
     /// This reduces recovery time and file size
     pub fn compact(&mut self) -> Result<()> {
         // 1. Replay all batches
-        let batches = self.replay()?;
+        let (batches, _) = self.replay()?;
         if batches.is_empty() || batches.len() == 1 {
             // Already compact or empty
             return Ok(());
@@ -382,7 +385,7 @@ mod tests {
         wal.append(&batch1)?;
         
         // Test 2: Replay should return the batch
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].num_rows(), 10);
         
@@ -391,14 +394,14 @@ mod tests {
         wal.append(&batch2)?;
         
         // Test 4: Replay should return both batches
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 2);
         assert_eq!(replayed[0].num_rows(), 10);
         assert_eq!(replayed[1].num_rows(), 10);
         
         // Test 5: Truncate should clear the log
         wal.truncate()?;
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
         
         Ok(())
@@ -419,14 +422,14 @@ mod tests {
         }
         
         // Verify we have 5 batches
-        let before_compact = wal.replay()?;
+        let (before_compact, _) = wal.replay()?;
         assert_eq!(before_compact.len(), 5);
         
         // Compact the WAL
         wal.compact()?;
         
         // After compaction, should have 1 batch with all rows
-        let after_compact = wal.replay()?;
+        let (after_compact, _) = wal.replay()?;
         assert_eq!(after_compact.len(), 1);
         assert_eq!(after_compact[0].num_rows(), 50);
         
@@ -452,7 +455,7 @@ mod tests {
         // Simulate: Restart and replay
         {
             let wal = WriteAheadLog::new(&wal_dir);
-            let recovered = wal.replay()?;
+            let (recovered, _) = wal.replay()?;
             assert_eq!(recovered.len(), 2);
             assert_eq!(recovered[0].num_rows(), 100);
             assert_eq!(recovered[1].num_rows(), 100);
@@ -468,7 +471,7 @@ mod tests {
         std::fs::create_dir_all(&wal_dir)?;
         
         let wal = WriteAheadLog::new(&wal_dir);
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
         
         Ok(())
@@ -480,7 +483,7 @@ mod tests {
         let wal_dir = temp_dir.path().join("nonexistent_wal");
         
         let wal = WriteAheadLog::new(&wal_dir);
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
         
         Ok(())
@@ -499,7 +502,7 @@ mod tests {
         wal.append(&large_batch)?;
         
         // Verify replay
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].num_rows(), 100_000);
         
@@ -562,7 +565,7 @@ mod tests {
         )?;
         wal.append(&batch2)?;
         
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].schema().field(0).name(), "value");
         
@@ -591,7 +594,7 @@ mod tests {
         wal.compact()?;
         
         // Verify all data is preserved
-        let replayed = wal.replay()?;
+        let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         let ids = replayed[0]
             .column(0)

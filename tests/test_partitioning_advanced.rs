@@ -3,7 +3,7 @@
 use hyperstreamdb::core::table::Table;
 use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{Int32Array, StringArray};
+use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -17,10 +17,10 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
 
     // 1. Define schema
     let schema = Arc::new(Schema::new(vec![
-        Field::new("year", DataType::Int32, true),
-        Field::new("month", DataType::Int32, true),
+        Field::new("year", DataType::Int64, true),
+        Field::new("month", DataType::Int64, true),
         Field::new("category", DataType::Utf8, true),
-        Field::new("value", DataType::Int32, false),
+        Field::new("value", DataType::Int64, false),
     ]));
 
     // 2. Define Partition Spec: (year, category)
@@ -39,10 +39,10 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![Some(2022), Some(2022), Some(2023), None])),
-            Arc::new(Int32Array::from(vec![1, 2, 1, 1])),
+            Arc::new(arrow::array::Int64Array::from(vec![Some(2022), Some(2022), Some(2023), None])),
+            Arc::new(arrow::array::Int64Array::from(vec![1, 2, 1, 1])),
             Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("A"), Some("C")])),
-            Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+            Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30, 40])),
         ]
     )?;
 
@@ -101,7 +101,7 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("category", DataType::Utf8, false),
-        Field::new("value", DataType::Int32, false),
+        Field::new("value", DataType::Int64, false),
     ]));
 
     let spec = PartitionSpec {
@@ -119,7 +119,7 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
             schema.clone(),
             vec![
                 Arc::new(StringArray::from(vec!["A"])),
-                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(arrow::array::Int64Array::from(vec![1])),
             ]
         )?;
         table.write_async(vec![batch]).await?;

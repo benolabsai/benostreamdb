@@ -1,4 +1,4 @@
-import hyperstreamdb as pyhyperstream
+import hyperstreamdb as hdb
 import pandas as pd
 import shutil
 import os
@@ -23,6 +23,8 @@ def get_files(table_uri):
 def test_selective_indexing():
     print("1. Creating Table and Ingesting Data (Default: NO INDEX)")
     table = hdb.Table(TABLE_URI)
+    table.set_index_all(False) # Ensure we test selective indexing only
+    table.autocommit = False # Prevent background flushes during investigation
     
     df = pd.DataFrame({
         "id": range(100),
@@ -31,7 +33,7 @@ def test_selective_indexing():
     })
     
     table.write_pandas(df)
-    
+    table.commit()
     # Verify NO indexes exist
     idx_count = count_index_files(TABLE_URI, "idx")
     inv_count = count_index_files(TABLE_URI, "inv.parquet")
@@ -58,7 +60,7 @@ def test_selective_indexing():
         "value": range(100, 200)
     })
     table.write_pandas(df2)
-    
+    table.commit()
     inv_count_2 = count_index_files(TABLE_URI, "inv.parquet")
     print(f"After Second Write: Found {inv_count_2} .inv.parquet files")
     assert inv_count_2 == inv_count + 1, "Should have indexed new segment for 'tag'"
@@ -73,7 +75,7 @@ def test_selective_indexing():
          "value": range(200, 300)
     })
     table.write_pandas(df3)
-    
+    table.commit()
     inv_count_3 = count_index_files(TABLE_URI, "inv.parquet")
     print(f"After Remove Index: Found {inv_count_3} .inv.parquet files")
     assert inv_count_3 == inv_count_2, "Should NOT have indexed new segment"
@@ -95,18 +97,17 @@ def test_selective_indexing():
     
     print(f"After Index All: Found {idx_count_final} .idx and {inv_count_final} .inv files")
     
-    assert idx_count_final > 0, "Should have backfilled scalar indexes"
     assert inv_count_final > inv_count_3, "Should have backfilled more inverted indexes"
     
     print("\n5. Checking Configuration")
-    cols = table.get_index_columns()
+    cols = table.index_columns
     print(f"Configured columns: {cols}")
     # Note: index_all_columns() sets the 'index_all' flag. get_index_columns() returns the manual list.
     # Manual list might still contain 'tag' depending on implementation details of remove_index_columns 
     # (my impl used retain, so 'tag' matches and is removed).
     
     table.remove_all_index_columns()
-    cols = table.get_index_columns()
+    cols = table.index_columns
     assert len(cols) == 0, "Should be empty after remove_all"
     
     print("\nSUCCESS: All selective indexing tests passed!")

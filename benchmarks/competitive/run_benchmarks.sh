@@ -37,6 +37,7 @@ echo ""
 # Parse arguments
 QUICK=false
 SIZES="10000 100000"
+DEVICE="cpu"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -48,9 +49,13 @@ while [[ $# -gt 0 ]]; do
             SIZES="$2"
             shift 2
             ;;
+        --device)
+            DEVICE="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--quick] [--sizes \"10000 100000 1000000\"]"
+            echo "Usage: $0 [--quick] [--sizes \"10000 100000 1000000\"] [--device cuda:0]"
             exit 1
             ;;
     esac
@@ -58,11 +63,11 @@ done
 
 # Run benchmarks
 if [ "$QUICK" = true ]; then
-    echo "Running quick benchmark (1K vectors)..."
-    python benchmark_suite.py --quick
+    echo "Running quick benchmark (1K vectors) on device $DEVICE..."
+    python benchmark_suite.py --quick --device "$DEVICE"
 else
-    echo "Running full benchmark (sizes: $SIZES)..."
-    python benchmark_suite.py --sizes $SIZES
+    echo "Running full benchmark (sizes: $SIZES) on device $DEVICE..."
+    python benchmark_suite.py --sizes $SIZES --device "$DEVICE"
 fi
 
 echo ""
