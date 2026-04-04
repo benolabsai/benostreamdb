@@ -922,8 +922,10 @@ impl HybridSegmentWriter {
 
                     for (key, row_ids) in inverted_map {
                         key_builder.append_value(key);
+                        let mut last_id = 0;
                         for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                            list_builder.values().append_value(row_id - last_id);
+                            last_id = row_id;
                         }
                         list_builder.append(true);
                     }
@@ -997,8 +999,10 @@ impl HybridSegmentWriter {
 
                     for (key, row_ids) in inverted_map {
                         key_builder.append_value(key);
+                        let mut last_id = 0;
                         for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                            list_builder.values().append_value(row_id - last_id);
+                            last_id = row_id;
                         }
                         list_builder.append(true);
                     }
@@ -1053,8 +1057,10 @@ impl HybridSegmentWriter {
 
                     for (key, row_ids) in inverted_map {
                         key_builder.append_value(key);
+                        let mut last_id = 0;
                         for row_id in row_ids {
-                            list_builder.values().append_value(row_id);
+                            list_builder.values().append_value(row_id - last_id);
+                            last_id = row_id;
                         }
                         list_builder.append(true);
                     }
@@ -1123,8 +1129,10 @@ impl HybridSegmentWriter {
                     // Build row_ids list
                     for key in &keys {
                         if let Some(row_ids) = inverted_map.get(key) {
+                            let mut last_id = 0;
                             for row_id in row_ids {
-                                list_builder.values().append_value(*row_id);
+                                list_builder.values().append_value(*row_id - last_id);
+                                last_id = *row_id;
                             }
                             list_builder.append(true);
                         }
@@ -1195,8 +1203,10 @@ impl HybridSegmentWriter {
                     // Build row_ids list
                     for key in &keys {
                         if let Some(row_ids) = inverted_map.get(key) {
+                            let mut last_id = 0;
                             for row_id in row_ids {
-                                list_builder.values().append_value(*row_id);
+                                list_builder.values().append_value(*row_id - last_id);
+                                last_id = *row_id;
                             }
                             list_builder.append(true);
                         }
