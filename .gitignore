@@ -103,3 +103,4 @@ groq_api_key.txt
 rag_db/
 news_db/
 
+.hypothesis/
