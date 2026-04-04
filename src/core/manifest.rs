@@ -1052,34 +1052,7 @@ impl ManifestManager {
                 all_entries.into_iter().map(|e| (e.file_path.clone(), e)).collect()
             };
             
-            // --- BOOTSTRAP: If this is the first commit (v1), discover existing files ---
-            if current_ver == 0 && active_map.is_empty() {
-                // If it's a genesis manifest, check if there's any existing data on disk
-                // This bridges the discovery flow with the versioned flow.
-                let mut stream = self.store.list(None);
-                while let Some(meta) = stream.next().await {
-                    let meta = meta?;
-                    let path_str = meta.location.to_string();
-                    if path_str.ends_with(".parquet") && !path_str.contains("_wal/") {
-                         // Create a basic entry for the discovered file
-                         active_map.insert(path_str.clone(), ManifestEntry {
-                             file_path: path_str,
-                             record_count: 0, 
-                             file_size_bytes: meta.size as i64,
-                             column_stats: HashMap::new(),
-                             index_files: Vec::new(),
-                             partition_values: HashMap::new(),
-                             clustering_strategy: None,
-                             clustering_columns: None,
-                             min_clustering_score: None,
-                             max_clustering_score: None,
-                             normalization_mins: None,
-                             normalization_maxs: None,
-                             delete_files: Vec::new(),
-                         });
-                    }
-                }
-            }
+            // Genesis Discovery removed - only explicitly committed entries should be in the manifest.
             
             // Hardened De-duplication: Always filter out items in remove_paths AND de-duplicate new/existing by path
             for path in remove_paths {
