@@ -114,7 +114,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     let reader = HybridReader::new(config, local_store, "");
 
     let query_val = hyperstreamdb::core::index::VectorValue::Float32(query);
-    let results = reader.vector_search_index("embedding", &query_val, k, None, hyperstreamdb::core::index::VectorMetric::L2, None).await?;
+    let results = reader.vector_search_index("embedding", &query_val, k, None, hyperstreamdb::core::index::VectorMetric::L2, None, None).await?;
     
     assert!(!results.is_empty(), "Should return results");
     

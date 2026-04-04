@@ -86,6 +86,24 @@ jobs:
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
         run: cargo test --features python,intel,cuda --lib --tests -- --skip gpu_execution --nocapture
 
+      - name: Setup Python for Tests
+        if: steps.filter.outputs.code == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install maturin and build
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis
+          maturin develop --features python
+
+      - name: Run Python Tests (pytest)
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          # Skip GPU-only benchmarks on standard CI runners
+          pytest -v tests/ --ignore=tests/performance --ignore=tests/benchmarks
+
   linux:
     needs: [check]
     runs-on: ubuntu-22.04

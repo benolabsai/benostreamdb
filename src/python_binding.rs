@@ -566,17 +566,45 @@ impl PyTable {
             }
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
-        let mut final_schema = projected_schema;
-        if let Some(batch) = batches.first() {
-            final_schema = batch.schema();
-        } else if vs_params.is_some() {
-            let mut fields: Vec<arrow::datatypes::Field> = final_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-            fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
-            final_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
-        }
+        let final_schema = if vs_params.is_some() {
+            // Include distance column in schema if it was a vector search
+            let mut fields: Vec<arrow::datatypes::Field> = projected_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+            if !fields.iter().any(|f| f.name() == "distance") {
+                fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
+            }
+            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
+        } else {
+            projected_schema
+        };
         
+        // Cast all batches to the final schema to support evolution (e.g. promoting Int32 to Int64)
+        let casted_batches: Vec<RecordBatch> = batches.into_iter()
+            .map(|b| {
+                final_schema.fields().iter()
+                    .map(|field| {
+                        if let Some(col) = b.column_by_name(field.name()) {
+                            if col.data_type() != field.data_type() {
+                                // Automatically cast types if they evolved (e.g. Int32 -> Int64)
+                                arrow::compute::cast(col, field.data_type())
+                                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Schema evolution cast failed for column '{}': {}", field.name(), e)))
+                            } else {
+                                Ok(col.clone())
+                            }
+                        } else {
+                            // Handle missing columns in older segments (NULL fill)
+                            Ok(arrow::array::new_null_array(field.data_type(), b.num_rows()))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, pyo3::PyErr>>()
+                    .and_then(|cols| {
+                        RecordBatch::try_new(final_schema.clone(), cols)
+                            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create batch with evolved schema: {}", e)))
+                    })
+            })
+            .collect::<Result<Vec<RecordBatch>, pyo3::PyErr>>()?;
+
         // Convert to Arrow C Data Interface
-        arrow_batches_to_pyarrow(py, batches, final_schema)
+        arrow_batches_to_pyarrow(py, casted_batches, final_schema)
     }
 
     /// Read table to Pandas DataFrame with optional filtering and column projection

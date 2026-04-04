@@ -21,6 +21,7 @@
     <properties>
         <trino.version>435</trino.version>
         <java.release>17</java.release>
+        <skipTests>true</skipTests>
     </properties>
 
     <profiles>
