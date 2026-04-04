@@ -29,8 +29,8 @@ def test_nyc_taxi_ingest():
     for pq_file in parquet_files:
         print(f"Ingesting {pq_file.name}...")
         
-        # Read Parquet file
-        arrow_table = pq.read_table(pq_file)
+        # Normalize schema to lowercase to avoid case-sensitivity issues (e.g. Passenger_count vs passenger_count)
+        arrow_table = arrow_table.rename_columns([c.lower() for c in arrow_table.column_names])
         total_rows += len(arrow_table)
         
         # Write to HyperStream
@@ -48,9 +48,6 @@ def test_nyc_taxi_ingest():
     assert throughput > 100_000, f"Throughput {throughput:.0f} < 100K rows/sec"
 
 def test_nyc_taxi_query():
-    if not Path("tests/data/nyc_taxi").exists():
-        print("NYC Taxi data not found. Skipping query test.")
-        return
     if not Path("tests/data/nyc_taxi").exists():
         print("NYC Taxi data not found. Skipping query test.")
         return

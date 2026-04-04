@@ -22,10 +22,11 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import tempfile
 import shutil
+import platform
+import subprocess
 
 try:
     import hyperstreamdb as hdb
@@ -82,6 +83,8 @@ class BenchmarkResult:
     throughput: Optional[float] = None
     memory_mb: Optional[float] = None
     storage_mb: Optional[float] = None
+    hardware: str = "Unknown"
+    device_type: str = "cpu"
     metadata: Optional[Dict] = None
 
 
@@ -90,10 +93,25 @@ class CompetitiveBenchmark:
     Comprehensive benchmark suite comparing HyperStreamDB to competitors
     """
     
-    def __init__(self, output_dir: str = "benchmark_results"):
+    def __init__(self, output_dir: str = "benchmark_results", device: str = "cpu"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
         self.results: List[BenchmarkResult] = []
+        self.device = device
+        self.hardware = self._get_hardware_info()
+
+    def _get_hardware_info(self) -> str:
+        """Detect CPU model name"""
+        try:
+            if platform.system() == "Linux":
+                res = subprocess.check_output("lscpu | grep 'Model name'", shell=True).decode()
+                return res.split(":")[1].strip()
+            elif platform.system() == "Darwin":
+                res = subprocess.check_output("sysctl -n machdep.cpu.brand_string", shell=True).decode()
+                return res.strip()
+        except:
+            pass
+        return platform.processor() or "Generic x86_64"
         
     def generate_test_data(self, n_rows: int, dim: int = 768) -> Tuple[np.ndarray, pd.DataFrame]:
         """
@@ -142,12 +160,12 @@ class CompetitiveBenchmark:
             # Table creation (not counted in timing)
             table = hdb.Table(uri)
             
-            # Flush with GPU acceleration
+            # Flush with specific device
             try:
-                table.set_default_device("mps")
-                print("  (Using MPS GPU acceleration)")
+                table.set_default_device(self.device)
+                print(f"  (Using {self.device} acceleration)")
             except Exception as e:
-                print(f"  (GPU acceleration not available: {e})")
+                print(f"  (Device selection failed: {e}. Falling back.)")
 
             table.add_index_columns(["embedding"])
             
@@ -174,6 +192,8 @@ class CompetitiveBenchmark:
             latency_ms=elapsed * 1000,
             throughput=throughput,
             storage_mb=storage_mb,
+            hardware=self.hardware,
+            device_type=self.device,
             metadata={'dim': dim}
         )
         self.results.append(result)
@@ -230,6 +250,8 @@ class CompetitiveBenchmark:
             operation=f"vector_search_k{k}",
             dataset_size=n_rows,
             latency_ms=avg_latency,
+            hardware=self.hardware,
+            device_type=self.device,
             metadata={'p99_ms': p99_latency, 'dim': dim}
         )
         self.results.append(result)
@@ -276,6 +298,8 @@ class CompetitiveBenchmark:
             operation="hybrid_query",
             dataset_size=n_rows,
             latency_ms=elapsed,
+            hardware=self.hardware,
+            device_type=self.device,
             metadata={'k': k, 'dim': dim}
         )
         self.results.append(result)
@@ -313,6 +337,8 @@ class CompetitiveBenchmark:
             latency_ms=elapsed * 1000,
             throughput=throughput,
             storage_mb=storage_mb,
+            hardware=self.hardware,
+            device_type="cpu", # DuckDB is CPU only
             metadata={'dim': dim, 'iceberg': False}
         )
         self.results.append(result)
@@ -367,6 +393,8 @@ class CompetitiveBenchmark:
             operation="scalar_query",
             dataset_size=n_rows,
             latency_ms=elapsed,
+            hardware=self.hardware,
+            device_type="cpu",
             metadata={'result_count': len(results)}
         )
         self.results.append(result)
@@ -404,6 +432,8 @@ class CompetitiveBenchmark:
             latency_ms=elapsed * 1000,
             throughput=throughput,
             storage_mb=storage_mb,
+            hardware=self.hardware,
+            device_type="cpu", 
             metadata={'dim': dim}
         )
         self.results.append(result)
@@ -446,6 +476,8 @@ class CompetitiveBenchmark:
             operation=f"vector_search_k{k}",
             dataset_size=n_rows,
             latency_ms=avg_latency,
+            hardware=self.hardware,
+            device_type="cpu",
             metadata={'p99_ms': p99_latency, 'dim': dim}
         )
         self.results.append(result)
@@ -495,6 +527,8 @@ class CompetitiveBenchmark:
         df = pd.DataFrame([
             {
                 'System': r.system,
+                'Hardware': r.hardware,
+                'Device': r.device_type,
                 'Operation': r.operation,
                 'Dataset Size': r.dataset_size,
                 'Latency (ms)': r.latency_ms,
@@ -504,9 +538,21 @@ class CompetitiveBenchmark:
             for r in self.results
         ])
         
-        # Save raw results
+        # Save raw results (Append mode if CSV exists)
         csv_path = self.output_dir / 'benchmark_results.csv'
-        df.to_csv(csv_path, index=False)
+        if csv_path.exists():
+            existing_df = pd.read_csv(csv_path)
+            # Ensure compatibility
+            if 'Hardware' not in existing_df.columns:
+                existing_df['Hardware'] = 'Generic Baseline'
+            if 'Device' not in existing_df.columns:
+                existing_df['Device'] = 'cpu'
+            
+            combined_df = pd.concat([existing_df, df], ignore_index=True)
+            combined_df.to_csv(csv_path, index=False)
+            df = combined_df # Use combined for report
+        else:
+            df.to_csv(csv_path, index=False)
         print(f"\n✓ Results saved to {csv_path}")
         
         # Generate summary report
@@ -645,6 +691,8 @@ def main():
                         help='Output directory (default: benchmark_results)')
     parser.add_argument('--quick', action='store_true',
                         help='Quick test with small dataset')
+    parser.add_argument('--device', default='cpu',
+                        help='Device for HyperStreamDB (cpu, cuda:0, mps)')
     
     args = parser.parse_args()
     
@@ -653,7 +701,7 @@ def main():
     else:
         sizes = args.sizes
     
-    benchmark = CompetitiveBenchmark(output_dir=args.output)
+    benchmark = CompetitiveBenchmark(output_dir=args.output, device=args.device)
     benchmark.run_full_suite(dataset_sizes=sizes)
     
     print("\n" + "=" * 80)

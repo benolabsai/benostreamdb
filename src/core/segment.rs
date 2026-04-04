@@ -263,13 +263,17 @@ impl HybridSegmentWriter {
                             col_stats.min = s.min_opt().map(|&v| ManifestValue::Float64(v));
                             col_stats.max = s.max_opt().map(|&v| ManifestValue::Float64(v));
                         },
-                        ParquetStats::ByteArray(s) => {
-                             if let (Some(min_val), Some(max_val)) = (s.min_opt(), s.max_opt()) {
-                                 col_stats.min = std::str::from_utf8(min_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
-                                 col_stats.max = std::str::from_utf8(max_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
-                             }
-                        },
-                        _ => {}
+                         ParquetStats::ByteArray(s) => {
+                              if let (Some(min_val), Some(max_val)) = (s.min_opt(), s.max_opt()) {
+                                  col_stats.min = std::str::from_utf8(min_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
+                                  col_stats.max = std::str::from_utf8(max_val.as_ref()).ok().map(|s| ManifestValue::String(s.to_string()));
+                              }
+                         },
+                         ParquetStats::Boolean(s) => {
+                             col_stats.min = s.min_opt().map(|&v| ManifestValue::Boolean(v));
+                             col_stats.max = s.max_opt().map(|&v| ManifestValue::Boolean(v));
+                         },
+                         _ => {}
                     }
                 }
 
@@ -560,6 +564,7 @@ impl HybridSegmentWriter {
                         files.push(inv_path.to_str().unwrap().to_string());
                     }
                 },
+
 
                 arrow::datatypes::DataType::List(inner) | arrow::datatypes::DataType::FixedSizeList(inner, _) => {
                      if *inner.data_type() == arrow::datatypes::DataType::Float32 {

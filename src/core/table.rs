@@ -80,6 +80,7 @@ pub struct Table {
     enterprise_license: Option<String>,
     primary_key: Arc<std::sync::RwLock<Vec<String>>>,
     autocommit: Arc<std::sync::atomic::AtomicBool>,
+    recovered_wal_paths: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Clone for Table {
@@ -108,6 +109,7 @@ impl Clone for Table {
             enterprise_license: self.enterprise_license.clone(),
             primary_key: self.primary_key.clone(),
             autocommit: self.autocommit.clone(),
+            recovered_wal_paths: self.recovered_wal_paths.clone(),
         }
     }
 }
@@ -149,11 +151,20 @@ impl Table {
 
     pub fn set_index_config(&self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
         let mut configs = self.index_configs.write().unwrap();
-        configs.insert(column, ColumnIndexConfig {
+        configs.insert(column.clone(), ColumnIndexConfig {
             device,
             tokenizer,
             enabled,
         });
+        
+        let mut cols = self.index_columns.write().unwrap();
+        if enabled {
+            if !cols.contains(&column) {
+                cols.push(column);
+            }
+        } else {
+            cols.retain(|c| c != &column);
+        }
     }
 }
 
@@ -290,9 +301,9 @@ impl Table {
         });
         
         // Replay WAL (Recovery)
-        let recovered_batches = wal.replay().unwrap_or_else(|e| {
-            println!("WAL Recovery Warning: {}", e);
-            Vec::new()
+        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
+            println!("WAL Recovery Warning: {}" , e);
+            (Vec::new(), Vec::new())
         });
         
         let mut initial_buffer = Vec::new();
@@ -369,6 +380,7 @@ impl Table {
             enterprise_license: None,
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
         };
         
         // Sync PKs after initialization
@@ -861,9 +873,9 @@ impl Table {
         let _ = wal.spawn_worker();
         
         // Replay WAL (Recovery)
-        let recovered_batches = wal.replay().unwrap_or_else(|e| {
+        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
             println!("WAL Recovery Warning: {}", e);
-            Vec::new()
+            (Vec::new(), Vec::new())
         });
         
         let mut initial_buffer = Vec::new();
@@ -994,6 +1006,7 @@ impl Table {
             enterprise_license: None,
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
         };
         
         table.sync_primary_key_from_schema_async().await?;
@@ -2040,12 +2053,15 @@ impl Table {
         let planner = QueryPlanner::new();
         let mut filtered_batches = Vec::new();
         for batch in batches {
-            if let Ok(filtered) = planner.filter_expr(&batch, expr) {
-                if filtered.num_rows() > 0 {
-                     filtered_batches.push(filtered);
+            match planner.filter_expr(&batch, expr) {
+                Ok(filtered) => {
+                    if filtered.num_rows() > 0 {
+                         filtered_batches.push(filtered);
+                    }
                 }
-            } else if let Err(_e) = planner.filter_expr(&batch, expr) {
-
+                Err(e) => {
+                    eprintln!("DEBUG: Failed to evaluate filter expression on batch: {}", e);
+                }
             }
         }
         Ok(filtered_batches)
@@ -2953,11 +2969,19 @@ impl Table {
              self.background_tasks.lock().await.push(handle);
         }
         
-        // 5. Truncate WAL (Durability Checkpoint)
-        {
-             let mut wal = self.wal.lock().await;
-             wal.truncate().context("Failed to truncate WAL")?;
-        }
+         // 5. Truncate WAL (Durability Checkpoint)
+         {
+              let mut wal = self.wal.lock().await;
+              wal.truncate().context("Failed to truncate WAL")?;
+              
+              // 5b. Cleanup recovered files
+              let mut recovered = self.recovered_wal_paths.lock().unwrap();
+              if !recovered.is_empty() {
+                  let paths: Vec<std::path::PathBuf> = recovered.iter().map(std::path::PathBuf::from).collect();
+                  wal.cleanup_files(&paths).unwrap_or_default();
+                  recovered.clear();
+              }
+         }
 
         Ok(())
     }

@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import time
 import shutil
+import glob
 
 def test_wal_compaction():
     print("="*60)
@@ -10,7 +11,8 @@ def test_wal_compaction():
     print("="*60)
 
     # Setup
-    uri = f"file:///tmp/test_wal_compact_{int(time.time())}"
+    ts = int(time.time())
+    uri = f"file:///tmp/test_wal_compact_{ts}"
     base_path = uri.replace("file://", "")
     if os.path.exists(base_path):
         shutil.rmtree(base_path)
@@ -18,16 +20,19 @@ def test_wal_compaction():
     # 1. Write many small batches to trigger compaction
     print("\nPhase 1: Writing 200 small batches...")
     table = hdb.Table(uri)
+    table.autocommit = False
     
     for i in range(200):
         df = pd.DataFrame({'id': [i], 'val': [i * 2]})
         table.write_pandas(df)
         if (i + 1) % 50 == 0:
             print(f"  Written {i + 1} batches...")
+            time.sleep(0.1) # Small pause for WAL consistency
     
     # Check WAL file exists
-    wal_path = os.path.join(base_path, "_wal", "log.arrow")
-    assert os.path.exists(wal_path), f"WAL file missing at {wal_path}"
+    wal_files = glob.glob(os.path.join(base_path, "_wal", "log_*.arrow"))
+    assert len(wal_files) > 0, f"WAL file missing in {os.path.join(base_path, '_wal')}"
+    wal_path = wal_files[0]
     size_before = os.path.getsize(wal_path)
     print(f"✓ WAL file size before compaction: {size_before} bytes")
     

@@ -1,0 +1,4 @@
+System,Hardware,Device,Operation,Dataset Size,Latency (ms),Throughput (rows/sec),Storage (MB)
+HyperStreamDB,AMD Ryzen 9 5900XT 16-Core Processor,cuda:0,ingest,1000,281.59403800964355,3551.211549321771,7.111603736877441
+HyperStreamDB,AMD Ryzen 9 5900XT 16-Core Processor,cuda:0,vector_search_k10,1000,17.801284790039062,,
+HyperStreamDB,AMD Ryzen 9 5900XT 16-Core Processor,cuda:0,vector_search_k100,1000,18.015742301940918,,
