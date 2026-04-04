@@ -366,7 +366,7 @@ impl PyComputeContext {
 impl PyComputeContext {
     /// Internal helper to list available backends
     fn list_available_backends_internal() -> Vec<String> {
-        let backends = vec!["cpu".to_string()];
+        let mut backends = vec!["cpu".to_string()];
         
         #[cfg(feature = "cuda")]
         backends.push("cuda".to_string());
