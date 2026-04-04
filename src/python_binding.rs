@@ -14,7 +14,7 @@ use tokio::runtime::Runtime;
 use std::sync::Arc;
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use crate::python_gpu_context::PyComputeContext;
+use crate::python_gpu_context::PyDevice;
 
 // Helper function to parse metric string to VectorMetric enum
 // Uses native Rust names: L2, Cosine, InnerProduct, L1, Hamming, Jaccard
@@ -278,11 +278,11 @@ pub struct PyTable {
     table: Table,
     /// Dedicated runtime for parallel query execution (bypasses Python GIL)
     query_pool: Arc<Runtime>,
-    context: Option<Py<PyComputeContext>>,
+    device: Option<Py<PyDevice>>,
 }
 
 impl PyTable {
-    pub fn new_internal(uri: &str, context: Option<Py<PyComputeContext>>) -> Result<Self, anyhow::Error> {
+    pub fn new_internal(uri: &str, device: Option<Py<PyDevice>>) -> Result<Self, anyhow::Error> {
         let table = Table::new(uri.to_string())?;
         // Create dedicated runtime for parallel query execution
         // This runtime is separate from the table's internal runtime
@@ -291,17 +291,17 @@ impl PyTable {
             Runtime::new()
                 .map_err(|e| anyhow::anyhow!("Failed to create query pool runtime: {}", e))?
         );
-        Ok(PyTable { table, query_pool, context })
+        Ok(PyTable { table, query_pool, device })
     }
 
-    pub fn create_internal(uri: &str, schema: arrow::datatypes::SchemaRef, context: Option<Py<PyComputeContext>>) -> Result<Self, anyhow::Error> {
+    pub fn create_internal(uri: &str, schema: arrow::datatypes::SchemaRef, device: Option<Py<PyDevice>>) -> Result<Self, anyhow::Error> {
         let table = Table::create(uri.to_string(), schema)?;
         // Create dedicated runtime for parallel query execution
         let query_pool = Arc::new(
             Runtime::new()
                 .map_err(|e| anyhow::anyhow!("Failed to create query pool runtime: {}", e))?
         );
-        Ok(PyTable { table, query_pool, context })
+        Ok(PyTable { table, query_pool, device })
     }
 }
 
@@ -309,17 +309,18 @@ impl PyTable {
 #[allow(deprecated)]
 impl PyTable {
     #[new]
-    #[pyo3(signature = (uri, context=None))]
-    fn new(uri: &str, context: Option<Py<PyComputeContext>>) -> PyResult<Self> {
-        Self::new_internal(uri, context)
+    #[pyo3(signature = (uri, device=None))]
+    fn new(uri: &str, device: Option<Py<PyDevice>>) -> PyResult<Self> {
+        Self::new_internal(uri, device)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
     /// Create a new table with an explicit schema
     #[staticmethod]
-    #[pyo3(signature = (uri, schema, context=None))]
-    fn create(uri: &str, schema: PySchema, context: Option<Py<PyComputeContext>>) -> PyResult<Self> {
-        Self::create_internal(uri, schema.inner, context)
+    #[pyo3(signature = (uri, schema, device=None))]
+    fn create(uri: &str, schema: Bound<'_, PyAny>, device: Option<Py<PyDevice>>) -> PyResult<Self> {
+        let rust_schema = extract_schema(schema)?;
+        Self::create_internal(uri, rust_schema, device)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
@@ -334,7 +335,7 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             
         let query_pool = Arc::new(rt);
-        Ok(PyTable { table, query_pool, context: None })
+        Ok(PyTable { table, query_pool, device: None })
     }
     
     /// Override parallel readers for vector search (disables auto-detection)
@@ -477,14 +478,14 @@ impl PyTable {
     /// Example:
     ///     # Vector search with cosine metric
     ///     df = table.to_pandas(vector_filter={"column": "embedding", "query": [1.0, 2.0], "k": 3, "metric": "cosine"})
-    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, context=None))]
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
     fn to_arrow(
         &self,
         py: Python<'_>,
         filter: Option<String>,
         vector_filter: Option<Bound<'_, PyDict>>,
         columns: Option<Vec<String>>,
-        context: Option<Py<PyComputeContext>>,
+        device: Option<Py<PyDevice>>,
     ) -> PyResult<Py<PyAny>> {
         let _pyarrow = py.import("pyarrow")?;
         // Parse vector filter if provided
@@ -544,8 +545,8 @@ impl PyTable {
             table_schema
         };
 
-        // Determine which context to use: per-call context or table-level default
-        let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
+        // Determine which device to use: per-call device or table-level default
+        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
             Some(ctx_borrow.context)
@@ -587,18 +588,18 @@ impl PyTable {
     /// Example:
     ///     # Fast scalar query - skip reading 768D embeddings
     ///     df = table.to_pandas(filter="category = 'science'", columns=["doc_id", "title"])
-    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, context=None, **kwargs))]
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None, **kwargs))]
     fn to_pandas(
         &self,
         py: Python<'_>,
         filter: Option<String>,
         vector_filter: Option<Bound<'_, PyDict>>,
         columns: Option<Vec<String>>,
-        context: Option<Py<PyComputeContext>>,
+        device: Option<Py<PyDevice>>,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
         // Get Arrow table with column projection
-        let arrow_table = self.to_arrow(py, filter, vector_filter, columns, context)?;
+        let arrow_table = self.to_arrow(py, filter, vector_filter, columns, device)?;
         
         // Convert to Pandas via PyArrow, passing through kwargs
         arrow_table.call_method(py, "to_pandas", (), kwargs.as_ref())
@@ -609,9 +610,9 @@ impl PyTable {
     /// - List of PyArrow RecordBatches
     /// - PyArrow Table
     /// - Pandas DataFrame
-    #[pyo3(signature = (data, context=None))]
-    fn write(&self, py: Python<'_>, data: Bound<'_, PyAny>, context: Option<Py<PyComputeContext>>) -> PyResult<()> {
-        let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
+    #[pyo3(signature = (data, device=None))]
+    fn write(&self, py: Python<'_>, data: Bound<'_, PyAny>, device: Option<Py<PyDevice>>) -> PyResult<()> {
+        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
             Some(ctx_borrow.context)
@@ -652,7 +653,7 @@ impl PyTable {
              // Fallback to Table/DataFrame handling
              let obj: Py<PyAny> = data.unbind();
              
-             let context_clone = context.as_ref().map(|c| c.clone_ref(py));
+             let context_clone = device.as_ref().map(|c| c.clone_ref(py));
              // Let's try arrow first as it's lighter
              if self.write_arrow(py, obj.clone_ref(py), context_clone.as_ref().map(|c| c.clone_ref(py))).is_ok() {
                  Ok(())
@@ -684,19 +685,19 @@ impl PyTable {
 
 
     /// Read table to Pandas DataFrame (Alias for to_pandas)
-    #[pyo3(signature = (filter=None, columns=None, context=None))]
+    #[pyo3(signature = (filter=None, columns=None, device=None))]
     fn read(
         &self,
         py: Python<'_>,
         filter: Option<String>,
         columns: Option<Vec<String>>,
-        context: Option<Py<PyComputeContext>>,
+        device: Option<Py<PyDevice>>,
     ) -> PyResult<Py<PyAny>> {
-        self.to_pandas(py, filter, None, columns, context, None)
+        self.to_pandas(py, filter, None, columns, device, None)
     }
 
     /// Vector search on the table
-    #[pyo3(signature = (column, query, k=10, filter=None, context=None))]
+    #[pyo3(signature = (column, query, k=10, filter=None, device=None))]
     fn search(
         &self,
         py: Python<'_>,
@@ -704,14 +705,14 @@ impl PyTable {
         query: Vec<f32>,
         k: usize,
         filter: Option<String>,
-        context: Option<Py<PyComputeContext>>,
+        device: Option<Py<PyDevice>>,
     ) -> PyResult<Py<PyAny>> {
         let vf_dict = PyDict::new(py);
         vf_dict.set_item("column", column)?;
         vf_dict.set_item("query", query)?;
         vf_dict.set_item("k", k)?;
         
-        self.to_pandas(py, filter, Some(vf_dict), None, context, None)
+        self.to_pandas(py, filter, Some(vf_dict), None, device, None)
     }
 
     /// Parallel vector search - runs multiple queries in parallel in Rust (bypasses Python GIL)
@@ -802,8 +803,8 @@ impl PyTable {
     }
 
     /// Write Pandas DataFrame to table
-    #[pyo3(signature = (df, context=None))]
-    fn write_pandas(&self, py: Python<'_>, df: Py<PyAny>, context: Option<Py<PyComputeContext>>) -> PyResult<()> {
+    #[pyo3(signature = (df, device=None))]
+    fn write_pandas(&self, py: Python<'_>, df: Py<PyAny>, device: Option<Py<PyDevice>>) -> PyResult<()> {
         // Provide current table schema to PyArrow for correct type inference (especially for vectors)
         let pyarrow = py.import("pyarrow")?;
         let schema = self.table.arrow_schema();
@@ -814,16 +815,16 @@ impl PyTable {
              let py_schema = arrow_schema_to_pyarrow(py, schema)?;
              table_class.call_method1("from_pandas", (df.bind(py), py_schema))?.unbind()
         };
-        self.write_arrow(py, arrow_table, context)
+        self.write_arrow(py, arrow_table, device)
     }
 
     /// Write PyArrow Table to table
-    #[pyo3(signature = (table, context=None))]
-    fn write_arrow(&self, py: Python<'_>, table: Py<PyAny>, context: Option<Py<PyComputeContext>>) -> PyResult<()> {
+    #[pyo3(signature = (table, device=None))]
+    fn write_arrow(&self, py: Python<'_>, table: Py<PyAny>, device: Option<Py<PyDevice>>) -> PyResult<()> {
         // Convert PyArrow Table to RecordBatches
         let batches = pyarrow_to_arrow_batches(py, table)?;
         
-        let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
+        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
             Some(ctx_borrow.context)
@@ -923,15 +924,15 @@ impl PyTable {
     ///     df: Pandas DataFrame
     ///     key_column: Column name to merge on
     ///     mode: Optional PyMergeMode (MergeOnRead or MergeOnWrite)
-    ///     context: Optional ComputeContext for GPU acceleration
-    #[pyo3(signature = (df, key_column, mode=None, context=None))]
+    ///     device: Optional ComputeContext for GPU acceleration
+    #[pyo3(signature = (df, key_column, mode=None, device=None))]
     fn merge_pandas(
         &self,
         py: Python<'_>,
         df: Py<PyAny>,
         key_column: String,
         mode: Option<PyMergeMode>,
-        context: Option<Py<PyComputeContext>>,
+        device: Option<Py<PyDevice>>,
     ) -> PyResult<()> {
         // 1. Convert Pandas -> Arrow RecordBatch
         let pyarrow = py.import("pyarrow")?;
@@ -947,7 +948,7 @@ impl PyTable {
         
         let batches = pyarrow_to_arrow_batches(py, arrow_table)?;
         
-        let ctx = context.as_ref().or(self.context.as_ref()).map(|c| c.clone_ref(py));
+        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
             Some(ctx_borrow.context)
@@ -1820,4 +1821,26 @@ fn pyarrow_to_arrow_batches(py: Python<'_>, table: Py<PyAny>) -> PyResult<Vec<Re
     }
     
     Ok(batches)
+}
+
+fn extract_schema(schema_obj: Bound<'_, PyAny>) -> PyResult<arrow::datatypes::SchemaRef> {
+    // 1. Try to unwrap if it is a PySchema directly
+    if let Ok(py_schema) = schema_obj.extract::<PySchema>() {
+         return Ok(py_schema.inner.clone());
+    }
+
+    // 2. Try to use Arrow C Data Interface via _export_to_c
+    if schema_obj.hasattr("_export_to_c")? {
+        let mut ffi_schema = FFI_ArrowSchema::empty();
+        let schema_ptr = &mut ffi_schema as *mut FFI_ArrowSchema as Py_uintptr_t;
+        schema_obj.call_method1("_export_to_c", (schema_ptr,))?;
+        
+        let schema = arrow::datatypes::Schema::try_from(&ffi_schema)
+            .map_err(|e| pyo3::exceptions::PyTypeError::new_err(format!("Arrow schema extraction failed: {}", e)))?;
+        return Ok(Arc::new(schema));
+    }
+
+    Err(pyo3::exceptions::PyTypeError::new_err(
+        "Expected hyperstreamdb.Schema or pyarrow.Schema object"
+    ))
 }

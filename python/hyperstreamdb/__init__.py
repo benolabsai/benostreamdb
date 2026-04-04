@@ -60,39 +60,39 @@ class Query:
         self._columns = columns
         return self
 
-    def to_pandas(self, context: Optional[Any] = None):
+    def to_pandas(self, device: Optional[Any] = None):
         """Execute the query and return results as a Pandas DataFrame."""
         return self._table.to_pandas(
             filter=self._filter, 
             vector_filter=self._vector_filter, 
             columns=self._columns, 
-            context=context
+            device=device
         )
 
-    def to_arrow(self, context: Optional[Any] = None):
+    def to_arrow(self, device: Optional[Any] = None):
         """Execute the query and return results as an Arrow Table."""
         return self._table.to_arrow(
             filter=self._filter, 
             vector_filter=self._vector_filter, 
             columns=self._columns, 
-            context=context
+            device=device
         )
 
-    def execute(self, context: Optional[Any] = None):
+    def execute(self, device: Optional[Any] = None):
         """Execute the query and return results as a Pandas DataFrame (alias for to_pandas)."""
-        return self.to_pandas(context)
+        return self.to_pandas(device)
 
 class Table:
     """
     Enhanced HyperStreamDB Table with auto-vectorization and embedding registry support.
     """
-    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, context: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None, explain: bool = False):
+    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None, explain: bool = False):
         uri = _resolve_uri(uri)
         self.explain = explain
         if inner_table:
             self._inner = inner_table
         else:
-            self._inner = _RustTable(uri, context=context)
+            self._inner = _RustTable(uri, device=device)
         self._inner.set_index_all(index_all)
         if primary_key:
             if isinstance(primary_key, str):
@@ -102,16 +102,16 @@ class Table:
         self._embedding_configs = {}
 
     @classmethod
-    def create(cls, uri: str, schema, context: Optional[Any] = None) -> 'Table':
+    def create(cls, uri: str, schema, device: Optional[Any] = None) -> 'Table':
         """Create a new table with an explicit schema."""
         uri = _resolve_uri(uri)
-        return cls(uri, inner_table=_RustTable.create(uri, schema, context=context))
+        return cls(uri, inner_table=_RustTable.create(uri, schema, device=device))
 
     @classmethod
-    def register_external(cls, uri: str, iceberg_metadata_uri: str, context: Optional[Any] = None) -> 'Table':
+    def register_external(cls, uri: str, iceberg_metadata_uri: str, device: Optional[Any] = None) -> 'Table':
         """Register an existing Iceberg table."""
         uri = _resolve_uri(uri)
-        return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri, context=context))
+        return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri, device=device))
 
     def define_embedding(self, column: str, function: Union[str, EmbeddingFunction], vector_column: Optional[str] = None):
         """
@@ -127,48 +127,48 @@ class Table:
             "vector_column": vector_column or f"{column}_vector"
         }
 
-    def write(self, data: Any, context: Optional[Any] = None, mode: str = "append"):
+    def write(self, data: Any, device: Optional[Any] = None, mode: str = "append"):
         """
         Write data to the table, automatically generating embeddings for configured columns.
         
         Args:
             data: pandas.DataFrame, pyarrow.Table, polars.DataFrame, or List[Dict].
-            context: Optional ComputeContext for GPU acceleration.
+            device: Optional Device for GPU acceleration.
             mode: 'append' (default) or 'overwrite' (clears table first).
         """
         if mode == "overwrite":
             self.truncate()
 
         if isinstance(data, pd.DataFrame):
-            return self._write_pandas(data, context=context)
+            return self._write_pandas(data, device=device)
         elif pa and isinstance(data, pa.Table):
-            return self._write_arrow(data, context=context)
+            return self._write_arrow(data, device=device)
         elif pl and isinstance(data, pl.DataFrame):
-            return self._write_polars(data, context=context)
+            return self._write_polars(data, device=device)
         elif isinstance(data, list):
-            return self._write_list(data, context=context)
+            return self._write_list(data, device=device)
         else:
             try:
                 import numpy as np
                 if isinstance(data, np.ndarray):
-                    return self.write(pd.DataFrame(data), context=context)
+                    return self.write(pd.DataFrame(data), device=device)
                 
                 import torch
                 if isinstance(data, torch.Tensor):
-                    return self.write(pd.DataFrame(data.detach().cpu().numpy()), context=context)
+                    return self.write(pd.DataFrame(data.detach().cpu().numpy()), device=device)
             except ImportError:
                 pass
             raise TypeError(f"Unsupported data type for write: {type(data)}")
 
-    def write_pandas(self, df: pd.DataFrame, context: Optional[Any] = None):
+    def write_pandas(self, df: pd.DataFrame, device: Optional[Any] = None):
         """High-level Pandas ingestion with auto-vectorization."""
-        return self._write_pandas(df, context=context)
+        return self._write_pandas(df, device=device)
 
-    def write_arrow(self, table: 'pa.Table', context: Optional[Any] = None):
+    def write_arrow(self, table: 'pa.Table', device: Optional[Any] = None):
         """High-level Arrow ingestion with auto-vectorization."""
-        return self._write_arrow(table, context=context)
+        return self._write_arrow(table, device=device)
 
-    def upsert(self, data: Any, key_column: Union[str, List[str]], mode: str = "merge_on_read", context: Optional[Any] = None):
+    def upsert(self, data: Any, key_column: Union[str, List[str]], mode: str = "merge_on_read", device: Optional[Any] = None):
         """Update or insert data using a key column (or list of columns) to avoid duplicates."""
         from .hyperstreamdb import PyMergeMode
         
@@ -184,10 +184,10 @@ class Table:
                 key_str = ",".join(key_column)
             else:
                 key_str = key_column
-            return self._inner.merge_pandas(processed_df, key_str, enum_mode, context=context)
+            return self._inner.merge_pandas(processed_df, key_str, enum_mode, device=device)
         
         df = pd.DataFrame(data)
-        return self.upsert(df, key_column, mode, context=context)
+        return self.upsert(df, key_column, mode, device=device)
 
     def commit(self):
         """Commit temporary segments to the table."""
@@ -223,26 +223,26 @@ class Table:
         """Delete rows matching the filter expression."""
         return self._inner.delete(filter)
 
-    def _write_pandas(self, df: pd.DataFrame, context: Optional[Any] = None):
+    def _write_pandas(self, df: pd.DataFrame, device: Optional[Any] = None):
         processed_df = self._auto_vectorize(df)
-        return self._inner.write_pandas(processed_df, context=context)
+        return self._inner.write_pandas(processed_df, device=device)
 
-    def _write_arrow(self, table: 'pa.Table', context: Optional[Any] = None):
+    def _write_arrow(self, table: 'pa.Table', device: Optional[Any] = None):
         if self._embedding_configs:
             df = table.to_pandas()
-            return self._write_pandas(df, context=context)
-        return self._inner.write_arrow(table, context=context)
+            return self._write_pandas(df, device=device)
+        return self._inner.write_arrow(table, device=device)
 
-    def _write_polars(self, df: 'pl.DataFrame', context: Optional[Any] = None):
+    def _write_polars(self, df: 'pl.DataFrame', device: Optional[Any] = None):
         if self._embedding_configs:
             pandas_df = df.to_pandas()
-            return self._write_pandas(pandas_df, context=context)
-        return self._inner.write_arrow(df.to_arrow(), context=context)
+            return self._write_pandas(pandas_df, device=device)
+        return self._inner.write_arrow(df.to_arrow(), device=device)
 
-    def _write_list(self, data: List[Dict[str, Any]], context: Optional[Any] = None):
+    def _write_list(self, data: List[Dict[str, Any]], device: Optional[Any] = None):
         # Convert to pandas first to handle vectorization and type enforcement
         df = pd.DataFrame(data)
-        return self._write_pandas(df, context=context)
+        return self._write_pandas(df, device=device)
 
     def _auto_vectorize(self, data: Union[pd.DataFrame, List[Dict[str, Any]]]):
         if not self._embedding_configs:
@@ -317,11 +317,11 @@ class Table:
                     # Vectorize the query string
                     vector_filter["query"] = func([vector_filter["query"]])[0].tolist()
                     if self.explain:
-                        print(f"[Explain] Vectorized query using context: {target_col}")
+                        print(f"[Explain] Vectorized query using device: {target_col}")
                     
         return vector_filter
 
-    def to_pandas(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, context: Optional[Any] = None, **kwargs):
+    def to_pandas(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """
         Read table to Pandas with auto-vectorization of search queries and flexible parameters.
         
@@ -335,7 +335,7 @@ class Table:
                 - ef_search: int (optional) - HNSW ef parameter for tuning
                 - probes: int (optional) - IVF probes parameter for tuning
             columns: Optional list of column names to select
-            context: Optional compute context (GPU/CPU)
+            device: Optional compute device (GPU/CPU)
             **kwargs: Extra params (merged into vector_filter if present)
         
         Example:
@@ -354,9 +354,9 @@ class Table:
             print(self._inner.explain(filter, vf))
             
         filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["k", "n_probe", "column"]}
-        return self._inner.to_pandas(filter, vf, columns, context=context, **filtered_kwargs)
+        return self._inner.to_pandas(filter, vf, columns, device=device, **filtered_kwargs)
 
-    def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, context: Optional[Any] = None, **kwargs):
+    def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """
         Read table to Arrow Table with auto-vectorization of search queries and flexible parameters.
         
@@ -370,7 +370,7 @@ class Table:
                 - ef_search: int (optional) - HNSW ef parameter for tuning
                 - probes: int (optional) - IVF probes parameter for tuning
             columns: Optional list of column names to select
-            context: Optional compute context (GPU/CPU)
+            device: Optional compute device (GPU/CPU)
             **kwargs: Extra params (merged into vector_filter if present)
         """
         if "filter" in kwargs and filter is None:
@@ -378,7 +378,7 @@ class Table:
             
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
         # to_arrow in Rust doesn't currently take **kwargs
-        return self._inner.to_arrow(filter, vf, columns, context=context)
+        return self._inner.to_arrow(filter, vf, columns, device=device)
 
     def query(self) -> Query:
         """Start a fluent query."""
