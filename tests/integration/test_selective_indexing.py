@@ -22,7 +22,7 @@ def get_files(table_uri):
 
 def test_selective_indexing():
     print("1. Creating Table and Ingesting Data (Default: NO INDEX)")
-    table = pyhyperstream.PyTable(TABLE_URI)
+    table = hdb.Table(TABLE_URI)
     
     df = pd.DataFrame({
         "id": range(100),
