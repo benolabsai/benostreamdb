@@ -33,7 +33,7 @@ def test_profiling():
     if Path(db_path).exists():
         shutil.rmtree(db_path)
         
-    table = hdb.PyTable(f"file://{db_path}")
+    table = hdb.Table(f"file://{db_path}")
     # Scalar index only
     table.add_index_columns(["category"])
     
