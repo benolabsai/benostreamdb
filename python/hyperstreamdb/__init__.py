@@ -1,5 +1,6 @@
 from .hyperstreamdb import *
 from .hyperstreamdb import Table as _RustTable
+from .hyperstreamdb import Session as _RustSession
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd
 try:
@@ -108,6 +109,12 @@ class Table:
         """Create a new table with an explicit schema."""
         uri = _resolve_uri(uri)
         return cls(uri, inner_table=_RustTable.create(uri, schema, device=device))
+
+    @classmethod
+    def create_partitioned(cls, uri: str, schema, partition_spec: Dict[str, Any], device: Optional[Any] = None) -> 'Table':
+        """Create a new table with an explicit schema and partitioning."""
+        uri = _resolve_uri(uri)
+        return cls(uri, inner_table=_RustTable.create_partitioned(uri, schema, partition_spec, device=device))
 
     @classmethod
     def register_external(cls, uri: str, iceberg_metadata_uri: str, device: Optional[Any] = None) -> 'Table':
@@ -496,9 +503,89 @@ class Table:
         """
         self._inner.set_index_config(column, enabled, tokenizer, device)
 
+    def set_sort_order(self, columns: List[str], ascending: List[bool]):
+        """Set the table's default sort order for future data writes."""
+        return self._inner.replace_sort_order(columns, ascending)
+
+    def set_partition_spec(self, spec: List[Dict[str, Any]]):
+        """
+        Update the table's partition specification.
+        
+        Args:
+            spec: List of partition fields, each being a dict with:
+                - source_id: int (or source_ids: List[int])
+                - name: str
+                - transform: str
+                - field_id: int (optional)
+        """
+        from .hyperstreamdb import PartitionField
+        
+        fields = []
+        for item in spec:
+            if isinstance(item, dict):
+                # Handle both 'source_id' (singular) and 'source_ids' (plural) for flexibility
+                source_ids = item.get("source_ids")
+                if source_ids is None:
+                    sid = item.get("source_id")
+                    source_ids = [sid] if sid is not None else []
+                
+                fields.append(PartitionField(
+                    source_ids=source_ids,
+                    name=item["name"],
+                    transform=item["transform"],
+                    field_id=item.get("field_id")
+                ))
+            else:
+                fields.append(item)
+                
+        return self._inner.update_spec(fields)
+
     def __getattr__(self, name):
         """Delegate other calls to the Rust implementation."""
         return getattr(self._inner, name)
 
     def __repr__(self):
         return f"HyperStreamTable(uri={self._inner.table_uri()})"
+
+class Session:
+    """
+    HyperStreamDB Query Session with integration for Python Table objects.
+    """
+    def __init__(self, memory_mb: Optional[int] = None):
+        self._inner = _RustSession(memory_mb)
+
+    def register(self, name: str, table: Union[Table, _RustTable]):
+        """Register a table in the session for SQL queries."""
+        if hasattr(table, "_inner"):
+            # Unwrap Python Table to get the Rust implementation
+            return self._inner.register(name, table._inner)
+        return self._inner.register(name, table)
+
+    def sql(self, query: str) -> Any:
+        """Execute a SQL query against registered tables."""
+        import re
+        
+        # 1. Strip pgvector-style casts that DataFusion's parser doesn't understand
+        query = re.sub(r'::vector(\(\d+\))?', '', query)
+        
+        # 2. Map Operators to UDFs (DataFusion handles these better as function calls)
+        ops = {
+            '<->': 'dist_l2',
+            '<=>': 'dist_cosine',
+            '<#>': 'dist_ip',
+            '<+>': 'dist_l1',
+            '<~>': 'dist_hamming',
+            '<%>': 'dist_jaccard'
+        }
+        
+        for op, udf in ops.items():
+            # Matches: identifier <op> (string_literal | array_literal_string | parameter)
+            # This covers common use cases in RAG/pgvector.
+            pattern = rf'(\w+)\s*{re.escape(op)}\s*(\'[^\']*\'|\[[^\]]*\]|\?|\$[\d+])'
+            query = re.sub(pattern, rf'{udf}(\1, \2)', query)
+            
+        # 3. Sanitize vector literals that might contain NumPy type markers (e.g., [np.float32(1.0)])
+        # which often happens when users call str() on a list of numpy scalars.
+        query = re.sub(r'np\.\w+\(([^)]+)\)', r'\1', query)
+            
+        return self._inner.sql(query)
