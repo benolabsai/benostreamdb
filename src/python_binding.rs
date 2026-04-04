@@ -459,6 +459,7 @@ impl PyTable {
     }
 
 
+
     /// Read table to PyArrow Table with optional filtering and column projection
     /// 
     /// Args:

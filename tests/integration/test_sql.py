@@ -1,4 +1,5 @@
-import hyperstreamdb as hyperstream
+import time
+import hyperstreamdb as hdb
 import pandas as pd
 import pyarrow as pa
 import pytest
@@ -12,7 +13,7 @@ def table_path(tmp_path):
 
 def test_sql_basic_query(table_path, tmp_path):
     print(f"Creating table at {table_path}")
-    table = hyperstream.Table(f"file://{table_path}")
+    table = hdb.Table(f"file://{table_path}")
     
     # Create Data
     df = pd.DataFrame({
@@ -24,6 +25,7 @@ def test_sql_basic_query(table_path, tmp_path):
     # Write
     print("Writing data...")
     table.write_pandas(df)
+    table.commit() # Ensure data is in segments for subsequent queries
     
     # Query all
     print("Executing SELECT * FROM t")
@@ -42,12 +44,14 @@ def test_sql_basic_query(table_path, tmp_path):
     # Boolean column and filter test
     # Create a new table for boolean testing
     bool_table_path = str(tmp_path / "sql_test_table_bool")
-    table_bool = hyperstream.Table(f"file://{bool_table_path}")
+    table_bool = hdb.Table(f"file://{bool_table_path}")
     
     # Create DataFrame (including Boolean)
     df_bool = pd.DataFrame({'id': [1, 2, 3], 'category': ['science', 'math', 'science'], 'is_active': [True, False, True]})
     table_bool.write_pandas(df_bool)
-
+    table_bool.commit()
+    table_bool.wait_for_background_tasks() # Final sync window
+    
     # Test boolean filtering using table.sql() directly (simpler path)
     results = table_bool.sql("SELECT * FROM t WHERE is_active = true")
     results_df = results.to_pandas()
@@ -62,13 +66,13 @@ def test_sql_basic_query(table_path, tmp_path):
     assert not any(results_false_df['is_active'])  # All returned rows should be false
 
     # Check Memory Limit Argument (Should not crash even if unused)
-    session_limited = hyperstream.Session(memory_mb=100)
+    session_limited = hdb.Session(memory_mb=100)
     assert session_limited is not None
     
     # Filter Query
     print("Executing SELECT * FROM t WHERE id > 3")
     # Re-write original data for subsequent tests that expect it
-    table.write_pandas(df)
+    # Data is already there from the top of the test, no need to rewrite unless truncated
     result_filtered = table.sql("SELECT * FROM t WHERE id > 3")
     assert len(result_filtered) == 2
     res_df_filtered = result_filtered.to_pandas()
@@ -94,19 +98,20 @@ def test_sql_basic_query(table_path, tmp_path):
 
     # Joins
     print("Executing Join Test...")
-    session = hyperstream.Session()
+    session = hdb.Session()
     
     # Create orders table
-    orders_table = hyperstream.Table(f"file://{tmp_path}/orders")
+    orders_table = hdb.Table(f"file://{tmp_path}/orders")
     orders_df = pd.DataFrame({
         "order_id": [101, 102, 103],
         "user_id": [1, 2, 4], # 4 has no match
         "amount": [10.5, 20.0, 30.0]
     })
     orders_table.write_pandas(orders_df)
+    orders_table.commit()
     
-    session.register("users", table)
-    session.register("orders", orders_table)
+    session.register("users", table._inner)
+    session.register("orders", orders_table._inner)
     
     # Inner Join
     # users: 1, 3, 5 (after previous writes? No, wait. 
