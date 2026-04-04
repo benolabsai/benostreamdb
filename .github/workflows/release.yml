@@ -84,7 +84,7 @@ jobs:
         env:
           # Point to CUDA stubs so binaries can load even without a GPU
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
-        run: cargo test --features intel,cuda --lib --tests -- --skip gpu_execution --nocapture
+        run: cargo test --features python,intel,cuda --lib --tests -- --skip gpu_execution --nocapture
 
   linux:
     needs: [check]
@@ -154,7 +154,7 @@ jobs:
           RUSTFLAGS: -L /tmp/stubs
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --features intel,cuda --zig
+          args: --release --out dist --find-interpreter --features python,intel,cuda --zig
           sccache: 'false'
           manylinux: auto
       - name: Upload wheels
@@ -195,7 +195,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --features mps
+          args: --release --out dist --find-interpreter --features python,mps
           sccache: 'false'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -235,7 +235,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter
+          args: --release --out dist --find-interpreter --features python
           sccache: 'false'
       - name: Upload wheels
         uses: actions/upload-artifact@v4
