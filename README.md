@@ -376,6 +376,12 @@ python tests/integration/test_nyc_taxi.py
   - **Vector search**: <50ms for k=10 on 10M vectors ⏱️
   - **Compaction**: <5min for 10GB ⏱️
 
+  **Benchmarking Environment:**
+  - **System**: Lenovo T480
+  - **CPU**: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz
+  - **RAM**: 64GB
+  - **OS**: Linux
+
 ### Phase 2: Nessie Integration (Next)
 
 **Catalog Strategy:**
