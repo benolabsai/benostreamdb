@@ -233,6 +233,11 @@ class Table:
         if self._embedding_configs:
             df = table.to_pandas()
             return self._write_pandas(df, device=device)
+            
+        if pa and isinstance(table, pa.RecordBatch):
+            from pyarrow import Table as paTable
+            table = paTable.from_batches([table])
+            
         return self._inner.write_arrow(table, device=device)
 
     def _write_polars(self, df: 'pl.DataFrame', device: Optional[Any] = None):

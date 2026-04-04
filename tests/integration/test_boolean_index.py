@@ -1,11 +1,11 @@
-import hyperstreamdb as hyperstream
+import hyperstreamdb as hdb
 import pandas as pd
 import pytest
 
 def test_boolean_indexing(tmp_path):
     """Test that boolean columns can be indexed and filtered correctly."""
     table_path = str(tmp_path / "bool_test")
-    table = hyperstream.Table(f"file://{table_path}")
+    table = hdb.Table(f"file://{table_path}")
     
     # Create DataFrame with boolean column
     df = pd.DataFrame({
@@ -14,10 +14,11 @@ def test_boolean_indexing(tmp_path):
         'category': ['A', 'B', 'A', 'B', 'A']
     })
     
-    # Write data (boolean indexing happens here)
+    # Write data (ensure it's committed for boolean search to find it)
     table.write_pandas(df)
+    table.commit()
     
-    # Test filtering for true values
+    # Test filtering for true values 
     result_true = table.sql("SELECT * FROM t WHERE is_active = true")
     df_true = result_true.to_pandas()
     

@@ -52,7 +52,7 @@ def run_rag_demo():
     unique_contexts_df["embedding"] = [list(e) for e in embeddings]
 
     print(f"Ingesting {len(unique_contexts_df)} entries into HyperStreamDB...")
-    table = hdb.Table(db_path, explain=True, context=ctx)
+    table = hdb.Table(db_path, explain=True, device=ctx)
     table.add_index_columns(["embedding", "context"])
     table.write(unique_contexts_df[["context", "title", "embedding"]])
     print("Committing table (flushes data and builds vector indexes)...")
