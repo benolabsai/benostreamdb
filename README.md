@@ -79,6 +79,10 @@ maturin develop
 
 # Or install from PyPI (coming soon)
 pip install hyperstreamdb
+
+# Windows Users
+# HyperStreamDB is optimized for Linux/POSIX environments. 
+# Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
 
 ### GPU Acceleration (Optional)
@@ -296,10 +300,10 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 ```
 
 **Supported GPU Backends:**
-- **CUDA** - NVIDIA GPUs (Linux, Windows)
+- **CUDA** - NVIDIA GPUs (Linux, Windows via WSL2)
 - **ROCm** - AMD GPUs (Linux)
 - **Metal (MPS)** - Apple Silicon (macOS)
-- **OpenCL** - Intel GPUs (Linux, Windows)
+- **OpenCL** - Intel GPUs (Linux, Windows via WSL2)
 - **CPU** - Fallback for all platforms
 
 **Supported Distance Metrics:**
