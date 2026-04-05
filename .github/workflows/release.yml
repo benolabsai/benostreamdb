@@ -279,8 +279,17 @@ jobs:
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
           fi
       - name: Publish to crates.io
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty || echo "Version already exists or publish failed, continuing."
-        continue-on-error: true
+        run: |
+          if ! cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> publish_err.log; then
+            cat publish_err.log
+            if grep -qi "already uploaded" publish_err.log; then
+              echo "Version already exists on crates.io, safely continuing."
+              exit 0
+            else
+              echo "Error: Cargo publish failed for an unexpected reason."
+              exit 1
+            fi
+          fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Download wheels
