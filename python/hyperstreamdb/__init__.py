@@ -503,6 +503,32 @@ class Table:
         """
         self._inner.set_index_config(column, enabled, tokenizer, device)
 
+    def add_index(self, column: str, tokenizer: Optional[str] = None, device: Optional[str] = None):
+        """
+        Add an index to a column (convenience wrapper).
+        """
+        return self._inner.add_index(column, tokenizer, device)
+
+    def drop_index(self, column: str):
+        """
+        Drop an index from a column (convenience wrapper).
+        """
+        return self._inner.drop_index(column)
+
+    def add_primary_key(self, column: str):
+        """
+        Atomically add a column to the primary key.
+        This performs a validation check for duplicates across all existing data.
+        If validation fails, the change is NOT committed.
+        """
+        return self._inner.add_primary_key(column)
+
+    def drop_primary_key(self, column: str):
+        """
+        Atomically remove a column from the primary key.
+        """
+        return self._inner.drop_primary_key(column)
+
     def set_sort_order(self, columns: List[str], ascending: List[bool]):
         """Set the table's default sort order for future data writes."""
         return self._inner.replace_sort_order(columns, ascending)

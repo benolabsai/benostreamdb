@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "hyperstreamdb"
-version = "0.1.9"
+version = "0.1.10"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -59,8 +59,8 @@ features = ["python"]
 extra-features = { mps = ["mps"], cuda = ["cuda"], rocm = ["rocm"], intel_gpu = ["intel_gpu"], intel_cpu = ["intel_cpu"] }
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
-# Build both the Rust library and Python bindings
-bindings = "pyo3"
+# Build both the Rust library and Python bindings (multi-version compatible)
+bindings = "pyo3-abi3"
 sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
 # Optimizations for WHEEL builds
 strip = false

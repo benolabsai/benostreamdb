@@ -1,107 +1,102 @@
-# HyperStreamDB Catalog Usage Guide
+# Multi-Catalog Usage Guide
 
-HyperStreamDB integrates with the **Nessie Project** (Iceberg-compatible REST Catalog) to provide Git-like semantics for your data. This allows you to specific snapshots, create branches for experimentation, and merge changes atomically.
+HyperStreamDB supports enterprise-grade data catalogs to provide table discovery, atomic commits, and snapshot isolation across your data lake. 
 
-## 1. Setup
+## Supported Catalogs
 
-You need a running Nessie server. You can run one locally using Docker:
+| Catalog | Protocol | Use Case |
+|---------|----------|----------|
+| **Hive Metastore** | Thrift | Enterprise standard, Hadoop ecosystem. |
+| **Project Nessie** | REST v2 | Git-like versioning (branching, merging). |
+| **AWS Glue** | Native SDK | AWS cloud-native metadata management. |
+| **Iceberg REST** | REST v1 | Vendor-neutral, interoperable standard. |
+| **Unity Catalog** | REST | Databricks ecosystem integration. |
 
+---
+
+## 1. Hive Metastore (Detailed Example)
+
+The Hive Metastore (HMS) is the industry standard for metadata management in Hadoop-compatible environments.
+
+### Connection
+```python
+import hyperstreamdb as hdb
+
+# Connect to HMS via Thrift (no auth example)
+table = hdb.Table.from_hive(
+    address="thrift://metastore-host:9083",
+    namespace="default",
+    table="events_analytics"
+)
+```
+
+### How it Works
+When you load a table from Hive, HyperStreamDB:
+1.  Queries the HMS for the `metadata_location` parameter in the table properties.
+2.  Loads the corresponding Iceberg manifest from storage (S3/GCS/FS).
+3.  On `commit()`, it writes a new manifest version and atomically updates the `metadata_location` in HMS using a CAS (Compare-and-Swap) operation on the backend database.
+
+---
+
+## 2. Project Nessie
+
+Nessie provides Git-like semantics for your data lake, allowing you to branch and merge table states.
+
+### Setup
+Run Nessie locally via Docker:
 ```bash
 docker run -p 19120:19120 projectnessie/nessie
 ```
 
-The Nessie API will be available at `http://localhost:19120`.
-
-## 2. Python API Overview
-
-HyperStreamDB exposes the `PyNessieCatalog` class for interacting with the catalog.
-
-### Initialization
-
+### Python API
 ```python
-import hyperstreamdb as hdb
+# Connect to Nessie
+catalog = hdb.NessieCatalog("http://localhost:19120")
 
-# Connect to local Nessie instance
-catalog = hdb.PyNessieCatalog("http://localhost:19120")
-```
+# Create a branch for experimentation
+catalog.create_branch("etl-job-v2", source_ref="main")
 
-### creating a Table (Iceberg-compatible)
-
-To create a table, you need to define its schema and provide a location. Note that in Nessie, tables are tracked on specific **branches** (default is `main`).
-
-```python
-import json
-
-# Define Schema (Iceberg JSON format)
-schema_json = json.dumps({
-    "type": "struct",
-    "schema-id": 0,
-    "fields": [
-        {"id": 0, "name": "user_id", "type": "int", "required": True},
-        {"id": 1, "name": "event_ts", "type": "timestamp", "required": False},
-        {"id": 2, "name": "value", "type": "double", "required": False}
-    ]
-})
-
-# Create Table on 'main' branch
-# Note: For S3 usage, location would be "s3://my-bucket/tables/events"
-catalog.create_table(
-    branch="main",
-    table_name="events",
-    location="file:///tmp/hyperstream/events", 
-    schema_json=schema_json
+# Load table from the specific branch
+table = hdb.Table.from_nessie(
+    "http://localhost:19120", 
+    namespace="prod", 
+    table="users",
+    ref="etl-job-v2"
 )
 ```
 
-### Writing Data
+---
 
-Currently, writes are performed directly via `PyTable` or `PyWriter`. The catalog integration tracks the *metadata* pointers.
+## 3. AWS Glue Catalog
 
+For AWS users, the Glue Data Catalog provides a managed, serverless metadata store.
+
+### Usage
 ```python
-import pandas as pd
-
-# 1. Connect to the table location directly for writing
-# (Future versions will load configuration from Catalog)
-table = hdb.PyTable("file:///tmp/hyperstream/events")
-
-# 2. Write Data
-df = pd.DataFrame({
-    "user_id": [1, 2, 3],
-    "value": [10.5, 20.0, 15.2]
-})
-table.write_pandas(df)
-
-# Note: Automatic committing to Nessie is not yet transparently hooked into 'write_pandas'.
-# In the current phase, you manage the data writes and catalog commits separately or use the forthcoming 'transaction' API.
-```
-
-### Branching
-
-You can create branches to isolate changes (e.g., for ETL jobs or testing).
-
-```python
-# Create 'dev' branch from 'main'
-catalog.create_branch("dev", source_ref="main")
-
-# Now you can create tables or commit changes to 'dev' without affecting 'main'
-catalog.create_table(
-    branch="dev", 
-    table_name="experimental_table",
-    location="...",
-    schema_json=schema_json
+# HyperStreamDB uses your local AWS credentials (IAM/Env)
+table = hdb.Table.from_glue(
+    namespace="production_db", 
+    table="clickstream_data"
 )
 ```
 
-### Time Travel / Reading Specific References
+---
 
-The `PyReader` supports reading from specific table locations. The Catalog is used to *resolve* which location (snapshot) corresponds to a specific branch or time.
+## 4. Iceberg REST Catalog
 
-*(Note: Full `load_table` resolution logic is currently being finalized in Phase 2)*.
+The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, HyperStreamDB).
 
-## 3. Example Workflow
+### Usage
+```python
+table = hdb.Table.from_rest(
+    url="https://api.tabular.io/v1/",
+    namespace="marketing",
+    table="campaign_results",
+    token="YOUR_OAUTH_TOKEN"  # Optional OAuth2 token
+)
+```
 
-1.  **Ingest**: ETL job writes raw data to `raw_data` table on `main`.
-2.  **Branch**: Data Scientist creates `experiment-1` branch from `main`.
-3.  **Tests**: DS modifies data or merges new segments on `experiment-1`.
-4.  **Validate**: Verify results on branch.
-5.  **Merge**: (Upcoming) Merge `experiment-1` back to `main`.
+---
+
+## Next Steps
+More detailed guides for authentication (Kerberos, OAuth2, IAM Roles) and advanced branching workflows are coming in future releases.
