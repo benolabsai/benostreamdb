@@ -200,7 +200,8 @@ impl Table {
         self._validate_pk_uniqueness(&next_ids, &latest_schema).await?;
         
         // Atomic commit to manifest
-        self.manifest_manager.update_identifier_fields(next_ids).await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        manifest_manager.update_identifier_fields(next_ids).await?;
         
         // Update in-memory state
         let mut pk = self.primary_key.write().unwrap();
@@ -222,10 +223,11 @@ impl Table {
             .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
 
         let mut next_ids = latest_schema.identifier_field_ids.clone();
-        next_ids.retain(|id| *id != field_id);
-        
+        next_ids.retain(|id| id != &field_id);
+
         // Atomic commit to manifest
-        self.manifest_manager.update_identifier_fields(next_ids).await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        manifest_manager.update_identifier_fields(next_ids).await?;
 
         // Update in-memory state
         let mut pk = self.primary_key.write().unwrap();
@@ -241,7 +243,7 @@ impl Table {
             
         // For now, we perform a scan to check for duplicates. 
         // In a production environment, this could be optimized using indexes.
-        let mut batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
+        let batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
         
         // We use a HashSet of combined row values to detect duplicates
         let mut seen = std::collections::HashSet::new();
