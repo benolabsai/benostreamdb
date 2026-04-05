@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -164,7 +164,7 @@ features = ["invocation"]
 [dependencies.pyo3]
 version = "0.26.0"
 optional = true
-features = ["extension-module"]
+features = ["extension-module", "abi3-py310"]
 
 [dependencies.numpy]
 version = "0.26.0"

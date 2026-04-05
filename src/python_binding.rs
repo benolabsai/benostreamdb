@@ -459,19 +459,43 @@ impl PyTable {
         self.table.get_index_all()
     }
 
-    /// Set indexing configuration for a specific column
-    #[pyo3(signature = (column, enabled=true, tokenizer=None, device=None))]
-    fn set_index_config(&mut self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
-        self.table.set_index_config(column, enabled, tokenizer, device);
-    }
-
-    /// Set default device for all future indexes in this table
     fn set_primary_key(&mut self, columns: Vec<String>) {
         self.table.set_primary_key(columns);
     }
 
     fn get_primary_key(&self) -> Vec<String> {
         self.table.get_primary_key()
+    }
+
+    /// Add a column to the primary key.
+    fn add_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.query_pool.block_on(self.table.add_primary_key(column))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Remove a column from the primary key.
+    fn drop_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.query_pool.block_on(self.table.drop_primary_key(column))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Set indexing configuration for a specific column
+    #[pyo3(signature = (column, enabled=true, tokenizer=None, device=None))]
+    fn set_index_config(&mut self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
+        self.table.set_index_config(column, enabled, tokenizer, device);
+    }
+
+    /// Add an index to a column (convenience wrapper)
+    #[pyo3(signature = (column, tokenizer=None, device=None))]
+    fn add_index(&mut self, column: String, tokenizer: Option<String>, device: Option<String>) {
+        self.table.add_index(column, tokenizer, device);
+    }
+
+    /// Drop an index from a column (convenience wrapper)
+    fn drop_index(&mut self, column: String) {
+        self.table.drop_index(column);
     }
 
     /// Set default device for all future indexes in this table
