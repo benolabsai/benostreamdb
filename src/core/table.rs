@@ -166,6 +166,104 @@ impl Table {
             cols.retain(|c| c != &column);
         }
     }
+
+    /// Convenience wrapper for set_index_config (enabled=true)
+    pub fn add_index(&self, column: String, tokenizer: Option<String>, device: Option<String>) {
+        self.set_index_config(column, true, tokenizer, device);
+    }
+
+    /// Convenience wrapper for set_index_config (enabled=false)
+    pub fn drop_index(&self, column: String) {
+        self.set_index_config(column, false, None, None);
+    }
+
+    /// Add a column to the primary key. 
+    /// This is an atomic operation that commits a new manifest version.
+    /// Validation: Ensures no duplicate keys exist for the new definition.
+    pub async fn add_primary_key(&self, column: String) -> Result<()> {
+        let manifest = self.manifest().await?;
+        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        
+        // Find field ID for column
+        let field_id = latest_schema.fields.iter()
+            .find(|f| f.name == column)
+            .map(|f| f.id)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
+
+        let mut next_ids = latest_schema.identifier_field_ids.clone();
+        if next_ids.contains(&field_id) {
+            return Ok(()); // Already in PK
+        }
+        next_ids.push(field_id);
+        
+        // Validate uniqueness before committing
+        self._validate_pk_uniqueness(&next_ids, &latest_schema).await?;
+        
+        // Atomic commit to manifest
+        self.manifest_manager.update_identifier_fields(next_ids).await?;
+        
+        // Update in-memory state
+        let mut pk = self.primary_key.write().unwrap();
+        if !pk.contains(&column) {
+            pk.push(column);
+        }
+        Ok(())
+    }
+
+    /// Remove a column from the primary key.
+    /// This is an atomic operation that commits a new manifest version.
+    pub async fn drop_primary_key(&self, column: String) -> Result<()> {
+        let manifest = self.manifest().await?;
+        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        
+        let field_id = latest_schema.fields.iter()
+            .find(|f| f.name == column)
+            .map(|f| f.id)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
+
+        let mut next_ids = latest_schema.identifier_field_ids.clone();
+        next_ids.retain(|id| *id != field_id);
+        
+        // Atomic commit to manifest
+        self.manifest_manager.update_identifier_fields(next_ids).await?;
+
+        // Update in-memory state
+        let mut pk = self.primary_key.write().unwrap();
+        pk.retain(|c| c != &column);
+        Ok(())
+    }
+
+    /// Internal helper to validate that a set of field IDs form a unique key across existing data.
+    async fn _validate_pk_uniqueness(&self, field_ids: &[i32], schema: &crate::core::manifest::Schema) -> Result<()> {
+        let col_names: Vec<String> = field_ids.iter()
+            .map(|id| schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap())
+            .collect();
+            
+        // For now, we perform a scan to check for duplicates. 
+        // In a production environment, this could be optimized using indexes.
+        let mut batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
+        
+        // We use a HashSet of combined row values to detect duplicates
+        let mut seen = std::collections::HashSet::new();
+        
+        for batch in batches {
+            for row_idx in 0..batch.num_rows() {
+                // Generate a stable key for the row values across the PK columns
+                let mut row_key = Vec::new();
+                for col_idx in 0..batch.num_columns() {
+                    let col = batch.column(col_idx);
+                    // Use Display/Debug representation as a simple stable key for now
+                    row_key.push(format!("{:?}", col.slice(row_idx, 1)));
+                }
+                
+                if !seen.insert(row_key) {
+                    return Err(anyhow::anyhow!("Primary key violation detected for columns {:?}: Duplicate row values found.", col_names));
+                }
+            }
+        }
+        
+        Ok(())
+    }
 }
 
 // ============================================================================
