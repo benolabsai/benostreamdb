@@ -282,7 +282,7 @@ jobs:
         run: |
           if ! cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> publish_err.log; then
             cat publish_err.log
-            if grep -qi "already uploaded" publish_err.log; then
+            if grep -qi "already exists on crates.io" publish_err.log; then
               echo "Version already exists on crates.io, safely continuing."
               exit 0
             else
