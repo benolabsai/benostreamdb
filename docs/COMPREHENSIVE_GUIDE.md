@@ -145,7 +145,7 @@ See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for complete documentation.
 
 ### 3.2 Hardware Acceleration
 The indexing engine supports hardware acceleration for multiple backends:
-*   **CUDA**: NVIDIA GPUs (Linux/Windows)
+*   **CUDA**: NVIDIA GPUs (Linux, Windows via WSL2)
 *   **Metal**: Apple Silicon (MPS)
 *   **ROCm**: AMD GPUs
 *   **Intel**: AVX-512 optimizations

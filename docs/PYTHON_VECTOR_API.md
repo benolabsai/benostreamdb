@@ -23,10 +23,10 @@ The API supports six distance metrics:
 
 | Backend | Hardware | Platform | Status |
 |---------|----------|----------|--------|
-| **CUDA** | NVIDIA GPUs | Linux, Windows | ✅ Supported |
+| **CUDA** | NVIDIA GPUs | Linux, WSL2 | ✅ Supported |
 | **ROCm** | AMD GPUs | Linux | ✅ Supported |
 | **Metal (MPS)** | Apple Silicon | macOS | ✅ Supported |
-| **OpenCL** | Intel GPUs | Linux, Windows | ✅ Supported |
+| **OpenCL** | Intel GPUs | Linux, WSL2 | ✅ Supported |
 | **CPU** | All platforms | Fallback | ✅ Always available |
 
 ### Backend Priority
@@ -68,10 +68,11 @@ nvidia-smi
 nvcc --version
 ```
 
-**Installation (Windows):**
-1. Download CUDA Toolkit from [NVIDIA website](https://developer.nvidia.com/cuda-downloads)
-2. Run installer and follow prompts
-3. Verify with `nvidia-smi` in Command Prompt
+**Installation (Windows via WSL2):**
+1. Install WSL2 and a Linux distribution (e.g., Ubuntu 22.04)
+2. Install NVIDIA drivers on the Windows host
+3. Install NVIDIA Container Toolkit or the CUDA Toolkit within WSL2
+4. Follow the Linux installation instructions above within your WSL2 environment
 
 #### AMD ROCm
 
@@ -115,7 +116,7 @@ print(ctx.backend)  # Should show "mps" on Apple Silicon
 **Requirements:**
 - Intel GPU (Iris Xe or newer recommended)
 - Intel Graphics Driver with OpenCL support
-- Linux or Windows
+- Linux or WSL2
 
 **Installation (Linux):**
 ```bash
@@ -126,9 +127,8 @@ sudo apt-get install intel-opencl-icd
 clinfo
 ```
 
-**Installation (Windows):**
-- Install latest Intel Graphics Driver from [Intel website](https://www.intel.com/content/www/us/en/download-center/home.html)
-- OpenCL support is included in modern drivers
+**Installation (Windows via WSL2):**
+- Users on Windows should install Intel OpenCL runtimes within their WSL2 distribution.
 
 ## Quick Start
 

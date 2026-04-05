@@ -9,7 +9,7 @@ HyperStreamDB supports GPU acceleration for vector distance computations across 
 - **NVIDIA CUDA** - For NVIDIA GPUs (GeForce, Quadro, Tesla)
 - **AMD ROCm** - For AMD Radeon GPUs
 - **Apple Metal (MPS)** - For Apple Silicon Macs
-- **Intel OpenCL** - For Intel integrated and discrete GPUs
+- **Intel OpenCL** - For Intel integrated and discrete GPUs (Linux, WSL2)
 
 GPU acceleration provides 10x+ speedup for batch distance operations on large vector databases (100,000+ vectors).
 
@@ -69,15 +69,16 @@ nvidia-smi
 nvcc --version
 ```
 
-### Installation on Windows
+### Installation on Windows (via WSL2)
 
-1. Download CUDA Toolkit from [NVIDIA website](https://developer.nvidia.com/cuda-downloads)
-2. Run the installer (cuda_12.3.0_windows.exe)
-3. Follow the installation wizard
-4. Verify installation:
-   ```cmd
+Windows users should use **WSL2** (Windows Subsystem for Linux) to run HyperStreamDB with GPU support.
+
+1. Install WSL2 and Ubuntu (e.g., `wsl --install -d Ubuntu-22.04`)
+2. Install NVIDIA Windows Driver (this provides the necessary kernel-mode interface for WSL2)
+3. Within the WSL2 Ubuntu environment, follow the **Linux installation** instructions above.
+4. Verify from within WSL:
+   ```bash
    nvidia-smi
-   nvcc --version
    ```
 
 ### Verification
@@ -236,7 +237,7 @@ print(f"Computed {len(distances)} distances on Apple GPU")
 - **GPU**: Intel Iris Xe or newer (integrated or discrete)
   - Recommended: Arc A-series discrete GPUs
 - **Driver**: Intel Graphics Driver with OpenCL support
-- **OS**: Linux or Windows
+- **OS**: Linux or WSL2 (Windows with WSL2)
 
 ### Supported GPUs
 
@@ -260,12 +261,9 @@ sudo apt-get install opencl-headers
 clinfo
 ```
 
-### Installation on Windows
+### Installation on Windows (via WSL2)
 
-1. Download latest Intel Graphics Driver from [Intel Download Center](https://www.intel.com/content/www/us/en/download-center/home.html)
-2. Run the installer
-3. OpenCL support is included in modern Intel drivers
-4. Verify with `clinfo` (install from [GitHub](https://github.com/Oblomov/clinfo))
+Windows users should install the Intel OpenCL runtime within their WSL2 distribution following the Linux installation steps above. 
 
 ### Verification
 
