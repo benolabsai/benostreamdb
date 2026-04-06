@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "hyperstreamdb"
-version = "0.1.11"
+version = "0.1.12"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,9 +44,9 @@ dev = [
 mps = []   # Apple Silicon (Metal)
 cuda = []  # NVIDIA (CUDA)
 rocm = []  # AMD (via OpenCL/ROCm)
-intel_gpu = [] # Intel (OpenCL)
+intel = [] # Intel (OpenCL)
 intel_cpu = [] # Intel (SIMD/AVX2)
-all_gpu = ["mps", "cuda", "rocm", "intel_gpu"]
+all_gpu = ["mps", "cuda", "rocm", "intel"]
 src = ["maturin>=1.7"]
 
 [project.urls]
@@ -56,7 +56,7 @@ Repository = "https://github.com/rla3rd/hyperstreamdb"
 [tool.maturin]
 features = ["python"]
 # Map Python extras to Rust features
-extra-features = { mps = ["mps"], cuda = ["cuda"], rocm = ["rocm"], intel_gpu = ["intel_gpu"], intel_cpu = ["intel_cpu"] }
+extra-features = { mps = ["mps"], cuda = ["cuda"], rocm = ["rocm"], intel = ["intel"], intel_cpu = ["intel_cpu"] }
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings (multi-version compatible)
