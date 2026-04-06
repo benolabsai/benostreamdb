@@ -11,10 +11,22 @@ sys.path.insert(0, os.path.abspath('../../python'))
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
+# Read version from Cargo.toml (single source of truth)
+_cargo_toml = os.path.join(os.path.dirname(__file__), '..', '..', 'Cargo.toml')
+try:
+    import tomllib
+    with open(_cargo_toml, 'rb') as f:
+        _cargo = tomllib.load(f)
+    release = _cargo['package']['version']
+except ModuleNotFoundError:
+    import re
+    with open(_cargo_toml, 'r') as f:
+        _match = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.MULTILINE)
+    release = _match.group(1) if _match else '0.0.0'
+
 project = 'HyperStreamDB'
 copyright = '2026, HyperStream Team'
 author = 'HyperStream Team'
-release = '0.1.11'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

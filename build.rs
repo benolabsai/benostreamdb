@@ -17,41 +17,45 @@ fn main() {
     fs::write(&version_file, format!(r#"pub const VERSION: &str = "{}";"#, version))
         .expect("Failed to write version.rs");
     
-    #[cfg(feature = "cuda")]
-    {
-        let out_dir = env::var("OUT_DIR").unwrap();
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    
+    if target_os == "macos" {
+        println!("cargo:rustc-cfg=feature=\"mps\"");
+    } else {
+        // Auto-detect CUDA, ROCm, or fallback to Intel OpenCL
+        let has_nvcc = Command::new("nvcc").arg("--version").output().is_ok();
         
-        // Check if nvcc is available
-        let status = Command::new("nvcc").arg("--version").output();
-        if status.is_err() {
-            println!("cargo:warning=nvcc not found, skipping CUDA kernel compilation");
-            return;
-        }
+        if has_nvcc {
+            println!("cargo:rustc-cfg=feature=\"cuda\"");
+            
+            let out_dir = env::var("OUT_DIR").unwrap();
+            let kernels = vec![
+                "l2_distance",
+                "cosine_distance",
+                "inner_product",
+                "l1_distance",
+                "hamming_distance",
+                "jaccard_distance",
+                "kmeans_assignment",
+            ];
 
-        // List of CUDA kernels to compile
-        let kernels = vec![
-            "l2_distance",
-            "cosine_distance",
-            "inner_product",
-            "l1_distance",
-            "hamming_distance",
-            "jaccard_distance",
-            "kmeans_assignment",
-        ];
+            for kernel_name in kernels {
+                let kernel_src = format!("src/core/index/cuda/{}.cu", kernel_name);
+                let kernel_ptx = format!("{}/{}.ptx", out_dir, kernel_name);
 
-        // Compile each kernel
-        for kernel_name in kernels {
-            let kernel_src = format!("src/core/index/cuda/{}.cu", kernel_name);
-            let kernel_ptx = format!("{}/{}.ptx", out_dir, kernel_name);
+                let status = Command::new("nvcc")
+                    .args(&["-ptx", &kernel_src, "-o", &kernel_ptx])
+                    .status()
+                    .expect(&format!("Failed to execute nvcc for {}", kernel_name));
 
-            let status = Command::new("nvcc")
-                .args(&["-ptx", &kernel_src, "-o", &kernel_ptx])
-                .status()
-                .expect(&format!("Failed to execute nvcc for {}", kernel_name));
-
-            if !status.success() {
-                panic!("nvcc failed for {}", kernel_name);
+                if !status.success() {
+                    panic!("nvcc failed for {}", kernel_name);
+                }
             }
+        } else if Command::new("rocminfo").output().is_ok() {
+            println!("cargo:rustc-cfg=feature=\"rocm\"");
+        } else {
+            println!("cargo:rustc-cfg=feature=\"intel\"");
         }
     }
 }
