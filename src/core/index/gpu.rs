@@ -54,14 +54,14 @@ impl ComputeContext {
             },
             
             ComputeBackend::Mps => {
-                #[cfg(all(target_os = "macos", feature = "mps"))]
+                #[cfg(target_os = "macos")]
                 return true; 
-                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                #[cfg(not(target_os = "macos"))]
                 false
             },
 
             ComputeBackend::Intel => {
-                #[cfg(feature = "intel")]
+                // opencl3 is always available
                 {
                     use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
                     if let Ok(devices) = get_all_devices(CL_DEVICE_TYPE_GPU) {
@@ -80,7 +80,7 @@ impl ComputeContext {
             },
 
             ComputeBackend::Rocm => {
-                #[cfg(feature = "rocm")]
+                // opencl3 is always available
                 {
                     use opencl3::device::{get_all_devices, Device, CL_DEVICE_TYPE_GPU};
                     if let Ok(devices) = get_all_devices(CL_DEVICE_TYPE_GPU) {
@@ -109,19 +109,19 @@ impl ComputeContext {
             if ctx.is_available() { return ctx; }
         }
         
-        #[cfg(all(target_os = "macos", feature = "mps"))]
+        #[cfg(target_os = "macos")]
         {
             let ctx = Self { backend: ComputeBackend::Mps, device_id: 0 };
             if ctx.is_available() { return ctx; }
         }
 
-        #[cfg(feature = "intel")]
+        // opencl3 is always available
         {
             let ctx = Self { backend: ComputeBackend::Intel, device_id: 0 };
             if ctx.is_available() { return ctx; }
         }
 
-        #[cfg(feature = "rocm")]
+        // opencl3 is always available
         {
             let ctx = Self { backend: ComputeBackend::Rocm, device_id: 0 };
             if ctx.is_available() { return ctx; }
@@ -407,7 +407,7 @@ fn compute_cuda(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
 
 #[allow(unused_variables)]
 fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
-    #[cfg(feature = "rocm")]
+    // opencl3 is always available
     {
         // Try ROCm, fall back to CPU if not available
         match compute_opencl(query, vectors, dim, metric, Some("AMD")) {
@@ -418,43 +418,38 @@ fn compute_rocm(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric
             }
         }
     }
-    #[cfg(not(feature = "rocm"))]
-    {
-        // Fall back to CPU if ROCm feature is not enabled
-        compute_cpu(query, vectors, dim, metric)
-    }
 }
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_KMEANS: &str = include_str!("mps/kmeans_assignment.metal");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_L2: &str = include_str!("mps/l2_distance.metal");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_COSINE: &str = include_str!("mps/cosine_distance.metal");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_INNER_PRODUCT: &str = include_str!("mps/inner_product.metal");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_L1: &str = include_str!("mps/l1_distance.metal");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
 
 #[cfg(feature = "cuda")]
 static CUDA_KMEANS: &str = include_str!(concat!(env!("OUT_DIR"), "/kmeans_assignment.ptx"));
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_JACCARD: &str = include_str!("mps/jaccard_distance.metal");
 
 #[allow(unused_variables)]
 fn compute_mps(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
-    #[cfg(all(target_os = "macos", feature = "mps"))]
+    #[cfg(target_os = "macos")]
     {
         use metal::*;
         use std::mem;
@@ -568,32 +563,32 @@ fn compute_mps(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric)
         }
     }
 
-    #[cfg(not(all(target_os = "macos", feature = "mps")))]
+    #[cfg(not(target_os = "macos"))]
     {
         // Fallback to CPU for tests on non-macOS
         compute_cpu(query, vectors, dim, metric)
     }
 }
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_L2: &str = include_str!("opencl/l2_distance.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_COSINE: &str = include_str!("opencl/cosine_distance.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_INNER_PRODUCT: &str = include_str!("opencl/inner_product.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_L1: &str = include_str!("opencl/l1_distance.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_HAMMING: &str = include_str!("opencl/hamming_distance.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 static OPENCL_SRC_JACCARD: &str = include_str!("opencl/jaccard_distance.cl");
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 fn compute_opencl(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, _platform_filter: Option<&str>) -> Result<Vec<f32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -675,7 +670,7 @@ fn compute_opencl(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetr
 
 #[allow(unused_variables)]
 fn compute_intel(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
-    #[cfg(feature = "intel")]
+    // opencl3 is always available
     {
         // Try Intel GPU, fall back to CPU if not available
         match compute_opencl(query, vectors, dim, metric, Some("Intel")) {
@@ -686,11 +681,6 @@ fn compute_intel(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetri
                 compute_cpu(query, vectors, dim, metric)
             }
         }
-    }
-    #[cfg(not(feature = "intel"))]
-    {
-        // Fall back to CPU if Intel GPU feature is not enabled
-        compute_cpu(query, vectors, dim, metric)
     }
 }
 
@@ -814,7 +804,7 @@ fn compute_cuda_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vector
 /// ROCm batch implementation (uses OpenCL with chunking)
 #[allow(unused_variables)]
 fn compute_rocm_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, context: &ComputeContext) -> Result<Vec<f32>> {
-    #[cfg(feature = "rocm")]
+    // opencl3 is always available
     {
         // Try ROCm batch, fall back to CPU if not available
         match compute_opencl_batch(query, vectors, dim, metric, Some("AMD"), context) {
@@ -825,17 +815,12 @@ fn compute_rocm_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vector
             }
         }
     }
-    #[cfg(not(feature = "rocm"))]
-    {
-        // Fall back to CPU if ROCm feature is not enabled
-        compute_cpu(query, vectors, dim, metric)
-    }
 }
 
 /// MPS batch implementation with chunked processing
 #[allow(unused_variables)]
 fn compute_mps_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, context: &ComputeContext) -> Result<Vec<f32>> {
-    #[cfg(all(target_os = "macos", feature = "mps"))]
+    #[cfg(target_os = "macos")]
     {
         use metal::*;
         use std::mem;
@@ -944,7 +929,7 @@ fn compute_mps_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorM
         Ok(all_distances)
     }
     
-    #[cfg(not(all(target_os = "macos", feature = "mps")))]
+    #[cfg(not(target_os = "macos"))]
     {
         // Fallback to CPU for tests on non-macOS
         compute_cpu(query, vectors, dim, metric)
@@ -952,7 +937,7 @@ fn compute_mps_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorM
 }
 
 /// OpenCL batch implementation with chunked processing
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, platform_filter: Option<&str>, _context: &ComputeContext) -> Result<Vec<f32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -1079,7 +1064,7 @@ fn compute_opencl_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
 /// Intel GPU batch implementation (uses OpenCL with chunking)
 #[allow(unused_variables)]
 fn compute_intel_batch(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric, context: &ComputeContext) -> Result<Vec<f32>> {
-    #[cfg(feature = "intel")]
+    // opencl3 is always available
     {
         // Try Intel GPU batch, fall back to CPU if not available
         match compute_opencl_batch(query, vectors, dim, metric, Some("Intel"), context) {
@@ -1089,11 +1074,6 @@ fn compute_intel_batch(query: &[f32], vectors: &[f32], dim: usize, metric: Vecto
                 compute_cpu(query, vectors, dim, metric)
             }
         }
-    }
-    #[cfg(not(feature = "intel"))]
-    {
-        // Fall back to CPU if Intel GPU feature is not enabled
-        compute_cpu(query, vectors, dim, metric)
     }
 }
 
@@ -1192,7 +1172,7 @@ mod tests {
         }
         
         // Test with MPS backend (will fall back to CPU for non-L2 metrics)
-        #[cfg(all(target_os = "macos", feature = "mps"))]
+        #[cfg(target_os = "macos")]
         {
             let context = ComputeContext { backend: ComputeBackend::Mps, device_id: 0 };
             
@@ -1517,7 +1497,7 @@ mod property_tests {
                 }
             }
             
-            #[cfg(all(target_os = "macos", feature = "mps"))]
+            #[cfg(target_os = "macos")]
             {
                 let mps_context = ComputeContext { backend: ComputeBackend::Mps, device_id: 0 };
                 
@@ -1540,7 +1520,7 @@ mod property_tests {
                 }
             }
             
-            #[cfg(feature = "rocm")]
+            // opencl3 is always available
             {
                 let rocm_context = ComputeContext { backend: ComputeBackend::Rocm, device_id: 0 };
                 
@@ -1563,7 +1543,7 @@ mod property_tests {
                 }
             }
             
-            #[cfg(feature = "intel")]
+            // opencl3 is always available
             {
                 let intel_context = ComputeContext { backend: ComputeBackend::Intel, device_id: 0 };
                 
@@ -1630,7 +1610,7 @@ fn compute_kmeans_assignment_cpu(vectors: &[f32], centroids: &[f32], dim: usize)
     Ok(labels)
 }
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
     use metal::*;
     use std::mem;
@@ -1693,7 +1673,7 @@ fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize)
     }
 }
 
-#[cfg(not(all(target_os = "macos", feature = "mps")))]
+#[cfg(not(target_os = "macos"))]
 fn compute_kmeans_assignment_mps(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
     compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }
@@ -1739,7 +1719,7 @@ fn compute_kmeans_assignment_cuda(vectors: &[f32], centroids: &[f32], dim: usize
     compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
+// opencl3 is always available
 fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, platform_filter: Option<&str>) -> Result<Vec<u32>> {
     use opencl3::command_queue::{CommandQueue, CL_BLOCKING};
     use opencl3::context::Context;
@@ -1791,9 +1771,4 @@ fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usi
         queue.enqueue_read_buffer(&d_labels, CL_BLOCKING, 0, &mut labels, &[])?;
         Ok(labels)
     }
-}
-
-#[cfg(not(any(feature = "intel", feature = "rocm")))]
-fn compute_kmeans_assignment_opencl(vectors: &[f32], centroids: &[f32], dim: usize, _pf: Option<&str>) -> Result<Vec<u32>> {
-    compute_kmeans_assignment_cpu(vectors, centroids, dim)
 }
