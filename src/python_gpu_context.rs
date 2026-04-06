@@ -45,25 +45,23 @@ impl PyDevice {
                 #[cfg(feature = "cuda")]
                 { ComputeBackend::Cuda }
                 #[cfg(not(feature = "cuda"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'cuda' not available. Build with 'cuda' feature.")); }
+                { return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "CUDA backend not available. Install from source with: pip install hyperstreamdb[cuda] --no-binary :all:"
+                )); }
             }
             "mps" | "metal" => {
-                #[cfg(feature = "mps")]
+                #[cfg(target_os = "macos")]
                 { ComputeBackend::Mps }
-                #[cfg(not(feature = "mps"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'mps' not available. Build with 'mps' feature.")); }
+                #[cfg(not(target_os = "macos"))]
+                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'mps' is only available on macOS.")); }
             }
             "intel" | "opencl" | "graphics" => {
-                #[cfg(feature = "intel")]
-                { ComputeBackend::Intel }
-                #[cfg(not(feature = "intel"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'intel' not available. Build with 'intel' feature (requires opencl3).")); }
+                // opencl3 is always available
+                ComputeBackend::Intel
             }
             "rocm" => {
-                #[cfg(feature = "rocm")]
-                { ComputeBackend::Rocm }
-                #[cfg(not(feature = "rocm"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'rocm' not available. Build with 'rocm' feature.")); }
+                // opencl3 is always available
+                ComputeBackend::Rocm
             }
             _ => {
                 return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown device type '{}'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm'", backend_str)));

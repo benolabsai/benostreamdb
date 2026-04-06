@@ -17,9 +17,6 @@ cffi==2.0.0
 charset-normalizer==3.4.7
 click==8.3.2
 comm==0.2.3
-cuda-bindings==13.2.0
-cuda-pathfinder==1.5.1
-cuda-toolkit==13.0.2
 datasets==4.8.4
 debugpy==1.8.20
 decorator==5.2.1
@@ -36,7 +33,6 @@ hf-xet==1.4.3
 httpcore==1.0.9
 httpx==0.28.1
 huggingface_hub==1.9.0
--e git+ssh://git@github.com/rla3rd/hyperstreamdb.git@16fedeaed178ed978dd0a642685155576f224742#egg=hyperstreamdb
 hypothesis==6.151.10
 idna==3.11
 iniconfig==2.3.0

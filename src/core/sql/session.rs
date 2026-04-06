@@ -26,28 +26,29 @@ impl HyperStreamSession {
         
         let runtime = Arc::new(RuntimeEnv::default());
         
-        let mut state_builder = SessionStateBuilder::new()
+        let state_builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
             .with_default_features()
             .with_physical_optimizer_rule(Arc::new(IndexJoinOptimizerRule::default()))
             .with_physical_optimizer_rule(Arc::new(crate::core::sql::optimizer::VectorSearchOptimizerRule::default()));
             
-        // Register Vector UDFs
-        let udfs = vector_udf::all_vector_udfs();
-        state_builder = state_builder.with_scalar_functions(
-            udfs.into_iter().map(Arc::new).collect()
-        );
-        
-        // Register Vector Aggregates
-        let aggregates = vector_udf::all_vector_aggregates();
-        state_builder = state_builder.with_aggregate_functions(
-            aggregates.into_iter().map(Arc::new).collect()
-        );
-
         let state = state_builder.build();
-        
         let mut ctx = SessionContext::new_with_state(state);
+        
+        // Register standard functions (now that we've added the crates to Cargo.toml)
+        datafusion_functions::register_all(&mut ctx).expect("Failed to register standard functions");
+        datafusion_functions_aggregate::register_all(&mut ctx).expect("Failed to register standard aggregates");
+        
+        // Add Vector Scalar Functions (Additive registration)
+        for udf in vector_udf::all_vector_udfs() {
+            ctx.register_udf(udf);
+        }
+
+        // Add Vector Aggregate Functions (Additive registration via register_udaf in DF 52)
+        for udf in vector_udf::all_vector_aggregates() {
+            ctx.register_udaf(udf);
+        }
         
         // Register vector operators (validates UDFs are present)
         crate::core::sql::vector_operators::register_vector_operators(&mut ctx)
@@ -63,9 +64,15 @@ impl HyperStreamSession {
     }
 
     pub async fn sql(&self, query: &str) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef)> {
-        // Parse the SQL query and execute directly
-        // Note: pgvector rewriter temporarily disabled due to schema mismatch issues
-        let df = self.ctx.sql(query).await?;
+        // Parse the SQL query to get a logical plan
+        let plan = self.ctx.state().create_logical_plan(query).await?;
+        
+        // Rewrite the plan to convert pgvector syntax to UDF calls
+        let rewritten_plan = crate::core::sql::pgvector_rewriter::rewrite_pgvector_plan(plan)?;
+        
+        // Execute the rewritten logical plan
+        let df = self.ctx.execute_logical_plan(rewritten_plan).await?;
+        
         let schema: arrow::datatypes::SchemaRef = std::sync::Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;
         Ok((batches, schema))

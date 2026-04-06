@@ -19,9 +19,10 @@ The JNI layer acts as a bridge between the JVM and the Rust core. It avoids the 
 ## Shared Library
 
 The core logic is compiled into a dynamic library:
-*   `libhyperstreamdb.so` (Linux)
+*   `libhyperstreamdb.so` (Linux, WSL2)
 *   `libhyperstreamdb.dylib` (macOS)
-*   `hyperstreamdb.dll` (Windows)
+
+Note: Native Windows `.dll` builds are no longer supported. Windows users should use WSL2.
 
 This library is packed into the JARs for Trino and Spark connectors.
 
