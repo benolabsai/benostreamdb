@@ -142,43 +142,14 @@ jobs:
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
           fi
-      - name: Install OpenCL headers and ICD
-        run: sudo apt-get update && sudo apt-get install -y ocl-icd-opencl-dev
-      - name: Create cross-compilation stubs
-        run: |
-          # Create a platform-specific stub dir
-          mkdir -p /tmp/stubs
-          
-          if [ "${{ matrix.target }}" = "x86_64" ]; then
-            ZIG_TARGET="x86_64-linux-gnu.2.17"
-          else
-            ZIG_TARGET="aarch64-linux-gnu.2.17"
-          fi
-          
-          echo "Building stubs for $ZIG_TARGET"
-          
-          # 1. Create OpenCL stub (with more common symbols)
-          echo 'void clGetPlatformIDs() {} void clGetDeviceIDs() {} void clCreateContext() {}' > /tmp/stubs/opencl_stub.c
-          zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libOpenCL.so /tmp/stubs/opencl_stub.c
-          ln -sf libOpenCL.so /tmp/stubs/libOpenCL.so.1
-          
-          # 2. Create CUDA stub
-          echo 'void cuInit() {} void cuDeviceGet() {} void cuCtxCreate_v2() {}' > /tmp/stubs/cuda_stub.c
-          zig cc -target $ZIG_TARGET -shared -o /tmp/stubs/libcuda.so /tmp/stubs/cuda_stub.c
-          ln -sf libcuda.so /tmp/stubs/libcuda.so.1
-          
-          ls -la /tmp/stubs/
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
-        env:
-          # Use our clean, architecture-correct stubs exclusively
-          RUSTFLAGS: -L /tmp/stubs
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --features python,intel,cuda --zig
+          args: --release --out dist --find-interpreter --features python --zig
           sccache: 'false'
           manylinux: auto
       - name: Upload wheels
