@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "hyperstreamdb"
-version = "0.1.11"
+dynamic = ["version"]
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.10"

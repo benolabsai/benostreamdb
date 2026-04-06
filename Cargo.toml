@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -36,10 +36,6 @@ required-features = ["java"]
 [features]
 default = ["candle"]
 candle = []
-cuda = ["dep:cust", "intel"]
-rocm = ["dep:opencl3", "intel"] # Fallback to OpenCL for now
-mps = ["metal"]
-intel = ["dep:opencl3"]
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize"]
 java = ["dep:jni"]
@@ -84,10 +80,7 @@ aws-sdk-glue = "1.0"
 volo-thrift = "0.10"
 pilota = "0.11"
 
-# Hardware Acceleration
-cust = { version = "0.3", optional = true } # CUDA
-opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
-
+# Hardware Acceleration (moved to bottom of file)
 # indexing
 roaring = "0.10.2" # For scalar bitmaps
 # hnsw_rs removed and internalized to src/core/index/hnsw_rs
@@ -146,8 +139,13 @@ candle-transformers = "0.8"
 tokenizers = "0.21"
 sha2 = "0.10"
 
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cust = { version = "0.3" } # CUDA
+opencl3 = { version = "0.9" } # Intel / OpenCL
+
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = { version = "0.27.0", optional = true } # MPS
+metal = { version = "0.27.0" } # MPS
+opencl3 = { version = "0.9" } # Intel / OpenCL
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # rocm-smi = { version = "0.4.0", optional = true } # ROCm monitoring
