@@ -13,17 +13,54 @@ HyperStreamDB supports GPU acceleration for vector distance computations across 
 
 GPU acceleration provides 10x+ speedup for batch distance operations on large vector databases (100,000+ vectors).
 
+## Installation
+
+### Standard Install (PyPI)
+
+The default `pip install` includes automatic runtime detection for **MPS** (macOS), **Intel OpenCL**, and **AMD ROCm (via OpenCL)**. No extra setup is needed — if the hardware and drivers are present, HyperStreamDB detects them automatically.
+
+```bash
+pip install hyperstreamdb
+```
+
+### CUDA Install (Source Build)
+
+NVIDIA CUDA support requires the **CUDA Toolkit** to be installed on your system at compile time. You must build from source:
+
+```bash
+# Requires: CUDA Toolkit 11.0+ and Rust toolchain
+pip install hyperstreamdb[cuda] --no-binary :all:
+```
+
+Or clone and build directly:
+
+```bash
+git clone https://github.com/rla3rd/hyperstreamdb.git
+cd hyperstreamdb
+pip install -e ".[cuda]"
+```
+
+> **Note:** A future release will use runtime CUDA detection (via `cudarc`), eliminating the need for source builds.
+
 ## Quick Start
 
 ```python
 import hyperstreamdb as hdb
 
 # Auto-detect and use best available GPU backend
-ctx = hdb.GPUContext.auto_detect()
-print(f"Using GPU backend: {ctx.backend}")
+device = hdb.Device("auto")
+print(f"Using backend: {device.type}")
 
-# Check what backends are available
-print(f"Available backends: {ctx.list_available_backends()}")
+# Or pick a specific backend
+device = hdb.Device("cuda")    # NVIDIA (requires source build with CUDA)
+device = hdb.Device("mps")     # Apple Silicon (auto-detected on macOS)
+device = hdb.Device("intel")   # Intel OpenCL (auto-detected)
+device = hdb.Device("rocm")    # AMD OpenCL (auto-detected)
+device = hdb.Device("cpu")     # CPU fallback (always available)
+
+# Check availability
+print(hdb.Device.is_available("cuda"))   # True if CUDA compiled in + driver present
+print(hdb.Device.is_available("intel"))  # True if Intel OpenCL driver present
 ```
 
 ## NVIDIA CUDA Setup

@@ -68,22 +68,24 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 ### Installation
 
+**Standard Install (CPU + OpenCL/Metal):**
+The default package includes automatic hardware detection for Apple Metal, Intel OpenCL, and AMD ROCm.
+
 ```bash
-# Install from source
-git clone https://github.com/rla3rd/hyperstreamdb
-cd hyperstreamdb
-
-# Build Python bindings
-pip install maturin
-maturin develop
-
-# Or install from PyPI (coming soon)
 pip install hyperstreamdb
-
-# Windows Users
-# HyperStreamDB is optimized for Linux/POSIX environments. 
-# Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
+
+**CUDA Support (NVIDIA):**
+CUDA requires the **CUDA Toolkit** to be installed at compile time. You can build from source using the `[cuda]` extra:
+
+```bash
+# Requires: CUDA Toolkit and Rust toolchain
+pip install hyperstreamdb[cuda] --no-binary :all:
+```
+
+**Windows Users:**
+HyperStreamDB is optimized for Linux/POSIX. Windows users should use **WSL2**.
+
 
 ### GPU Acceleration (Optional)
 
