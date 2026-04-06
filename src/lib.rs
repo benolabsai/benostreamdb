@@ -45,6 +45,7 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyGlueCatalog>()?;
     m.add_class::<python_binding::PyHiveCatalog>()?;
     m.add_class::<python_binding::PyUnityCatalog>()?;
+    m.add_class::<python_binding::PyJdbcCatalog>()?;
     m.add_class::<python_binding::PySession>()?;
     
     m.add_class::<python_binding::PyDataFileInfo>()?;
@@ -54,7 +55,11 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     
     m.add_class::<python_binding::PyDataType>()?;
     m.add_class::<python_binding::PyField>()?;
+    m.add_class::<python_binding::PyPartitionField>()?;
     m.add_class::<python_binding::PySchema>()?;
+    
+    m.add_class::<python_binding::PyManifest>()?;
+    m.add_class::<python_binding::PyManifestEntry>()?;
     
     // Device API
     m.add_class::<python_gpu_context::PyDevice>()?;

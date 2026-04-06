@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
-version = "0.1.8"
+version = "0.1.12"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -3782,6 +3782,8 @@ dependencies = [
  "cust",
  "datafusion",
  "datafusion-expr-common",
+ "datafusion-functions",
+ "datafusion-functions-aggregate",
  "datafusion-functions-aggregate-common",
  "dirs",
  "env_logger",

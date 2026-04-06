@@ -1373,7 +1373,7 @@ impl ManifestManager {
             let opts = PutOptions {
                 mode: PutMode::Create,
                 ..Default::default()
-            };
+              };
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
@@ -1399,6 +1399,33 @@ impl ManifestManager {
             }
         }
         Err(anyhow::anyhow!("Failed to commit schema update after {} attempts", max_retries))
+    }
+
+    /// Update the primary key (identifier fields) for the table.
+    /// This creates a new schema version with the updated field IDs.
+    pub async fn update_identifier_fields(&self, new_ids: Vec<i32>) -> Result<Manifest> {
+        let (current_manifest, _) = self.load_latest().await?;
+        let mut schemas = current_manifest.schemas.clone();
+        
+        // Get latest schema and update its identifier fields
+        if let Some(latest_schema) = schemas.last_mut() {
+            // Check if it's already exactly the same to avoid redundant commits
+            if latest_schema.identifier_field_ids == new_ids {
+                return Ok(current_manifest);
+            }
+            
+            // Create a new schema version
+            let mut new_schema = latest_schema.clone();
+            new_schema.schema_id += 1;
+            new_schema.identifier_field_ids = new_ids;
+            
+            let new_schema_id = new_schema.schema_id;
+            schemas.push(new_schema);
+            
+            self.update_schema(schemas, new_schema_id, None).await
+        } else {
+            Err(anyhow::anyhow!("No existing schema found to update identifier fields"))
+        }
     }
 
     /// Atomically commit a full manifest (optimistic concurrency)

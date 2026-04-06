@@ -1,6 +1,6 @@
 # HyperStreamDB Comprehensive Guide
 
-**Version:** 0.1.8 (Alpha)  
+**Version:** 0.1.10 (Alpha)  
 **Last Updated:** 2026-04-03
 
 HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
@@ -145,20 +145,56 @@ See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for complete documentation.
 
 ### 3.2 Hardware Acceleration
 The indexing engine supports hardware acceleration for multiple backends:
-*   **CUDA**: NVIDIA GPUs (Linux/Windows)
+*   **CUDA**: NVIDIA GPUs (Linux, Windows via WSL2)
 *   **Metal**: Apple Silicon (MPS)
 *   **ROCm**: AMD GPUs
 *   **Intel**: AVX-512 optimizations
 
 Enable via `Cargo.toml` features or environment detection.
 
-### 3.3 Multi-Catalog Support
-HyperStreamDB supports enterprise catalog integrations:
-*   **Nessie**: Git-like versioning for data.
-*   **Unity Catalog**: Databricks integration.
-*   **AWS Glue**: Native AWS metadata.
-*   **Hive Metastore**: Legacy Hadoop compatibility.
-*   **REST**: Iceberg-compatible REST catalog.
+## 3.3 Multi-Catalog Support
+
+HyperStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.
+
+Below is a detailed example using the Hive Metastore, followed by short-form examples for other supported catalogs. Full integration guides for each will be provided in future updates.
+
+### Hive Metastore (Detailed Example)
+
+Connecting to a Hive Metastore allows you to resolve table names to storage locations automatically.
+
+```python
+import hyperstreamdb as hdb
+
+# Load a table from Hive Metastore
+table = hdb.Table.from_hive(
+    address="thrift://localhost:9083", 
+    namespace="default", 
+    table="my_analytics_table"
+)
+
+# Any writes will now be atomically committed back to Hive
+df = table.to_pandas(filter="status = 'active'")
+```
+
+### AWS Glue, Nessie, and REST Catalogs
+
+HyperStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:
+
+```python
+# AWS Glue (Native AWS Integration)
+table = hdb.Table.from_glue(namespace="prod", table="users")
+
+# Project Nessie (Git-like Versioning)
+table = hdb.Table.from_nessie(nessie_url, namespace="dev", table="experiments")
+
+# Iceberg REST Catalog (Standard API)
+table = hdb.Table.from_rest(rest_url, namespace="marketing", table="campaigns")
+
+# Unity Catalog (Databricks Ecosystem)
+table = hdb.Table.from_unity(unity_url, namespace="main", table="gold_data")
+```
+
+For more details on advanced configurations and authentication (Kerberos, SASL, IAM), see the [Configuration Guide](./CONFIGURATION.md) or the [Catalog Usage Guide](./catalog_usage.md).
 
 ---
 

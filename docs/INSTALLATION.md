@@ -1,91 +1,21 @@
-# HyperStreamDB
-
-**Serverless Index-Streaming Database with Overlay Indexing**
-
-A production-ready indexed data lake format that combines the transactional guarantees of Apache Iceberg with persistent indexes (scalar bitmaps + HNSW vector search) for blazing-fast queries on object storage.
-
-## 🎯 What Makes HyperStreamDB Different?
-
-**HyperStreamDB = Iceberg + Persistent Indexes**
-
-| Feature | Iceberg/Delta | HyperStreamDB |
-|---------|---------------|---------------|
-| **Transactional Updates** | ✅ Yes | ✅ Yes |
-| **Time Travel** | ✅ Yes | ✅ Yes |
-| **Scalar Indexes** | ❌ No | ✅ RoaringBitmap |
-| **Boolean Indexes** | ❌ No | ✅ Native Boolean |
-| **Vector Search** | ❌ No | ✅ HNSW |
-| **pgvector SQL** | ❌ No | ✅ Full Compatibility |
-| **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/Metal/OpenCL |
-| **Python Vector API** | ❌ No | ✅ NumPy-compatible |
-| **Fluent Query API** | ❌ No | ✅ Method Chaining |
-| **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
-| **Native SQL** | ❌ No | ✅ DataFusion |
-| **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
-| **Query Engines** | Spark/Trino | Spark/Trino/Python |
-
-## ⚡ Iceberg V2/V3 Compliance
-
-HyperStreamDB implements Apache Iceberg table format with full V2 and V3 feature support:
-
-| Feature | V1 | V2 | V3 | HyperStreamDB |
-|---------|----|----|----|--------------| 
-| **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
-| **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
-| **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ HyperLogLog |
-| **Row Lineage** | ❌ | ❌ | ✅ | ✅ UUID + Sequence |
-| **Default Values** | ❌ | ❌ | ✅ | ✅ Schema Fields |
-| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality |
-
-### New APIs
-
-```python
-import hyperstreamdb as hdb
-
-# Create table with sort order (V2)
-table = hdb.Table("s3://bucket/table")
-table.set_sort_order(["timestamp", "user_id"], ascending=[False, True])
-
-# Evolve partition spec (V2)
-table.set_partition_spec([
-    {"source_id": 1, "field_id": 1000, "name": "date", "transform": "day"}
-])
-
-# V3 tables automatically include row lineage
-# _row_id (UUID) and _last_updated_sequence_number are added when format_version >= 3
-```
-
-### Migration Guide: V2 → V3
-
-Upgrading to V3 enables row-level operations and enhanced tracking:
-
-1. **Automatic**: V3 metadata columns added transparently when `format_version >= 3`
-2. **No Data Rewrite**: Existing data remains compatible
-3. **New Columns**: `_row_id` (UUID v4), `_last_updated_sequence_number` (i64)
-
-
-## 🚀 Quick Start
-
 ### Installation
 
-**Standard Install (CPU + OpenCL/Metal):**
-The default package includes automatic hardware detection for Apple Metal, Intel OpenCL, and AMD ROCm.
-
 ```bash
+# Install from source
+git clone https://github.com/rla3rd/hyperstreamdb
+cd hyperstreamdb
+
+# Build Python bindings
+pip install maturin
+maturin develop
+
+# Or install from PyPI (coming soon)
 pip install hyperstreamdb
+
+# Windows Users
+# HyperStreamDB is optimized for Linux/POSIX environments. 
+# Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
-
-**CUDA Support (NVIDIA):**
-CUDA requires the **CUDA Toolkit** to be installed at compile time. You can build from source using the `[cuda]` extra:
-
-```bash
-# Requires: CUDA Toolkit and Rust toolchain
-pip install hyperstreamdb[cuda] --no-binary :all:
-```
-
-**Windows Users:**
-HyperStreamDB is optimized for Linux/POSIX. Windows users should use **WSL2**.
-
 
 ### GPU Acceleration (Optional)
 
@@ -619,5 +549,3 @@ This project contains modified source code from various upstream open-source pro
 - **RoaringBitmap** - Scalar indexing
 
 ---
-
-**Built with ❤️ in Rust**

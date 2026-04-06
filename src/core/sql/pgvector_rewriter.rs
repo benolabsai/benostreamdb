@@ -11,7 +11,7 @@
 /// This uses DataFusion's TreeNodeRewriter for proper expression tree traversal.
 use datafusion::common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{Expr, Operator};
+use datafusion::logical_expr::Expr;
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 
@@ -34,50 +34,93 @@ impl TreeNodeRewriter for PgVectorRewriter {
     type Node = Expr;
 
     fn f_down(&mut self, expr: Expr) -> Result<Transformed<Expr>> {
-        match &expr {
-            // Handle binary expressions with custom operators
+        match expr {
+            // Handle binary expressions with custom operators (e.g. <->)
             Expr::BinaryExpr(binary) => {
-                let op_str = format!("{:?}", binary.op);
+                let op_str = binary.op.to_string();
                 
                 // Check if this is a pgvector operator
-                for (pg_op, udf_name) in OPERATOR_MAPPINGS {
-                    if op_str.contains(pg_op) || matches_operator(&binary.op, pg_op) {
-                        // Convert to UDF call
-                        let udf = create_distance_udf(udf_name)?;
-                        let udf_expr = Expr::ScalarFunction(datafusion::logical_expr::expr::ScalarFunction::new_udf(
-                            Arc::new(udf),
-                            vec![(*binary.left).clone(), (*binary.right).clone()],
-                        ));
-                        return Ok(Transformed::yes(udf_expr));
+                if let Some((_, udf_name)) = OPERATOR_MAPPINGS.iter().find(|(op, _)| op == &op_str) {
+                    let mut left = *binary.left;
+                    let mut right = *binary.right;
+                    
+                    // Check if either side is a string literal starting with '['
+                    // and convert it automatically to a vector literal
+                    for arg in [&mut left, &mut right] {
+                        let literal_text = match arg {
+                            Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Some(s),
+                            Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => Some(s),
+                            _ => None,
+                        };
+                        
+                        if let Some(s) = literal_text {
+                            let trimmed = s.trim();
+                            if trimmed.starts_with('[') {
+                                if let Ok(parsed_value) = VectorLiteralParser::parse(trimmed) {
+                                    *arg = Expr::Literal(parsed_value, None);
+                                }
+                            }
+                        }
                     }
+                    
+                    // Create the UDF call
+                    let udf = get_distance_udf(udf_name)?;
+                    let args = vec![left, right];
+                    let func = datafusion::logical_expr::expr::ScalarFunction::new_udf(
+                        Arc::new(udf),
+                        args,
+                    );
+                    return Ok(Transformed::yes(Expr::ScalarFunction(func)));
                 }
                 
-                Ok(Transformed::no(expr))
+                Ok(Transformed::no(Expr::BinaryExpr(binary)))
             }
             
-            // Handle CAST expressions for vector literals
-            // Pattern: CAST('[1,2,3]' AS vector)
-            Expr::Cast(cast) => {
-                if let Expr::Literal(ScalarValue::Utf8(Some(literal_str)), _metadata) = &*cast.expr {
-                    // Check if casting to a vector-like type
-                    let type_str = format!("{:?}", cast.data_type);
-                    if type_str.to_lowercase().contains("vector") || 
-                       literal_str.starts_with('[') && literal_str.ends_with(']') {
-                        // Parse the vector literal
-                        match VectorLiteralParser::parse(literal_str) {
-                            Ok(parsed_value) => {
-                                return Ok(Transformed::yes(Expr::Literal(parsed_value, None)));
-                            }
-                            Err(e) => {
-                                return Err(DataFusionError::Plan(
-                                    format!("Failed to parse vector literal '{}': {}", literal_str, e)
-                                ));
+            // Handle scalar function calls (e.g., dist_l2)
+            Expr::ScalarFunction(mut func) => {
+                let name = func.name();
+                if matches!(name, "dist_l2" | "dist_cosine" | "dist_ip" | "dist_l1" | "dist_hamming" | "dist_jaccard") {
+                    if func.args.len() == 2 {
+                        // Support both regular and large string literals for the second argument
+                        let literal_text = match &func.args[1] {
+                            Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Some(s.as_str()),
+                            Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => Some(s.as_str()),
+                            _ => None,
+                        };
+
+                        if let Some(s) = literal_text {
+                            let trimmed = s.trim();
+                            if trimmed.starts_with('[') {
+                                match VectorLiteralParser::parse(trimmed) {
+                                    Ok(parsed_value) => {
+                                        func.args[1] = Expr::Literal(parsed_value, None);
+                                        return Ok(Transformed::yes(Expr::ScalarFunction(func)));
+                                    }
+                                    Err(e) => {
+                                        return Err(datafusion::error::DataFusionError::Plan(
+                                            format!("Failed to parse vector literal: {}. Input starts with: {}", e, &trimmed[..trimmed.len().min(50)])
+                                        ));
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                Ok(Transformed::no(Expr::ScalarFunction(func)))
+            }
+            
+            // Recurse into aliases to ensure nested distance calls are rewritten
+            Expr::Alias(mut alias) => {
+                use datafusion::common::tree_node::TreeNode;
+                // Move the expression out of the box to rewrite it
+                let expr = std::mem::replace(&mut alias.expr, Box::new(Expr::Literal(ScalarValue::Null, None)));
+                let transformed = expr.rewrite(self)?;
                 
-                Ok(Transformed::no(expr))
+                alias.expr = Box::new(transformed.data);
+                if transformed.transformed {
+                    return Ok(Transformed::yes(Expr::Alias(alias)));
+                }
+                Ok(Transformed::no(Expr::Alias(alias)))
             }
             
             _ => Ok(Transformed::no(expr)),
@@ -85,17 +128,9 @@ impl TreeNodeRewriter for PgVectorRewriter {
     }
 }
 
-/// Check if a DataFusion operator matches a pgvector operator string
-fn matches_operator(_op: &Operator, _pg_op: &str) -> bool {
-    // DataFusion operators are enums, so we need to match based on the operator type
-    // For custom operators, we'd need to extend DataFusion's Operator enum
-    // For now, we'll rely on string matching in the debug representation
-    false
-}
-
-/// Create a distance UDF by name
-fn create_distance_udf(name: &str) -> Result<datafusion::logical_expr::ScalarUDF> {
-    use crate::core::sql::vector_udf::*;
+/// Helper function to create a new distance UDF
+fn get_distance_udf(name: &str) -> Result<datafusion::logical_expr::ScalarUDF> {
+    use super::vector_udf::*;
     
     let udf = match name {
         "dist_l2" => datafusion::logical_expr::ScalarUDF::new_from_impl(L2DistUDF::new()),
@@ -118,11 +153,13 @@ pub fn rewrite_pgvector_plan(
 ) -> Result<datafusion::logical_expr::LogicalPlan> {
     use datafusion::common::tree_node::TreeNode;
     
-    let mut rewriter = PgVectorRewriter;
-    
-    // Transform all expressions in the plan
-    let result = plan.map_expressions(|expr| {
-        expr.rewrite(&mut rewriter)
+    // Use transform to visit all nodes in the logical plan
+    // For each node, we map its expressions through our PgVectorRewriter
+    let result = plan.transform(|node| {
+        let mut rewriter = PgVectorRewriter;
+        node.map_expressions(|expr| {
+            expr.rewrite(&mut rewriter)
+        })
     })?;
     
     Ok(result.data)
@@ -139,7 +176,7 @@ mod tests {
         let literal = Expr::Literal(ScalarValue::Utf8(Some("[1,2,3]".to_string())), None);
         let cast_expr = Expr::Cast(datafusion::logical_expr::Cast {
             expr: Box::new(literal),
-            data_type: DataType::Utf8, // Placeholder - would be custom vector type
+            data_type: DataType::Utf8, // Placeholder
         });
         
         let mut rewriter = PgVectorRewriter;

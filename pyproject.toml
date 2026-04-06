@@ -7,7 +7,7 @@ name = "hyperstreamdb"
 version = "0.1.8"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = { text = "MIT AND Apache-2.0" }
 authors = [
     { name = "HyperStream Team" }
@@ -18,11 +18,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
     "Topic :: Database",
@@ -44,9 +44,8 @@ dev = [
 mps = []   # Apple Silicon (Metal)
 cuda = []  # NVIDIA (CUDA)
 rocm = []  # AMD (via OpenCL/ROCm)
-intel_gpu = [] # Intel (OpenCL)
-intel_cpu = [] # Intel (SIMD/AVX2)
-all_gpu = ["mps", "cuda", "rocm", "intel_gpu"]
+intel = [] # Intel (OpenCL)
+all_gpu = ["mps", "cuda", "rocm", "intel"]
 src = ["maturin>=1.7"]
 
 [project.urls]
@@ -55,12 +54,13 @@ Repository = "https://github.com/rla3rd/hyperstreamdb"
 
 [tool.maturin]
 features = ["python"]
-# Map Python extras to Rust features
-extra-features = { mps = ["mps"], cuda = ["cuda"], rocm = ["rocm"], intel_gpu = ["intel_gpu"], intel_cpu = ["intel_cpu"] }
+# Map pip extras to Cargo features for source builds
+# e.g. pip install hyperstreamdb[cuda] --no-binary :all:
+extra-features = { cuda = ["cuda"] }
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
-# Build both the Rust library and Python bindings
-bindings = "pyo3"
+# Build both the Rust library and Python bindings (multi-version compatible)
+bindings = "pyo3-abi3"
 sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
 # Optimizations for WHEEL builds
 strip = false
