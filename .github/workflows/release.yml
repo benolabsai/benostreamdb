@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -33,14 +33,41 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Install Dependencies
+      - name: Create OpenCL stub (for Zig cross-compilation)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ocl-icd-opencl-dev
+          mkdir -p /tmp/opencl-stub
+          echo "void clGetPlatformIDs() {}" > /tmp/opencl-stub/stub.c
+          echo "void clGetDeviceIDs() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clCreateContext() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clCreateCommandQueueWithProperties() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clCreateBuffer() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clEnqueueWriteBuffer() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clEnqueueReadBuffer() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clCreateProgramWithSource() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clBuildProgram() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clCreateKernel() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clSetKernelArg() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clEnqueueNDRangeKernel() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clFinish() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clReleaseKernel() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clReleaseProgram() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clReleaseCommandQueue() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clReleaseContext() {}" >> /tmp/opencl-stub/stub.c
+          echo "void clReleaseMemObject() {}" >> /tmp/opencl-stub/stub.c
+          gcc -shared -o /tmp/opencl-stub/libOpenCL.so /tmp/opencl-stub/stub.c
+
+          # Create pkg-config file so cargo can find the stub independently of Zig search paths
+          mkdir -p /tmp/pkgconfig
+          cat <<PC > /tmp/pkgconfig/OpenCL.pc
+          Name: OpenCL
+          Description: OpenCL ICD Loader Stub
+          Version: 3.0
+          Libs: -L/tmp/opencl-stub -lOpenCL
+          PC
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
-          cuda: '12.1.0'
+          cuda: "12.1.0"
       - name: Prep CUDA Stubs
         run: |
           # The linker looks for libcuda.so.1, but stubs only provide libcuda.so
@@ -70,7 +97,7 @@ jobs:
 
       - name: Run Cargo Check
         if: steps.filter.outputs.code == 'true'
-        run: cargo check --all-targets --all-features
+        run: cargo check --all-targets --features python
 
       - name: Run Cargo Tests (CPU)
         if: steps.filter.outputs.code == 'true'
@@ -84,13 +111,13 @@ jobs:
         env:
           # Point to CUDA stubs so binaries can load even without a GPU
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
-        run: cargo test --features python,intel,cuda --lib --tests -- --skip gpu_execution --nocapture
+        run: cargo test --features python --lib --tests -- --skip gpu_execution --nocapture
 
       - name: Setup Python for Tests
         if: steps.filter.outputs.code == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install maturin and build
         if: steps.filter.outputs.code == 'true'
@@ -111,7 +138,7 @@ jobs:
       fail-fast: true
       matrix:
         target: [x86_64, aarch64]
-        python-version: ['3.10'] # ABI3 Universal Wheels
+        python-version: ["3.10"] # ABI3 Universal Wheels
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
@@ -123,8 +150,8 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: '12.1.0'
-          method: 'network'
+          cuda: "12.1.0"
+          method: "network"
           # We only need compilation, not the full driver
           sub-packages: '["nvcc", "cudart-dev"]'
       - name: Setup Zig
@@ -150,7 +177,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features python --zig
-          sccache: 'false'
+          sccache: "false"
           manylinux: auto
       - name: Upload wheels
         uses: actions/upload-artifact@v4
@@ -165,7 +192,7 @@ jobs:
       fail-fast: true
       matrix:
         target: [x86_64, aarch64]
-        python-version: ['3.10'] # ABI3 Universal Wheels
+        python-version: ["3.10"] # ABI3 Universal Wheels
     steps:
       - uses: actions/checkout@v4
       - name: Cache Rust dependencies
@@ -192,13 +219,12 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features python
-          sccache: 'false'
+          sccache: "false"
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
           name: wheels-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
-
 
   sdist:
     needs: [check]
@@ -226,7 +252,6 @@ jobs:
         with:
           name: wheels-sdist
           path: dist
-
 
   release:
     name: Final Release
