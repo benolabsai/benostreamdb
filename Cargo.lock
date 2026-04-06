@@ -3755,7 +3755,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
