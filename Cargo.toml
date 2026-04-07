@@ -34,8 +34,7 @@ name = "test_connector_ffi"
 required-features = ["java"]
 
 [features]
-default = ["candle"]
-candle = []
+default = []
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize"]
 java = ["dep:jni"]
@@ -43,6 +42,12 @@ simdeez_f = []
 stdsimd = []
 intel_cpu = ["simdeez_f", "stdsimd"]
 simd = ["intel_cpu"]
+
+# GPU Acceleration Features
+cuda = []
+mps = []
+rocm = []
+intel = []
 
 [dependencies]
 # core columnar memory format
@@ -133,14 +138,11 @@ base64 = "0.22.1"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql", "chrono", "uuid", "any"] }
 murmur3 = "0.5.2"
 regex = "1.10"
-candle-core = "0.8"
-candle-nn = "0.8"
-candle-transformers = "0.8"
-tokenizers = "0.21"
+
 sha2 = "0.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cust = { version = "0.3" } # CUDA
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc"] }
 opencl3 = { version = "0.9" } # Intel / OpenCL
 
 [target.'cfg(target_os = "macos")'.dependencies]

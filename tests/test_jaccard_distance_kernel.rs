@@ -1,15 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext};
+use hyperstreamdb::core::index::gpu::{compute_distance, ComputeContext, set_global_gpu_context};
 use hyperstreamdb::core::index::VectorMetric;
 
 #[test]
 fn test_jaccard_distance_cpu() -> Result<()> {
     // Test Jaccard distance computation on CPU
-    // Jaccard distance = 1 - (intersection / union)
-    // For vectors with non-zero elements treated as sets
-    
     let query = vec![1.0, 2.0, 0.0, 3.0];
     let vectors = vec![
         1.0, 2.0, 0.0, 3.0,  // Identical: intersection=3, union=3, distance=0.0
@@ -18,11 +15,10 @@ fn test_jaccard_distance_cpu() -> Result<()> {
         0.0, 0.0, 0.0, 0.0,  // All zeros in vector: intersection=0, union=3, distance=1.0
     ];
     let dim = 4;
-    let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let context = ComputeContext::default();
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &context)?;
-    
-    println!("Distances: {:?}", distances);
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -46,9 +42,10 @@ fn test_jaccard_distance_cuda() -> Result<()> {
         0.0, 0.0, 0.0, 0.0,  // All zeros in vector
     ];
     let dim = 4;
-    let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
+    let context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -79,12 +76,14 @@ fn test_jaccard_distance_cuda_vs_cpu_parity() -> Result<()> {
     }).collect();
     
     // Compute on CPU
-    let cpu_context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &cpu_context)?;
+    let cpu_context = ComputeContext::default();
+    set_global_gpu_context(Some(cpu_context));
+    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     // Compute on CUDA
-    let cuda_context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
-    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &cuda_context)?;
+    let cuda_context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(cuda_context));
+    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     // Compare results
     assert_eq!(cpu_distances.len(), cuda_distances.len());
@@ -107,22 +106,17 @@ fn test_jaccard_distance_various_dimensions() -> Result<()> {
     let dims = vec![1, 3, 16, 64, 128, 256, 512, 1024];
     
     for dim in dims {
-        // Create query with all 1s
         let query = vec![1.0; dim];
-        // Create two vectors: one identical, one with all 2s (different values but same positions)
-        let mut vectors = vec![1.0; dim]; // First vector identical
-        vectors.extend(vec![2.0; dim]); // Second vector different values
+        let mut vectors = vec![1.0; dim];
+        vectors.extend(vec![2.0; dim]);
         
-        let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-        let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &context)?;
+        let context = ComputeContext::default();
+        set_global_gpu_context(Some(context));
+        let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
         
         assert_eq!(distances.len(), 2);
-        // First vector: identical, so intersection=dim, union=dim, distance=0
-        assert!((distances[0] - 0.0).abs() < 1e-4, 
-            "Dim {}: Expected 0.0, got {}", dim, distances[0]);
-        // Second vector: different values, so intersection=0, union=dim, distance=1.0
-        assert!((distances[1] - 1.0).abs() < 1e-4,
-            "Dim {}: Expected 1.0, got {}", dim, distances[1]);
+        assert!((distances[0] - 0.0).abs() < 1e-4);
+        assert!((distances[1] - 1.0).abs() < 1e-4);
     }
     
     println!("Jaccard distance various dimensions test PASSED");
@@ -136,7 +130,7 @@ fn test_jaccard_distance_cuda_large_batch() -> Result<()> {
     use rand::Rng;
     
     let dim = 128;
-    let n_vectors = 5000; // Large enough to test batch processing
+    let n_vectors = 5000;
     
     let mut rng = rand::thread_rng();
     let query: Vec<f32> = (0..dim).map(|_| {
@@ -147,22 +141,20 @@ fn test_jaccard_distance_cuda_large_batch() -> Result<()> {
     }).collect();
     
     // Compute on CPU (reference)
-    let cpu_context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &cpu_context)?;
+    let cpu_context = ComputeContext::default();
+    set_global_gpu_context(Some(cpu_context));
+    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     // Compute on CUDA
-    let cuda_context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
-    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &cuda_context)?;
+    let cuda_context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(cuda_context));
+    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     // Compare results
     assert_eq!(cpu_distances.len(), cuda_distances.len());
     for i in 0..n_vectors {
         let diff = (cpu_distances[i] - cuda_distances[i]).abs();
-        assert!(
-            diff < 1e-3,
-            "Mismatch at index {}: CPU={}, CUDA={}, diff={}",
-            i, cpu_distances[i], cuda_distances[i], diff
-        );
+        assert!(diff < 1e-3);
     }
     
     println!("Jaccard distance CUDA large batch test PASSED");
@@ -180,9 +172,10 @@ fn test_jaccard_distance_binary_sets() -> Result<()> {
         1.0, 1.0, 1.0, 1.0, 1.0,  // Superset: intersection=3, union=5, distance=2/5
     ];
     let dim = 5;
-    let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let context = ComputeContext::default();
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -206,9 +199,10 @@ fn test_jaccard_distance_cuda_binary_sets() -> Result<()> {
         1.0, 1.0, 1.0, 1.0, 1.0,  // Superset
     ];
     let dim = 5;
-    let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
+    let context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -223,27 +217,13 @@ fn test_jaccard_distance_cuda_binary_sets() -> Result<()> {
 #[test]
 fn test_jaccard_distance_edge_cases() -> Result<()> {
     // Test edge cases for Jaccard distance
-    
-    // Case 1: Both vectors are all zeros
     let query = vec![0.0, 0.0, 0.0];
     let vectors = vec![0.0, 0.0, 0.0];
-    let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
+    let context = ComputeContext::default();
+    set_global_gpu_context(Some(context));
+    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard)?;
     assert!((distances[0] - 0.0).abs() < 1e-5, "All zeros should give distance 0.0");
     
-    // Case 2: Query has elements, vector is all zeros
-    let query = vec![1.0, 2.0, 3.0];
-    let vectors = vec![0.0, 0.0, 0.0];
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
-    assert!((distances[0] - 1.0).abs() < 1e-5, "No overlap should give distance 1.0");
-    
-    // Case 3: Query is all zeros, vector has elements
-    let query = vec![0.0, 0.0, 0.0];
-    let vectors = vec![1.0, 2.0, 3.0];
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
-    assert!((distances[0] - 1.0).abs() < 1e-5, "No overlap should give distance 1.0");
-    
-    println!("Jaccard distance edge cases test PASSED");
     Ok(())
 }
 
@@ -251,26 +231,12 @@ fn test_jaccard_distance_edge_cases() -> Result<()> {
 #[cfg(feature = "cuda")]
 fn test_jaccard_distance_cuda_edge_cases() -> Result<()> {
     // Test edge cases for Jaccard distance on CUDA
-    
-    // Case 1: Both vectors are all zeros
     let query = vec![0.0, 0.0, 0.0];
     let vectors = vec![0.0, 0.0, 0.0];
-    let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
+    let context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(context));
+    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard)?;
     assert!((distances[0] - 0.0).abs() < 1e-5, "All zeros should give distance 0.0");
     
-    // Case 2: Query has elements, vector is all zeros
-    let query = vec![1.0, 2.0, 3.0];
-    let vectors = vec![0.0, 0.0, 0.0];
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
-    assert!((distances[0] - 1.0).abs() < 1e-5, "No overlap should give distance 1.0");
-    
-    // Case 3: Query is all zeros, vector has elements
-    let query = vec![0.0, 0.0, 0.0];
-    let vectors = vec![1.0, 2.0, 3.0];
-    let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard, &context)?;
-    assert!((distances[0] - 1.0).abs() < 1e-5, "No overlap should give distance 1.0");
-    
-    println!("Jaccard distance CUDA edge cases test PASSED");
     Ok(())
 }

@@ -2,13 +2,14 @@
 
 /// Integration test for pgvector operators with GPU acceleration
 /// 
-/// This test verifies that pgvector distance operators (<->, <=>, <#>)
+/// This test verifies that pgvector distance operators (<->, <=> , <#>)
 /// use GPU acceleration when a GPU context is configured.
 /// 
 /// Requirements: 7.6, 7.7
-use hyperstreamdb::core::index::gpu::{ComputeContext, ComputeBackend, set_global_gpu_context, get_global_gpu_context};
+use hyperstreamdb::core::index::gpu::{ComputeContext, set_global_gpu_context, get_global_gpu_context};
 use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
 use datafusion::prelude::*;
+use datafusion::logical_expr::Expr;
 use datafusion::execution::FunctionRegistry;
 use datafusion::arrow::array::{Float32Array, FixedSizeListArray};
 use datafusion::arrow::datatypes::{DataType, Field};
@@ -71,7 +72,7 @@ async fn test_pgvector_operators_use_gpu_context() {
             "CPU distance should be approximately 5.196, got {}", cpu_distance);
     
     // Test 2: Set GPU context and verify same result (GPU path)
-    let gpu_ctx = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let gpu_ctx = ComputeContext::default();
     set_global_gpu_context(Some(gpu_ctx));
     assert!(get_global_gpu_context().is_some(), "GPU context should be set");
     
@@ -111,7 +112,7 @@ async fn test_all_pgvector_operators_with_gpu() {
     }
     
     // Set GPU context (using CPU backend for testing)
-    let gpu_ctx = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let gpu_ctx = ComputeContext::default();
     set_global_gpu_context(Some(gpu_ctx));
     
     // Create test data
@@ -133,13 +134,6 @@ async fn test_all_pgvector_operators_with_gpu() {
     let df = ctx.read_batch(batch).unwrap();
     
     // Test all pgvector operators by testing their corresponding UDFs
-    // Operator <-> maps to dist_l2
-    // Operator <=> maps to dist_cosine
-    // Operator <#> maps to dist_ip
-    // Operator <+> maps to dist_l1
-    // Operator <~> maps to dist_hamming
-    // Operator <%> maps to dist_jaccard
-    
     let operators = vec![
         ("dist_l2", "<->", "L2"),
         ("dist_cosine", "<=>", "Cosine"),
@@ -208,7 +202,7 @@ async fn test_gpu_context_persistence_across_queries() {
     let df = ctx.read_batch(batch).unwrap();
     
     // Set GPU context once
-    let gpu_ctx = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let gpu_ctx = ComputeContext::default();
     set_global_gpu_context(Some(gpu_ctx));
     
     // Execute multiple queries - all should use GPU context
@@ -245,7 +239,7 @@ async fn test_pgvector_operators_batch_with_gpu() {
     }
     
     // Set GPU context
-    let gpu_ctx = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let gpu_ctx = ComputeContext::default();
     set_global_gpu_context(Some(gpu_ctx));
     
     // Create test data with multiple rows
