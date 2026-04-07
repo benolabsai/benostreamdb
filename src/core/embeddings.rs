@@ -57,30 +57,8 @@ pub fn get_embedded_func(name: &str) -> Option<Arc<dyn EmbeddingFunction>> {
     GLOBAL_REGISTRY.read().ok()?.get(name)
 }
 
-// --- Implementations ---
 
-#[cfg(feature = "candle")]
-#[allow(dead_code)]
-pub struct CandleFunction {
-    name: String,
-    model: Arc<candle_transformers::models::bert::BertModel>,
-    tokenizer: tokenizers::Tokenizer,
-    device: candle_core::Device,
-    dim: usize,
-}
 
-#[cfg(feature = "candle")]
-#[async_trait]
-impl EmbeddingFunction for CandleFunction {
-    async fn embed(&self, _texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        // Implementation using candle...
-        // For now, return stub if actually implemented
-        unimplemented!("Candle implementation details to be fleshed out in next step")
-    }
-
-    fn dimension(&self) -> usize { self.dim }
-    fn name(&self) -> &str { &self.name }
-}
 
 /// A bridge to call Python embedding functions from Rust.
 type EmbeddingCallback = Box<dyn Fn(Vec<String>) -> Result<Vec<Vec<f32>>> + Send + Sync>;

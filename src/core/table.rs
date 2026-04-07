@@ -19,6 +19,8 @@ use arrow::array::Array;
 use object_store::ObjectStore;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use tracing;
+
 
 use crate::core::storage::create_object_store;
 use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager, PartitionSpec, IndexFile, SortOrder, SortField, SortDirection, NullOrder};
@@ -402,7 +404,7 @@ impl Table {
         
         // Replay WAL (Recovery)
         let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
-            println!("WAL Recovery Warning: {}" , e);
+            tracing::warn!("WAL Recovery Warning: {}" , e);
             (Vec::new(), Vec::new())
         });
         
@@ -410,8 +412,9 @@ impl Table {
         let mut initial_mem_index = None;
 
         if !recovered_batches.is_empty() {
-            println!("recovering {} batches from WAL...", recovered_batches.len());
+            tracing::info!("recovering {} batches from WAL...", recovered_batches.len());
             initial_buffer = recovered_batches;
+
             
             // Promote THE MOST EVOLVED schema from manifest + all WAL batches
             for batch in &initial_buffer {
@@ -756,8 +759,9 @@ impl Table {
             }
             
             // If not a HyperStreamDB table, try to import as external Iceberg table
-            println!("Auto-registering Iceberg table from REST catalog: {}", rest_uri);
+            tracing::info!("Auto-registering Iceberg table from REST catalog: {}", rest_uri);
             let mut table = Self::register_external(native_uri, &metadata.location).await?;
+
             table.catalog = Some(Arc::new(client));
             table.catalog_namespace = Some(namespace);
             table.catalog_table_name = Some(table_name);
@@ -4249,9 +4253,8 @@ impl Table {
         let (centroids, _) = simple_kmeans(&vectors, k, 3)?; // Fast 3-iter training
 
         // 3. Assign all vectors (GPU Accelerated!)
-        let ctx = get_global_gpu_context().unwrap_or_else(|| {
-              ComputeContext::auto_detect()
-        });
+        let _ = get_global_gpu_context().unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
+
 
         let dim = list_array.value_length() as usize;
         let flat_vectors: Vec<f32> = (0..n).into_par_iter().flat_map(|i| {
@@ -4260,7 +4263,7 @@ impl Table {
         
         let flat_centroids: Vec<f32> = centroids.iter().flatten().copied().collect();
         
-        let assignments = crate::core::index::gpu::compute_kmeans_assignment(&flat_vectors, &flat_centroids, dim, &ctx)?;
+        let assignments = crate::core::index::gpu::compute_kmeans_assignment(&flat_vectors, &flat_centroids, dim)?;
         
         // 4. Sort batch by assignments
         let assignment_array = Int32Array::from(assignments.into_iter().map(|a| a as i32).collect::<Vec<i32>>());
