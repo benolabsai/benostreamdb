@@ -8,6 +8,7 @@ use object_store::{path::Path, ObjectStore};
 use anyhow::Result;
 use futures::StreamExt;
 use chrono::Utc;
+use tracing;
 
 pub type SegmentId = String;
 
@@ -699,9 +700,9 @@ impl ManifestManager {
 
         // 1. Check Version Cache (Fast Path)
         if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get(&cache_key).await {
-            eprintln!("DEBUG: ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
+            tracing::debug!("ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
             if let Ok(manifest) = self.load_version(ver).await {
-                eprintln!("DEBUG: ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
+                tracing::debug!("ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
                 return Ok((manifest, ver));
             }
         }
@@ -734,14 +735,14 @@ impl ManifestManager {
         }
 
         if let Some(path) = latest_path { 
-             eprintln!("DEBUG: ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
+             tracing::debug!("ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
               return match self.load_version(max_ver).await {
                  Ok(m) => {
-                     eprintln!("DEBUG: ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
+                     tracing::debug!("ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
                      Ok((m, max_ver))
                  },
                  Err(e) => {
-                     eprintln!("DEBUG: ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
+                     tracing::error!("ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
                      // Fallback if somehow listing said it exists but we can't read it
                      let bytes = self.store.get(&path).await?.bytes().await?;
                      let manifest: Manifest = serde_json::from_slice(&bytes)?;
@@ -1257,7 +1258,7 @@ impl ManifestManager {
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest: {}", path);
+                    tracing::info!("Committed Manifest: {}", path);
                     // 5. Update Caches
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
@@ -1377,7 +1378,7 @@ impl ManifestManager {
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest v{} (Schema Update)", new_ver);
+                    tracing::info!("Committed Manifest v{} (Schema Update)", new_ver);
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = format!("{}/{}", self.root_uri, path);

@@ -106,3 +106,4 @@ news_db/
 .hypothesis/
 venv_demo/
 venv_demo/
+.env
