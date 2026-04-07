@@ -19,15 +19,13 @@ fn main() {
     
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     
-    if target_os == "macos" {
-        println!("cargo:rustc-cfg=feature=\"mps\"");
-    } else {
-        // Auto-detect CUDA, ROCm, or fallback to Intel OpenCL
+    // CUDA kernel compilation - only when the cuda feature is explicitly enabled
+    // (MPS is handled by #[cfg(target_os = "macos")] in source code)
+    // (Intel/ROCm are handled by opencl3 which is always available)
+    if env::var("CARGO_FEATURE_CUDA").is_ok() && target_os != "macos" {
         let has_nvcc = Command::new("nvcc").arg("--version").output().is_ok();
         
         if has_nvcc {
-            println!("cargo:rustc-cfg=feature=\"cuda\"");
-            
             let out_dir = env::var("OUT_DIR").unwrap();
             let kernels = vec![
                 "l2_distance",
@@ -52,10 +50,8 @@ fn main() {
                     panic!("nvcc failed for {}", kernel_name);
                 }
             }
-        } else if Command::new("rocminfo").output().is_ok() {
-            println!("cargo:rustc-cfg=feature=\"rocm\"");
         } else {
-            println!("cargo:rustc-cfg=feature=\"intel\"");
+            panic!("CUDA feature enabled but nvcc not found. Install CUDA Toolkit or remove the 'cuda' feature.");
         }
     }
 }
