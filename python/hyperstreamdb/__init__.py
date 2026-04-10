@@ -1,6 +1,26 @@
 from .hyperstreamdb import *
 from .hyperstreamdb import Table as _RustTable
 from .hyperstreamdb import Session as _RustSession
+
+def _list_available_backends():
+    backends = ['cpu']
+    for b in ['cuda', 'rocm', 'mps', 'intel']:
+        if Device.is_available(b):
+            backends.append(b)
+    return backends
+
+def _auto_detect():
+    for b in ['cuda', 'rocm', 'mps', 'intel']:
+        if Device.is_available(b):
+            return Device(b)
+    return Device('cpu')
+
+Device.list_available_backends = staticmethod(_list_available_backends)
+Device.auto_detect = staticmethod(_auto_detect)
+Device.backend = property(lambda self: self.type_name)
+Device.device_id = property(lambda self: self.index)
+ComputeContext = Device
+
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd
 try:
@@ -141,7 +161,7 @@ class Table:
         Write data to the table, automatically generating embeddings for configured columns.
         
         Args:
-            data: pandas.DataFrame, pyarrow.Table, polars.DataFrame, or List[Dict].
+            data: pandas.DataFrame, pyarrow.Table, polars.DataFrame, numpy.ndarray, torch.Tensor, or List[Dict].
             device: Optional Device for GPU acceleration.
             mode: 'append' (default) or 'overwrite' (clears table first).
         """
@@ -407,6 +427,13 @@ class Table:
         # to_arrow in Rust doesn't currently take **kwargs
         return self._inner.to_arrow(filter, vf, columns, device=device)
 
+    def sql(self, query: str) -> Any:
+        """
+        Execute a SQL query against the table.
+        The table is registered as 't'.
+        """
+        return self._inner.execute_sql(query)
+
     def query(self) -> Query:
         """Start a fluent query."""
         return Query(self)
@@ -588,30 +615,5 @@ class Session:
         return self._inner.register(name, table)
 
     def sql(self, query: str) -> Any:
-        """Execute a SQL query against registered tables."""
-        import re
-        
-        # 1. Strip pgvector-style casts that DataFusion's parser doesn't understand
-        query = re.sub(r'::vector(\(\d+\))?', '', query)
-        
-        # 2. Map Operators to UDFs (DataFusion handles these better as function calls)
-        ops = {
-            '<->': 'dist_l2',
-            '<=>': 'dist_cosine',
-            '<#>': 'dist_ip',
-            '<+>': 'dist_l1',
-            '<~>': 'dist_hamming',
-            '<%>': 'dist_jaccard'
-        }
-        
-        for op, udf in ops.items():
-            # Matches: identifier <op> (string_literal | array_literal_string | parameter)
-            # This covers common use cases in RAG/pgvector.
-            pattern = rf'(\w+)\s*{re.escape(op)}\s*(\'[^\']*\'|\[[^\]]*\]|\?|\$[\d+])'
-            query = re.sub(pattern, rf'{udf}(\1, \2)', query)
-            
-        # 3. Sanitize vector literals that might contain NumPy type markers (e.g., [np.float32(1.0)])
-        # which often happens when users call str() on a list of numpy scalars.
-        query = re.sub(r'np\.\w+\(([^)]+)\)', r'\1', query)
-            
+        """Execute a SQL query against the table (registered as 't')."""
         return self._inner.sql(query)

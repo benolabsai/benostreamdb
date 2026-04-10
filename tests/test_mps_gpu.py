@@ -33,7 +33,7 @@ def test_mps_gpu():
     print("\n[3] Computing distances on CPU...")
     cpu_ctx = hdb.ComputeContext("cpu")
     start_time = time.time()
-    cpu_distances = hdb.l2_batch(query, vectors, context=cpu_ctx)
+    cpu_distances = hdb.l2_batch(query, vectors, device=cpu_ctx)
     cpu_time = time.time() - start_time
     print(f"CPU Time: {cpu_time*1000:.2f}ms")
 
@@ -43,7 +43,7 @@ def test_mps_gpu():
     ctx.reset_stats()
     
     start_time = time.time()
-    gpu_distances = hdb.l2_batch(query, vectors, context=ctx)
+    gpu_distances = hdb.l2_batch(query, vectors, device=ctx)
     gpu_time = time.time() - start_time
     
     stats = ctx.get_stats()

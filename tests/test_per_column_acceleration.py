@@ -26,13 +26,13 @@ def test_cascading_device_assignment():
     # col_another_default -> Should use CPU
     
     print("--- Adding col_default (no explicit device) ---")
-    table.add_index_columns(["col_default"])
+    table.add_index("col_default")
     
     print("--- Adding col_gpu_override with device='mps' ---")
-    table.add_index_columns(["col_gpu_override"], device="mps")
+    table.add_index("col_gpu_override", device="mps")
     
     print("--- Adding col_another_default (no explicit device) ---")
-    table.add_index_columns(["col_another_default"])
+    table.add_index("col_another_default")
     
     # 3. Ingest data
     data = {

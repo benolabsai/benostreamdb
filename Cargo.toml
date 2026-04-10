@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.1.12"
+version = "0.2.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -142,7 +142,7 @@ regex = "1.10"
 sha2 = "0.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cudarc = { version = "0.13.0", features = ["driver", "nvrtc"] }
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-version-from-build-system"] }
 opencl3 = { version = "0.9" } # Intel / OpenCL
 
 [target.'cfg(target_os = "macos")'.dependencies]

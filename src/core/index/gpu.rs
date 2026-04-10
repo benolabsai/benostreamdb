@@ -275,6 +275,30 @@ impl ComputeContext {
             _ => anyhow::bail!("Unsupported device: {}", device),
         }
     }
+
+    pub fn is_available(&self) -> bool {
+        match self.backend {
+            ComputeBackend::Cpu => true,
+            ComputeBackend::Cuda => {
+                #[cfg(feature = "cuda")]
+                { CudaBackend::new(self.device_id as usize).is_ok() }
+                #[cfg(not(feature = "cuda"))]
+                { false }
+            }
+            ComputeBackend::Mps => {
+                #[cfg(all(target_os = "macos", feature = "mps"))]
+                { MetalBackend::new().is_ok() }
+                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                { false }
+            }
+            ComputeBackend::Rocm | ComputeBackend::Intel => {
+                #[cfg(any(feature = "intel", feature = "rocm"))]
+                { true } // OpenCL fallback
+                #[cfg(not(any(feature = "intel", feature = "rocm")))]
+                { false }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

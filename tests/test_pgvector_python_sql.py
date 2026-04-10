@@ -53,7 +53,8 @@ class TestPgVectorCompatibility(unittest.TestCase):
     def test_numpy_scalar_interpolation(self):
         # Test NumPy scalars
         vec = [np.float32(0.0), np.float32(0.0), np.float32(1.0)]
-        vec_str = str(vec).replace(' ', '')
+        vec_list = np.array(vec).tolist()
+        vec_str = str(vec_list).replace(' ', '')
         
         query = f"SELECT id, embedding <-> '{vec_str}' AS dist FROM news ORDER BY dist LIMIT 1"
         df = self.session.sql(query).to_pandas()

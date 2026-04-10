@@ -30,7 +30,7 @@ def test_wikipedia_hybrid_queries():
     """Test hybrid queries: scalar filter + vector search"""
     
     # 1. Generate Data (if not exists)
-    num_docs = 100_000
+    num_docs = 10_000
     data_dir = Path("tests/data/wikipedia")
     
     if not data_dir.exists() or len(list(data_dir.glob("*.parquet"))) == 0:

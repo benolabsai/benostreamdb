@@ -1,0 +1,152 @@
+================================================================================
+ICEBERG SPEC COMPLIANCE CHECK - HyperStreamDB
+================================================================================
+
+
+Format Versions:
+--------------------------------------------------------------------------------
+  ✓ [v1] Format Version Field: format_version field present in TableMetadata
+  ✓ [v2] V2 Format Support: V2 is default format version
+  ✓ [v3] V3 Format Support: V3 features: row lineage, default values, deletion vectors
+
+Data Types:
+--------------------------------------------------------------------------------
+  ✓ [v1] Type: boolean: Supported
+  ✓ [v1] Type: int: Supported
+  ✓ [v1] Type: long: Supported
+  ✓ [v1] Type: float: Supported
+  ✓ [v1] Type: double: Supported
+  ✓ [v1] Type: decimal: Supported
+  ✓ [v1] Type: date: Supported
+  ✓ [v1] Type: time: Supported
+  ✓ [v1] Type: timestamp: Supported
+  ✓ [v1] Type: timestamptz: Supported
+  ✓ [v1] Type: string: Supported
+  ✓ [v1] Type: uuid: Supported
+  ✓ [v1] Type: fixed: Supported
+  ✓ [v1] Type: binary: Supported
+  ✓ [v3] Type: timestamp_ns: Supported
+  ✓ [v3] Type: timestamptz_ns: Supported
+  ✗ [v3] Type: unknown: Not implemented (optional - rarely used)
+  ✗ [v3] Type: variant: Not implemented (optional - rarely used)
+  ✗ [v3] Type: geometry: Not implemented (optional - rarely used)
+  ✗ [v3] Type: geography: Not implemented (optional - rarely used)
+  ✓ [v1] Nested Type: struct: Supported
+  ✓ [v1] Nested Type: list: Supported
+  ✓ [v1] Nested Type: map: Supported
+
+Schema Evolution:
+--------------------------------------------------------------------------------
+  ✓ [v1] Add Column: Supported
+  ✓ [v1] Drop Column: Supported
+  ✓ [v1] Rename Column: Supported
+  ✓ [v1] Reorder Columns: Supported
+  ✓ [v1] Type Promotion (int->long): Supported
+  ✓ [v1] Type Promotion (float->double): Supported
+  ✓ [v1] Type Promotion (decimal precision): Supported
+  ✓ [v1] Default Values (v3): initial-default and write-default supported
+
+Partitioning:
+--------------------------------------------------------------------------------
+  ✓ [v1] Transform: identity: Implemented in IcebergTransform
+  ✓ [v1] Transform: bucket[N]: Implemented in IcebergTransform
+  ✓ [v1] Transform: truncate[W]: Implemented in IcebergTransform
+  ✓ [v1] Transform: year: Implemented in IcebergTransform
+  ✓ [v1] Transform: month: Implemented in IcebergTransform
+  ✓ [v1] Transform: day: Implemented in IcebergTransform
+  ✓ [v1] Transform: hour: Implemented in IcebergTransform
+  ✓ [v1] Transform: void: Implemented in IcebergTransform
+  ✓ [v2] Partition Spec Evolution: set_partition_spec() API available
+
+Sorting:
+--------------------------------------------------------------------------------
+  ✓ [v2] Sort Orders: SortOrder struct and set_sort_order() API
+  ✓ [v2] Sort Direction (asc/desc): Supported
+  ✓ [v2] Null Order (nulls-first/nulls-last): Supported
+
+Row-Level Deletes:
+--------------------------------------------------------------------------------
+  ✓ [v2] Position Delete Files: IcebergDeleteWriter and PositionDeleteReader implemented
+  ✓ [v2] Equality Delete Files: EqualityDeleteReader implemented
+  ✓ [v3] Deletion Vectors (v3): Deletion vectors integrated with Puffin format
+
+Row Lineage (v3):
+--------------------------------------------------------------------------------
+  ✓ [v3] _row_id Field: Metadata column 2147483540 reserved
+  ✓ [v3] _last_updated_sequence_number Field: Metadata column 2147483539 reserved
+  ✓ [v3] next-row-id Table Field: Found in TableMetadata struct
+  ✓ [v3] first-row-id Snapshot Field: Found in Snapshot struct
+
+Manifests:
+--------------------------------------------------------------------------------
+  ✓ [v2] Manifest List Format: ManifestListEntry struct implemented
+  ✓ [v2] Manifest Entry Format: ManifestEntry struct with status, sequence numbers
+  ✓ [v2] Data File Metadata: Column stats, partition values, metrics
+
+Statistics:
+--------------------------------------------------------------------------------
+  ✓ [v1] Column Statistics (min/max/null_count): ColumnStats struct with min, max, null_count
+  ✓ [v2] NDV (Distinct Count) - v2: HyperLogLog NDV estimation implemented
+
+Hashing:
+--------------------------------------------------------------------------------
+  ✓ [v1] Murmur3 Hash Implementation: murmur3_32_x86 function implemented, test vectors verified
+
+File Formats:
+--------------------------------------------------------------------------------
+  ✓ [v1] File Format: Parquet: Supported
+  ✓ [v1] File Format: Avro: Supported
+  ✗ [v1] File Format: ORC: Not implemented (optional - Parquet/Avro cover 95%+ use cases)
+
+================================================================================
+COMPLIANCE SUMMARY
+================================================================================
+Total Checks: 62
+  Required: 57 (57 passed, 0 failed)
+  Optional: 5 (0 passed, 5 failed)
+
+Overall Compliance: 91.9%
+Required Features Compliance: 100.0%
+
+OPTIONAL FAILURES (Can be deferred):
+--------------------------------------------------------------------------------
+  ⚠ [v3] Data Types - Type: unknown
+    Details: Not implemented (optional - rarely used)
+  ⚠ [v3] Data Types - Type: variant
+    Details: Not implemented (optional - rarely used)
+  ⚠ [v3] Data Types - Type: geometry
+    Details: Not implemented (optional - rarely used)
+  ⚠ [v3] Data Types - Type: geography
+    Details: Not implemented (optional - rarely used)
+  ⚠ [v1] File Formats - File Format: ORC
+    Details: Not implemented (optional - Parquet/Avro cover 95%+ use cases)
+
+
+✅ ALL REQUIRED FEATURES IMPLEMENTED (100.0%)!
+
+Note: 5 optional feature(s) not implemented (can be deferred)
+
+Proceeding to regression tests...
+
+================================================================================
+RUNNING REGRESSION TESTS
+================================================================================
+
+
+Running Rust Tests...
+Command: cargo test --release
+✗ Rust Tests TIMEOUT
+
+Running Python Tests...
+Command: pytest tests/ -v
+✗ Python Tests ERROR: [Errno 2] No such file or directory: 'pytest'
+
+Running Integration Tests...
+Command: cargo test --release --test *
+✗ Integration Tests FAILED
+Error output:
+error: target `test_connector_ffi` in package `hyperstreamdb` requires the features: `java`
+Consider enabling them by passing, e.g., `--features="java"`
+
+
+❌ REGRESSION TESTS FAILED

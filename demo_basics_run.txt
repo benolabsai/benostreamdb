@@ -1,0 +1,47 @@
+=== HyperStreamDB Basics Demo ===
+Intel GPU not available (module 'hyperstreamdb' has no attribute 'ComputeContext'), using CPU
+
+Loading AG News dataset...
+Embedding 500 articles using all-MiniLM-L6-v2...
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 2499.17it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+Written data to /home/ralbright/projects/hyperstreamdb/news_db/seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.parquet (500 rows)
+Building indexes for batch of 500 rows
+Indexing String column: category
+Indexing String column: text
+Indexing Vector column: embedding (type=List(Field { data_type: Float32, nullable: true }))
+Indexing Int64 column: label
+Building HNSW-IVF index (blocking): 500 vectors, 384 dims, use_pq=false
+Building HNSW-IVF index: 500 vectors, 4 clusters, 384 dims, M=16, use_pq=false
+  Found 4 unique values
+  Found 500 unique values
+String Inverted Index written to /home/ralbright/projects/hyperstreamdb/news_db/seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.category.inv.parquet
+Committed Manifest: _manifest/v1.json
+String Inverted Index written to /home/ralbright/projects/hyperstreamdb/news_db/seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.text.inv.parquet
+DEBUG: ManifestManager::load_latest: Found version 1 in LATEST_VERSION_CACHE
+DEBUG: ManifestManager::load_latest: Cache hit v1 (entries=0)
+DEBUG: Total entries to prune: 1
+DEBUG: Entry seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.parquet: partitions={}, index_files=[]
+DEBUG: ManifestManager::load_latest: Found version 1 in LATEST_VERSION_CACHE
+DEBUG: ManifestManager::load_latest: Cache hit v1 (entries=0)
+DEBUG: Searching for index for column: category. Available index files: []
+DEBUG: ManifestManager::load_latest: Found version 1 in LATEST_VERSION_CACHE
+DEBUG: ManifestManager::load_latest: Cache hit v1 (entries=0)
+DEBUG: Total entries to prune: 1
+DEBUG: Entry seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.parquet: partitions={}, index_files=[]
+DEBUG: ManifestManager::load_latest: Found version 1 in LATEST_VERSION_CACHE
+DEBUG: ManifestManager::load_latest: Cache hit v1 (entries=0)
+DEBUG: Total entries to prune: 1
+DEBUG: Entry seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.parquet: partitions={}, index_files=[]
+DEBUG: Searching for index for column: category. Available index files: []
+  - K-Means took: 2.37s (5 iterations, 4 clusters)
+  - Grouping vectors took: 1.28ms
+  - Building HNSW graphs took: 345.17ms (4 clusters)
+HNSW-IVF index built in 2.72s: 4 non-empty clusters
+DEBUG: to_manifest_entry: segment_id=seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32, generated index_files=[IndexFile { file_path: "seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.category.inv.parquet", index_type: "inverted", column_name: Some("category"), blob_type: None, offset: None, length: None }, IndexFile { file_path: "seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.label.inv.parquet", index_type: "inverted", column_name: Some("label"), blob_type: None, offset: None, length: None }, IndexFile { file_path: "seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.text.inv.parquet", index_type: "inverted", column_name: Some("text"), blob_type: None, offset: None, length: None }, IndexFile { file_path: "seg_a3c8bf37-bd2a-491a-b907-53799dcb5d32.embedding.cluster_0.hnsw.graph", index_type: "vector", column_name: Some("embedding"), blob_type: None, offset: None, length: None }]

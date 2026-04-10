@@ -83,6 +83,7 @@ pub struct Table {
     primary_key: Arc<std::sync::RwLock<Vec<String>>>,
     autocommit: Arc<std::sync::atomic::AtomicBool>,
     recovered_wal_paths: Arc<std::sync::Mutex<Vec<String>>>,
+    pub(crate) partition_spec: Arc<PartitionSpec>,
 }
 
 impl Clone for Table {
@@ -112,6 +113,7 @@ impl Clone for Table {
             primary_key: self.primary_key.clone(),
             autocommit: self.autocommit.clone(),
             recovered_wal_paths: self.recovered_wal_paths.clone(),
+            partition_spec: self.partition_spec.clone(),
         }
     }
 }
@@ -123,6 +125,92 @@ impl std::fmt::Debug for Table {
             .field("index_all", &self.index_all)
             .finish()
     }
+}
+
+/// Shared WAL recovery logic used by both sync and async Table constructors.
+/// Promotes schema to the widest version, aligns all recovered batches, and
+/// rebuilds the in-memory vector index from recovered data.
+/// Returns (aligned_buffer, optional_memory_index, promoted_schema).
+fn recover_wal_state(
+    recovered_batches: Vec<RecordBatch>,
+    mut schema_val: SchemaRef,
+) -> (Vec<RecordBatch>, Option<InMemoryVectorIndex>, SchemaRef) {
+    if recovered_batches.is_empty() {
+        return (Vec::new(), None, schema_val);
+    }
+
+    tracing::info!("Recovering {} batches from WAL...", recovered_batches.len());
+
+    // Use first batch schema if current schema is empty
+    if schema_val.fields().is_empty() {
+        if let Some(first) = recovered_batches.first() {
+            schema_val = first.schema();
+        }
+    }
+
+    // Promote to the widest schema across all recovered batches
+    for batch in &recovered_batches {
+        let wal_schema = batch.schema();
+        if wal_schema.fields().len() > schema_val.fields().len() {
+            schema_val = wal_schema.clone();
+        }
+    }
+
+    // Align all recovered batches to the widest schema
+    let aligned_buffer: Vec<RecordBatch> = recovered_batches.into_iter().map(|b| {
+        if b.schema() != schema_val {
+            let mut cols = Vec::with_capacity(schema_val.fields().len());
+            for field in schema_val.fields() {
+                let col = if let Some(c) = b.column_by_name(field.name()) {
+                    c.clone()
+                } else {
+                    arrow::array::new_null_array(field.data_type(), b.num_rows())
+                };
+                cols.push(col);
+            }
+            RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
+        } else {
+            b
+        }
+    }).collect();
+
+    // Rebuild in-memory vector index from recovered data.
+    // Look for an "embedding" column (the most common convention), supporting
+    // both FixedSizeList and variable-length List arrays.
+    let col_name = aligned_buffer.first().and_then(|b| {
+        b.schema().fields().iter()
+            .find(|f| f.name() == "embedding")
+            .map(|f| f.name().clone())
+    });
+
+    let mut mem_index = None;
+    if let Some(ref col_name) = col_name {
+        if let Some(first) = aligned_buffer.first() {
+            if let Some(col) = first.column_by_name(col_name) {
+                let dim = if let Some(fsl) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+                    Some(fsl.value_length() as usize)
+                } else if let Some(list) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
+                    (0..list.len()).find_map(|i| {
+                        if list.is_null(i) { None } else {
+                            list.value(i).as_any().downcast_ref::<arrow::array::Float32Array>().map(|v| v.len())
+                        }
+                    })
+                } else { None };
+
+                if let Some(d) = dim {
+                    let mut idx = InMemoryVectorIndex::new(d);
+                    let mut offset = 0;
+                    for batch in &aligned_buffer {
+                        let _ = idx.insert_batch(batch, col_name, offset);
+                        offset += batch.num_rows();
+                    }
+                    mem_index = Some(idx);
+                }
+            }
+        }
+    }
+
+    (aligned_buffer, mem_index, schema_val)
 }
 
 impl Table {
@@ -382,7 +470,10 @@ impl Table {
         let rt = Arc::new(Runtime::new()?);
         
         // Load schema eagerly (blocking)
-        let mut schema_val = rt.block_on(Self::load_initial_schema(store.clone(), &uri));
+        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
+        let (manifest, _) = rt.block_on(manifest_manager.load_latest()).unwrap_or_default();
+        let schema_val = rt.block_on(Self::load_initial_schema(store.clone(), &uri));
+        let partition_spec = Arc::new(manifest.partition_spec.clone());
 
         // Initialize WAL (Sync wrapper)
         let wal_dir = if uri.starts_with("file://") {
@@ -408,56 +499,9 @@ impl Table {
             (Vec::new(), Vec::new())
         });
         
-        let mut initial_buffer = Vec::new();
-        let mut initial_mem_index = None;
-
-        if !recovered_batches.is_empty() {
-            tracing::info!("recovering {} batches from WAL...", recovered_batches.len());
-            initial_buffer = recovered_batches;
-
-            
-            // Promote THE MOST EVOLVED schema from manifest + all WAL batches
-            for batch in &initial_buffer {
-                let wal_schema = batch.schema();
-                if wal_schema.fields().len() > schema_val.fields().len() {
-                    schema_val = wal_schema.clone();
-                }
-            }
-            
-            // Align all recovered batches to the widest schema
-            initial_buffer = initial_buffer.into_iter().map(|b| {
-                if b.schema() != schema_val {
-                    let mut cols = Vec::with_capacity(schema_val.fields().len());
-                    for field in schema_val.fields() {
-                        let col = if let Some(c) = b.column_by_name(field.name()) {
-                            c.clone()
-                        } else {
-                            arrow::array::new_null_array(field.data_type(), b.num_rows())
-                        };
-                        cols.push(col);
-                    }
-                    RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
-                } else {
-                    b
-                }
-            }).collect();
-             
-             // Simple recovery of memory index (brute force)
-             if let Some(first) = initial_buffer.first() {
-                 if let Some(col) = first.column_by_name("embedding") {
-                     if let Some(fsl) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
-                         let dim = fsl.value_length() as usize;
-                         let mut idx = InMemoryVectorIndex::new(dim);
-                         let mut offset = 0;
-                         for batch in &initial_buffer {
-                             let _ = idx.insert_batch(batch, "embedding", offset);
-                             offset += batch.num_rows();
-                         }
-                         initial_mem_index = Some(idx);
-                     }
-                 }
-             }
-        }
+        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
+            recovered_batches, schema_val,
+        );
 
         let table = Table { 
             uri: uri.clone(), 
@@ -484,6 +528,7 @@ impl Table {
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
+            partition_spec,
         };
         
         // Sync PKs after initialization
@@ -957,7 +1002,15 @@ impl Table {
         // This avoids the panic on Drop when running inside an async context.
         // NOTE: Sync methods (read, write) will panic if called on this instance.
         
-        let mut schema_val = Self::load_initial_schema(store.clone(), &uri).await;
+        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
+        let (manifest, version) = manifest_manager.load_latest().await?;
+        let partition_spec = Arc::new(manifest.partition_spec.clone());
+        
+        let schema_val = if version > 0 {
+             Self::load_initial_schema(store.clone(), &uri).await
+        } else {
+             Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
+        };
         let index_cols = Arc::new(std::sync::RwLock::new(Vec::<String>::new()));
 
         // Initialize WAL
@@ -982,109 +1035,13 @@ impl Table {
             (Vec::new(), Vec::new())
         });
         
-        let mut initial_buffer = Vec::new();
-        let mut initial_mem_index = None;
+        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
+            recovered_batches, schema_val,
+        );
 
-        if !recovered_batches.is_empty() {
-            println!("recovering {} batches from WAL...", recovered_batches.len());
-            // Restore Schema from first batch if unknown
-            if schema_val.fields().is_empty() {
-                 if let Some(first) = recovered_batches.first() {
-                     schema_val = first.schema();
-                 }
-            }
-
-            // Restore Index
-            // (Copy-paste logic from write_async backfill, simplified)
-             let target_col = index_cols.read().unwrap().first().cloned()
-                 .or_else(|| {
-                     recovered_batches.first().and_then(|b| {
-                         b.schema().fields().iter()
-                             .find(|f| f.name() == "embedding")
-                             .map(|f| f.name().clone())
-                     })
-                 });
-            
-            if let Some(col_name) = target_col {
-                let mut offset = 0;
-                // Init index
-                if let Some(first) = recovered_batches.first() {
-                     if let Some(col) = first.column_by_name(&col_name) {
-                         // Support FixedSizeList, List, LargeList
-                         let dim = if let Some(fsl) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
-                              Some(fsl.value_length() as usize)
-                         } else if let Some(list) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
-                              // Probe first non-null
-                              (0..list.len()).find_map(|i| {
-                                  if list.is_null(i) { None } else {
-                                      list.value(i).as_any().downcast_ref::<arrow::array::Float32Array>().map(|v| v.len())
-                                  }
-                              })
-                         } 
-                         // Time32 range - Temporarily disabled due to type ambiguity
-                         /*
-                         else if let Some(time32) = col.as_any().downcast_ref::<arrow::array::Time32Array>() {
-                             // This branch is for indexing, not vector search, so dim is not applicable here.
-                             // This block seems misplaced if it's trying to determine vector dimension.
-                             // It should be handled by the `insert_batch` logic if Time32/Time64 indexing is supported.
-                             None
-                         }
-                         // Time64 range
-                         else if let Some(time64) = col.as_any().downcast_ref::<arrow::array::Time64Array>() {
-                             None
-                         }
-                         */
-                         else { None }; // TODO: LargeList support here too if needed generically
-
-                         if let Some(d) = dim {
-                             let mut idx = InMemoryVectorIndex::new(d);
-                             for batch in &recovered_batches {
-                                 let _ = idx.insert_batch(batch, &col_name, offset);
-                                 offset += batch.num_rows();
-                             }
-                             initial_mem_index = Some(idx);
-                         }
-                     }
-                }
-            }
-            
-            initial_buffer = recovered_batches;
-            
-            // Promote THE MOST EVOLVED schema from manifest + all WAL batches
-            for batch in &initial_buffer {
-                let wal_schema = batch.schema();
-                if wal_schema.fields().len() > schema_val.fields().len() {
-                    schema_val = wal_schema.clone();
-                }
-            }
-            
-            // Align all recovered batches to the widest schema
-            initial_buffer = initial_buffer.into_iter().map(|b| {
-                if b.schema() != schema_val {
-                    let mut cols = Vec::with_capacity(schema_val.fields().len());
-                    for field in schema_val.fields() {
-                        let col = if let Some(c) = b.column_by_name(field.name()) {
-                            c.clone()
-                        } else {
-                            arrow::array::new_null_array(field.data_type(), b.num_rows())
-                        };
-                        cols.push(col);
-                    }
-                    RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
-                } else {
-                    b
-                }
-            }).collect();
-            
-            // Note: We DO NOT truncate WAL here. 
-            // We kept the data in memory (dirty). If we crash now, we need WAL again.
-            // We only truncate when we Flush to Parquet.
-            // However, since we re-read them, the `wal` writer needs to know to Append?
-            // `wal.append` opens in Append mode, so it's fine.
-            // BUT: `wal.truncate` happens on flush.
-            // If we have previous WAL data, and we Append new data, the file grows.
-            // Correct.
-        }
+        // Note: We DO NOT truncate WAL here.
+        // Data remains dirty in memory. If we crash now, we need WAL again.
+        // We only truncate when we Flush to Parquet.
 
         let table = Table { 
             uri: uri.to_string(), 
@@ -1111,6 +1068,7 @@ impl Table {
             primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
+            partition_spec,
         };
         
         table.sync_primary_key_from_schema_async().await?;
@@ -1881,7 +1839,6 @@ impl Table {
 
 
 
-        // 1. Read from Physical Storage (Snapshot Isolation)
         let entries_to_read = if version > 0 {
             if expr.is_some() || vector_filter.is_some() {
                 let planner = QueryPlanner::new();
@@ -1993,15 +1950,37 @@ impl Table {
               return Ok(results);
         }
 
+        // Extract Iceberg schema from the already-loaded manifest to avoid
+        // redundant manifest loads inside each per-segment read.
+        let iceberg_schema = _manifest.schemas.iter()
+            .find(|s| s.schema_id == _manifest.current_schema_id)
+            .cloned();
+        let iceberg_schema_arc = iceberg_schema.map(Arc::new);
+
+        // Capture current GPU context so it can be propagated into each async
+        // worker closure (thread_local is per-thread, not per-future).
+        let current_gpu_context = get_global_gpu_context();
+
         let expr_arc = expr.map(Arc::new);
+        let concurrency = config.max_parallel_readers.unwrap_or_else(|| {
+            std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
+        });
         let stream = futures::stream::iter(entries_to_read)
             .map(|entry| {
                 let expr_clone = expr_arc.clone();
+                let schema_clone = iceberg_schema_arc.clone();
+                let ctx = current_gpu_context.clone();
                 async move {
-                    self.read_segment_expr(&entry, expr_clone.as_deref(), version, columns).await
+                    if let Some(c) = ctx {
+                        crate::core::index::gpu::set_global_gpu_context(Some(c));
+                    }
+                    self.read_segment_expr(
+                        &entry, expr_clone.as_deref(), version, columns,
+                        schema_clone.as_deref(),
+                    ).await
                 }
             })
-            .buffer_unordered(16); 
+            .buffer_unordered(concurrency);
 
         let results: Vec<Result<Vec<RecordBatch>>> = stream.collect().await;
         let mut all_batches = Vec::new();
@@ -2083,18 +2062,31 @@ impl Table {
         expr: Option<&FilterExpr>,
         manifest_version: u64,
         columns: Option<&[&str]>,
+        cached_iceberg_schema: Option<&crate::core::manifest::Schema>,
     ) -> Result<Vec<RecordBatch>> {
         let file_path_str = entry.file_path.clone();
         let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
             .strip_suffix(".parquet").unwrap_or(&file_path_str);
 
-        // Load Manifest to get Schema
-        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
-        
-        let iceberg_schema = manifest.schemas.iter().find(|s| s.schema_id == manifest.current_schema_id).cloned();
+        // Use cached schema if provided by caller; otherwise fall back to manifest load.
+        let iceberg_schema = if let Some(schema) = cached_iceberg_schema {
+            Some(schema.clone())
+        } else {
+            let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+            let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
+            manifest.schemas.iter().find(|s| s.schema_id == manifest.current_schema_id).cloned()
+        };
 
-        let config = SegmentConfig::new(&self.uri, segment_id)
+        // Resolve partition-aware path
+        let path = std::path::Path::new(&file_path_str);
+        let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+        let full_base_path = if rel_parent.is_empty() {
+             self.uri.clone()
+        } else {
+             format!("{}/{}", self.uri, rel_parent)
+        };
+
+        let config = SegmentConfig::new(&full_base_path, segment_id)
             .with_parquet_path(entry.file_path.clone())
             .with_data_store(self.data_store.clone().unwrap_or(self.store.clone()))
             .with_delete_files(entry.delete_files.clone())
@@ -2179,7 +2171,7 @@ impl Table {
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let expr = FilterExpr::from_filters(filters.to_vec());
-        self.read_segment_expr(entry, expr.as_ref(), manifest_version, columns).await
+        self.read_segment_expr(entry, expr.as_ref(), manifest_version, columns, None).await
     }
 
     pub async fn read_segment(
@@ -2814,11 +2806,11 @@ impl Table {
         // Apply sort order if configured (Iceberg V2 spec compliance)
         let sorted_batch = self.apply_sort_order(&coalesced_batch)?;
         
+        let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
-        let spec = &manifest.partition_spec;
         
         // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage)
+        let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
         let batch_with_metadata = if manifest.format_version >= 3 {
             let sequence_number = manifest.version as i64;
             self.add_v3_metadata_columns(&sorted_batch, sequence_number)?
@@ -2827,7 +2819,7 @@ impl Table {
         };
 
         // Split batches by partition
-        let partitioned_batches = self.split_batch_by_partition(&batch_with_metadata, spec)?;
+        let partitioned_batches = spec.partition_batch(&batch_with_metadata)?;
         
         // Extract local path from URI for writer
         let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
@@ -2850,12 +2842,20 @@ impl Table {
         // Parallelize partition writing using futures stream
         let stream = futures::stream::iter(partitioned_batches.into_iter().map(|(partition_values, batch)| {
             let base_path = base_path.to_string();
+            let spec = spec.clone();
             let default_device_inner = default_device_for_stream.clone();
             async move {
                 let segment_id = format!("seg_{}", uuid::Uuid::new_v4());
+                let hive_path = spec.partition_to_path(&partition_values);
+                let full_base_path = if hive_path.is_empty() { 
+                    base_path 
+                } else { 
+                    format!("{}/{}", base_path, hive_path)
+                };
+                let _ = std::fs::create_dir_all(&full_base_path);
 
                 // 1. Create writer for data write (no index building yet)
-                let config_write = SegmentConfig::new(&base_path, &segment_id)
+                let config_write = SegmentConfig::new(&full_base_path, &segment_id)
                     .with_index_all(false)
                     .with_columns_to_index(Vec::new())
                     .with_partition_values(partition_values.clone())
@@ -2879,8 +2879,18 @@ impl Table {
         let results: Vec<Result<PartitionSegment>> = stream.collect().await;
         
         for res in results {
-            let (entry, generated_files, segment_id, batch, partition_values) = res?;
+            let spec = spec.clone();
+            let (mut entry, generated_files, segment_id, batch, partition_values) = res?;
             
+            // Adjust paths relative to Table Root (Hive style)
+            let hive_path = spec.partition_to_path(&partition_values);
+            if !hive_path.is_empty() {
+                entry.file_path = format!("{}/{}", hive_path, entry.file_path);
+                for idx in &mut entry.index_files {
+                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                }
+            }
+
             all_generated_files.extend(generated_files);
             all_new_entries.push(entry.clone());
 
@@ -2901,13 +2911,21 @@ impl Table {
                 let pk_clone = self.primary_key.read().unwrap().clone();
                 let table_store = self.store.clone();
 
+                let spec_bg = spec.clone();
                 let handle = tokio::spawn(async move {
                     let _start = std::time::Instant::now();
                     
-                    let config_index = SegmentConfig::new(&base_path_clone, &segment_id_clone)
+                    let hive_path = spec_bg.partition_to_path(&partition_values_clone);
+                    let full_base_path = if hive_path.is_empty() { 
+                        base_path_clone 
+                    } else { 
+                        format!("{}/{}", base_path_clone, hive_path)
+                    };
+
+                    let config_index = SegmentConfig::new(&full_base_path, &segment_id_clone)
                         .with_index_all(index_all_flag)
                         .with_columns_to_index(index_cols_clone)
-                        .with_partition_values(partition_values_clone)
+                        .with_partition_values(partition_values_clone.clone())
                         .with_column_devices(index_configs_clone)
                         .with_default_device(default_device_clone);
                     
@@ -2925,8 +2943,18 @@ impl Table {
                         Ok(Ok((updated_entry, _files))) => {
                             // Atomic metadata update: Add index files to the existing entry
                             let mut merged_entry = entry_clone;
-                            eprintln!("DEBUG: Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_entry.index_files);
-                            merged_entry.index_files = updated_entry.index_files;
+                            let mut updated_index_files = updated_entry.index_files;
+                            
+                            // Prefix index files if in a partitioned subdirectory
+                            let hive_path = spec_bg.partition_to_path(&partition_values_clone);
+                            if !hive_path.is_empty() {
+                                for idx in &mut updated_index_files {
+                                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                                }
+                            }
+
+                            eprintln!("DEBUG: Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_index_files);
+                            merged_entry.index_files = updated_index_files;
                             // NOTE: We MUST preserve the record_count and column_stats from entry_clone,
                             // as updated_entry (from index_writer) only contains the index metadata.
                             
@@ -3170,14 +3198,34 @@ impl Table {
         let expr = FilterExpr::parse_sql(filter, arrow_schema).await.context("Failed to parse delete filter")?;
         
         let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
-        let mut all_new_entries = Vec::new();
+        let candidate_paths: std::collections::HashSet<String> = candidates.iter().map(|(e, _)| e.file_path.clone()).collect();
+        eprintln!("DEBUG: delete_async: filter='{}', potential candidates: {}", filter, candidates.len());
+        
+        let mut all_updated_entries = Vec::new();
 
-        for (entry, _index_file) in candidates {
+        for entry in all_entries {
+            if !candidate_paths.contains(&entry.file_path) {
+                // Preserve non-candidate segments as-is
+                all_updated_entries.push(entry);
+                continue;
+            }
+
+            eprintln!("DEBUG: delete_async: processing segment {}", entry.file_path);
             let file_path_str = entry.file_path.clone();
+            
+            // Fix path resolution: find correct physical subdirectory
+            let path = std::path::Path::new(&file_path_str);
+            let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+            let full_base_path = if rel_parent.is_empty() {
+                self.uri.clone()
+            } else {
+                format!("{}/{}", self.uri, rel_parent)
+            };
+
             let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
                 .strip_suffix(".parquet").unwrap_or(&file_path_str);
             
-            let config = SegmentConfig::new(&self.uri, segment_id)
+            let config = SegmentConfig::new(&full_base_path, segment_id)
                 .with_index_files(entry.index_files.clone())
                 .with_record_count(entry.record_count as u64);
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
@@ -3247,17 +3295,12 @@ impl Table {
 
                 let partition_data = if !entry.partition_values.is_empty() {
                     let path = std::path::Path::new(&entry.file_path);
-                    let parent = path.parent().unwrap(); 
-                    let parent_str = parent.to_str().unwrap();
-                    
-                    let base_clean = self.uri.replace("file://", "");
-                    let parent_clean = parent_str.replace("file://", "");
-                    
-                    let rel_path = if parent_clean.starts_with(&base_clean) {
-                        parent_clean.strip_prefix(&base_clean).unwrap_or("").trim_start_matches('/').to_string()
-                    } else {
-                        parent.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string()
-                    };
+                    let rel_path = path.parent()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or("")
+                        .trim_start_matches('/')
+                        .to_string();
+                        
                     Some((rel_path, entry.partition_values.clone()))
                 } else {
                     None
@@ -3271,14 +3314,16 @@ impl Table {
                 
                 let mut new_entry = entry.clone();
                 new_entry.delete_files.push(delete_file);
-                all_new_entries.push(new_entry);
+                all_updated_entries.push(new_entry);
             } else {
-                all_new_entries.push(entry.clone());
+                all_updated_entries.push(entry.clone());
             }
         }
 
-        if !all_new_entries.is_empty() {
-            manifest_manager.commit(&all_new_entries, &[], crate::core::manifest::CommitMetadata::default()).await?;
+        if !all_updated_entries.is_empty() {
+            // Commit the entire updated state. 
+            // In HyperStreamDB manifest management, this acts as an atomic swap of the segment list.
+            manifest_manager.commit(&all_updated_entries, &[], crate::core::manifest::CommitMetadata::default()).await?;
         }
 
         Ok(())
@@ -3326,7 +3371,19 @@ impl Table {
                 if !candidates.is_empty() {
                     // Refine search within candidates (Index lookup)
                     for (entry, _) in candidates {
-                        let config = SegmentConfig::new(&self.uri, &entry.file_path.replace(".parquet", ""))
+                        // Resolve partition-aware path for PK lookup
+                        let path = std::path::Path::new(&entry.file_path);
+                        let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+                        let full_base_path = if rel_parent.is_empty() {
+                             self.uri.clone()
+                        } else {
+                             format!("{}/{}", self.uri, rel_parent)
+                        };
+                        
+                        let seg_id = entry.file_path.split('/').next_back().unwrap_or(&entry.file_path)
+                            .replace(".parquet", "");
+
+                        let config = SegmentConfig::new(&full_base_path, &seg_id)
                             .with_index_files(entry.index_files.clone())
                             .with_delete_files(entry.delete_files.clone());
                         let reader = HybridReader::new(config, self.store.clone(), &self.uri);
@@ -4129,88 +4186,6 @@ impl Table {
         Ok(result)
     }
 
-    /// Helper to shard a RecordBatch into multiple batches based on PartitionSpec
-    fn split_batch_by_partition(
-        &self, 
-        batch: &RecordBatch, 
-        spec: &crate::core::manifest::PartitionSpec
-    ) -> Result<Vec<(HashMap<String, serde_json::Value>, RecordBatch)>> {
-        use arrow::compute::take;
-        use arrow::array::UInt32Array;
-        use std::collections::BTreeMap;
-        
-        if spec.fields.is_empty() {
-             return Ok(vec![(HashMap::new(), batch.clone())]);
-        }
-
-        let mut row_groups: HashMap<String, Vec<u32>> = HashMap::new();
-        let mut key_cache: HashMap<String, HashMap<String, serde_json::Value>> = HashMap::new();
-        
-        for row_i in 0..batch.num_rows() {
-            let mut key_map = BTreeMap::new();
-            for field in &spec.fields {
-                // Find columns by source_ids (Iceberg Field IDs)
-                let source_ids = field.get_source_ids();
-                let mut col_indices = Vec::new();
-                
-                for id in &source_ids {
-                    let idx = batch.schema().fields().iter().position(|f| {
-                        f.metadata().get("iceberg.id")
-                            .and_then(|id_str| id_str.parse::<i32>().ok())
-                            .map(|found_id| found_id == *id)
-                            .unwrap_or(false)
-                    });
-                    if let Some(i) = idx {
-                        col_indices.push(i);
-                    }
-                }
-
-                // Fallback to name-based if no source_ids matched and field has a name
-                if col_indices.is_empty() {
-                    if let Ok(idx) = batch.schema().index_of(&field.name) {
-                        col_indices.push(idx);
-                    }
-                }
-
-                let val = if !col_indices.is_empty() {
-                    let arrays: Vec<&dyn arrow::array::Array> = col_indices.iter()
-                        .map(|idx| batch.column(*idx).as_ref())
-                        .collect();
-                    let transform = crate::core::iceberg::IcebergTransform::parse(&field.transform);
-                    transform.apply_multi(&arrays, row_i)
-                } else {
-                    serde_json::Value::Null
-                };
-                
-                key_map.insert(field.name.clone(), val);
-            }
-            let key_str = serde_json::to_string(&key_map)?;
-            row_groups.entry(key_str.clone()).or_default().push(row_i as u32);
-            key_cache.entry(key_str).or_insert_with(|| {
-                let mut final_key = HashMap::new();
-                for (k, v) in key_map {
-                    final_key.insert(k, v);
-                }
-                final_key
-            });
-        }
-        
-        let mut result = Vec::new();
-        for (key_str, row_indices) in row_groups {
-            let key = key_cache.remove(&key_str).unwrap();
-            let indices = UInt32Array::from(row_indices);
-            let sub_batch = RecordBatch::try_new(
-                batch.schema(),
-                batch.columns().iter()
-                    .map(|c| take(c.as_ref(), &indices, None))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .map_err(|e| anyhow::anyhow!("Arrow take failed: {}", e))?
-            )?;
-            result.push((key, sub_batch));
-        }
-        
-        Ok(result)
-    }
     fn get_vector_column_for_shuffling(&self, batch: &RecordBatch) -> Option<String> {
         // Use first index column if it's a vector
         let index_cols = self.index_columns.read().unwrap();
@@ -4366,7 +4341,7 @@ mod tests {
         )?;
 
         // 4. Split by partition
-        let results = table.split_batch_by_partition(&batch, &spec)?;
+        let results = spec.partition_batch(&batch)?;
         
         // Each uniquely combined (col1, col2) should have a stable hash
         // (1, "a"), (1, "b"), (2, "a") are all different, so they should return 3 partitions

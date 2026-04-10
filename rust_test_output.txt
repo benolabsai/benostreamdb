@@ -1,0 +1,447 @@
+   Compiling hyperstreamdb v0.1.12 (/home/ralbright/projects/hyperstreamdb)
+warning: unused import: `crate::core::license::LicensePayload`
+  --> src/core/table/mod.rs:21:5
+   |
+21 | use crate::core::license::LicensePayload;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/core/table/mod.rs:128:13
+    |
+128 |         let mut table = Self {
+    |             ----^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `hyperstreamdb` (lib) generated 2 warnings (run `cargo fix --lib -p hyperstreamdb` to apply 2 suggestions)
+warning: `hyperstreamdb` (lib test) generated 2 warnings (2 duplicates)
+    Finished `release` profile [optimized] target(s) in 18m 56s
+     Running unittests src/lib.rs (target/release/deps/hyperstreamdb-575e24a4c58929ed)
+
+running 345 tests
+test core::cache::tests::test_cache_invalidation ... ok
+test core::cache::tests::test_byte_cache_hit_miss ... ok
+test core::cache::tests::test_index_cache_hit_miss ... ok
+test core::cache::tests::test_latest_version_cache_hit_miss ... ok
+test core::cache::tests::test_cache_key_uniqueness ... ok
+test core::cache::tests::test_cache_concurrent_access ... ok
+test core::cache::tests::test_inverted_index_cache_hit_miss ... ok
+test core::index::gpu::tests::test_cpu ... ok
+test core::index::hnsw_rs::dist::tests::have_avx2 ... ok
+test core::index::hnsw_rs::dist::tests::have_avx512f ... ok
+test core::index::hnsw_rs::dist::tests::have_sse2 ... ok
+test core::index::hnsw_rs::dist::tests::test_access_to_dist_cos ... ok
+test core::index::hnsw_rs::dist::tests::test_access_to_dist_l1 ... ok
+test core::index::hnsw_rs::dist::tests::test_dist_ext_float ... ok
+test core::index::hnsw_rs::dist::tests::test_dot_distances ... ok
+test core::index::hnsw_rs::dist::tests::test_feature_simd ... ok
+test core::index::hnsw_rs::dist::tests::test_hamming_f32 ... ok
+test core::index::hnsw_rs::dist::tests::test_hamming_f64 ... ok
+test core::index::hnsw_rs::dist::tests::test_hellinger ... ok
+test core::index::hnsw_rs::dist::tests::test_jaccard_u16 ... ok
+test core::index::hnsw_rs::dist::tests::test_jeffreys ... ok
+test core::index::hnsw_rs::dist::tests::test_jensenshannon ... ok
+test core::index::hnsw_rs::dist::tests::test_levenshtein ... ok
+test core::index::hnsw_rs::dist::tests::test_my_closure ... ok
+test core::index::hnsw_rs::dist::tests::test_simd_hamming_u32 ... ok
+test core::index::hnsw_ivf::tests::test_hnsw_ivf_pre_filtering ... ok
+test core::index::hnsw_rs::dist::tests::test_simd_hamming_u64 ... ok
+test core::compaction::tests::test_hilbert_clustering ... ok
+test core::compaction::tests::test_zorder_clustering ... ok
+test core::index::hnsw_rs::hnswio::tests::test_bincode ... ok
+test core::compaction::tests::test_compaction_local_fs ... ok
+test core::compaction::tests::test_vacuum_old_versions ... ok
+test core::compaction::tests::test_concurrent_compaction ... ok
+test core::index::ivf::tests::test_ivf_basic ... ok
+test core::index::memory::tests::test_l2_distance_consistency ... ok
+test core::index::memory::tests::test_memory_index_search ... ok
+test core::maintenance::tests::test_maintenance_flow ... ok
+test core::manifest::tests::test_manifest_flow ... ok
+test core::manifest::tests::test_verify_manifest_history ... ok
+test core::merge::tests::test_find_row_ids_basic ... ok
+test core::merge::tests::test_merge_empty_segment ... ok
+test core::merge::tests::test_merge_handles_duplicates ... ok
+test core::merge::tests::test_merge_handles_nulls ... ok
+test core::merge::tests::test_merge_large_dataset ... ok
+test core::merge::tests::test_merge_planner_new ... ok
+test core::merge::tests::test_merge_schema_evolution ... ok
+test core::merge::tests::test_prune_segments_empty_index ... ok
+test core::merge::tests::test_prune_segments_with_index ... ok
+test core::query::tests::property_tests::test_deterministic_tiebreaking ... ok
+test core::query::tests::property_tests::test_distance_column_in_results ... ok
+test core::index::hnsw_rs::hnswio::tests::test_dump_reload_1 ... ok
+test core::query::tests::property_tests::test_limit_and_offset_correctness ... ok
+test core::query::tests::property_tests::test_knn_result_ordering ... ok
+test core::query::tests::test_auto_detect_parallel_readers_small_segments ... ok
+test core::query::tests::test_auto_detect_respects_manual_override ... ok
+test core::query::tests::test_auto_detect_parallel_readers_large_segments ... ok
+test core::query::tests::test_merge_and_rerank_empty ... ok
+test core::query::tests::test_merge_and_rerank_low_k ... ok
+test core::query::tests::test_merge_and_rerank_vector_results ... ok
+test core::query::tests::test_query_config_clone ... ok
+test core::query::tests::test_query_config_default ... ok
+test core::reader::tests::test_reader_with_deletes ... ok
+test core::query::tests::test_query_config_with_max_parallel_readers ... ok
+test core::reader::tests::test_row_group_reading ... ok
+test core::index::hnsw_rs::hnswio::tests::test_dump_reload_myfn ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_all_ones ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_all_zeros ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_consistency ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_empty_vector ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_format_exists ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_format_selection ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_handles_partial_bytes ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_large_vectors ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_preserves_information ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_readability ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_sql_integration ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_compound_primary_key_hybrid_search ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_compound_primary_key_reordering ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_fast_path_single_threaded ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_binary_display_single_bit ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_limit_pushdown_basic ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_limit_pushdown_with_offset ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_multiple_vector_columns_fallback ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_manifest_caching_reduces_parses ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_multiple_vector_columns_primary_ranking ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_row_group_skipping_preserves_correctness ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_row_group_skipping_with_statistics ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_vector_search_config_custom ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_vector_search_config_defaults ... ok
+test core::sql::optimizer::config_defaults_tests::test_config_behavior_with_invalid_hint_values ... ok
+test core::sql::optimizer::config_defaults_tests::test_config_behavior_with_no_hints ... ok
+test core::sql::optimizer::config_defaults_tests::test_config_behavior_with_only_whitespace_hints ... ok
+test core::sql::optimizer::config_defaults_tests::test_default_ef_search_value ... ok
+test core::sql::optimizer::config_defaults_tests::test_default_probes_value ... ok
+test core::sql::optimizer::config_defaults_tests::test_default_trait_implementation ... ok
+test core::sql::optimizer::binary_vector_display_tests::test_optimization_compatibility_matrix ... ok
+test core::sql::optimizer::config_defaults_tests::test_default_use_index_value ... ok
+test core::sql::optimizer::config_defaults_tests::test_from_session_config_with_empty_config ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_all_partitions_empty ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_aggregation_with_group_by ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_batch_handling ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_input_dimension_agnostic ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_input_not_an_error ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_input_returns_null_concept ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_vs_zero_vector ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_merge_batch_with_empty_partitions ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_null_vs_empty_distinction ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_vector_avg_empty_input_behavior ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_empty_input_type_safety ... ok
+test core::sql::optimizer::empty_aggregation_tests::test_vector_sum_empty_input_behavior ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_configuration_parameters ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_preserves_query_semantics ... ok
+test core::index::hnsw_rs::flatten::tests::test_dump_reload_graph_flatten ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_scenarios_documentation ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_with_different_metrics ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_with_offset ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_with_filters ... ok
+test core::sql::optimizer::fallback_tests::test_index_file_not_found_handling ... ok
+test core::sql::optimizer::fallback_tests::test_multiple_vector_order_by_handling ... ok
+test core::sql::optimizer::fallback_tests::test_non_vector_sort_expression_no_optimization ... ok
+test core::sql::optimizer::fallback_tests::test_optimizer_handles_missing_index_gracefully ... ok
+test core::sql::optimizer::fallback_tests::test_multiple_order_by_no_optimization ... ok
+test core::sql::optimizer::fallback_tests::test_fallback_logging_message ... ok
+test core::sql::optimizer::fallback_tests::test_optimizer_name_for_fallback_scenarios ... ok
+test core::segment::tests::test_write_hybrid_segment ... ok
+test core::sql::optimizer::fallback_tests::test_sequential_scan_fallback_behavior ... ok
+test core::sql::optimizer::fallback_tests::test_optimizer_rejects_multiple_sort_expressions ... ok
+test core::sql::optimizer::fallback_tests::test_optimizer_schema_check_enabled ... ok
+test core::sql::optimizer::fallback_tests::test_zero_sort_expressions_no_optimization ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_all_params ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_preserves_vector_params ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_with_different_metrics ... ok
+test core::sql::optimizer::fallback_tests::test_sequential_scan_when_no_index_exists ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_with_offset ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_vector_column_names ... ok
+test core::sql::optimizer::property_tests::test_filter_combination_with_vector_search ... ok
+test core::sql::optimizer::property_tests::test_index_pushdown_preserves_limit ... ok
+test core::sql::optimizer::property_tests::test_index_pushdown_creates_vector_search_params ... ok
+test core::sql::optimizer::property_tests::test_index_pushdown_vector_value_types ... ok
+test core::sql::optimizer::property_tests::test_index_pushdown_with_all_metrics ... ok
+test core::sql::optimizer::property_tests::test_index_pushdown_with_configuration ... ok
+test core::sql::optimizer::property_tests::test_knn_pattern_detection_with_limit ... ok
+test core::sql::optimizer::property_tests::test_knn_pattern_with_config_parameters ... ok
+test core::sql::optimizer::property_tests::test_knn_pattern_with_different_metrics ... ok
+test core::sql::optimizer::property_tests::test_sql_hints_parsing ... ok
+test core::sql::optimizer::property_tests::test_offset_calculation_correctness ... ok
+test core::sql::optimizer::property_tests::test_sql_hints_with_whitespace_variations ... ok
+test core::sql::optimizer::property_tests::test_vector_search_params_chaining ... ok
+test core::sql::optimizer::property_tests::test_vector_search_params_builder ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_empty ... ok
+test core::sql::optimizer::property_tests::test_sql_hints_with_unknown_parameters ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_high_dimensionality ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_mixed_schema ... ok
+test core::index::hnsw_rs::hnswio::tests::test_dump_reload_graph_only ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_indices_sorted ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_non_nullable_column ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_indices_values_length_match ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_nullable_column ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_schema_representation ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_single_element ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_struct_creation ... ok
+test core::sql::optimizer::sparse_vector_table_tests::test_sparse_vector_table_schema_with_multiple_columns ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_preserves_vector_dimensions ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_threshold_comparison_operators ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_cosine_distance ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_different_column_names ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_hamming_distance ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_jaccard_distance ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_l1_distance ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_l2_distance ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_multiple_conditions ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_inner_product ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_single_dimension_vector ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_negative_threshold ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_sparse_vector ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_zero_dimension_vector ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_threshold_zero ... ok
+test core::sql::pgvector_rewriter::tests::test_cast_vector_literal ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_large_threshold ... ok
+test core::sql::optimizer::where_clause_tests::test_where_clause_with_various_k_values ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_format_consistency ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_format_round_trip ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_literal_bit_count_validation ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_literal_parsing_binary_format ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_literal_invalid_digit ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_literal_parsing_hex_format ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_literal_partial_byte_handling ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_hex_literal_invalid_digit ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_hex_format_round_trip ... ok
+test core::sql::optimizer::property_tests::test_config_defaults_when_not_set ... ok
+test core::sql::vector_literal::dimension_validation_property_tests::test_dimension_validation_mismatched_dimensions ... ok
+test core::sql::vector_literal::dimension_validation_property_tests::test_dimension_validation_edge_cases ... ok
+test core::sql::vector_literal::dimension_validation_property_tests::test_dimension_validation_matching_dimensions ... ok
+test core::sql::vector_literal::dimension_validation_property_tests::test_dimension_validation_zero_dimension ... ok
+test core::sql::vector_literal::binary_vector_property_tests::test_binary_quantization_correctness ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_empty_brackets ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_double_comma ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_leading_comma ... ok
+test core::sql::tests::test_parallel_scan_planning ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_no_brackets ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_missing_closing_bracket ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_missing_opening_bracket ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_invalid_token ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_trailing_comma ... ok
+test core::sql::vector_literal::dimension_validation_property_tests::test_dimension_validation_with_parsed_vectors ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_with_integer_values ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_duplicate_detection ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_empty_parsing ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_high_sparsity ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_index_bounds_validation ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_error_handling_invalid_format ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_with_mixed_types ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_with_negative_values ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_missing_braces ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_with_zero_values ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_parsing_correctness ... ok
+test core::sql::vector_literal::tests::test_binary_round_trip ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_all_ones ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_binary_string ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_hex_string ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_multiple_bytes_binary ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_multiple_bytes_hex ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_partial_byte ... ok
+test core::sql::vector_literal::tests::test_parse_binary_basic ... ok
+test core::sql::vector_literal::tests::test_parse_binary_bit_count_mismatch ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_parsing_correctness ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_format ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_incomplete_byte ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_invalid_digit ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_lowercase ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_uppercase ... ok
+test core::sql::vector_literal::tests::test_parse_binary_invalid_digit ... ok
+test core::sql::vector_literal::tests::test_parse_binary_invalid_format ... ok
+test core::sql::vector_literal::tests::test_parse_binary_lowercase ... ok
+test core::sql::vector_literal::sparse_vector_property_tests::test_sparse_vector_with_various_formats ... ok
+test core::sql::vector_literal::tests::test_parse_binary_hex_multiple_bytes ... ok
+test core::sql::vector_literal::tests::test_parse_binary_missing_closing_quote ... ok
+test core::sql::vector_literal::tests::test_format_binary_vector_all_zeros ... ok
+test core::sql::vector_literal::tests::test_parse_binary_no_expected_bits ... ok
+test core::sql::vector_literal::tests::test_parse_empty_vector ... ok
+test core::sql::vector_literal::tests::test_parse_binary_multiple_bytes ... ok
+test core::sql::vector_literal::tests::test_parse_double_comma ... ok
+test core::sql::vector_literal::tests::test_parse_integer_vector ... ok
+test core::sql::vector_literal::tests::test_parse_float_vector ... ok
+test core::sql::vector_literal::property_tests::test_vector_literal_with_various_formats ... ok
+test core::sql::vector_literal::tests::test_parse_invalid_number ... ok
+test core::sql::vector_literal::tests::test_parse_leading_comma ... ok
+test core::sql::vector_literal::tests::test_parse_missing_closing_bracket ... ok
+test core::sql::vector_literal::tests::test_parse_missing_opening_bracket ... ok
+test core::sql::vector_literal::tests::test_parse_binary_partial_byte ... ok
+test core::sql::vector_literal::tests::test_parse_multiple_errors ... ok
+test core::sql::vector_literal::tests::test_parse_mixed_vector ... ok
+test core::sql::vector_literal::tests::test_parse_negative_numbers ... ok
+test core::sql::vector_literal::tests::test_parse_scientific_notation ... ok
+test core::sql::vector_literal::tests::test_parse_single_element ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_basic ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_empty ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_index_out_of_bounds ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_invalid_format ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_invalid_index ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_missing_closing_brace ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_missing_opening_brace ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_duplicate_indices ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_invalid_value ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_negative_values ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_single_element ... ok
+test core::sql::vector_literal::tests::test_parse_trailing_comma ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_with_spaces ... ok
+test core::sql::vector_literal::tests::test_parse_sparse_vector_zero_values ... ok
+test core::sql::vector_literal::tests::test_parse_special_float_values ... ok
+test core::sql::vector_literal::tests::test_parse_very_small_numbers ... ok
+test core::sql::vector_literal::tests::test_parse_whitespace_only ... ok
+test core::sql::vector_literal::tests::test_parse_with_spaces ... ok
+test core::sql::vector_literal::tests::test_validate_dimensions_large ... ok
+test core::sql::vector_literal::tests::test_validate_dimensions_match ... ok
+test core::sql::vector_literal::tests::test_validate_dimensions_mismatch ... ok
+test core::sql::vector_literal::tests::test_parse_very_large_numbers ... ok
+test core::sql::vector_literal::tests::test_validate_dimensions_zero ... ok
+test core::sql::vector_operators::property_tests::test_all_operators_have_unique_udfs ... ok
+test core::sql::vector_operators::tests::test_cosine_operator_mapping ... ok
+test core::sql::vector_operators::property_tests::test_operator_to_udf_mapping_correctness ... ok
+test core::sql::vector_operators::tests::test_all_operators_have_descriptions ... ok
+test core::sql::vector_operators::tests::test_get_operator_for_udf ... ok
+test core::sql::vector_operators::tests::test_hamming_operator_mapping ... ok
+test core::sql::vector_operators::tests::test_inner_product_operator_mapping ... ok
+test core::sql::vector_operators::tests::test_l1_operator_mapping ... ok
+test core::sql::vector_operators::tests::test_jaccard_operator_mapping ... ok
+test core::sql::vector_operators::tests::test_get_udf_for_operator ... ok
+test core::sql::vector_operators::tests::test_l2_operator_mapping ... ok
+test core::sql::vector_operators::tests::test_operator_case_sensitivity ... ok
+test core::sql::vector_operators::tests::test_operator_mapping_completeness ... ok
+test core::sql::vector_operators::tests::test_operator_not_found ... ok
+test core::sql::vector_operators::tests::test_operator_uniqueness ... ok
+test core::sql::vector_operators::tests::test_register_vector_operators_missing_udf ... ok
+test core::sql::vector_operators::tests::test_udf_not_found ... ok
+test core::sql::vector_operators::tests::test_register_vector_operators_success ... ok
+test core::sql::vector_operators::tests::test_udf_uniqueness ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_avg_dimension_mismatch ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_avg_empty_input ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_sum_dimension_mismatch ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_sum_empty_input ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_avg_correctness ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_sum_correctness ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_avg_merge_batch ... ok
+test core::sql::vector_udf::aggregation_property_tests::test_vector_sum_merge_batch ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_dense_to_sparse_to_dense_round_trip ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_cosine_distance_equivalence ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_distance_with_complete_overlap ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_distance_with_no_overlap ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_distance_with_high_sparsity ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_inner_product_distance_equivalence ... ok
+test core::sql::vector_udf::sparse_distance_property_tests::test_sparse_l2_distance_equivalence ... ok
+test core::sql::vector_udf::sparse_utility_tests::test_sparsevec_dims ... ok
+test core::sql::vector_udf::sparse_utility_tests::test_sparsevec_dims_various_sizes ... ok
+test core::sql::vector_udf::sparse_utility_tests::test_sparsevec_nnz ... ok
+test core::sql::vector_udf::sparse_utility_tests::test_sparsevec_nnz_empty ... ok
+test core::sql::vector_udf::sparse_utility_tests::test_sparsevec_nnz_various_sparsity ... ok
+test core::sql::vector_udf::type_conversion_property_tests::test_dense_sparse_dense_round_trip ... ok
+test core::sql::vector_operators::property_tests::test_operator_registration_with_random_subset ... ok
+test core::storage::tests::test_azure_uri_parsing ... ok
+test core::storage::tests::test_gcs_uri_parsing ... ok
+test core::storage::tests::test_http_uri_parsing ... ok
+test core::storage::tests::test_invalid_uri ... ok
+test core::storage::tests::test_local_filesystem_absolute_path ... ok
+test core::storage::tests::test_local_filesystem_creates_directory ... ok
+test core::storage::tests::test_local_filesystem_file_uri ... ok
+test core::storage::tests::test_path_normalization ... ok
+test core::storage::tests::test_s3_uri_parsing ... ok
+test core::storage::tests::test_unsupported_scheme ... ok
+test core::wal::tests::test_wal_basic_operations ... ok
+test core::wal::tests::test_wal_compaction ... ok
+test core::wal::tests::test_wal_compaction_preserves_data ... ok
+test core::wal::tests::test_wal_crash_recovery ... ok
+test core::wal::tests::test_wal_empty_dir ... ok
+test core::wal::tests::test_wal_large_batches ... ok
+test core::wal::tests::test_wal_multiple_schemas ... ok
+test core::wal::tests::test_wal_nonexistent_dir ... ok
+test core::cache::tests::test_cache_eviction_lru ... ok
+test core::sql::vector_udf::type_conversion_property_tests::test_vector_to_sparse_udf_round_trip ... ok
+test core::sql::vector_udf::type_conversion_property_tests::test_binary_quantization_via_cast ... ok
+test core::index::hnsw_rs::hnsw::tests::test_iter_point ... ok
+test core::sql::vector_udf::grouped_aggregation_property_tests::test_grouped_vector_sum ... ok
+test core::sql::vector_udf::grouped_aggregation_property_tests::test_grouped_vector_avg ... ok
+test core::index::hnsw_rs::hnsw::tests::test_iter_layerpoint ... ok
+test core::wal::tests::test_wal_should_compact ... ok
+
+test result: ok. 345 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s
+
+     Running unittests src/bin/gateway.rs (target/release/deps/gateway-5dbab628df969744)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests tests/bin/generate_iceberg_manifests.rs (target/release/deps/generate_iceberg_manifests-e3db42adf4fa9d13)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/hdb.rs (target/release/deps/hdb-4123494b2029ae93)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/iceberg_rest.rs (target/release/deps/iceberg_rest-8cad8f10467ec46e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/probe_datafusion.rs (target/release/deps/probe_datafusion-fc510d10a2270877)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/setup_test_data.rs (target/release/deps/setup_test_data-3dbe05d1ff4cd92c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests tests/bin/verify_iceberg_read_check.rs (target/release/deps/verify_iceberg_read_check-7d4a08e43ae52f75)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/verify_layered_indexing.rs (target/release/deps/verify_layered_indexing-acbb4b1240d3f341)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/all_types_index_test.rs (target/release/deps/all_types_index_test-8f3468afd26bd9dd)
+
+running 1 test
+test test_all_types_indexing ... FAILED
+
+failures:
+
+---- test_all_types_indexing stdout ----
+Written data to /tmp/.tmpQbEpyl/69dd0c84-c190-4a61-8fdc-214e014dae36.parquet (5 rows)
+DEBUG: Total entries to prune: 1
+DEBUG: Entry 69dd0c84-c190-4a61-8fdc-214e014dae36.parquet: partitions={}, index_files=[]
+DEBUG: Boolean Pruning Check (MAX): entry_max=Boolean(true) (Bool(true)), filter_min=Bool(true), too_small=false
+
+thread 'test_all_types_indexing' (2864664) panicked at tests/all_types_index_test.rs:71:9:
+assertion `left == right` failed
+  left: 5
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    test_all_types_indexing
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `--test all_types_index_test`
