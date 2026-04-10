@@ -142,7 +142,7 @@ regex = "1.10"
 sha2 = "0.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-version-from-build-system"], optional = true }
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
 opencl3 = { version = "0.9" } # Intel / OpenCL
 
 [target.'cfg(target_os = "macos")'.dependencies]
