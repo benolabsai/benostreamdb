@@ -38,7 +38,7 @@ jobs:
           pip install -r docs/requirements.txt
 
       - name: Build Rust API Documentation
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps --features python,cuda,enterprise,java,mps,intel
 
       - name: Build Python Extension (for autodoc)
         run: |
