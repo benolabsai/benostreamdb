@@ -85,18 +85,25 @@ static PTX_HAMMING: &str = include_str!(concat!(env!("OUT_DIR"), "/hamming_dista
 #[cfg(feature = "cuda")]
 static PTX_JACCARD: &str = include_str!(concat!(env!("OUT_DIR"), "/jaccard_distance.ptx"));
 
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_L2: &str = include_str!("opencl/l2_distance.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_COSINE: &str = include_str!("opencl/cosine_distance.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_INNER_PRODUCT: &str = include_str!("opencl/inner_product.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_L1: &str = include_str!("opencl/l1_distance.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_HAMMING: &str = include_str!("opencl/hamming_distance.cl");
+#[allow(dead_code)]
 #[cfg(any(feature = "intel", feature = "rocm"))]
 static OPENCL_SRC_JACCARD: &str = include_str!("opencl/jaccard_distance.cl");
 
