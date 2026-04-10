@@ -129,7 +129,7 @@ impl std::fmt::Debug for Table {
 
 impl Drop for Table {
     fn drop(&mut self) {
-        if let Ok(tasks) = self.background_tasks.lock() {
+        if let Ok(tasks) = self.background_tasks.try_lock() {
             let pending = tasks.iter().filter(|t| !t.is_finished()).count();
             if pending > 0 {
                 tracing::warn!(
@@ -163,13 +163,16 @@ fn recover_wal_state(
         }
     }
 
-    // Promote to the widest schema across all recovered batches
+    // Safely attempt to merge all WAL schemas to capture any column additions
+    // or type evolutions instead of fragile field count comparisons.
+    let mut merged_schema = schema_val.as_ref().clone();
     for batch in &recovered_batches {
-        let wal_schema = batch.schema();
-        if wal_schema.fields().len() > schema_val.fields().len() {
-            schema_val = wal_schema.clone();
+        match arrow::datatypes::Schema::try_merge(vec![merged_schema.clone(), batch.schema().as_ref().clone()]) {
+            Ok(s) => merged_schema = s,
+            Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
         }
     }
+    let schema_val = std::sync::Arc::new(merged_schema);
 
     // Align all recovered batches to the widest schema
     let aligned_buffer: Vec<RecordBatch> = recovered_batches.into_iter().map(|b| {
@@ -350,20 +353,20 @@ impl Table {
         // In a production environment, this could be optimized using indexes.
         let batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
         
-        // We use a HashSet of combined row values to detect duplicates
         let mut seen = std::collections::HashSet::new();
         
         for batch in batches {
-            for row_idx in 0..batch.num_rows() {
-                // Generate a stable key for the row values across the PK columns
-                let mut row_key = Vec::new();
-                for col_idx in 0..batch.num_columns() {
-                    let col = batch.column(col_idx);
-                    // Use Display/Debug representation as a simple stable key for now
-                    row_key.push(format!("{:?}", col.slice(row_idx, 1)));
-                }
+            let sort_fields = batch.schema().fields().iter()
+                .map(|f| arrow::row::SortField::new(f.data_type().clone()))
+                .collect::<Vec<_>>();
+            let converter = arrow::row::RowConverter::new(sort_fields)
+                .map_err(|e| anyhow::anyhow!("RowConverter error: {}", e))?;
+            
+            let rows = converter.convert_columns(batch.columns())
+                .map_err(|e| anyhow::anyhow!("Row conversion error: {}", e))?;
                 
-                if !seen.insert(row_key) {
+            for row in rows.iter() {
+                if !seen.insert(row.as_ref().to_vec()) {
                     return Err(anyhow::anyhow!("Primary key violation detected for columns {:?}: Duplicate row values found.", col_names));
                 }
             }
