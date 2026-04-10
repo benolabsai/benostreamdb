@@ -1,7 +1,7 @@
 Welcome to HyperStreamDB
 ========================
 
-.. image:: /_static/logo.png
+.. image:: /_static/HyperStreamDB.png
    :align: center
    :width: 300px
    :alt: HyperStreamDB Logo

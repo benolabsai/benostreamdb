@@ -1,5 +1,8 @@
-# HyperStreamDB
+<p align="center">
+  <img src="HyperStreamDB.png" alt="HyperStreamDB Logo" width="300">
+</p>
 
+# HyperStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
 A production-ready indexed data lake format that combines the transactional guarantees of Apache Iceberg with persistent indexes (scalar bitmaps + HNSW vector search) for blazing-fast queries on object storage.
