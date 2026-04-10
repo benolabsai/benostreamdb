@@ -43,14 +43,15 @@ jobs:
       - name: Build Python Extension (for autodoc)
         run: |
           # Use maturin to build and pip install the package so autodoc can find it
-          maturin build --release
+          pip install maturin
+          maturin build --release || maturin build --release --compatibility manylinux2014
           pip install target/wheels/*.whl
 
       - name: Prepare Sphinx Guides
         run: |
           # Copy existing markdown guides into source directory
           mkdir -p docs/source/guides/
-          cp docs/*.md docs/source/guides/
+          find docs -maxdepth 1 -name "*.md" -type f -exec cp {} docs/source/guides/ \;
           # Ensure filename matches index.rst expectation
           mv docs/source/guides/INSTALLATION.md docs/source/guides/installation.md || true
           mv docs/source/guides/COMPREHENSIVE_GUIDE.md docs/source/guides/comprehensive_guide.md || true
