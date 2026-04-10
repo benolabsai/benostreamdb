@@ -1,0 +1,9 @@
+[
+  {
+    "dataset_size": 10000,
+    "filter_selectivity": "20%",
+    "qdrant_mean_ms": 203.33309173583984,
+    "hyperstream_mean_ms": 12.36257553100586,
+    "speedup": 16.447470126744374
+  }
+]

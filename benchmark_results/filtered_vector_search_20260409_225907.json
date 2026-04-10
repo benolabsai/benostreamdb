@@ -1,0 +1,14 @@
+[
+  {
+    "name": "filtered_vector_search",
+    "throughput": null,
+    "latency_p50_ms": 11.921167373657227,
+    "latency_p95_ms": 17.14615821838379,
+    "latency_p99_ms": 17.860612869262695,
+    "latency_mean_ms": 13.252544403076172,
+    "latency_min_ms": 11.279821395874023,
+    "latency_max_ms": 18.039226531982422,
+    "elapsed_sec": 0.06683564186096191,
+    "memory_delta_mb": 18.35546875
+  }
+]
