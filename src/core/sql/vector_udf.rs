@@ -118,12 +118,12 @@ where
     use crate::core::index::gpu;
     
     // Check if GPU context is available
-    if let Some(ctx) = gpu::get_global_gpu_context() {
+    if let Some(_ctx) = gpu::get_global_gpu_context() {
         // Prepare vectors for batch computation (single pair)
         let dim = v1.len();
         
         // Call GPU compute_distance with v2 as a "batch" of 1 vector
-        match gpu::compute_distance(v1, v2, dim, metric, &ctx) {
+        match gpu::compute_distance(v1, v2, dim, metric) {
             Ok(distances) => {
                 // Extract the single distance result
                 if let Some(&dist) = distances.first() {
@@ -133,10 +133,10 @@ where
             }
             Err(_) => {
                 // GPU computation failed, fall back to CPU
-                // Error is silently handled - this is expected behavior for graceful degradation
             }
         }
     }
+
     
     // Fall back to CPU computation
     cpu_fn(v1, v2)

@@ -1,0 +1,107 @@
+    Checking hyperstreamdb v0.1.12 (/home/ralbright/projects/hyperstreamdb)
+warning: unused import: `futures::StreamExt`
+ --> src/core/table/query.rs:7:5
+  |
+7 | use futures::StreamExt;
+  |     ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx`
+   --> src/core/table/query.rs:101:21
+    |
+101 |         if let Some(ctx) = get_global_gpu_context() {
+    |                     ^^^ help: if this is intentional, prefix it with an underscore: `_ctx`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `expr_opt`
+   --> src/core/reader.rs:166:36
+    |
+166 |     pub async fn read_async(&self, expr_opt: Option<&FilterExpr>, columns: Option<&[&str]>) -> Result<Vec<arrow::record_batch::RecordBatc...
+    |                                    ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_expr_opt`
+
+warning: unused variable: `uri`
+  --> src/core/sql/physical_plan.rs:84:31
+   |
+84 |     pub async fn create_async(uri: String, schema: SchemaRef) -> Result<Self> {
+   |                               ^^^ help: if this is intentional, prefix it with an underscore: `_uri`
+
+warning: unused variable: `schema`
+  --> src/core/sql/physical_plan.rs:84:44
+   |
+84 |     pub async fn create_async(uri: String, schema: SchemaRef) -> Result<Self> {
+   |                                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_schema`
+
+warning: unused variable: `rust_spec`
+   --> src/python_binding.rs:380:13
+    |
+380 |         let rust_spec = extract_partition_spec(partition_spec)?;
+    |             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rust_spec`
+
+warning: unused variable: `py`
+   --> src/python_binding.rs:548:33
+    |
+548 |     fn add_index_columns(&self, py: Python<'_>, columns: Vec<String>, tokenizer: Option<String>) -> PyResult<()> {
+    |                                 ^^ help: if this is intentional, prefix it with an underscore: `_py`
+
+warning: unused variable: `tokenizer`
+   --> src/python_binding.rs:548:71
+    |
+548 |     fn add_index_columns(&self, py: Python<'_>, columns: Vec<String>, tokenizer: Option<String>) -> PyResult<()> {
+    |                                                                       ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tokenizer`
+
+warning: unused variable: `ascending`
+    --> src/python_binding.rs:1126:56
+     |
+1126 |     fn replace_sort_order(&self, columns: Vec<String>, ascending: Vec<bool>) -> PyResult<()> {
+     |                                                        ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ascending`
+
+warning: unused variable: `file_path`
+    --> src/python_binding.rs:1299:41
+     |
+1299 |     fn read_file(&self, py: Python<'_>, file_path: String, filter: Option<String>, columns: Option<Vec<String>>) -> PyResult<Py<PyAny>> {
+     |                                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_file_path`
+
+error[E0004]: non-exhaustive patterns: `ComputeBackend::Opencl` not covered
+  --> src/python_gpu_context.rs:93:15
+   |
+93 |         match self.context.backend {
+   |               ^^^^^^^^^^^^^^^^^^^^ pattern `ComputeBackend::Opencl` not covered
+   |
+note: `ComputeBackend` defined here
+  --> src/core/index/gpu.rs:24:10
+   |
+24 | pub enum ComputeBackend {
+   |          ^^^^^^^^^^^^^^
+...
+29 |     Opencl,
+   |     ------ not covered
+   = note: the matched value is of type `ComputeBackend`
+help: ensure that all possible cases are being handled by adding a match arm with a wildcard pattern or an explicit pattern as shown
+   |
+98 ~             ComputeBackend::Intel => "intel".to_string(),
+99 ~             ComputeBackend::Opencl => todo!(),
+   |
+
+error[E0507]: cannot move out of `self.context` which is behind a shared reference
+   --> src/python_gpu_context.rs:124:62
+    |
+124 |         crate::core::index::gpu::set_global_gpu_context(Some(self.context));
+    |                                                              ^^^^^^^^^^^^ move occurs because `self.context` has type `ComputeContext`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+124 |         crate::core::index::gpu::set_global_gpu_context(Some(self.context.clone()));
+    |                                                                          ++++++++
+
+warning: unused variable: `gpu_context`
+  --> src/python_distance.rs:58:13
+   |
+58 |         let gpu_context = ctx.get_context();
+   |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_gpu_context`
+
+Some errors have detailed explanations: E0004, E0507.
+For more information about an error, try `rustc --explain E0004`.
+warning: `hyperstreamdb` (lib) generated 11 warnings
+error: could not compile `hyperstreamdb` (lib) due to 2 previous errors; 11 warnings emitted

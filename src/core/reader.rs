@@ -397,7 +397,6 @@ impl HybridReader {
     pub async fn get_scalar_filter_bitmap(&self, filter: &crate::core::planner::QueryFilter) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
         
-        eprintln!("DEBUG: Searching for index for column: {}. Available index files: {:?}", filter_column, self.config.index_files);
         let inv_idx_info = self.config.index_files.iter()
             .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(filter_column));
             
@@ -410,7 +409,7 @@ impl HybridReader {
                 dir_path = "".to_string();
             }
             
-            let full_inv_path_str = if dir_path.is_empty() {
+            let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
                 inv_path_str.clone()
             } else {
                 format!("{}/{}", dir_path, inv_path_str)
@@ -1103,13 +1102,19 @@ impl HybridReader {
                  offset: None,
                  length: None,
              };
-             match self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
+           if true {
+            let results = self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await;
+            
+            match results {
                  Ok(m) => m,
                  Err(_) => {
                      // Final fallback: Flat scan Parquet
                      self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
                  }
              }
+           } else {
+               vec![]
+           }
         };
         
         if matches.is_empty() {

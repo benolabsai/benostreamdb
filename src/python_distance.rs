@@ -7,7 +7,7 @@
 use pyo3::prelude::*;
 use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use crate::core::index::{VectorMetric, distance};
-use crate::core::index::gpu::{compute_distance, compute_distance_batch, ComputeBackend};
+use crate::core::index::gpu::{compute_distance, ComputeBackend};
 use crate::python_gpu_context::PyDevice;
 
 /// Helper function to validate vector dimensions
@@ -53,14 +53,13 @@ fn compute_single_distance(
 
     
     // Compute distance using GPU if device provided, otherwise CPU
-    if let Some(ctx) = device {
+    if let Some(_ctx) = device {
         // Use GPU acceleration
-        let gpu_context = ctx.get_context();
         let mut vectors = Vec::with_capacity(a.len() * 2);
         vectors.extend_from_slice(a);
         vectors.extend_from_slice(b);
         
-        let distances = compute_distance(a, b, a.len(), metric, gpu_context)
+        let distances = compute_distance(a, b, a.len(), metric)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         
         Ok(distances[0])
@@ -402,7 +401,7 @@ fn compute_batch_distances(
         let gpu_context = ctx.get_context();
         let start = std::time::Instant::now();
         
-        let results = compute_distance_batch(query, vectors, dim, metric, gpu_context)
+        let results = compute_distance(query, vectors, dim, metric)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             
         let duration = start.elapsed();

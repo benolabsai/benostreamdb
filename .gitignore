@@ -103,4 +103,11 @@ groq_api_key.txt
 rag_db/
 news_db/
 
+<<<<<<< HEAD
 .hypothesis/
+=======
+.hypothesis/
+venv_demo/
+venv_demo/
+.env
+>>>>>>> 91645c4f4d113f606607c9c4edf6635702e26b87

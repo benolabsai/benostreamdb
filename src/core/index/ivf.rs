@@ -20,6 +20,33 @@ pub struct IvfIndex {
     pub dim: usize,
 }
 
+/// Assign vectors to the nearest centroids using L2 distance.
+/// Optimized for parallel execution on CPU.
+pub fn simple_kmeans_assignment(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+    use rayon::prelude::*;
+    let _n_vectors = vectors.len() / dim;
+    let n_centroids = centroids.len() / dim;
+
+    let assignments: Vec<u32> = vectors.par_chunks(dim)
+        .map(|vec| {
+            let mut min_dist = f32::MAX;
+            let mut min_idx = 0;
+            for i in 0..n_centroids {
+                let centroid = &centroids[i * dim..(i + 1) * dim];
+                let dist = crate::core::index::distance::l2_distance_squared(vec, centroid);
+                if dist < min_dist {
+                    min_dist = dist;
+                    min_idx = i;
+                }
+            }
+            min_idx as u32
+        })
+        .collect();
+
+    Ok(assignments)
+}
+
+
 impl IvfIndex {
     /// Build IVF index from vectors
     pub fn build(vectors: Vec<Vec<f32>>, n_lists: Option<usize>) -> Result<Self> {
@@ -250,7 +277,7 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
     }
 
     // Step 3: Final assignment for ALL vectors using SIMD (Parallel)
-    let _context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    let _ = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
     
     // We already have nested Vec<Vec<f32>>, so we'll do direct assignment
     let labels: Vec<usize> = vectors.par_iter().map(|v| {

@@ -8,6 +8,8 @@ use object_store::{path::Path, ObjectStore};
 use anyhow::Result;
 use futures::StreamExt;
 use chrono::Utc;
+use tracing;
+use arrow::record_batch::RecordBatch;
 
 pub type SegmentId = String;
 
@@ -699,9 +701,9 @@ impl ManifestManager {
 
         // 1. Check Version Cache (Fast Path)
         if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get(&cache_key).await {
-            eprintln!("DEBUG: ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
+            tracing::debug!("ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
             if let Ok(manifest) = self.load_version(ver).await {
-                eprintln!("DEBUG: ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
+                tracing::debug!("ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
                 return Ok((manifest, ver));
             }
         }
@@ -734,14 +736,14 @@ impl ManifestManager {
         }
 
         if let Some(path) = latest_path { 
-             eprintln!("DEBUG: ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
+             tracing::debug!("ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
               return match self.load_version(max_ver).await {
                  Ok(m) => {
-                     eprintln!("DEBUG: ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
+                     tracing::debug!("ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
                      Ok((m, max_ver))
                  },
                  Err(e) => {
-                     eprintln!("DEBUG: ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
+                     tracing::error!("ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
                      // Fallback if somehow listing said it exists but we can't read it
                      let bytes = self.store.get(&path).await?.bytes().await?;
                      let manifest: Manifest = serde_json::from_slice(&bytes)?;
@@ -1257,7 +1259,7 @@ impl ManifestManager {
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest: {}", path);
+                    tracing::info!("Committed Manifest: {}", path);
                     // 5. Update Caches
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
@@ -1377,7 +1379,7 @@ impl ManifestManager {
             
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    println!("Committed Manifest v{} (Schema Update)", new_ver);
+                    tracing::info!("Committed Manifest v{} (Schema Update)", new_ver);
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = format!("{}/{}", self.root_uri, path);
@@ -1611,6 +1613,133 @@ impl ManifestManager {
 
         Ok(deleted_count)
     }
+}
+
+impl PartitionSpec {
+    pub fn partition_batch(&self, batch: &RecordBatch) -> Result<Vec<(HashMap<String, Value>, RecordBatch)>> {
+        if self.fields.is_empty() {
+             return Ok(vec![(HashMap::new(), batch.clone())]);
+        }
+
+        // 1. Group row indices by partition key
+        let mut row_groups: HashMap<Vec<Value>, Vec<u32>> = HashMap::new();
+        
+        for i in 0..batch.num_rows() {
+            let mut key = Vec::with_capacity(self.fields.len());
+            for field in &self.fields {
+                // Determine source columns
+                let source_ids = field.get_source_ids();
+                let mut cols = Vec::new();
+                
+                // Try finding by name first
+                if let Ok(idx) = batch.schema().index_of(&field.name) {
+                    cols.push(batch.column(idx));
+                } else {
+                    // Search by Iceberg IDs
+                    for id in &source_ids {
+                        let idx = batch.schema().fields().iter().position(|f| {
+                            f.metadata().get("iceberg.id")
+                                .and_then(|id_str| id_str.parse::<i32>().ok())
+                                .map(|found_id| found_id == *id)
+                                .unwrap_or(false)
+                        });
+                        if let Some(i) = idx {
+                            cols.push(batch.column(i));
+                        }
+                    }
+                }
+
+                if cols.is_empty() {
+                    anyhow::bail!("Partition column {} (IDs {:?}) missing from batch", field.name, source_ids);
+                }
+
+                let val = match field.transform.as_str() {
+                    "identity" if cols.len() == 1 => {
+                        let col = cols[0];
+                        if col.is_null(i) {
+                            serde_json::Value::Null
+                        } else {
+                            // Basic extraction (Handle Utf8, Int64, Int32 for common identity partitioning)
+                            if let Some(s) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                                serde_json::Value::String(s.value(i).to_string())
+                            } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                                serde_json::Value::Number(serde_json::Number::from(n.value(i)))
+                            } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                                serde_json::Value::Number(serde_json::Number::from(n.value(i)))
+                            } else {
+                                serde_json::to_value(format!("{:?}", col.slice(i, 1))).unwrap_or(serde_json::Value::Null)
+                            }
+                        }
+                    },
+                    _ => {
+                        // Handle bucket[N] or bucket(N)
+                        let mut num_buckets = None;
+                        if field.transform.starts_with("bucket") {
+                            let parts: Vec<&str> = field.transform.split(|c| c == '[' || c == ']' || c == '(' || c == ')').collect();
+                            for part in parts {
+                                if let Ok(n) = part.trim().parse::<u64>() {
+                                    num_buckets = Some(n);
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Fallback: Stable hash of all source values for unknown/multi-column transforms
+                        let mut hash_input = String::new();
+                        for col in cols {
+                             hash_input.push_str(&format!("{:?}", col.slice(i, 1)));
+                        }
+                        use std::collections::hash_map::DefaultHasher;
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = DefaultHasher::new();
+                        hash_input.hash(&mut hasher);
+                        let full_hash = hasher.finish();
+                        
+                        if let Some(n) = num_buckets {
+                            serde_json::Value::Number(serde_json::Number::from((full_hash % n) as i32))
+                        } else {
+                            serde_json::Value::Number(serde_json::Number::from(full_hash))
+                        }
+                    }
+                };
+                key.push(val);
+            }
+            row_groups.entry(key).or_insert_with(Vec::new).push(i as u32);
+        }
+
+    // 2. Create sharded RecordBatches
+    let mut result = Vec::with_capacity(row_groups.len());
+    for (key_vec, rows) in row_groups {
+        let indices = arrow::array::UInt32Array::from(rows);
+        let sharded_batch = arrow::compute::take_record_batch(batch, &indices)?;
+
+        let mut key_map = HashMap::with_capacity(self.fields.len());
+        for (f, v) in self.fields.iter().zip(key_vec) {
+            key_map.insert(f.name.clone(), v);
+        }
+        result.push((key_map, sharded_batch));
+    }
+
+    Ok(result)
+}
+
+/// Generate a Hive-style partition path string (e.g., "year=2024/month=04") from partition values.
+pub fn partition_to_path(&self, values: &std::collections::HashMap<String, serde_json::Value>) -> String {
+    let mut path_parts = Vec::new();
+    for field in &self.fields {
+        if let Some(val) = values.get(&field.name) {
+            let val_str = match val {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                serde_json::Value::Null => "null".to_string(),
+                _ => val.to_string().replace("\"", ""), // Remove quotes for cleaner directory names
+            };
+            path_parts.push(format!("{}={}", field.name, val_str));
+        }
+    }
+    path_parts.join("/")
+}
 }
 
 fn is_already_exists(e: &object_store::Error) -> bool {

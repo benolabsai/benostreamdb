@@ -119,19 +119,20 @@ class TestV2Features:
     
     def test_partition_evolution_metadata(self):
         """Verify partition spec evolution is tracked"""
-        table_path = str(TEST_DIR / "partition_evolution_test")
+        import uuid
+        table_path = str(TEST_DIR / f"partition_evolution_test_{uuid.uuid4().hex}")
         table = hdb.Table(table_path)
         
-        df = pd.DataFrame({
-            "date": pd.date_range("2024-01-01", periods=100),
-            "value": range(100)
-        })
-        
+        import pyarrow as pa
+        import datetime
+        dates = pa.array([datetime.date(2024, 1, 1) + datetime.timedelta(days=i) for i in range(100)], type=pa.date32())
+        values = pa.array(range(100))
+        batch = pa.RecordBatch.from_arrays([dates, values], names=["date", "value"])
         # Set initial partition spec
         table.set_partition_spec([
             {"source_id": 1, "field_id": 1000, "name": "date", "transform": "day"}
         ])
-        table.write_pandas(df)
+        table.write([batch])
         
         # Verify partition_specs history is tracked
         # (This would check the manifest JSON)

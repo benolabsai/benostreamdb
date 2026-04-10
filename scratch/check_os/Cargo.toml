@@ -1,0 +1,10 @@
+[package]
+name = "check_os"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+object_store = "0.13.2"
+tempfile = "3.27.0"
+tokio = { version = "1.51.1", features = ["full"] }

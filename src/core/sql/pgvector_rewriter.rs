@@ -165,6 +165,42 @@ pub fn rewrite_pgvector_plan(
     Ok(result.data)
 }
 
+/// Rewrites pgvector-specific SQL syntax into standard DataFusion SQL strings
+/// BEFORE parsing the AST. This is necessary because DataFusion's SQL parser
+/// does not natively map pgvector operators (e.g. `<->`) or `::vector` casts
+/// into internal DataFusion LogicalPlan nodes effectively.
+pub fn rewrite_sql_string(query: &str) -> String {
+    let mut q = query.to_string();
+    
+    // 1. Remove ::vector, ::vector(1536), etc.
+    let re_cast = regex::Regex::new(r"::vector(?:\(\d+\))?").unwrap();
+    q = re_cast.replace_all(&q, "").to_string();
+    
+    // 2. Replace distance operators: A <-> B -> dist_l2(A, B)
+    // We match LHS: an identifier or function call (without nested parens)
+    // RHS: string literal '[...]', ARRAY[...], or generic identifier
+    
+    let operators = [
+        ("<->", "dist_l2"),
+        ("<=>", "dist_cosine"),
+        ("<#>", "dist_ip"),
+        ("<+>", "dist_l1"),
+        ("<~>", "dist_hamming"),
+        ("<%>", "dist_jaccard"),
+    ];
+    
+    for (op, func) in operators {
+        // Simple regex to grab word-character identifiers and simple string literals
+        let pattern = format!(r"(?P<lhs>[a-zA-Z0-9_.]+(?:\([^)]*\))?)\s*{}\s*(?P<rhs>'[^']+'|ARRAY\[[^\]]+\]|[a-zA-Z0-9_.]+)", regex::escape(op));
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            let replacement = format!("{}(${{lhs}}, ${{rhs}})", func);
+            q = re.replace_all(&q, replacement.as_str()).to_string();
+        }
+    }
+    
+    q
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

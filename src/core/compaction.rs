@@ -9,9 +9,13 @@ use futures::StreamExt;
 use object_store::ObjectStore;
 use object_store::path::Path;
 use std::sync::Arc;
+use std::collections::HashMap;
+use serde_json::Value;
 use anyhow::{Result, Context};
 use tokio::fs;
+use tracing;
 use crate::telemetry::metrics::COMPACTION_DURATION_SECONDS;
+
 
 #[derive(Clone, Debug)]
 pub struct ClusteringOptions {
@@ -76,12 +80,12 @@ impl Compactor {
 
     pub async fn rewrite_data_files(&self) -> Result<()> {
         let _timer = COMPACTION_DURATION_SECONDS.start_timer();
-        println!("Starting compaction with strategy: {}", self.options.strategy);
+        tracing::info!("Starting compaction with strategy: {}", self.options.strategy);
         
         // 1. Discovery: ONLY consider segments active in the latest manifest
         let (_manifest, all_entries, _) = self.manifest.load_latest_full().await?;
         if all_entries.is_empty() {
-            println!("Manifest is empty. Nothing to compact.");
+            tracing::info!("Manifest is empty. Nothing to compact.");
             return Ok(());
         }
 
@@ -89,41 +93,50 @@ impl Compactor {
         for entry in &all_entries {
             // Only consider reasonably small files for compaction
             if entry.file_size_bytes < self.options.min_file_size_bytes {
-                 println!("Found candidate: {} ({} bytes)", entry.file_path, entry.file_size_bytes);
+                 tracing::debug!("Found candidate: {} ({} bytes)", entry.file_path, entry.file_size_bytes);
                  candidates.push(entry.clone());
             }
         }
 
         if candidates.is_empty() {
-            println!("No segments require compaction.");
+            tracing::info!("No segments require compaction.");
             return Ok(());
         }
 
-        // 2. BinPack Grouping
-        let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();
-        let mut current_bin = Vec::new();
-        let mut current_size = 0_i64;
-
+        // 2. Group by Partition & BinPack
+        let mut partition_groups: HashMap<Vec<(String, Value)>, Vec<crate::core::manifest::ManifestEntry>> = HashMap::new();
         for candidate in candidates {
-             if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
-                 && !current_bin.is_empty() {
-                     bins.push(current_bin);
-                     current_bin = Vec::new();
-                     current_size = 0;
-                 }
-             current_size += candidate.file_size_bytes;
-             current_bin.push(candidate);
-        }
-        if !current_bin.is_empty() {
-            bins.push(current_bin);
+            let mut key: Vec<(String, Value)> = candidate.partition_values.clone().into_iter().collect();
+            key.sort_by(|a, b| a.0.cmp(&b.0));
+            partition_groups.entry(key).or_insert_with(Vec::new).push(candidate);
         }
 
-        println!("Plan: Identified {} bins to compact.", bins.len());
+        let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();
+        for (_part_key, group) in partition_groups {
+            let mut current_bin = Vec::new();
+            let mut current_size = 0_i64;
+
+            for candidate in group {
+                if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
+                    && !current_bin.is_empty() {
+                        bins.push(current_bin);
+                        current_bin = Vec::new();
+                        current_size = 0;
+                    }
+                current_size += candidate.file_size_bytes;
+                current_bin.push(candidate);
+            }
+            if !current_bin.is_empty() {
+                bins.push(current_bin);
+            }
+        }
+
+        tracing::info!("Plan: Identified {} bins across partitions to compact.", bins.len());
 
         // 3. Parallel Execution
         // We want to process bins in parallel, but commit atomically at the end.
         let max_concurrent = self.options.max_concurrent_bins;
-        println!("Executing with parallelism: {}", max_concurrent);
+        tracing::info!("Executing with parallelism: {}", max_concurrent);
 
         // This requires cloning 'self' for the async move block.
         // Since 'self' contains Arc<Store> and ManifestManager (which owns Arcs), it's cheap to clone if we derive Clone.
@@ -154,7 +167,7 @@ impl Compactor {
                     all_old_paths.extend(old_paths);
                 },
                 Err(e) => {
-                    eprintln!("Error during parallel compaction: {}", e);
+                    tracing::error!("Error during parallel compaction: {}", e);
                     // Decide strategy: Abort all? Or partial commit?
                     // For now: Abort functionality to maintain consistency.
                     return Err(e);
@@ -163,7 +176,7 @@ impl Compactor {
         }
 
         if !all_new_entries.is_empty() {
-            println!("Committing Batch: +{} entries, -{} paths", all_new_entries.len(), all_old_paths.len());
+            tracing::info!("Committing Batch: +{} entries, -{} paths", all_new_entries.len(), all_old_paths.len());
             self.manifest.commit(&all_new_entries, &all_old_paths, crate::core::manifest::CommitMetadata::default()).await?;
         }
 
@@ -191,11 +204,11 @@ impl Compactor {
         let mut all_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
         
         for entry in &bin {
-             let path_str = &entry.file_path;
-             let basename = path_str.split('/').next_back().unwrap();
-             let segment_id = basename.strip_suffix(".parquet").unwrap();
+             let path = std::path::Path::new(&entry.file_path);
+             let segment_id = path.file_stem().unwrap().to_str().unwrap();
+             let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
              
-             let config = SegmentConfig::new("", segment_id); 
+             let config = SegmentConfig::new(rel_parent, segment_id); 
              let reader = HybridReader::new(config, self.store.clone(), &self.root_uri);
              
              // Compaction reads all columns to preserve full data
@@ -219,10 +232,10 @@ impl Compactor {
         // APPLY CLUSTERING
         if let Some(clustering) = &self.options.clustering {
             if clustering.strategy == "zorder" {
-                println!("Applying Z-Order clustering on columns: {:?}", clustering.columns);
+                tracing::info!("Applying Z-Order clustering on columns: {:?}", clustering.columns);
                 merged_batch = crate::core::clustering::apply_zorder(&merged_batch, &clustering.columns)?;
             } else if clustering.strategy == "hilbert" {
-                println!("Applying Hilbert clustering on columns: {:?}", clustering.columns);
+                tracing::info!("Applying Hilbert clustering on columns: {:?}", clustering.columns);
                 merged_batch = crate::core::clustering::apply_hilbert(&merged_batch, &clustering.columns)?;
             }
         }
@@ -350,7 +363,7 @@ impl Compactor {
              old_paths.push(entry.file_path.clone());
         }
 
-        println!("Compacted bin {} -> {}", old_paths.len(), new_entry.file_path);
+        tracing::info!("Compacted bin {} -> {}", old_paths.len(), new_entry.file_path);
 
         Ok((new_entry, old_paths))
     }
