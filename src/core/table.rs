@@ -4301,7 +4301,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().to_str().unwrap().to_string();
         let uri = format!("file://{}", path);
-        let table = Table::new_async(uri.clone()).await?;
+        let _table = Table::new_async(uri.clone()).await?;
 
         // 1. Setup schema with metadata IDs
         let mut fields = Vec::new();
