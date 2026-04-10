@@ -64,8 +64,11 @@ impl HyperStreamSession {
     }
 
     pub async fn sql(&self, query: &str) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef)> {
+        // Pre-process string to handle pgvector syntax not supported by DataFusion parser natively
+        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        
         // Parse the SQL query to get a logical plan
-        let plan = self.ctx.state().create_logical_plan(query).await?;
+        let plan = self.ctx.state().create_logical_plan(&query_processed).await?;
         
         // Rewrite the plan to convert pgvector syntax to UDF calls
         let rewritten_plan = crate::core::sql::pgvector_rewriter::rewrite_pgvector_plan(plan)?;

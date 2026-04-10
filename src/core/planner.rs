@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use crate::core::manifest::{ManifestEntry, IndexFile, ManifestValue};
+use crate::core::manifest::{ManifestEntry, IndexFile};
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -672,14 +672,11 @@ impl QueryPlanner {
     pub fn prune_entries(&self, entries: &[ManifestEntry], expr: Option<&FilterExpr>, vector_params: Option<&VectorSearchParams>) -> Vec<(ManifestEntry, Option<IndexFile>)> {
         let mut candidates = Vec::new();
         
-        eprintln!("DEBUG: Total entries to prune: {}", entries.len());
         for entry in entries {
-            eprintln!("DEBUG: Entry {}: partitions={:?}, index_files={:?}", entry.file_path, entry.partition_values, entry.index_files);
             let mut matches_scalar = true;
             if let Some(f) = expr {
                 if !self.might_match_expr(entry, f) {
                     matches_scalar = false;
-                    eprintln!("DEBUG: Pruning segment {} due to SCALAR filter expr", entry.file_path);
                 }
             }
             
@@ -690,7 +687,7 @@ impl QueryPlanner {
             };
 
             if !vector_matches {
-                eprintln!("DEBUG: Pruning segment {} due to VECTOR params", entry.file_path);
+                // Future: track why it didn't match
             }
 
             if matches_scalar && vector_matches {
@@ -814,7 +811,6 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res { 
-                    eprintln!("DEBUG: Pruning segment due to PARTITION column {}. Entry val: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_val, min_val, filter.min_inclusive);
                     return false; 
                 }
             }
@@ -827,14 +823,12 @@ impl QueryPlanner {
                      ord == Some(std::cmp::Ordering::Greater) || ord == Some(std::cmp::Ordering::Equal)
                  };
                  if res { 
-                     eprintln!("DEBUG: Pruning segment due to PARTITION column {} (MAX). Entry val: {:?}, Max filter: {:?}, Max inclusive: {}", filter.column, entry_val, max_val, filter.max_inclusive);
                      return false; 
                 }
             }
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
-                    eprintln!("DEBUG: Pruning segment due to PARTITION column {}. Entry val: {:?} not in values: {:?}", filter.column, entry_val, values);
                     return false;
                 }
             }
@@ -844,7 +838,6 @@ impl QueryPlanner {
         if let Some(stats) = entry.column_stats.get(&filter.column) {
 
             if stats.null_count == entry.record_count {
-                 eprintln!("DEBUG: Pruning segment due to NULL column {}. Null count: {}, Record count: {}", filter.column, stats.null_count, entry.record_count);
                  return false;
             }
 
@@ -858,12 +851,7 @@ impl QueryPlanner {
                          ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                     };
                     
-                    if matches!(entry_max, ManifestValue::Boolean(_)) {
-                         println!("DEBUG: Boolean Pruning Check (MAX): entry_max={:?} ({:?}), filter_min={:?}, too_small={}", entry_max, entry_max_val, filter_min, too_small);
-                    }
-
                     if too_small { 
-                         eprintln!("DEBUG: Pruning segment due to STATS column {}. Max val in segment: {:?}, Min filter: {:?}, Min inclusive: {}", filter.column, entry_max, filter_min, filter.min_inclusive);
                          return false; 
                     }
                 }
@@ -880,7 +868,6 @@ impl QueryPlanner {
                         ord == Some(std::cmp::Ordering::Greater) || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_large { 
-                        eprintln!("DEBUG: Pruning segment due to STATS column {} (MIN). Min val in segment: {:?}, Max filter: {:?}, Max inclusive: {}", filter.column, entry_min, filter_max, filter.max_inclusive);
                         return false; 
                     }
                 }

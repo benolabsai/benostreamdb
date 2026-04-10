@@ -11,7 +11,7 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     let table = Table::new_async(format!("file://{}", path)).await?;
 
     // Create some data using Arrow/Pandas (simulated)
-    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::arrow::array::StringArray;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;
 

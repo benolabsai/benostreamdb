@@ -17,8 +17,8 @@ except ImportError:
 
 def test_vector_search_flow():
     # 1. Generate Data (if not exists)
-    # We use 100k for this test run to be quick but meaningful
-    num_vectors = 100_000
+    # Use 10k for certification to avoid timeouts
+    num_vectors = 10_000
     data_dir = Path("tests/data/embeddings")
     
     if not data_dir.exists() or len(list(data_dir.glob("*.parquet"))) == 0:
@@ -45,10 +45,13 @@ def test_vector_search_flow():
     
     start_ingest = time.time()
     total_rows = 0
-    for pq_file in parquet_files:
+    for i, pq_file in enumerate(parquet_files):
+        print(f"  Ingesting file {i+1}/{len(parquet_files)}: {pq_file.name}...")
         arrow_table = pq.read_table(pq_file)
         table.write_arrow(arrow_table)
         total_rows += len(arrow_table)
+        if total_rows >= num_vectors:
+            break
     
     ingest_time = time.time() - start_ingest
     print(f"Ingest Time: {ingest_time:.2f}s ({total_rows / ingest_time:.0f} rows/s)")

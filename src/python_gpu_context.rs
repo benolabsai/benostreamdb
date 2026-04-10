@@ -72,6 +72,7 @@ impl PyDevice {
             context: ComputeContext {
                 backend: backend_enum,
                 device_id,
+                implementation: None,
             },
             stats: Arc::new(Mutex::new(GPUStats::default())),
         })
@@ -88,7 +89,7 @@ impl PyDevice {
             "rocm" => ComputeBackend::Rocm,
             _ => return false,
         };
-        ComputeContext { backend, device_id: 0 }.is_available()
+        ComputeContext { backend, device_id: 0, implementation: None }.is_available()
     }
 
     #[getter]
@@ -124,7 +125,7 @@ impl PyDevice {
     }
 
     fn activate(&self) {
-        crate::core::index::gpu::set_global_gpu_context(Some(self.context));
+        crate::core::index::gpu::set_global_gpu_context(Some(self.context.clone()));
     }
 
     #[staticmethod]

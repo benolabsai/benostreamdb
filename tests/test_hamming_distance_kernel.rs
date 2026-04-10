@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext};
+use hyperstreamdb::core::index::gpu::{compute_distance, ComputeContext, set_global_gpu_context};
 use hyperstreamdb::core::index::VectorMetric;
 
 #[test]
@@ -15,9 +15,10 @@ fn test_hamming_distance_cpu() -> Result<()> {
         4.0, 5.0, 6.0,  // Hamming distance: 3 (all elements differ)
     ];
     let dim = 3;
-    let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let context = ComputeContext::default();
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -41,9 +42,10 @@ fn test_hamming_distance_cuda() -> Result<()> {
         4.0, 5.0, 6.0,  // Hamming distance: 3
     ];
     let dim = 3;
-    let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
+    let context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -70,12 +72,14 @@ fn test_hamming_distance_cuda_vs_cpu_parity() -> Result<()> {
     let vectors: Vec<f32> = (0..n_vectors * dim).map(|_| rng.gen::<f32>()).collect();
     
     // Compute on CPU
-    let cpu_context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &cpu_context)?;
+    let cpu_context = ComputeContext::default();
+    set_global_gpu_context(Some(cpu_context));
+    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     // Compute on CUDA
-    let cuda_context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
-    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &cuda_context)?;
+    let cuda_context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(cuda_context));
+    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     // Compare results
     assert_eq!(cpu_distances.len(), cuda_distances.len());
@@ -101,8 +105,9 @@ fn test_hamming_distance_various_dimensions() -> Result<()> {
         let query = vec![1.0; dim];
         let vectors = vec![2.0; dim * 2]; // Two vectors, each with value 2.0
         
-        let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-        let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &context)?;
+        let context = ComputeContext::default();
+        set_global_gpu_context(Some(context));
+        let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
         
         assert_eq!(distances.len(), 2);
         // Hamming distance: all elements differ, so distance = dim
@@ -131,12 +136,14 @@ fn test_hamming_distance_cuda_large_batch() -> Result<()> {
     let vectors: Vec<f32> = (0..n_vectors * dim).map(|_| rng.gen::<f32>()).collect();
     
     // Compute on CPU (reference)
-    let cpu_context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
-    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &cpu_context)?;
+    let cpu_context = ComputeContext::default();
+    set_global_gpu_context(Some(cpu_context));
+    let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     // Compute on CUDA
-    let cuda_context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
-    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &cuda_context)?;
+    let cuda_context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(cuda_context));
+    let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     // Compare results
     assert_eq!(cpu_distances.len(), cuda_distances.len());
@@ -164,9 +171,10 @@ fn test_hamming_distance_binary_vectors() -> Result<()> {
         1.0, 1.0, 1.0, 1.0, 1.0,  // Hamming distance: 2 (two bits differ)
     ];
     let dim = 5;
-    let context = ComputeContext { backend: ComputeBackend::Cpu, device_id: -1 };
+    let context = ComputeContext::default();
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -190,9 +198,10 @@ fn test_hamming_distance_cuda_binary_vectors() -> Result<()> {
         1.0, 1.0, 1.0, 1.0, 1.0,  // Hamming distance: 2
     ];
     let dim = 5;
-    let context = ComputeContext { backend: ComputeBackend::Cuda, device_id: 0 };
+    let context = ComputeContext::from_device_str("cuda:0")?;
+    set_global_gpu_context(Some(context));
     
-    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming, &context)?;
+    let distances = compute_distance(&query, &vectors, dim, VectorMetric::Hamming)?;
     
     assert_eq!(distances.len(), 4);
     assert!((distances[0] - 0.0).abs() < 1e-5, "Expected 0.0, got {}", distances[0]);
@@ -203,4 +212,3 @@ fn test_hamming_distance_cuda_binary_vectors() -> Result<()> {
     println!("Hamming distance CUDA binary vectors test PASSED");
     Ok(())
 }
-

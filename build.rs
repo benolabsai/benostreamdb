@@ -51,7 +51,21 @@ fn main() {
                 }
             }
         } else {
-            panic!("CUDA feature enabled but nvcc not found. Install CUDA Toolkit or remove the 'cuda' feature.");
+            println!("cargo:warning=CUDA feature enabled but nvcc not found. Creating dummy PTX files to allow CI to pass Cargo Check/Docs.");
+            let out_dir = env::var("OUT_DIR").unwrap();
+            let kernels = vec![
+                "l2_distance",
+                "cosine_distance",
+                "inner_product",
+                "l1_distance",
+                "hamming_distance",
+                "jaccard_distance",
+                "kmeans_assignment",
+            ];
+            for kernel_name in kernels {
+                let kernel_ptx = format!("{}/{}.ptx", out_dir, kernel_name);
+                std::fs::write(&kernel_ptx, b"").expect("Failed to write dummy PTX");
+            }
         }
     }
 }

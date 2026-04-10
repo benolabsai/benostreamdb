@@ -2,13 +2,13 @@ name: Documentation Site
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
-      - 'src/**'
-      - 'python/**'
-      - 'docs/**'
-      - 'ROADMAP.md'
-      - '.github/workflows/docs.yml'
+      - "src/**"
+      - "python/**"
+      - "docs/**"
+      - "ROADMAP.md"
+      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install Dependencies
         run: |
@@ -38,17 +38,20 @@ jobs:
           pip install -r docs/requirements.txt
 
       - name: Build Rust API Documentation
-        run: cargo doc --no-deps --all-features
+        run: cargo doc --no-deps --features python,cuda,enterprise,java,mps,intel
 
       - name: Build Python Extension (for autodoc)
         run: |
-          # Use maturin to build and install the package locally so autodoc can find it
-          maturin develop --release
+          # Use maturin to build and pip install the package so autodoc can find it
+          pip install maturin
+          maturin build --release || maturin build --release --compatibility manylinux2014
+          pip install target/wheels/*.whl
 
       - name: Prepare Sphinx Guides
         run: |
           # Copy existing markdown guides into source directory
-          cp docs/*.md docs/source/guides/
+          mkdir -p docs/source/guides/
+          find docs -maxdepth 1 -name "*.md" -type f -exec cp {} docs/source/guides/ \;
           # Ensure filename matches index.rst expectation
           mv docs/source/guides/INSTALLATION.md docs/source/guides/installation.md || true
           mv docs/source/guides/COMPREHENSIVE_GUIDE.md docs/source/guides/comprehensive_guide.md || true

@@ -11,6 +11,8 @@
 use anyhow::Result;
 use super::distance::{l2_distance_squared};
 use super::ivf::simple_kmeans;
+use tracing;
+
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct PqConfig {
@@ -32,7 +34,7 @@ pub struct PqEncoder {
 impl PqEncoder {
     pub fn train(vectors: &[Vec<f32>], config: PqConfig) -> Result<Self> {
         let sub_dim = config.dim / config.m;
-        println!("Training PQ: m={}, k={}, dim={}, sub_dim={}", config.m, config.k, config.dim, sub_dim);
+        tracing::info!("Training PQ: m={}, k={}, dim={}, sub_dim={}", config.m, config.k, config.dim, sub_dim);
         use rayon::prelude::*;
 
         let codebooks: Result<Vec<Vec<Vec<f32>>>> = (0..config.m).into_par_iter().map(|i| {

@@ -102,7 +102,7 @@ fn bench_vector_search(c: &mut Criterion) {
             |b, &k| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
-                        black_box(reader.vector_search_index("embedding", &query_val, k, None, VectorMetric::L2, None).await.unwrap())
+                        black_box(reader.vector_search_index("embedding", &query_val, k, None, VectorMetric::L2, None, None).await.unwrap())
                     });
             },
         );
@@ -147,7 +147,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
             .iter(|| async {
                  // Pre-filter strategy (HybridReader way)
                  let expr = FilterExpr::DataFusion(filter.to_expr());
-                 black_box(reader.vector_search_index("embedding", &query_val, 10, Some(&expr), VectorMetric::L2, None).await.unwrap())
+                 black_box(reader.vector_search_index("embedding", &query_val, 10, Some(&expr), VectorMetric::L2, None, None).await.unwrap())
             });
     });
     

@@ -365,35 +365,35 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                 // This reduces the amount of data fetched and processed
                                 let k_with_offset = limit + offset;
                                 
-                                println!(
+                                tracing::info!(
                                     "VectorSearchOptimizer: Detected KNN pattern for column '{}' with k={}, offset={}, metric={:?}",
                                     col_name, limit, offset, metric
                                 );
                                 
                                 if search_config.limit_pushdown {
-                                    println!("VectorSearchOptimizer: Pushing LIMIT+OFFSET {} to vector index layer", k_with_offset);
+                                    tracing::debug!("VectorSearchOptimizer: Pushing LIMIT+OFFSET {} to vector index layer", k_with_offset);
                                 }
                                 
-                                let mut vp = VectorSearchParams::new(&col_name, query_val.clone(), k_with_offset).with_metric(metric.clone());
+                                let mut vp = VectorSearchParams::new(&col_name, query_val.clone(), k_with_offset).with_metric(*metric);
                                 
                                 // Apply configuration parameters
                                 if let Some(ef) = search_config.ef_search {
                                     vp = vp.with_ef_search(ef);
-                                    println!("VectorSearchOptimizer: Using ef_search={}", ef);
+                                    tracing::debug!("VectorSearchOptimizer: Using ef_search={}", ef);
                                 }
                                 if let Some(probes) = search_config.probes {
                                     vp = vp.with_probes(probes);
-                                    println!("VectorSearchOptimizer: Using probes={}", probes);
+                                    tracing::debug!("VectorSearchOptimizer: Using probes={}", probes);
                                 }
                                 
                                 // FAST PATH OPTIMIZATION: For small result sets (limit < 100), use single-threaded execution (Iceberg v0.9.0+)
                                 if search_config.fast_path && limit < 100 {
-                                    println!("VectorSearchOptimizer: Using fast path for small result set (limit={})", limit);
+                                    tracing::debug!("VectorSearchOptimizer: Using fast path for small result set (limit={})", limit);
                                 }
                                 
                                 // ROW GROUP SKIPPING: Statistics-based row group skipping (Iceberg v0.4.0+)
                                 if search_config.skip_row_groups {
-                                    println!("VectorSearchOptimizer: Row group skipping enabled - will skip groups outside predicate range");
+                                    tracing::debug!("VectorSearchOptimizer: Row group skipping enabled - will skip groups outside predicate range");
                                 }
                             
                             // Construct optimized scan
@@ -407,7 +407,7 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                 hs_exec.schema().clone(),
                             )?;
                             
-                            println!(
+                            tracing::info!(
                                 "VectorSearchOptimizer: Created optimized plan with vector search parameters. \
                                 Index will be used if available, otherwise will fall back to sequential scan."
                             );
@@ -416,13 +416,13 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                             let mut result: Arc<dyn ExecutionPlan> = Arc::new(new_hs);
                             if let Some(f) = filter {
                                  result = Arc::new(datafusion::physical_plan::filter::FilterExec::try_new(f, result)?);
-                                 println!("VectorSearchOptimizer: Added filter predicate to optimized plan");
+                                 tracing::debug!("VectorSearchOptimizer: Added filter predicate to optimized plan");
                             }
                             
                             // If there's an offset, we need to wrap with a limit that includes the offset
                             // The GlobalLimitExec will handle the offset and limit correctly
                             if offset > 0 {
-                                println!("VectorSearchOptimizer: Handling OFFSET {} by fetching {} results", offset, k_with_offset);
+                                tracing::info!("VectorSearchOptimizer: Handling OFFSET {} by fetching {} results", offset, k_with_offset);
                                 // Return the result and let the original GlobalLimitExec handle offset
                                 return Ok(Transformed::yes(result));
                             } else {
