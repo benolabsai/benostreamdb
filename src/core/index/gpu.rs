@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
-use cudarc::driver::{CudaDevice, LaunchAsync, LaunchConfig, DevicePtr};
+use cudarc::driver::{LaunchAsync, LaunchConfig};
 
 thread_local! {
     static GLOBAL_GPU_CONTEXT: RefCell<Option<ComputeContext>> = const { RefCell::new(None) };
@@ -248,7 +248,7 @@ impl GpuBackend for OpenCLBackend {
     fn name(&self) -> &str { &self.name }
     fn compute_distance(&self, _q: &[f32], _v: &[f32], _d: usize, _m: VectorMetric) -> Result<Vec<f32>> { compute_cpu(_q, _v, _d, _m) }
     fn compute_kmeans_assignment(&self, _v: &[f32], _c: &[f32], _d: usize) -> Result<Vec<u32>> { 
-        super::ivf::assign_kmeans_opencl(_v, _c, _d, Some(&self.name))
+        super::ivf::simple_kmeans_assignment(_v, _c, _d)
     }
 }
 
