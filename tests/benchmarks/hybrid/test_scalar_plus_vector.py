@@ -96,6 +96,7 @@ class TestHybridQueryBenchmarks:
             # Count filtered rows
             total_rows = sum(len(batch) for batch in filtered_data)
             print(f"  Category '{category}': {total_rows:,} rows (filtered from {n_vectors:,})")
+            assert total_rows > 0, f"Filter returned 0 rows for category {category}!"
         
         metrics.finish()
         metrics.print_summary()

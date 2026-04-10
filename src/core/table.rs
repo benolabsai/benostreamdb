@@ -127,6 +127,21 @@ impl std::fmt::Debug for Table {
     }
 }
 
+impl Drop for Table {
+    fn drop(&mut self) {
+        if let Ok(tasks) = self.background_tasks.lock() {
+            let pending = tasks.iter().filter(|t| !t.is_finished()).count();
+            if pending > 0 {
+                tracing::warn!(
+                    "Table instance for '{}' dropped with {} pending background tasks. These tasks are now detached.",
+                    self.uri,
+                    pending
+                );
+            }
+        }
+    }
+}
+
 /// Shared WAL recovery logic used by both sync and async Table constructors.
 /// Promotes schema to the widest version, aligns all recovered batches, and
 /// rebuilds the in-memory vector index from recovered data.
