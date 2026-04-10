@@ -1,0 +1,14 @@
+[
+  {
+    "name": "full_scan",
+    "throughput": null,
+    "latency_p50_ms": 14.109134674072266,
+    "latency_p95_ms": 14.109134674072266,
+    "latency_p99_ms": 14.109134674072266,
+    "latency_mean_ms": 14.109134674072266,
+    "latency_min_ms": 14.109134674072266,
+    "latency_max_ms": 14.109134674072266,
+    "elapsed_sec": 0.014285087585449219,
+    "memory_delta_mb": 0.05078125
+  }
+]

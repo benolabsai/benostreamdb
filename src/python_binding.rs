@@ -2,6 +2,8 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use regex::Regex;
+use once_cell::sync::Lazy;
 use crate::core::table::{Table, VectorSearchParams};
 use crate::core::compaction::CompactionOptions;
 use crate::core::index::VectorMetric;
@@ -12,6 +14,12 @@ use pyo3::ffi::Py_uintptr_t;
 use crate::core::catalog::{Catalog, nessie::NessieClient, rest::RestCatalogClient, glue::GlueCatalogClient, hive::HiveMetastoreClient, unity::UnityCatalogClient, jdbc::JdbcCatalogClient, CatalogConfig, CatalogType};
 use tokio::runtime::Runtime;
 use std::sync::Arc;
+
+static SQL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").unwrap());
+
+fn sanitize_sql(query: &str) -> String {
+    SQL_REGEX.replace_all(query, "l2_distance($1, $2)").to_string()
+}
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use crate::python_gpu_context::PyDevice;
@@ -649,7 +657,7 @@ impl PyTable {
         let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context)
+            Some(ctx_borrow.context.clone())
         } else {
             None
         };
@@ -743,7 +751,7 @@ impl PyTable {
         let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context)
+            Some(ctx_borrow.context.clone())
         } else {
             None
         };
@@ -955,7 +963,7 @@ impl PyTable {
         let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context)
+            Some(ctx_borrow.context.clone())
         } else {
             None
         };
@@ -1079,7 +1087,7 @@ impl PyTable {
         let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
             let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context)
+            Some(ctx_borrow.context.clone())
         } else {
             None
         };
@@ -1156,7 +1164,8 @@ impl PyTable {
     /// 
     /// Example:
     ///     table.sql("SELECT * FROM t WHERE id > 10")
-    fn sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+    fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+        let query = sanitize_sql(&query);
         let rt = self.table.runtime();
         
         let batch_result: Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> = rt.block_on(async {
@@ -1736,6 +1745,7 @@ impl PySession {
     }
 
     pub fn sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+        let query = sanitize_sql(&query);
         let (batches, schema) = self.rt.block_on(self.inner.sql(&query))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         

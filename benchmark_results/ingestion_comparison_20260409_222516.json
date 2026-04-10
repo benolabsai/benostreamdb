@@ -1,0 +1,9 @@
+[
+  {
+    "dataset_size": 10000,
+    "dimensions": 1536,
+    "qdrant_throughput": 802.0708833554684,
+    "hyperstream_throughput": 2135.1960694877043,
+    "ratio": 2.662103953400102
+  }
+]

@@ -1,0 +1,2714 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.0.2, pluggy-1.6.0 -- /home/ralbright/projects/hyperstreamdb/venv/bin/python
+cachedir: .pytest_cache
+hypothesis profile 'default'
+rootdir: /home/ralbright/projects/hyperstreamdb
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, hypothesis-6.151.11, anyio-4.12.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 155 items
+
+tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_filtered_vector_search ERROR [  0%]
+tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_multi_filter_vector ERROR [  1%]
+tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_comparison_post_vs_pre_filter ERROR [  1%]
+tests/benchmarks/index/test_index_build.py::TestIndexBuildBenchmarks::test_build_100k_vectors_latency ERROR [  2%]
+tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_point_lookup ERROR [  3%]
+tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_high_selectivity_filter ERROR [  3%]
+tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_range_query ERROR [  4%]
+tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_full_scan_baseline ERROR [  5%]
+tests/benchmarks/vector_search/test_cold_read_latency.py::TestColdReadLatency::test_cold_search_latency ERROR [  5%]
+tests/benchmarks/vector_search/test_parallel_search.py::test_parallel_search_vs_sequential ERROR [  6%]
+tests/benchmarks/vector_search/test_parallel_search.py::test_parallel_search_with_filters ERROR [  7%]
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_ingestion_comparison_small ERROR [  7%]
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_query_comparison ERROR [  8%]
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_filtered_search_comparison ERROR [  9%]
+tests/benchmarks/vector_search/test_vector_index_verification.py::test_automatic_schema_detection ERROR [  9%]
+tests/benchmarks/vector_search/test_vector_index_verification.py::test_explicit_index_configuration_still_works ERROR [ 10%]
+tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_ingest_1m_vectors ERROR [ 10%]
+tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_search_unfiltered_small ERROR [ 11%]
+tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_search_filtered_high_selectivity ERROR [ 12%]
+tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_concurrent_queries ERROR [ 12%]
+tests/integration/test_boolean_index.py::test_boolean_indexing PASSED    [ 13%]
+tests/integration/test_catalog.py::test_catalog_flow PASSED              [ 14%]
+tests/integration/test_concurrent_access.py::test_concurrent_writers PASSED [ 14%]
+tests/integration/test_concurrent_access.py::test_concurrent_readers PASSED [ 15%]
+tests/integration/test_concurrent_access.py::test_read_write_concurrency PASSED [ 16%]
+tests/integration/test_concurrent_access.py::test_concurrent_compaction PASSED [ 16%]
+tests/integration/test_concurrent_access.py::test_lock_contention PASSED [ 17%]
+tests/integration/test_error_handling.py::test_invalid_uri PASSED        [ 18%]
+tests/integration/test_error_handling.py::test_nonexistent_table_read PASSED [ 18%]
+tests/integration/test_error_handling.py::test_schema_mismatch_write PASSED [ 19%]
+tests/integration/test_error_handling.py::test_empty_batch_write PASSED  [ 20%]
+tests/integration/test_error_handling.py::test_null_values_handling PASSED [ 20%]
+tests/integration/test_error_handling.py::test_large_string_values PASSED [ 21%]
+tests/integration/test_error_handling.py::test_invalid_filter_expression PASSED [ 21%]
+tests/integration/test_error_handling.py::test_nonexistent_column_filter PASSED [ 22%]
+tests/integration/test_error_handling.py::test_corrupted_data_handling PASSED [ 23%]
+tests/integration/test_error_handling.py::test_concurrent_schema_changes PASSED [ 23%]
+tests/integration/test_error_handling.py::test_resource_limits PASSED    [ 24%]
+tests/integration/test_error_handling.py::test_special_characters_in_data PASSED [ 25%]
+tests/integration/test_glue_catalog.py::test_glue_catalog_basic SKIPPED  [ 25%]
+tests/integration/test_glue_catalog.py::test_glue_catalog_with_account_id SKIPPED [ 26%]
+tests/integration/test_hnsw_ivf.py::test_hnsw_ivf_integration PASSED     [ 27%]
+tests/integration/test_merge.py::test_merge_pruning FAILED               [ 27%]
+tests/integration/test_nyc_taxi.py::test_nyc_taxi_ingest PASSED          [ 28%]
+tests/integration/test_nyc_taxi.py::test_nyc_taxi_query PASSED           [ 29%]
+tests/integration/test_nyc_taxi.py::test_nyc_taxi_compaction PASSED      [ 29%]
+tests/integration/test_profiling_micro.py::test_profiling PASSED         [ 30%]
+tests/integration/test_query_planning.py::test_query_planning FAILED     [ 30%]
+tests/integration/test_rest_catalog.py::test_rest_catalog_basic SKIPPED  [ 31%]
+tests/integration/test_rest_catalog.py::test_rest_catalog_with_prefix PASSED [ 32%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_add_column PASSED [ 32%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_add_multiple_columns PASSED [ 33%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_drop_column_projection PASSED [ 34%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_type_widening PASSED [ 34%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_type_narrowing_error PASSED [ 35%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_nullable_to_required PASSED [ 36%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_required_to_nullable FAILED [ 36%]
+tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_schema_merge_on_read PASSED [ 37%]
+tests/integration/test_selective_indexing.py::test_selective_indexing FAILED [ 38%]
+tests/integration/test_sql.py::test_sql_basic_query PASSED               [ 38%]
+tests/integration/test_vector_search.py::test_vector_search_flow PASSED  [ 39%]
+tests/integration/test_views.py::test_view_creation PASSED               [ 40%]
+tests/integration/test_wal_compaction.py::test_wal_compaction FAILED     [ 40%]
+tests/integration/test_wal_durability.py::test_wal_durability FAILED     [ 41%]
+tests/integration/test_wikipedia.py::test_wikipedia_hybrid_queries FAILED [ 41%]
+tests/integration/test_write_buffer.py::test_write_buffer_and_index PASSED [ 42%]
+tests/performance/test_benchmarks.py::TestIngestThroughput::test_ingest_throughput_in_memory PASSED [ 43%]
+tests/performance/test_benchmarks.py::TestIngestThroughput::test_ingest_throughput_out_of_memory PASSED [ 43%]
+tests/performance/test_benchmarks.py::TestQueryLatency::test_query_latency_indexed_in_memory PASSED [ 44%]
+tests/performance/test_benchmarks.py::TestQueryLatency::test_query_latency_full_scan_out_of_memory PASSED [ 45%]
+tests/performance/test_benchmarks.py::TestCompactionSpeed::test_compaction_speed_in_memory PASSED [ 45%]
+tests/performance/test_benchmarks.py::TestCompactionSpeed::test_compaction_speed_out_of_memory PASSED [ 46%]
+tests/performance/test_benchmarks.py::TestVectorSearchLatency::test_vector_search_latency_in_memory FAILED [ 47%]
+tests/performance/test_benchmarks.py::TestVectorSearchLatency::test_vector_search_latency_out_of_memory PASSED [ 47%]
+tests/performance/test_benchmarks.py::TestMemoryUsage::test_memory_usage_write_in_memory PASSED [ 48%]
+tests/performance/test_benchmarks.py::TestMemoryUsage::test_memory_usage_read_out_of_memory PASSED [ 49%]
+tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_l2_batch_100k_vectors FAILED [ 49%]
+tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_cosine_batch_100k_vectors FAILED [ 50%]
+tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_inner_product_batch_100k_vectors FAILED [ 50%]
+tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_varying_vector_sizes FAILED [ 51%]
+tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_varying_dimensions FAILED [ 52%]
+tests/test_binary_vector_properties.py::test_binary_hamming_distance_correctness PASSED [ 52%]
+tests/test_binary_vector_properties.py::test_binary_hamming_distance_identical_vectors PASSED [ 53%]
+tests/test_binary_vector_properties.py::test_binary_hamming_distance_symmetry PASSED [ 54%]
+tests/test_binary_vector_properties.py::test_binary_vector_auto_packing_hamming PASSED [ 54%]
+tests/test_binary_vector_properties.py::test_binary_vector_auto_packing_jaccard PASSED [ 55%]
+tests/test_binary_vector_properties.py::test_binary_vector_auto_packing_rejects_non_binary PASSED [ 56%]
+tests/test_binary_vector_properties.py::test_binary_jaccard_distance_correctness PASSED [ 56%]
+tests/test_binary_vector_properties.py::test_binary_jaccard_distance_identical PASSED [ 57%]
+tests/test_binary_vector_properties.py::test_binary_jaccard_distance_all_zeros PASSED [ 58%]
+tests/test_binary_vector_properties.py::test_binary_vector_dimension_mismatch PASSED [ 58%]
+tests/test_catalog_factory.py::test_create_catalog_direct PASSED         [ 59%]
+tests/test_catalog_factory.py::test_create_catalog_from_config PASSED    [ 60%]
+tests/test_connector_apis.py::test_connector_apis FAILED                 [ 60%]
+tests/test_connector_integration.py::test_connector_apis FAILED          [ 61%]
+tests/test_context_backend_property.py::test_context_backend_property FAILED [ 61%]
+tests/test_context_backend_property.py::test_auto_detect_backend_property PASSED [ 62%]
+tests/test_context_backend_property.py::test_backend_case_insensitive_property PASSED [ 63%]
+tests/test_cross_engine_compat.py::TestSparkCompatibility::test_spark_read_basic SKIPPED [ 63%]
+tests/test_cross_engine_compat.py::TestSparkCompatibility::test_spark_read_v3_metadata SKIPPED [ 64%]
+tests/test_cross_engine_compat.py::TestTrinoCompatibility::test_trino_read_basic SKIPPED [ 65%]
+tests/test_cross_engine_compat.py::TestV2Features::test_sort_order_metadata FAILED [ 65%]
+tests/test_cross_engine_compat.py::TestV2Features::test_partition_evolution_metadata PASSED [ 66%]
+tests/test_cross_engine_compat.py::TestV2Features::test_ndv_statistics PASSED [ 67%]
+tests/test_cross_engine_compat.py::TestV3Features::test_row_lineage_columns PASSED [ 67%]
+tests/test_cross_engine_compat.py::TestV3Features::test_default_values_schema PASSED [ 68%]
+tests/test_default_config.py::test_load_default_catalog PASSED           [ 69%]
+tests/test_distance_properties.py::test_l2_distance_correctness PASSED   [ 69%]
+tests/test_distance_properties.py::test_cosine_distance_correctness PASSED [ 70%]
+tests/test_distance_properties.py::test_inner_product_correctness PASSED [ 70%]
+tests/test_distance_properties.py::test_l1_distance_correctness PASSED   [ 71%]
+tests/test_distance_properties.py::test_hamming_distance_correctness PASSED [ 72%]
+tests/test_distance_properties.py::test_jaccard_distance_correctness PASSED [ 72%]
+tests/test_distance_properties.py::test_dimension_mismatch_raises_error PASSED [ 73%]
+tests/test_distance_properties.py::test_nan_values_raise_error PASSED    [ 74%]
+tests/test_distance_properties.py::test_inf_values_raise_error PASSED    [ 74%]
+tests/test_distance_properties.py::test_accepts_numpy_arrays PASSED      [ 75%]
+tests/test_distance_properties.py::test_batch_operation_shape_correctness PASSED [ 76%]
+tests/test_distance_properties.py::test_batch_operation_all_metrics PASSED [ 76%]
+tests/test_distance_properties.py::test_batch_matches_single_pair PASSED [ 77%]
+tests/test_distance_properties.py::test_sparse_l2_equivalence PASSED     [ 78%]
+tests/test_distance_properties.py::test_sparse_cosine_equivalence PASSED [ 78%]
+tests/test_distance_properties.py::test_sparse_inner_product_equivalence PASSED [ 79%]
+tests/test_distance_properties.py::test_sparse_vector_unsorted_indices_error PASSED [ 80%]
+tests/test_distance_properties.py::test_sparse_vector_out_of_bounds_error PASSED [ 80%]
+tests/test_distance_properties.py::test_sparse_vector_length_mismatch_error PASSED [ 81%]
+tests/test_distance_properties.py::test_sparse_vector_nan_values_error PASSED [ 81%]
+tests/test_distance_properties.py::test_sparse_vector_dimension_mismatch_error PASSED [ 82%]
+tests/test_exports.py::test_imports PASSED                               [ 83%]
+tests/test_hyperstream_cuda.py::test_cuda_search PASSED                  [ 83%]
+tests/test_hyperstream_mps.py::test_mps_search PASSED                    [ 84%]
+tests/test_ingestion_optimizations.py::test_ingestion_optimizations PASSED [ 85%]
+tests/test_mps_gpu.py::test_mps_gpu FAILED                               [ 85%]
+tests/test_per_column_acceleration.py::test_cascading_device_assignment PASSED [ 86%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_large_vector_string PASSED [ 87%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_mixed_aggregations PASSED [ 87%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_numpy_scalar_interpolation PASSED [ 88%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_pgvector_cast_syntax PASSED [ 89%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_pgvector_operator_l2 PASSED [ 89%]
+tests/test_pgvector_python_sql.py::TestPgVectorCompatibility::test_vector_avg_centroid PASSED [ 90%]
+tests/test_pyarrow_schema_regression.py::test_pyarrow_schema_consistency PASSED [ 90%]
+tests/test_python_gpu_context.py::test_auto_detect PASSED                [ 91%]
+tests/test_python_gpu_context.py::test_cpu_backend_creation FAILED       [ 92%]
+tests/test_python_gpu_context.py::test_cpu_backend_with_device_id FAILED [ 92%]
+tests/test_python_gpu_context.py::test_backend_property PASSED           [ 93%]
+tests/test_python_gpu_context.py::test_device_id_property FAILED         [ 94%]
+tests/test_python_gpu_context.py::test_list_available_backends PASSED    [ 94%]
+tests/test_python_gpu_context.py::test_unavailable_backend_error FAILED  [ 95%]
+tests/test_python_gpu_context.py::test_invalid_backend_error FAILED      [ 96%]
+tests/test_python_gpu_context.py::test_get_stats PASSED                  [ 96%]
+tests/test_python_gpu_context.py::test_reset_stats PASSED                [ 97%]
+tests/test_python_gpu_context.py::test_repr FAILED                       [ 98%]
+tests/test_python_gpu_context.py::test_case_insensitive_backend PASSED   [ 98%]
+tests/test_qdrant_install.py::test_qdrant_install_and_query PASSED       [ 99%]
+tests/test_splits.py::test_read_split_with_projection FAILED             [100%]
+
+==================================== ERRORS ====================================
+___ ERROR at setup of TestHybridQueryBenchmarks.test_filtered_vector_search ____
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="hybrid-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/hybrid/test_scalar_plus_vector.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2e887d0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (c12673525d7f42154dd16234c0f58df3665664dd37a858208180202c8d4f14ce): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+_____ ERROR at setup of TestHybridQueryBenchmarks.test_multi_filter_vector _____
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="hybrid-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/hybrid/test_scalar_plus_vector.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2e887d0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (c12673525d7f42154dd16234c0f58df3665664dd37a858208180202c8d4f14ce): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_ ERROR at setup of TestHybridQueryBenchmarks.test_comparison_post_vs_pre_filter _
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="hybrid-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/hybrid/test_scalar_plus_vector.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2e887d0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (c12673525d7f42154dd16234c0f58df3665664dd37a858208180202c8d4f14ce): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+__ ERROR at setup of TestIndexBuildBenchmarks.test_build_100k_vectors_latency __
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="index-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/index/test_index_build.py:26: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2caf080>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (de7378555a3bcb3249da39fc557cbaf23526985f914bae8400613a7968a550cc): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+________ ERROR at setup of TestTableFormatBenchmarks.test_point_lookup _________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="table-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/table_format/test_vs_iceberg.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2caf9b0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (783e8bdd1e2c2df9665e9c529274858a27b161839d407da0eac1508f6e18ef74): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+___ ERROR at setup of TestTableFormatBenchmarks.test_high_selectivity_filter ___
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="table-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/table_format/test_vs_iceberg.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2caf9b0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (783e8bdd1e2c2df9665e9c529274858a27b161839d407da0eac1508f6e18ef74): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_________ ERROR at setup of TestTableFormatBenchmarks.test_range_query _________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="table-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/table_format/test_vs_iceberg.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2caf9b0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (783e8bdd1e2c2df9665e9c529274858a27b161839d407da0eac1508f6e18ef74): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_____ ERROR at setup of TestTableFormatBenchmarks.test_full_scan_baseline ______
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="table-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/table_format/test_vs_iceberg.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2caf9b0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (783e8bdd1e2c2df9665e9c529274858a27b161839d407da0eac1508f6e18ef74): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+________ ERROR at setup of TestColdReadLatency.test_cold_search_latency ________
+
+    @pytest.fixture(scope="module")
+    def minio_setup():
+>       minio = setup_minio_for_benchmarks()
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_cold_read_latency.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2cae5d0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (77e347efdfcf5dea833891393f6c5af5972ec3bec5252c38b9db5174fe2dcdf3): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+_____________ ERROR at setup of test_parallel_search_vs_sequential _____________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_parallel_search.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b3073ce0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (750d08dfa67d70895e56d10d52f98ecb38d7ba5727825e65087e7544451cbcbb): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+_____________ ERROR at setup of test_parallel_search_with_filters ______________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_parallel_search.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b3073ce0>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (750d08dfa67d70895e56d10d52f98ecb38d7ba5727825e65087e7544451cbcbb): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+____ ERROR at setup of TestQdrantComparison.test_ingestion_comparison_small ____
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for HyperStreamDB tests."""
+>       minio = setup_minio_for_benchmarks(bucket_name="qdrant-comparison")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py:40: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2eae390>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (feda0df48985cdc6a52273b0134da8b7ec36c420c50d5ebbb1c65034cc95bdd3): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+_________ ERROR at setup of TestQdrantComparison.test_query_comparison _________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for HyperStreamDB tests."""
+>       minio = setup_minio_for_benchmarks(bucket_name="qdrant-comparison")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py:40: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2eae390>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (feda0df48985cdc6a52273b0134da8b7ec36c420c50d5ebbb1c65034cc95bdd3): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+____ ERROR at setup of TestQdrantComparison.test_filtered_search_comparison ____
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for HyperStreamDB tests."""
+>       minio = setup_minio_for_benchmarks(bucket_name="qdrant-comparison")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_qdrant_direct_comparison.py:40: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2eae390>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (feda0df48985cdc6a52273b0134da8b7ec36c420c50d5ebbb1c65034cc95bdd3): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+______________ ERROR at setup of test_automatic_schema_detection _______________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for tests."""
+>       minio = setup_minio_for_benchmarks(bucket_name="index-verification")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vector_index_verification.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2d48c50>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (5c08af84f762f43b81fdc29fdf1648310b66f404d4eff85d3e8fb569746ef0b0): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+_______ ERROR at setup of test_explicit_index_configuration_still_works ________
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for tests."""
+>       minio = setup_minio_for_benchmarks(bucket_name="index-verification")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vector_index_verification.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2d48c50>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (5c08af84f762f43b81fdc29fdf1648310b66f404d4eff85d3e8fb569746ef0b0): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_____ ERROR at setup of TestVectorSearchBenchmarks.test_ingest_1m_vectors ______
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vs_qdrant.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2ce6480>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (0e83715ca3c5e0e4b374186820b23242eb291a4eb527e51d87b46615eb62af21): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+---------------------------- Captured stdout setup -----------------------------
+Setting up MinIO for benchmarks...
+__ ERROR at setup of TestVectorSearchBenchmarks.test_search_unfiltered_small ___
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vs_qdrant.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2ce6480>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (0e83715ca3c5e0e4b374186820b23242eb291a4eb527e51d87b46615eb62af21): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_ ERROR at setup of TestVectorSearchBenchmarks.test_search_filtered_high_selectivity _
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vs_qdrant.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2ce6480>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (0e83715ca3c5e0e4b374186820b23242eb291a4eb527e51d87b46615eb62af21): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+_____ ERROR at setup of TestVectorSearchBenchmarks.test_concurrent_queries _____
+
+    @pytest.fixture(scope="module")
+    def minio_manager():
+        """Setup MinIO for all tests in this module."""
+>       minio = setup_minio_for_benchmarks(bucket_name="vector-benchmarks")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/benchmarks/vector_search/test_vs_qdrant.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/benchmarks/common/minio_setup.py:161: in setup_minio_for_benchmarks
+    minio.start(use_docker=True)
+tests/benchmarks/common/minio_setup.py:32: in start
+    self._start_docker()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <minio_setup.MinIOManager object at 0x7341b2ce6480>
+
+    def _start_docker(self):
+        """Start MinIO using Docker."""
+        # Stop existing container if running
+        subprocess.run(
+            ["docker", "stop", self.container_name],
+            capture_output=True
+        )
+        subprocess.run(
+            ["docker", "rm", self.container_name],
+            capture_output=True
+        )
+    
+        # Start new container
+        cmd = [
+            "docker", "run", "-d",
+            "--name", self.container_name,
+            "-p", f"{self.port}:9000",
+            "-p", f"{self.console_port}:9001",
+            "-e", f"MINIO_ROOT_USER={self.access_key}",
+            "-e", f"MINIO_ROOT_PASSWORD={self.secret_key}",
+            "-v", f"{self.data_dir}:/data",
+            "minio/minio",
+            "server", "/data",
+            "--console-address", ":9001"
+        ]
+    
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+>           raise RuntimeError(f"Failed to start MinIO: {result.stderr}")
+E           RuntimeError: Failed to start MinIO: docker: Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint hyperstreamdb-benchmark-minio (0e83715ca3c5e0e4b374186820b23242eb291a4eb527e51d87b46615eb62af21): failed to bind host port for 0.0.0.0:9000:172.17.0.2:9000/tcp: address already in use
+E           
+E           Run 'docker run --help' for more information
+
+tests/benchmarks/common/minio_setup.py:71: RuntimeError
+=================================== FAILURES ===================================
+______________________________ test_merge_pruning ______________________________
+
+    def test_merge_pruning():
+        base_dir = "/tmp/test_merge"
+        if os.path.exists(base_dir):
+            shutil.rmtree(base_dir)
+        os.makedirs(base_dir)
+    
+        uri = f"file://{base_dir}"
+        table = hdb.Table(uri)
+        table.add_index_columns(["id", "val"])
+    
+        # 1. Write Segment A (IDs 0-9)
+        df_a = pd.DataFrame({
+            "id": range(0, 10),
+            "val": range(100, 110)
+        })
+        # We must explicitly cast to int32 because our Rust writer expects Int32 for the index implementation
+        df_a["id"] = df_a["id"].astype("int32")
+        table.write_pandas(df_a)
+        print("Written Segment A")
+    
+        # 2. Write Segment B (IDs 10-19)
+        df_b = pd.DataFrame({
+            "id": range(10, 20),
+            "val": range(200, 210)
+        })
+        df_b["id"] = df_b["id"].astype("int32")
+        table.write_pandas(df_b)
+        print("Written Segment B")
+    
+        # 3. Write Segment C (IDs 20-29)
+        df_c = pd.DataFrame({
+            "id": range(20, 30),
+            "val": range(300, 310)
+        })
+        df_c["id"] = df_c["id"].astype("int32")
+        table.write_pandas(df_c)
+        print("Written Segment C")
+    
+        # Verify files exist
+        # Verify files exist
+        files = glob.glob(f"{base_dir}/*.inv.parquet")
+        print(f"Index files found: {len(files)}")
+>       assert len(files) >= 3, "Should have at least 3 inverted index files"
+E       AssertionError: Should have at least 3 inverted index files
+E       assert 0 >= 3
+E        +  where 0 = len([])
+
+tests/integration/test_merge.py:50: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Written data to /tmp/test_merge/9033e950-7d14-4edd-80b7-b3b6c2a0e11e.parquet (10 rows)
+Written Segment A
+Written data to /tmp/test_merge/a5414301-7b52-4e8e-818f-7448bf14fe6a.parquet (10 rows)
+Written Segment B
+Written data to /tmp/test_merge/f84fd012-f3ba-4cb4-982a-a92b6967961a.parquet (10 rows)
+Written Segment C
+Index files found: 0
+_____________________________ test_query_planning ______________________________
+
+    def test_query_planning():
+        base_dir = "/tmp/test_query_planning"
+        if os.path.exists(base_dir):
+            shutil.rmtree(base_dir)
+        os.makedirs(base_dir)
+    
+        uri = f"file://{base_dir}"
+        table = hdb.Table(uri)
+        table.add_index_columns(["id", "val"])
+    
+        # Create multiple segments to test planning across segments.
+        import pyarrow as pa
+        schema = pa.schema([
+            pa.field("id", pa.int64()),
+            pa.field("val", pa.float64()),
+        ])
+    
+        batch1 = pa.RecordBatch.from_arrays([
+            pa.array([1, 2, 3], type=pa.int64()),
+            pa.array([1.1, 2.2, 3.3], type=pa.float64()),
+        ], schema=schema)
+        batch2 = pa.RecordBatch.from_arrays([
+            pa.array([4, 5, 6], type=pa.int64()),
+            pa.array([4.4, 5.5, 6.6], type=pa.float64()),
+        ], schema=schema)
+        batch3 = pa.RecordBatch.from_arrays([
+            pa.array([7, 8, 9], type=pa.int64()),
+            pa.array([7.7, 8.8, 9.9], type=pa.float64()),
+        ], schema=schema)
+    
+        table.write_arrow(batch1)
+        table.write_arrow(batch2)
+        table.write_arrow(batch3)
+        table.commit()
+    
+        # Check for segment files - only count main parquet segments, not inverted indexes.
+        files = [f for f in os.listdir(base_dir) if f.startswith("seg_") and f.endswith(".parquet") and ".inv." not in f]
+        print(f"Created {len(files)} initial segments.")
+>       assert len(files) == 3
+E       assert 0 == 3
+E        +  where 0 = len([])
+
+tests/integration/test_query_planning.py:43: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Written data to /tmp/test_query_planning/da644edf-85e3-496e-ae57-a78b9be613d6.parquet (3 rows)
+Written data to /tmp/test_query_planning/1eda5155-240b-44f2-bd53-99d3cb349871.parquet (3 rows)
+Written data to /tmp/test_query_planning/ab782821-a460-4213-9c39-6ecd06dbf313.parquet (3 rows)
+Created 0 initial segments.
+________________ TestSchemaEvolution.test_required_to_nullable _________________
+
+self = <test_schema_evolution.TestSchemaEvolution object at 0x7341b2eace60>
+temp_dir = '/tmp/tmpgubok9n6'
+
+    def test_required_to_nullable(self, temp_dir):
+        """Test changing a required column to nullable (should work seamlessly)."""
+        table = Table(f"file://{temp_dir}")
+    
+        # Write data with required column
+        schema_v1 = pa.schema([
+            pa.field("id", pa.int64()),
+            pa.field("value", pa.int32(), nullable=False),  # Required
+        ])
+    
+        batch_v1 = pa.RecordBatch.from_arrays([
+            pa.array([1, 2, 3], type=pa.int64()),
+            pa.array([100, 200, 300], type=pa.int32()),
+        ], schema=schema_v1)
+    
+        table.write([batch_v1])
+        table.commit()
+    
+        # Write new data with nullable column
+        schema_v2 = pa.schema([
+            pa.field("id", pa.int64()),
+            pa.field("value", pa.int32(), nullable=True),  # Now nullable
+        ])
+    
+        batch_v2 = pa.RecordBatch.from_arrays([
+            pa.array([4, 5, 6], type=pa.int64()),
+            pa.array([400, None, 600], type=pa.int32()),  # Contains null
+        ], schema=schema_v2)
+    
+        table.write([batch_v2])
+        table.commit()
+    
+        # Read all data - should work seamlessly
+>       result = table.read()
+                 ^^^^^^^^^^^^
+
+tests/integration/test_schema_evolution.py:336: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+python/hyperstreamdb/__init__.py:419: in read
+    return self.to_arrow(filter, vector_filter, columns, device=device, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = HyperStreamTable(uri=file:///tmp/tmpgubok9n6), filter = None
+vector_filter = None, columns = None, device = None, kwargs = {}, vf = None
+
+    def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
+        """
+        Read table to Arrow Table with auto-vectorization of search queries and flexible parameters.
+    
+        Parameters:
+            filter: Optional scalar WHERE clause (e.g., "category = 'news'")
+            vector_filter: Dict with vector search params:
+                - column: str (required) - vector column name
+                - query: list (required) - query vector
+                - k: int (required) - number of results
+                - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
+                - ef_search: int (optional) - HNSW ef parameter for tuning
+                - probes: int (optional) - IVF probes parameter for tuning
+            columns: Optional list of column names to select
+            device: Optional compute device (GPU/CPU)
+            **kwargs: Extra params (merged into vector_filter if present)
+        """
+        if "filter" in kwargs and filter is None:
+            filter = kwargs.pop("filter")
+    
+        vf = self._prepare_vector_filter(vector_filter, **kwargs)
+        # to_arrow in Rust doesn't currently take **kwargs
+>       return self._inner.to_arrow(filter, vf, columns, device=device)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       RuntimeError: Failed to create batch with evolved schema: Invalid argument error: Column 'value' is declared as non-nullable but contains null values
+
+python/hyperstreamdb/__init__.py:409: RuntimeError
+----------------------------- Captured stdout call -----------------------------
+Written data to /tmp/tmpgubok9n6/d830c58a-5739-4c1b-9aac-497f7c965dcb.parquet (3 rows)
+Written data to /tmp/tmpgubok9n6/764021dc-0627-4932-adcd-334a38b98ef4.parquet (3 rows)
+DEBUG: table_schema fields: 2
+----------------------------- Captured stderr call -----------------------------
+DEBUG: Total entries to prune: 2
+DEBUG: Entry d830c58a-5739-4c1b-9aac-497f7c965dcb.parquet: partitions={}, index_files=[]
+DEBUG: Entry 764021dc-0627-4932-adcd-334a38b98ef4.parquet: partitions={}, index_files=[]
+___________________________ test_selective_indexing ____________________________
+
+    def test_selective_indexing():
+        print("1. Creating Table and Ingesting Data (Default: NO INDEX)")
+        table = hdb.Table(TABLE_URI)
+        table.set_index_all(False) # Ensure we test selective indexing only
+>       table.autocommit = False # Prevent background flushes during investigation
+        ^^^^^^^^^^^^^^^^
+
+tests/integration/test_selective_indexing.py:27: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = HyperStreamTable(uri=file:///tmp/hyperstream_test_selective_indexing)
+value = False
+
+    @autocommit.setter
+    def autocommit(self, value: bool):
+>       self._inner.autocommit = value
+        ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: attribute 'autocommit' of 'builtins.Table' objects is not writable
+
+python/hyperstreamdb/__init__.py:226: AttributeError
+----------------------------- Captured stdout call -----------------------------
+1. Creating Table and Ingesting Data (Default: NO INDEX)
+_____________________________ test_wal_compaction ______________________________
+
+    def test_wal_compaction():
+        print("="*60)
+        print("Testing WAL Compaction")
+        print("="*60)
+    
+        # Setup
+        ts = int(time.time())
+        uri = f"file:///tmp/test_wal_compact_{ts}"
+        base_path = uri.replace("file://", "")
+        if os.path.exists(base_path):
+            shutil.rmtree(base_path)
+    
+        # 1. Write many small batches to trigger compaction
+        print("\nPhase 1: Writing 200 small batches...")
+        table = hdb.Table(uri)
+>       table.autocommit = False
+        ^^^^^^^^^^^^^^^^
+
+tests/integration/test_wal_compaction.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = HyperStreamTable(uri=file:///tmp/test_wal_compact_1775698076)
+value = False
+
+    @autocommit.setter
+    def autocommit(self, value: bool):
+>       self._inner.autocommit = value
+        ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: attribute 'autocommit' of 'builtins.Table' objects is not writable
+
+python/hyperstreamdb/__init__.py:226: AttributeError
+----------------------------- Captured stdout call -----------------------------
+============================================================
+Testing WAL Compaction
+============================================================
+
+Phase 1: Writing 200 small batches...
+_____________________________ test_wal_durability ______________________________
+
+    def test_wal_durability():
+        print("="*60)
+        print("Testing Write-Ahead Log (WAL) Durability")
+        print("="*60)
+    
+        # Setup
+        ts = int(time.time())
+        uri = f"file:///tmp/test_wal_{ts}"
+        base_path = f"/tmp/test_wal_{ts}"
+        if os.path.exists(base_path):
+            shutil.rmtree(base_path)
+    
+        # 1. Write Data (Unflushed)
+        print("\nPhase 1: Writing Data (Buffered)...")
+        table = hdb.Table(uri)
+>       table.autocommit = False
+        ^^^^^^^^^^^^^^^^
+
+tests/integration/test_wal_durability.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = HyperStreamTable(uri=file:///tmp/test_wal_1775698076), value = False
+
+    @autocommit.setter
+    def autocommit(self, value: bool):
+>       self._inner.autocommit = value
+        ^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: attribute 'autocommit' of 'builtins.Table' objects is not writable
+
+python/hyperstreamdb/__init__.py:226: AttributeError
+----------------------------- Captured stdout call -----------------------------
+============================================================
+Testing Write-Ahead Log (WAL) Durability
+============================================================
+
+Phase 1: Writing Data (Buffered)...
+________________________ test_wikipedia_hybrid_queries _________________________
+
+    def test_wikipedia_hybrid_queries():
+        """Test hybrid queries: scalar filter + vector search"""
+    
+        # 1. Generate Data (if not exists)
+        num_docs = 100_000
+        data_dir = Path("tests/data/wikipedia")
+    
+        if not data_dir.exists() or len(list(data_dir.glob("*.parquet"))) == 0:
+            print(f"Generating {num_docs:,} Wikipedia documents...")
+            generate_wikipedia(num_docs=num_docs, batch_size=10_000)
+    
+        # 2. Ingest
+        table_uri = "file:///tmp/hyperstream_test/wikipedia"
+    
+        try:
+            table = hdb.Table(table_uri)
+        except AttributeError:
+            print("AttributeError: Table not found")
+            print(dir(hdb))
+            sys.exit(1)
+    
+        # Enable indexing for vector search
+        table.add_index_columns(["category", "embedding"])
+    
+        parquet_files = sorted(data_dir.glob("*.parquet"))
+        print(f"\nIngesting {len(parquet_files)} files...")
+    
+        start_ingest = time.time()
+        total_rows = 0
+        for pq_file in parquet_files:
+            arrow_table = pq.read_table(pq_file)
+            table.write_arrow(arrow_table)
+            total_rows += len(arrow_table)
+    
+        ingest_time = time.time() - start_ingest
+        ingest_rate = total_rows / ingest_time
+        print(f"Ingest Time: {ingest_time:.2f}s ({ingest_rate:.0f} rows/s)")
+    
+        # Verify ingest rate target: >100K rows/sec
+        # Note: With 768D embeddings, this is I/O intensive
+        print(f"{'✓' if ingest_rate > 50000 else '⚠'} Ingest rate: {ingest_rate:.0f} rows/s (target: >50K with embeddings)")
+    
+        # 3. Test: Pure Scalar Query
+        print("\n--- Test 1: Pure Scalar Filter ---")
+        start = time.time()
+        df_scalar = table.to_pandas(filter="category = 'science'")
+        scalar_time = (time.time() - start) * 1000
+    
+        print(f"Filter: category = 'science'")
+        print(f"Results: {len(df_scalar)} rows")
+        print(f"Time (Cold): {scalar_time:.2f}ms")
+    
+        # Warm Cache Test
+        start = time.time()
+        df_scalar_warm = table.to_pandas(filter="category = 'science'", columns=["id", "title", "url", "category"])
+        scalar_time_warm = (time.time() - start) * 1000
+        print(f"Time (Warm): {scalar_time_warm:.2f}ms")
+    
+        assert scalar_time_warm < 500, f"Warm scalar query too slow: {scalar_time_warm:.2f}ms"
+    
+        # ~10% of 100K = ~10K results
+        assert len(df_scalar) > 5000, f"Expected ~10K science docs, got {len(df_scalar)}"
+>       assert all(df_scalar['category'] == 'science'), "Filter returned wrong category!"
+E       AssertionError: Filter returned wrong category!
+E       assert False
+E        +  where False = all(0             sports\n1           politics\n2               arts\n3           politics\n4         technology\n             ...    \n299995     geography\n299996       science\n299997       history\n299998    technology\n299999      business\nName: category, Length: 300000, dtype: str == 'science')
+
+tests/integration/test_wikipedia.py:91: AssertionError
+----------------------------- Captured stdout call -----------------------------
+
+Ingesting 10 files...
+Written data to /tmp/hyperstream_test/wikipedia/689d49df-8dd8-4a7c-8987-d265a1fbe9f7.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/12d6ebf6-8f42-4226-aabf-7e28d52a0141.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/20e052f5-0f04-4ee8-882f-62f58cca8b1d.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/5d024893-c1ec-45b9-9a44-cb2ecd5c3ada.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/82fb86d5-1da2-4102-bc34-c7a8e861de2a.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/99aad124-7462-4500-bd2d-8e608c9fbb44.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/bb973bb2-a779-4316-95dd-292a09ca8f43.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/724e73f5-8a05-492b-a7ca-93f0694d5251.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/2a50037a-61ba-402d-bc78-241b0aebce7b.parquet (10000 rows)
+Written data to /tmp/hyperstream_test/wikipedia/e14dcd80-fdc4-4796-bcfe-eba35bd5c151.parquet (10000 rows)
+Ingest Time: 4.58s (21843 rows/s)
+⚠ Ingest rate: 21843 rows/s (target: >50K with embeddings)
+
+--- Test 1: Pure Scalar Filter ---
+DEBUG: table_schema fields: 7
+Filter: category = 'science'
+Results: 300000 rows
+Time (Cold): 5204.87ms
+DEBUG: table_schema fields: 7
+Time (Warm): 33.04ms
+----------------------------- Captured stderr call -----------------------------
+DEBUG: Total entries to prune: 30
+DEBUG: Entry 550c3f66-e111-478a-a203-8f180520e940.parquet: partitions={}, index_files=[]
+DEBUG: Entry bb973bb2-a779-4316-95dd-292a09ca8f43.parquet: partitions={}, index_files=[]
+DEBUG: Entry 76607d0c-8971-4be0-8873-6da4898a7ba8.parquet: partitions={}, index_files=[]
+DEBUG: Entry cd432c28-4c7c-43e6-9c7d-2d35f84e537c.parquet: partitions={}, index_files=[]
+DEBUG: Entry 20e052f5-0f04-4ee8-882f-62f58cca8b1d.parquet: partitions={}, index_files=[]
+DEBUG: Entry af63ed01-9021-4cad-8885-320da40f958b.parquet: partitions={}, index_files=[]
+DEBUG: Entry 5d024893-c1ec-45b9-9a44-cb2ecd5c3ada.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9a87b1dc-9a80-48de-8bdf-1f15251d0c51.parquet: partitions={}, index_files=[]
+DEBUG: Entry d88cacb7-0a9a-480a-9d6c-d4804cf3854c.parquet: partitions={}, index_files=[]
+DEBUG: Entry 386fe4d4-8010-4c6b-8830-63ebc7b99b64.parquet: partitions={}, index_files=[]
+DEBUG: Entry 11683ef1-b66b-4997-a271-2fc6a9140acd.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9cc4acf0-59df-444c-9b1a-c081e2d5e033.parquet: partitions={}, index_files=[]
+DEBUG: Entry 12d6ebf6-8f42-4226-aabf-7e28d52a0141.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9f4161fa-fc20-455f-9f34-c7a58f59ccc7.parquet: partitions={}, index_files=[]
+DEBUG: Entry d2c72471-4455-434a-a2a5-f6a82f354b21.parquet: partitions={}, index_files=[]
+DEBUG: Entry e14dcd80-fdc4-4796-bcfe-eba35bd5c151.parquet: partitions={}, index_files=[]
+DEBUG: Entry b771e357-96c0-4001-a6e4-28e072b04ad4.parquet: partitions={}, index_files=[]
+DEBUG: Entry 724e73f5-8a05-492b-a7ca-93f0694d5251.parquet: partitions={}, index_files=[]
+DEBUG: Entry 3ab82289-3335-4d46-8664-70d81ebede1f.parquet: partitions={}, index_files=[]
+DEBUG: Entry 82fb86d5-1da2-4102-bc34-c7a8e861de2a.parquet: partitions={}, index_files=[]
+DEBUG: Entry 74397d18-248b-4185-ae59-f8288e1b1897.parquet: partitions={}, index_files=[]
+DEBUG: Entry a75f7536-d419-41ff-9e28-271b1503dcb7.parquet: partitions={}, index_files=[]
+DEBUG: Entry 689d49df-8dd8-4a7c-8987-d265a1fbe9f7.parquet: partitions={}, index_files=[]
+DEBUG: Entry b532cd96-e8a7-48e2-a849-08287e854408.parquet: partitions={}, index_files=[]
+DEBUG: Entry 2464845e-9118-401d-af51-274ce85db692.parquet: partitions={}, index_files=[]
+DEBUG: Entry 99aad124-7462-4500-bd2d-8e608c9fbb44.parquet: partitions={}, index_files=[]
+DEBUG: Entry ddae2a5f-ccda-458f-bad7-a75af30fcb5f.parquet: partitions={}, index_files=[]
+DEBUG: Entry 2a50037a-61ba-402d-bc78-241b0aebce7b.parquet: partitions={}, index_files=[]
+DEBUG: Entry 478bbcc9-28d9-4a3a-8e81-c68330e6f07e.parquet: partitions={}, index_files=[]
+DEBUG: Entry f3a5adf7-1db6-423d-a9fc-8dd00d9c1e8b.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 30
+DEBUG: Entry 550c3f66-e111-478a-a203-8f180520e940.parquet: partitions={}, index_files=[]
+DEBUG: Entry bb973bb2-a779-4316-95dd-292a09ca8f43.parquet: partitions={}, index_files=[]
+DEBUG: Entry 76607d0c-8971-4be0-8873-6da4898a7ba8.parquet: partitions={}, index_files=[]
+DEBUG: Entry cd432c28-4c7c-43e6-9c7d-2d35f84e537c.parquet: partitions={}, index_files=[]
+DEBUG: Entry 20e052f5-0f04-4ee8-882f-62f58cca8b1d.parquet: partitions={}, index_files=[]
+DEBUG: Entry af63ed01-9021-4cad-8885-320da40f958b.parquet: partitions={}, index_files=[]
+DEBUG: Entry 5d024893-c1ec-45b9-9a44-cb2ecd5c3ada.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9a87b1dc-9a80-48de-8bdf-1f15251d0c51.parquet: partitions={}, index_files=[]
+DEBUG: Entry d88cacb7-0a9a-480a-9d6c-d4804cf3854c.parquet: partitions={}, index_files=[]
+DEBUG: Entry 386fe4d4-8010-4c6b-8830-63ebc7b99b64.parquet: partitions={}, index_files=[]
+DEBUG: Entry 11683ef1-b66b-4997-a271-2fc6a9140acd.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9cc4acf0-59df-444c-9b1a-c081e2d5e033.parquet: partitions={}, index_files=[]
+DEBUG: Entry 12d6ebf6-8f42-4226-aabf-7e28d52a0141.parquet: partitions={}, index_files=[]
+DEBUG: Entry 9f4161fa-fc20-455f-9f34-c7a58f59ccc7.parquet: partitions={}, index_files=[]
+DEBUG: Entry d2c72471-4455-434a-a2a5-f6a82f354b21.parquet: partitions={}, index_files=[]
+DEBUG: Entry e14dcd80-fdc4-4796-bcfe-eba35bd5c151.parquet: partitions={}, index_files=[]
+DEBUG: Entry b771e357-96c0-4001-a6e4-28e072b04ad4.parquet: partitions={}, index_files=[]
+DEBUG: Entry 724e73f5-8a05-492b-a7ca-93f0694d5251.parquet: partitions={}, index_files=[]
+DEBUG: Entry 3ab82289-3335-4d46-8664-70d81ebede1f.parquet: partitions={}, index_files=[]
+DEBUG: Entry 82fb86d5-1da2-4102-bc34-c7a8e861de2a.parquet: partitions={}, index_files=[]
+DEBUG: Entry 74397d18-248b-4185-ae59-f8288e1b1897.parquet: partitions={}, index_files=[]
+DEBUG: Entry a75f7536-d419-41ff-9e28-271b1503dcb7.parquet: partitions={}, index_files=[]
+DEBUG: Entry 689d49df-8dd8-4a7c-8987-d265a1fbe9f7.parquet: partitions={}, index_files=[]
+DEBUG: Entry b532cd96-e8a7-48e2-a849-08287e854408.parquet: partitions={}, index_files=[]
+DEBUG: Entry 2464845e-9118-401d-af51-274ce85db692.parquet: partitions={}, index_files=[]
+DEBUG: Entry 99aad124-7462-4500-bd2d-8e608c9fbb44.parquet: partitions={}, index_files=[]
+DEBUG: Entry ddae2a5f-ccda-458f-bad7-a75af30fcb5f.parquet: partitions={}, index_files=[]
+DEBUG: Entry 2a50037a-61ba-402d-bc78-241b0aebce7b.parquet: partitions={}, index_files=[]
+DEBUG: Entry 478bbcc9-28d9-4a3a-8e81-c68330e6f07e.parquet: partitions={}, index_files=[]
+DEBUG: Entry f3a5adf7-1db6-423d-a9fc-8dd00d9c1e8b.parquet: partitions={}, index_files=[]
+_________ TestVectorSearchLatency.test_vector_search_latency_in_memory _________
+
+self = <test_benchmarks.TestVectorSearchLatency object at 0x7341b2ed4ce0>
+temp_dir = '/tmp/tmpi15i_oge'
+
+    def test_vector_search_latency_in_memory(self, temp_dir):
+        """Test vector search latency with small in-memory dataset."""
+        table = Table(f"file://{temp_dir}")
+    
+        # Small dataset: 10K vectors, 128D
+        num_vectors = 10_000
+        dim = 128
+    
+        schema = pa.schema([
+            pa.field("id", pa.int64()),
+            pa.field("embedding", pa.list_(pa.float32(), list_size=dim)),
+        ])
+    
+        # Enable vector indexing
+        table.index_columns = ["embedding"]
+    
+        embeddings = [np.random.random(dim).astype(np.float32).tolist() for _ in range(num_vectors)]
+    
+        batch = pa.RecordBatch.from_arrays([
+            pa.array(range(num_vectors), type=pa.int64()),
+            pa.array(embeddings),
+        ], schema=schema)
+    
+        table.write([batch])
+        table.commit()
+        table.wait_for_indexes()
+    
+        # Benchmark vector search
+        query_vector = np.random.random(dim).astype(np.float32).tolist()
+    
+        # Warm up
+        _ = table.search(column="embedding", query=query_vector, k=10)
+    
+        latencies = []
+        for _ in range(10):
+            start = time.time()
+            results = table.search(column="embedding", query=query_vector, k=10)
+            latency = (time.time() - start) * 1000  # ms
+            latencies.append(latency)
+            assert len(results) > 0
+    
+        p50 = np.percentile(latencies, 50)
+        p99 = np.percentile(latencies, 99)
+    
+        print(f"\n[IN-MEMORY] Vector search latency: p50={p50:.1f}ms, p99={p99:.1f}ms")
+        print(f"Dataset: {num_vectors:,} vectors, {dim}D")
+    
+        # Should be very fast for small in-memory dataset
+>       assert p99 < 50, f"Expected p99 < 50ms, got {p99:.1f}ms"
+E       AssertionError: Expected p99 < 50ms, got 55.1ms
+E       assert np.float64(55.07943391799927) < 50
+
+tests/performance/test_benchmarks.py:330: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Written data to /tmp/tmpi15i_oge/b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet (10000 rows)
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+DEBUG: table_schema fields: 2
+
+[IN-MEMORY] Vector search latency: p50=41.7ms, p99=55.1ms
+Dataset: 10,000 vectors, 128D
+----------------------------- Captured stderr call -----------------------------
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry b7af3421-654c-48d0-b1c3-e6973fb404ab.parquet: partitions={}, index_files=[]
+______________ TestGPUBatchPerformance.test_l2_batch_100k_vectors ______________
+
+self = <test_gpu_batch_benchmarks.TestGPUBatchPerformance object at 0x7341b2ed60f0>
+
+    def test_l2_batch_100k_vectors(self):
+        """
+        Benchmark L2 distance batch operations with 100K vectors.
+    
+        Validates Requirement 3.2: >10x speedup for 100K+ vectors on GPU vs CPU.
+        """
+        print("\n" + "=" * 80)
+        print("Benchmark: L2 Distance Batch Operations (100K vectors)")
+        print("=" * 80)
+    
+        # Setup: 100K vectors, 128 dimensions
+        dim = 128
+        n_vectors = 100_000
+    
+        query = np.random.rand(dim).astype(np.float32)
+        database = np.random.rand(n_vectors, dim).astype(np.float32)
+    
+        print(f"Query dimension: {dim}")
+        print(f"Database size: {n_vectors:,} vectors")
+        print()
+    
+        # Check available backends
+        backends = hdb.ComputeContext.list_available_backends()
+        print(f"Available backends: {backends}")
+        print()
+    
+        # Test CPU performance
+        cpu_ctx = hdb.ComputeContext('cpu')
+        print(f"Testing CPU backend...")
+>       cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="l2")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/performance/test_gpu_batch_benchmarks.py:95: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+query = array([0.47234464, 0.865863  , 0.7240326 , 0.09571558, 0.10528592,
+       0.39277527, 0.33388305, 0.32341596, 0.998277... 0.15778948, 0.16787465, 0.00146053, 0.9518657 , 0.18885572,
+       0.9400667 , 0.90708053, 0.69165826], dtype=float32)
+database = array([[0.04786259, 0.03534682, 0.84404445, ..., 0.50414807, 0.29295453,
+        0.5823751 ],
+       [0.2726745 , 0.53...7025754, 0.1714102 , 0.6470355 , ..., 0.7177361 , 0.00679659,
+        0.8577157 ]], shape=(100000, 128), dtype=float32)
+context = Device(type='cpu', index=-1), metric_name = 'l2', warmup = True
+
+    def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
+        """
+        Measure batch distance computation performance.
+    
+        Args:
+            query: Query vector (1D array)
+            database: Database vectors (2D array, shape [n_vectors, dim])
+            context: ComputeContext for computation
+            metric_name: Distance metric to use ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+            warmup: Whether to perform a warmup run
+    
+        Returns:
+            dict with timing and throughput metrics
+        """
+        # Get the appropriate batch function
+        batch_functions = {
+            "l2": hdb.l2_batch,
+            "cosine": hdb.cosine_batch,
+            "inner_product": hdb.inner_product_batch,
+            "l1": hdb.l1_batch,
+            "hamming": hdb.hamming_batch,
+            "jaccard": hdb.jaccard_batch,
+        }
+    
+        batch_fn = batch_functions[metric_name]
+    
+        # Warmup run to ensure GPU is initialized
+        if warmup:
+>           _ = batch_fn(query, database[:100], context=context)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: l2_batch() got an unexpected keyword argument 'context'
+
+tests/performance/test_gpu_batch_benchmarks.py:44: TypeError
+----------------------------- Captured stdout call -----------------------------
+
+================================================================================
+Benchmark: L2 Distance Batch Operations (100K vectors)
+================================================================================
+Query dimension: 128
+Database size: 100,000 vectors
+
+Available backends: ['cpu']
+
+Testing CPU backend...
+____________ TestGPUBatchPerformance.test_cosine_batch_100k_vectors ____________
+
+self = <test_gpu_batch_benchmarks.TestGPUBatchPerformance object at 0x7341b2ed63f0>
+
+    def test_cosine_batch_100k_vectors(self):
+        """
+        Benchmark Cosine distance batch operations with 100K vectors.
+        """
+        print("\n" + "=" * 80)
+        print("Benchmark: Cosine Distance Batch Operations (100K vectors)")
+        print("=" * 80)
+    
+        # Setup: 100K vectors, 128 dimensions
+        dim = 128
+        n_vectors = 100_000
+    
+        query = np.random.rand(dim).astype(np.float32)
+        database = np.random.rand(n_vectors, dim).astype(np.float32)
+    
+        print(f"Query dimension: {dim}")
+        print(f"Database size: {n_vectors:,} vectors")
+        print()
+    
+        # Check available backends
+        backends = hdb.ComputeContext.list_available_backends()
+    
+        # Test CPU performance
+        cpu_ctx = hdb.ComputeContext('cpu')
+        print(f"Testing CPU backend...")
+>       cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="cosine")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/performance/test_gpu_batch_benchmarks.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+query = array([0.7164454 , 0.39711592, 0.90888804, 0.24036515, 0.9457255 ,
+       0.30185032, 0.199142  , 0.39872536, 0.984134... 0.0675032 , 0.07973071, 0.98410386, 0.78760993, 0.47428113,
+       0.96400446, 0.678824  , 0.07654651], dtype=float32)
+database = array([[0.73685044, 0.88330716, 0.7542728 , ..., 0.46927142, 0.6271649 ,
+        0.39704746],
+       [0.06447766, 0.65...9940057, 0.9342358 , 0.6400355 , ..., 0.79514295, 0.7286316 ,
+        0.12757924]], shape=(100000, 128), dtype=float32)
+context = Device(type='cpu', index=-1), metric_name = 'cosine', warmup = True
+
+    def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
+        """
+        Measure batch distance computation performance.
+    
+        Args:
+            query: Query vector (1D array)
+            database: Database vectors (2D array, shape [n_vectors, dim])
+            context: ComputeContext for computation
+            metric_name: Distance metric to use ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+            warmup: Whether to perform a warmup run
+    
+        Returns:
+            dict with timing and throughput metrics
+        """
+        # Get the appropriate batch function
+        batch_functions = {
+            "l2": hdb.l2_batch,
+            "cosine": hdb.cosine_batch,
+            "inner_product": hdb.inner_product_batch,
+            "l1": hdb.l1_batch,
+            "hamming": hdb.hamming_batch,
+            "jaccard": hdb.jaccard_batch,
+        }
+    
+        batch_fn = batch_functions[metric_name]
+    
+        # Warmup run to ensure GPU is initialized
+        if warmup:
+>           _ = batch_fn(query, database[:100], context=context)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: cosine_batch() got an unexpected keyword argument 'context'
+
+tests/performance/test_gpu_batch_benchmarks.py:44: TypeError
+----------------------------- Captured stdout call -----------------------------
+
+================================================================================
+Benchmark: Cosine Distance Batch Operations (100K vectors)
+================================================================================
+Query dimension: 128
+Database size: 100,000 vectors
+
+Testing CPU backend...
+________ TestGPUBatchPerformance.test_inner_product_batch_100k_vectors _________
+
+self = <test_gpu_batch_benchmarks.TestGPUBatchPerformance object at 0x7341b2ed66f0>
+
+    def test_inner_product_batch_100k_vectors(self):
+        """
+        Benchmark Inner Product batch operations with 100K vectors.
+        """
+        print("\n" + "=" * 80)
+        print("Benchmark: Inner Product Batch Operations (100K vectors)")
+        print("=" * 80)
+    
+        # Setup: 100K vectors, 128 dimensions
+        dim = 128
+        n_vectors = 100_000
+    
+        query = np.random.rand(dim).astype(np.float32)
+        database = np.random.rand(n_vectors, dim).astype(np.float32)
+    
+        print(f"Query dimension: {dim}")
+        print(f"Database size: {n_vectors:,} vectors")
+        print()
+    
+        # Check available backends
+        backends = hdb.ComputeContext.list_available_backends()
+    
+        # Test CPU performance
+        cpu_ctx = hdb.ComputeContext('cpu')
+        print(f"Testing CPU backend...")
+>       cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="inner_product")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/performance/test_gpu_batch_benchmarks.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+query = array([0.45924756, 0.83502746, 0.42825297, 0.10007302, 0.6757109 ,
+       0.3600004 , 0.6860521 , 0.49687636, 0.081575... 0.66828036, 0.73153186, 0.1606065 , 0.01697406, 0.07322098,
+       0.26430273, 0.6787675 , 0.12069264], dtype=float32)
+database = array([[0.92699945, 0.29775828, 0.5718383 , ..., 0.26014245, 0.1515297 ,
+        0.23201123],
+       [0.8978012 , 0.79...695427 , 0.7250679 , 0.14281063, ..., 0.7264449 , 0.26064768,
+        0.19839846]], shape=(100000, 128), dtype=float32)
+context = Device(type='cpu', index=-1), metric_name = 'inner_product'
+warmup = True
+
+    def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
+        """
+        Measure batch distance computation performance.
+    
+        Args:
+            query: Query vector (1D array)
+            database: Database vectors (2D array, shape [n_vectors, dim])
+            context: ComputeContext for computation
+            metric_name: Distance metric to use ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+            warmup: Whether to perform a warmup run
+    
+        Returns:
+            dict with timing and throughput metrics
+        """
+        # Get the appropriate batch function
+        batch_functions = {
+            "l2": hdb.l2_batch,
+            "cosine": hdb.cosine_batch,
+            "inner_product": hdb.inner_product_batch,
+            "l1": hdb.l1_batch,
+            "hamming": hdb.hamming_batch,
+            "jaccard": hdb.jaccard_batch,
+        }
+    
+        batch_fn = batch_functions[metric_name]
+    
+        # Warmup run to ensure GPU is initialized
+        if warmup:
+>           _ = batch_fn(query, database[:100], context=context)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: inner_product_batch() got an unexpected keyword argument 'context'
+
+tests/performance/test_gpu_batch_benchmarks.py:44: TypeError
+----------------------------- Captured stdout call -----------------------------
+
+================================================================================
+Benchmark: Inner Product Batch Operations (100K vectors)
+================================================================================
+Query dimension: 128
+Database size: 100,000 vectors
+
+Testing CPU backend...
+______________ TestGPUBatchPerformance.test_varying_vector_sizes _______________
+
+self = <test_gpu_batch_benchmarks.TestGPUBatchPerformance object at 0x7341b2eadbb0>
+
+    def test_varying_vector_sizes(self):
+        """
+        Benchmark performance across different database sizes.
+    
+        Tests: 10K, 50K, 100K, 200K, 500K vectors
+        """
+        print("\n" + "=" * 80)
+        print("Benchmark: Performance Scaling with Database Size")
+        print("=" * 80)
+    
+        dim = 128
+        sizes = [10_000, 50_000, 100_000, 200_000, 500_000]
+    
+        # Check available backends
+        backends = hdb.ComputeContext.list_available_backends()
+        gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
+    
+        cpu_ctx = hdb.ComputeContext('cpu')
+        if gpu_available:
+            gpu_ctx = hdb.ComputeContext.auto_detect()
+            print(f"GPU backend: {gpu_ctx.backend}")
+        else:
+            print("⚠ No GPU backend available - CPU baseline only")
+        print()
+    
+        print(f"{'Size':>10} | {'CPU Time':>12} | {'CPU Throughput':>18} | {'GPU Time':>12} | {'GPU Throughput':>18} | {'Speedup':>10}")
+        print("-" * 110)
+    
+        for n_vectors in sizes:
+            query = np.random.rand(dim).astype(np.float32)
+            database = np.random.rand(n_vectors, dim).astype(np.float32)
+    
+            # CPU benchmark
+>           cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="l2", warmup=False)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/performance/test_gpu_batch_benchmarks.py:294: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+query = array([0.8690276 , 0.98160475, 0.7543911 , 0.44992086, 0.9506298 ,
+       0.00889718, 0.7013321 , 0.2486517 , 0.326694... 0.5061904 , 0.06037167, 0.6403049 , 0.61299914, 0.4309871 ,
+       0.8588823 , 0.40427503, 0.5801621 ], dtype=float32)
+database = array([[0.65442926, 0.8770775 , 0.82372814, ..., 0.7864949 , 0.4468522 ,
+        0.19942895],
+       [0.51760054, 0.03...04523343, 0.8381064 , 0.10987764, ..., 0.9212858 , 0.7956782 ,
+        0.5147543 ]], shape=(10000, 128), dtype=float32)
+context = Device(type='cpu', index=-1), metric_name = 'l2', warmup = False
+
+    def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
+        """
+        Measure batch distance computation performance.
+    
+        Args:
+            query: Query vector (1D array)
+            database: Database vectors (2D array, shape [n_vectors, dim])
+            context: ComputeContext for computation
+            metric_name: Distance metric to use ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+            warmup: Whether to perform a warmup run
+    
+        Returns:
+            dict with timing and throughput metrics
+        """
+        # Get the appropriate batch function
+        batch_functions = {
+            "l2": hdb.l2_batch,
+            "cosine": hdb.cosine_batch,
+            "inner_product": hdb.inner_product_batch,
+            "l1": hdb.l1_batch,
+            "hamming": hdb.hamming_batch,
+            "jaccard": hdb.jaccard_batch,
+        }
+    
+        batch_fn = batch_functions[metric_name]
+    
+        # Warmup run to ensure GPU is initialized
+        if warmup:
+            _ = batch_fn(query, database[:100], context=context)
+    
+        # Benchmark run
+        start = time.time()
+>       distances = batch_fn(query, database, context=context)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: l2_batch() got an unexpected keyword argument 'context'
+
+tests/performance/test_gpu_batch_benchmarks.py:48: TypeError
+----------------------------- Captured stdout call -----------------------------
+
+================================================================================
+Benchmark: Performance Scaling with Database Size
+================================================================================
+⚠ No GPU backend available - CPU baseline only
+
+      Size |     CPU Time |     CPU Throughput |     GPU Time |     GPU Throughput |    Speedup
+--------------------------------------------------------------------------------------------------------------
+_______________ TestGPUBatchPerformance.test_varying_dimensions ________________
+
+self = <test_gpu_batch_benchmarks.TestGPUBatchPerformance object at 0x7341b2eadfa0>
+
+    def test_varying_dimensions(self):
+        """
+        Benchmark performance across different vector dimensions.
+    
+        Tests: 64D, 128D, 256D, 512D, 1024D
+        """
+        print("\n" + "=" * 80)
+        print("Benchmark: Performance Scaling with Vector Dimension")
+        print("=" * 80)
+    
+        n_vectors = 100_000
+        dimensions = [64, 128, 256, 512, 1024]
+    
+        # Check available backends
+        backends = hdb.ComputeContext.list_available_backends()
+        gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
+    
+        cpu_ctx = hdb.ComputeContext('cpu')
+        if gpu_available:
+            gpu_ctx = hdb.ComputeContext.auto_detect()
+            print(f"GPU backend: {gpu_ctx.backend}")
+        else:
+            print("⚠ No GPU backend available - CPU baseline only")
+        print()
+    
+        print(f"{'Dimension':>10} | {'CPU Time':>12} | {'CPU Throughput':>18} | {'GPU Time':>12} | {'GPU Throughput':>18} | {'Speedup':>10}")
+        print("-" * 110)
+    
+        for dim in dimensions:
+            query = np.random.rand(dim).astype(np.float32)
+            database = np.random.rand(n_vectors, dim).astype(np.float32)
+    
+            # CPU benchmark
+>           cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="l2", warmup=False)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/performance/test_gpu_batch_benchmarks.py:342: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+query = array([0.7573428 , 0.9216167 , 0.1335145 , 0.18001264, 0.6021461 ,
+       0.04159729, 0.37156463, 0.3351887 , 0.825775... 0.11285443, 0.52555233, 0.2402143 , 0.6542503 ,
+       0.78854436, 0.11785484, 0.68320644, 0.7972131 ], dtype=float32)
+database = array([[0.7337674 , 0.67219514, 0.17237721, ..., 0.0887224 , 0.9342004 ,
+        0.6931554 ],
+       [0.18471503, 0.08...7557779 , 0.64978725, 0.88166064, ..., 0.70415765, 0.11086878,
+        0.42827725]], shape=(100000, 64), dtype=float32)
+context = Device(type='cpu', index=-1), metric_name = 'l2', warmup = False
+
+    def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
+        """
+        Measure batch distance computation performance.
+    
+        Args:
+            query: Query vector (1D array)
+            database: Database vectors (2D array, shape [n_vectors, dim])
+            context: ComputeContext for computation
+            metric_name: Distance metric to use ("l2", "cosine", "inner_product", "l1", "hamming", "jaccard")
+            warmup: Whether to perform a warmup run
+    
+        Returns:
+            dict with timing and throughput metrics
+        """
+        # Get the appropriate batch function
+        batch_functions = {
+            "l2": hdb.l2_batch,
+            "cosine": hdb.cosine_batch,
+            "inner_product": hdb.inner_product_batch,
+            "l1": hdb.l1_batch,
+            "hamming": hdb.hamming_batch,
+            "jaccard": hdb.jaccard_batch,
+        }
+    
+        batch_fn = batch_functions[metric_name]
+    
+        # Warmup run to ensure GPU is initialized
+        if warmup:
+            _ = batch_fn(query, database[:100], context=context)
+    
+        # Benchmark run
+        start = time.time()
+>       distances = batch_fn(query, database, context=context)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: l2_batch() got an unexpected keyword argument 'context'
+
+tests/performance/test_gpu_batch_benchmarks.py:48: TypeError
+----------------------------- Captured stdout call -----------------------------
+
+================================================================================
+Benchmark: Performance Scaling with Vector Dimension
+================================================================================
+⚠ No GPU backend available - CPU baseline only
+
+ Dimension |     CPU Time |     CPU Throughput |     GPU Time |     GPU Throughput |    Speedup
+--------------------------------------------------------------------------------------------------------------
+_____________________________ test_connector_apis ______________________________
+
+    def test_connector_apis():
+        print("Testing Connector APIs...")
+    
+        # Setup
+        uri = "file:///tmp/test_connector_api_table"
+        if os.path.exists("/tmp/test_connector_api_table"):
+            shutil.rmtree("/tmp/test_connector_api_table")
+    
+        table = hdb.Table(uri)
+    
+        # Create test data
+        df = pd.DataFrame({
+            "id": range(1000),
+            "name": [f"user_{i}" for i in range(1000)],
+            "age": [i % 50 for i in range(1000)],
+            "category": ["A" if i % 2 == 0 else "B" for i in range(1000)]
+        })
+    
+        # Index 'age' and 'category'
+        table.add_index_columns(["age", "category"])
+    
+        print("- Writing data...")
+        table.write_pandas(df)
+        table.wait_for_indexes()
+    
+        print("- Compacting and Backfilling Indexes...")
+        table.compact(min_file_size_bytes=1024)
+        table.index_all_columns()
+        table.wait_for_indexes()
+    
+        # 1. Test list_data_files
+        print("\n1. Testing list_data_files()...")
+        files = table.list_data_files()
+        assert len(files) > 0
+        print(f"  Found {len(files)} files")
+    
+        file_info = files[0]
+        print(f"  File: {file_info.file_path}")
+        print(f"  Rows: {file_info.row_count}")
+        print(f"  Size: {file_info.file_size_bytes} bytes")
+        print(f"  Scalar Indexes: {file_info.has_scalar_indexes}")
+        print(f"  Indexed Columns: {file_info.indexed_columns}")
+    
+        assert file_info.row_count == 1000
+>       assert "age" in file_info.indexed_columns
+E       AssertionError: assert 'age' in []
+E        +  where [] = <builtins.PyDataFileInfo object at 0x7341b2d4ea30>.indexed_columns
+
+tests/test_connector_apis.py:51: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Testing Connector APIs...
+- Writing data...
+Written data to /tmp/test_connector_api_table/780c0ef8-0258-46aa-b842-9560bab8db03.parquet (1000 rows)
+- Compacting and Backfilling Indexes...
+
+1. Testing list_data_files()...
+  Found 1 files
+  File: 780c0ef8-0258-46aa-b842-9560bab8db03.parquet
+  Rows: 1000
+  Size: 7306 bytes
+  Scalar Indexes: False
+  Indexed Columns: []
+_____________________________ test_connector_apis ______________________________
+
+table_uri = 'file:///tmp/tmp8ldsozk1/test_table_connectors'
+
+    def test_connector_apis(table_uri):
+        print(f"Creating table at {table_uri}")
+        table = hyperstreamdb.Table(table_uri)
+    
+        # 1. Create Data
+        df = pd.DataFrame({
+            "id": range(1000),
+            "tag": ["A"] * 500 + ["B"] * 500,
+            "value": np.random.randn(1000),
+            "embedding": [np.random.rand(128).astype(np.float32) for _ in range(1000)]
+        })
+    
+        # 2. Write Data
+        print("Writing data...")
+        table.write_pandas(df)
+        table.commit() # Ensure data is flushed to disk
+    
+        # 3. Configure Indexing (optional, to verify index flags)
+        # table.add_index_columns(["tag"])
+        # table.index_all_columns() # Should trigger backfill
+    
+        # Compact to ensure manifest is up to date and indexes (if any) are finalized
+        # Note: write() adds to buffer, commit() flushes to parquet.
+        # list_data_files reads from Manifest.
+        # We need to ensure commit() updates the manifest.
+        # (In current impl, flush_async -> write_segment -> commit_manifest). So yes.
+    
+        # 4. Test list_data_files
+        print("Testing list_data_files...")
+        files = table.list_data_files()
+        assert len(files) > 0, "Should have at least one data file"
+    
+        first_file = files[0]
+        print(f"File Info: Path={first_file.file_path}, Rows={first_file.row_count}, Size={first_file.file_size_bytes}")
+    
+        assert first_file.row_count == 1000
+        assert "tag" in first_file.min_values or True # Depending on if stats are gathered
+    
+        # 5. Test get_splits
+        print("Testing get_splits...")
+        # Force small split size to generate multiple splits per file if possible,
+        # but our file is likely small (~100KB).
+        # Let's try a very small split size (e.g. 1KB) to force splitting?
+        # Or just verify 1 split per file.
+    
+        max_split_size = 1024 * 1024 * 64 # 64MB default
+        splits = table.get_splits(max_split_size)
+        assert len(splits) >= len(files)
+    
+        split = splits[0]
+        print(f"Split Info: Path={split.file_path}, Start={split.start_offset}, Length={split.length}")
+        assert split.file_path == first_file.file_path
+    
+        # 6. Test read_file
+        print("Testing read_file...")
+        arrow_table = table.read_file(first_file.file_path, None)
+        df_read = arrow_table.to_pandas()
+        assert len(df_read) == 1000
+    
+        # Test with filter (index acceleration check - should now apply post-filtering)
+        # Note: providing valid SQL filter string
+        arrow_filtered = table.read_file(first_file.file_path, "tag = 'A'")
+        # Verification expectation: returns matching rows (correctly applies filter)
+>       assert len(arrow_filtered) == 500
+E       assert 1000 == 500
+E        +  where 1000 = len(pyarrow.Table\nid: int64\ntag: large_string\nvalue: double\nembedding: list<item: float>\n  child 0, item: float\n----\nid: [[0,1,2,3,4,...,995,996,997,998,999]]\ntag: [["A","A","A","A","A",...,"B","B","B","B","B"]]\nvalue: [[-1.2237293735578567,-1.4014722913665876,-0.44497893964886914,0.14263503712710407,-0.26982454964699654,...,-0.8093376532066281,-0.5570105553068011,1.1137414095476803,0.6073785022749318,0.4181210734286161]]\nembedding: [[[0.5812806,0.5594768,0.45898986,0.550614,0.71309924,...,0.76203537,0.20402583,0.23438989,0.22988757,0.06949453],[0.86506355,0.56694275,0.59203744,0.88207203,0.46269715,...,0.5069387,0.6915776,0.97781,0.5561768,0.011172042],...,[0.56473845,0.5385255,0.14225657,0.33476165,0.16129084,...,0.10131799,0.75222135,0.33103815,0.28516364,0.966706],[0.4118082,0.17013921,0.46315128,0.07284984,0.20071916,...,0.78353435,0.49071044,0.8899615,0.10293678,0.03515559]]])
+
+tests/test_connector_integration.py:81: AssertionError
+----------------------------- Captured stdout call -----------------------------
+Creating table at file:///tmp/tmp8ldsozk1/test_table_connectors
+Writing data...
+Written data to /tmp/tmp8ldsozk1/test_table_connectors/44d73ae5-9d82-4ac6-8862-e1323ee92302.parquet (1000 rows)
+Testing list_data_files...
+File Info: Path=44d73ae5-9d82-4ac6-8862-e1323ee92302.parquet, Rows=1000, Size=742699
+Testing get_splits...
+Split Info: Path=44d73ae5-9d82-4ac6-8862-e1323ee92302.parquet, Start=0, Length=742699
+Testing read_file...
+----------------------------- Captured stderr call -----------------------------
+DEBUG: Total entries to prune: 1
+DEBUG: Entry 44d73ae5-9d82-4ac6-8862-e1323ee92302.parquet: partitions={}, index_files=[]
+DEBUG: Total entries to prune: 1
+DEBUG: Entry 44d73ae5-9d82-4ac6-8862-e1323ee92302.parquet: partitions={}, index_files=[]
+________________________ test_context_backend_property _________________________
+
+    @given(backend=valid_backends, device_id=device_ids)
+>   def test_context_backend_property(backend, device_id):
+                   ^^^
+
+tests/test_context_backend_property.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+backend = 'cpu', device_id = 0
+
+    @given(backend=valid_backends, device_id=device_ids)
+    def test_context_backend_property(backend, device_id):
+        """
+        Property: For any created GPU context, querying its backend property
+        should return the backend name that was used to create it.
+    
+        This property verifies that the backend property correctly reflects
+        the backend used during context creation, regardless of whether the
+        backend is available on the current system.
+        """
+        # Get list of available backends
+        available_backends = hdb.ComputeContext.list_available_backends()
+    
+        if backend in available_backends:
+            # Backend is available - should succeed
+>           ctx = hdb.ComputeContext(backend, device_id=device_id)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: Device.__new__() got an unexpected keyword argument 'device_id'
+E           Falsifying example: test_context_backend_property(
+E               backend='cpu',
+E               device_id=0,
+E           )
+
+tests/test_context_backend_property.py:39: TypeError
+___________________ TestV2Features.test_sort_order_metadata ____________________
+
+self = <test_cross_engine_compat.TestV2Features object at 0x7341b2f18290>
+
+    def test_sort_order_metadata(self):
+        """Verify sort order is written to metadata"""
+        table_path = str(TEST_DIR / "sort_order_test")
+        table = hdb.Table(table_path)
+    
+        df = pd.DataFrame({"a": [3, 1, 2], "b": [6, 4, 5]})
+>       table.set_sort_order(["a"], ascending=[True])
+
+tests/test_cross_engine_compat.py:112: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = HyperStreamTable(uri=/tmp/hyperstream_compat_tests/sort_order_test)
+columns = ['a'], ascending = [True]
+
+    def set_sort_order(self, columns: List[str], ascending: List[bool]):
+        """Set the table's default sort order for future data writes."""
+>       return self._inner.replace_sort_order(columns, ascending)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       ValueError: Column 'a' not found
+
+python/hyperstreamdb/__init__.py:535: ValueError
+_________________________________ test_mps_gpu _________________________________
+
+    def test_mps_gpu():
+        print("="*50)
+        print("HYPERSTREAMDB MPS GPU VALIDATION")
+        print("="*50)
+    
+        # 1. Detect GPU Context
+        print("\n[1] Detecting GPU Context...")
+        try:
+            ctx = hdb.ComputeContext.auto_detect()
+            print(f"Detected backend: {ctx.backend}")
+            print(f"Device ID: {ctx.device_id}")
+    
+            if ctx.backend != "mps":
+                print(f"WARNING: Expected 'mps' backend on macOS, but got '{ctx.backend}'")
+        except Exception as e:
+            print(f"Error detecting GPU context: {e}")
+            return
+    
+        # 2. Prepare Test Data
+        print("\n[2] Preparing Test Data...")
+        n_vectors = 100_000
+        dim = 768
+        print(f"Generating {n_vectors:,} vectors of {dim} dimensions...")
+    
+        query = np.random.randn(dim).astype(np.float32)
+        vectors = np.random.randn(n_vectors, dim).astype(np.float32)
+    
+        # 3. Compute on CPU (Baseline)
+        print("\n[3] Computing distances on CPU...")
+        cpu_ctx = hdb.ComputeContext("cpu")
+        start_time = time.time()
+>       cpu_distances = hdb.l2_batch(query, vectors, context=cpu_ctx)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: l2_batch() got an unexpected keyword argument 'context'
+
+tests/test_mps_gpu.py:36: TypeError
+----------------------------- Captured stdout call -----------------------------
+==================================================
+HYPERSTREAMDB MPS GPU VALIDATION
+==================================================
+
+[1] Detecting GPU Context...
+Detected backend: cpu
+Device ID: -1
+WARNING: Expected 'mps' backend on macOS, but got 'cpu'
+
+[2] Preparing Test Data...
+Generating 100,000 vectors of 768 dimensions...
+
+[3] Computing distances on CPU...
+__________________________ test_cpu_backend_creation ___________________________
+
+    def test_cpu_backend_creation():
+        """Test creating a CPU backend context"""
+        ctx = hdb.ComputeContext('cpu')
+        assert ctx.backend == 'cpu'
+>       assert ctx.device_id == 0  # Default device_id
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AssertionError: assert -1 == 0
+E        +  where -1 = Device(type='cpu', index=-1).device_id
+
+tests/test_python_gpu_context.py:24: AssertionError
+_______________________ test_cpu_backend_with_device_id ________________________
+
+    def test_cpu_backend_with_device_id():
+        """Test creating a CPU backend with custom device_id"""
+>       ctx = hdb.ComputeContext('cpu', device_id=-1)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: Device.__new__() got an unexpected keyword argument 'device_id'
+
+tests/test_python_gpu_context.py:29: TypeError
+___________________________ test_device_id_property ____________________________
+
+    def test_device_id_property():
+        """Test that device_id property returns the correct device ID"""
+>       ctx = hdb.ComputeContext('cpu', device_id=5)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: Device.__new__() got an unexpected keyword argument 'device_id'
+
+tests/test_python_gpu_context.py:47: TypeError
+________________________ test_unavailable_backend_error ________________________
+
+    def test_unavailable_backend_error():
+        """Test that requesting an unavailable backend raises RuntimeError"""
+        backends = hdb.ComputeContext.list_available_backends()
+    
+        # Try to create a context with a backend that's not available
+        # We'll try all possible backends and expect errors for unavailable ones
+        all_backends = ['cuda', 'rocm', 'mps', 'intel']
+        unavailable = [b for b in all_backends if b not in backends]
+    
+        for backend in unavailable:
+            with pytest.raises(RuntimeError) as exc_info:
+                hdb.ComputeContext(backend)
+    
+            # Check that error message mentions available backends
+            error_msg = str(exc_info.value)
+            assert 'not available' in error_msg.lower()
+>           assert 'available backends' in error_msg.lower()
+E           AssertionError: assert 'available backends' in 'cuda backend not available. install from source with: pip install hyperstreamdb[cuda] --no-binary :all:'
+E            +  where 'cuda backend not available. install from source with: pip install hyperstreamdb[cuda] --no-binary :all:' = <built-in method lower of str object at 0x7341b2c03900>()
+E            +    where <built-in method lower of str object at 0x7341b2c03900> = 'CUDA backend not available. Install from source with: pip install hyperstreamdb[cuda] --no-binary :all:'.lower
+
+tests/test_python_gpu_context.py:82: AssertionError
+__________________________ test_invalid_backend_error __________________________
+
+    def test_invalid_backend_error():
+        """Test that requesting an invalid backend raises ValueError"""
+        with pytest.raises(ValueError) as exc_info:
+            hdb.ComputeContext('invalid_backend')
+    
+        error_msg = str(exc_info.value)
+>       assert 'unknown backend' in error_msg.lower()
+E       assert 'unknown backend' in "unknown device type 'invalid_backend'. valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'xpu'"
+E        +  where "unknown device type 'invalid_backend'. valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'xpu'" = <built-in method lower of str object at 0x7341b2c037e0>()
+E        +    where <built-in method lower of str object at 0x7341b2c037e0> = "Unknown device type 'invalid_backend'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'xpu'".lower
+
+tests/test_python_gpu_context.py:92: AssertionError
+__________________________________ test_repr ___________________________________
+
+    def test_repr():
+        """Test that __repr__ returns a useful string representation"""
+>       ctx = hdb.ComputeContext('cpu', device_id=0)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: Device.__new__() got an unexpected keyword argument 'device_id'
+
+tests/test_python_gpu_context.py:146: TypeError
+_______________________ test_read_split_with_projection ________________________
+
+cleanup = None
+
+    def test_read_split_with_projection(cleanup):
+        os.makedirs("test_splits_data", exist_ok=True)
+        table_uri = f"file://{os.getcwd()}/test_splits_data"
+    
+        # 1. Create a Parquet file with 3 Row Groups (approx)
+        # 3 batches of 10 rows
+        schema = pa.schema([
+            ('id', pa.int32()),
+            ('val', pa.string()),
+            ('heavy', pa.string()) # Large column we want to skip
+        ])
+    
+        file_path = f"{table_uri}/segment_abc.parquet"
+        writer = pq.ParquetWriter(file_path.replace("file://", ""), schema, version='2.6')
+    
+        for i in range(3):
+            ids = pa.array(range(i*10, (i+1)*10), type=pa.int32())
+            vals = pa.array([f"val_{x}" for x in range(i*10, (i+1)*10)])
+            heavy = pa.array(["X" * 1000 for _ in range(10)])
+            batch = pa.Table.from_arrays([ids, vals, heavy], schema=schema)
+            writer.write_table(batch, row_group_size=10)
+    
+        writer.close()
+    
+        # 2. Initialize Table
+        # Note: Table::new expects existing table or creates it?
+        # Our simple Table::new just opens logic.
+        # We need to manually construct splits or use list_data_files -> manual split construction if get_splits logic is simple.
+    
+        # Actually, let's use list_data_files to get the file, then create a split manually or use get_splits
+        # We implemented `get_splits(max_split_size)`.
+        # File size: 30 rows + heavy strings ~ 30KB.
+        # Let's say max_split_size = 10KB.
+    
+        # Need to trick `get_splits`?
+        # Or just verify `read_split` directly by assuming we know row group IDs.
+    
+        # Let's interact via `read_split` manually first to test the API.
+    
+        catalog = hdb.create_catalog("nessie", {"url": "http://localhost:19120"}) # Type doesn't matter for local file read if we use direct path
+        # Actually we don't have a specific `Table` python object exposed easily for direct `read_split` calls
+        # except via the internal test wrapper or if we expose it on the Catalog?
+        # Python binding `read_split` is on `PyTable`.
+    
+        # We need a `PyTable`.
+        # `load_table` usually returns one. But we have a local file.
+        # Let's use `hdb.Table` (if exposed?) No.
+        # But `PyRestCatalog` etc return `PyTable`.
+        # Does `PyTable.new(uri)` exist? It is not exposed to Python as `__init__`.
+    
+        # 3. Open Table directly
+        # Note: open_table expects URI. For local file, typically table URI is parent dir.
+        # But here we want to treat the file as a table/segment source.
+        # Our simple Table implementation treats URI as "Table Root".
+        # And read_split(split) uses split.file_path.
+    
+        # Let's open the "Table" at the directory level.
+        table = hdb.open_table(table_uri)
+    
+        # 4. Construct a Split manually (or via Python wrapper if exposed)
+        # PySplit is exposed.
+        # We want to read Row Group 1 (rows 10-20).
+        # file_path in split should be relative or absolute. Table assumes absolute or relative to store.
+        # Let's use absolute path since we used absolute path in writer.
+    
+        # Row Group 1:
+        split = hdb.PySplit(
+            file_path,
+            0, 100, # offset/length ignored by current impl
+            [1],    # row_group_ids
+            None,   # index_file_path
+            False   # can_use_indexes
+        )
+    
+        # 5. Read Split with Projection (SKIP 'heavy')
+        columns = ["id", "val"]
+        arrow_table = table.read_split(split, columns)
+    
+        # 6. Verify
+>       assert arrow_table.num_columns == 2
+E       assert 0 == 2
+E        +  where 0 = pyarrow.Table\n\n----.num_columns
+
+tests/test_splits.py:96: AssertionError
+=============================== warnings summary ===============================
+tests/test_exports.py::test_imports
+  /home/ralbright/projects/hyperstreamdb/venv/lib/python3.12/site-packages/_pytest/python.py:170: PytestReturnNotNoneWarning: Test functions should return None, but tests/test_exports.py::test_imports returned <class 'bool'>.
+  Did you mean to use `assert` instead of `return`?
+  See https://docs.pytest.org/en/stable/how-to/assert.html#return-not-none for more information.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/integration/test_merge.py::test_merge_pruning - AssertionError: ...
+FAILED tests/integration/test_query_planning.py::test_query_planning - assert...
+FAILED tests/integration/test_schema_evolution.py::TestSchemaEvolution::test_required_to_nullable
+FAILED tests/integration/test_selective_indexing.py::test_selective_indexing
+FAILED tests/integration/test_wal_compaction.py::test_wal_compaction - Attrib...
+FAILED tests/integration/test_wal_durability.py::test_wal_durability - Attrib...
+FAILED tests/integration/test_wikipedia.py::test_wikipedia_hybrid_queries - A...
+FAILED tests/performance/test_benchmarks.py::TestVectorSearchLatency::test_vector_search_latency_in_memory
+FAILED tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_l2_batch_100k_vectors
+FAILED tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_cosine_batch_100k_vectors
+FAILED tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_inner_product_batch_100k_vectors
+FAILED tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_varying_vector_sizes
+FAILED tests/performance/test_gpu_batch_benchmarks.py::TestGPUBatchPerformance::test_varying_dimensions
+FAILED tests/test_connector_apis.py::test_connector_apis - AssertionError: as...
+FAILED tests/test_connector_integration.py::test_connector_apis - assert 1000...
+FAILED tests/test_context_backend_property.py::test_context_backend_property
+FAILED tests/test_cross_engine_compat.py::TestV2Features::test_sort_order_metadata
+FAILED tests/test_mps_gpu.py::test_mps_gpu - TypeError: l2_batch() got an une...
+FAILED tests/test_python_gpu_context.py::test_cpu_backend_creation - Assertio...
+FAILED tests/test_python_gpu_context.py::test_cpu_backend_with_device_id - Ty...
+FAILED tests/test_python_gpu_context.py::test_device_id_property - TypeError:...
+FAILED tests/test_python_gpu_context.py::test_unavailable_backend_error - Ass...
+FAILED tests/test_python_gpu_context.py::test_invalid_backend_error - assert ...
+FAILED tests/test_python_gpu_context.py::test_repr - TypeError: Device.__new_...
+FAILED tests/test_splits.py::test_read_split_with_projection - assert 0 == 2
+ERROR tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_filtered_vector_search
+ERROR tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_multi_filter_vector
+ERROR tests/benchmarks/hybrid/test_scalar_plus_vector.py::TestHybridQueryBenchmarks::test_comparison_post_vs_pre_filter
+ERROR tests/benchmarks/index/test_index_build.py::TestIndexBuildBenchmarks::test_build_100k_vectors_latency
+ERROR tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_point_lookup
+ERROR tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_high_selectivity_filter
+ERROR tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_range_query
+ERROR tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmarks::test_full_scan_baseline
+ERROR tests/benchmarks/vector_search/test_cold_read_latency.py::TestColdReadLatency::test_cold_search_latency
+ERROR tests/benchmarks/vector_search/test_parallel_search.py::test_parallel_search_vs_sequential
+ERROR tests/benchmarks/vector_search/test_parallel_search.py::test_parallel_search_with_filters
+ERROR tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_ingestion_comparison_small
+ERROR tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_query_comparison
+ERROR tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdrantComparison::test_filtered_search_comparison
+ERROR tests/benchmarks/vector_search/test_vector_index_verification.py::test_automatic_schema_detection
+ERROR tests/benchmarks/vector_search/test_vector_index_verification.py::test_explicit_index_configuration_still_works
+ERROR tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_ingest_1m_vectors
+ERROR tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_search_unfiltered_small
+ERROR tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_search_filtered_high_selectivity
+ERROR tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchmarks::test_concurrent_queries
+== 25 failed, 104 passed, 6 skipped, 1 warning, 20 errors in 61.96s (0:01:01) ==

@@ -10,13 +10,14 @@ pub mod pgvector_rewriter;
 
 use std::any::Any;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::TableType;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::logical_expr::{TableProviderFilterPushDown, Expr};
-use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::arrow::datatypes::{SchemaRef, Field, Schema};
 
 use crate::core::table::Table;
 use crate::core::sql::physical_plan::HyperStreamExec;
@@ -32,6 +33,36 @@ impl HyperStreamTableProvider {
     }
 }
 
+fn strip_field_metadata(field: &Field) -> Field {
+    let dt = field.data_type().clone();
+    let dt = match dt {
+        arrow::datatypes::DataType::List(f) => {
+            arrow::datatypes::DataType::List(Arc::new(strip_field_metadata(f.as_ref())))
+        }
+        arrow::datatypes::DataType::FixedSizeList(f, size) => {
+            arrow::datatypes::DataType::FixedSizeList(Arc::new(strip_field_metadata(f.as_ref())), size)
+        }
+        arrow::datatypes::DataType::LargeList(f) => {
+            arrow::datatypes::DataType::LargeList(Arc::new(strip_field_metadata(f.as_ref())))
+        }
+        arrow::datatypes::DataType::Struct(fields) => {
+            let fields = fields.iter().map(|f| strip_field_metadata(f.as_ref())).collect();
+            arrow::datatypes::DataType::Struct(fields)
+        }
+        arrow::datatypes::DataType::Map(f, sorted) => {
+            arrow::datatypes::DataType::Map(Arc::new(strip_field_metadata(f.as_ref())), sorted)
+        }
+        _ => dt,
+    };
+    Field::new(field.name(), dt, field.is_nullable())
+        .with_metadata(HashMap::new())
+}
+
+fn strip_metadata(schema: SchemaRef) -> SchemaRef {
+    let fields: Vec<Field> = schema.fields().iter().map(|f| strip_field_metadata(f.as_ref())).collect();
+    Arc::new(Schema::new_with_metadata(fields, HashMap::new()))
+}
+
 #[async_trait]
 impl TableProvider for HyperStreamTableProvider {
     fn as_any(&self) -> &dyn Any {
@@ -39,7 +70,7 @@ impl TableProvider for HyperStreamTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.table.arrow_schema()
+        strip_metadata(self.table.arrow_schema())
     }
 
     fn table_type(&self) -> TableType {

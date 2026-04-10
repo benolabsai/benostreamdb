@@ -394,13 +394,22 @@ pub async fn execute_vector_search_with_config(
                     .unwrap_or(&file_path_str);
                 
                 tracing::debug!("Entry index files: {:?}", entry.index_files);
-                let config = SegmentConfig::new(&base_uri, segment_id)
+                // Resolve partition-aware path for vector search
+                let path = std::path::Path::new(&file_path_str);
+                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+                let full_base_uri = if rel_parent.is_empty() {
+                     base_uri.clone()
+                } else {
+                     format!("{}/{}", base_uri, rel_parent)
+                };
+
+                let config = SegmentConfig::new(&full_base_uri, segment_id)
                     .with_parquet_path(entry.file_path.clone())
                     .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
                     .with_delete_files(entry.delete_files.clone())
                     .with_index_files(entry.index_files.clone());
                 
-                let reader = HybridReader::new(config, store, &base_uri);
+                let reader = HybridReader::new(config, store.clone(), &base_uri);
                 
                 let target_schema = if let Some(cols) = &columns_clone {
                     let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::new(Vec::<arrow::datatypes::Field>::new())));

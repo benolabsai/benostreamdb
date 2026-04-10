@@ -1,0 +1,202 @@
+   Compiling stable_deref_trait v1.2.1
+   Compiling zerofrom v0.1.6
+   Compiling half v2.7.1
+   Compiling siphasher v1.0.2
+   Compiling num-complex v0.4.6
+   Compiling aho-corasick v1.1.4
+   Compiling portable-atomic v1.13.1
+   Compiling dary_heap v0.3.8
+   Compiling paste v0.1.18
+   Compiling yoke v0.8.1
+   Compiling bytemuck v1.25.0
+   Compiling libflate v2.2.1
+   Compiling zerovec v0.11.5
+   Compiling zerotrie v0.2.3
+   Compiling phf_shared v0.12.1
+   Compiling arrow-buffer v57.3.0
+   Compiling ciborium-ll v0.2.2
+   Compiling num v0.4.3
+   Compiling phf v0.12.1
+   Compiling cfg-if v0.1.10
+   Compiling simdeez v1.0.8
+   Compiling ciborium v0.2.2
+   Compiling chrono-tz v0.10.4
+   Compiling apache-avro v0.17.0
+   Compiling tinystr v0.8.2
+   Compiling icu_locale_core v2.1.1
+   Compiling potential_utf v0.1.4
+   Compiling icu_collections v2.1.1
+   Compiling arrow-data v57.3.0
+   Compiling regex-automata v0.4.14
+   Compiling icu_provider v2.1.1
+   Compiling icu_properties v2.1.2
+   Compiling icu_normalizer v2.1.1
+   Compiling smartcore v0.3.2
+   Compiling fastbloom v0.17.0
+   Compiling moka v0.12.15
+   Compiling idna_adapter v1.2.1
+   Compiling idna v1.1.0
+   Compiling url v2.5.8
+   Compiling reqwest v0.12.28
+   Compiling sqlx-core v0.8.6
+   Compiling reqwest v0.11.27
+   Compiling regex v1.12.3
+   Compiling matchers v0.2.0
+   Compiling criterion v0.5.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling arrow-array v57.3.0
+   Compiling object_store v0.12.5
+   Compiling sqlx-sqlite v0.8.6
+   Compiling arrow-select v57.3.0
+   Compiling arrow-arith v57.3.0
+   Compiling arrow-pyarrow v57.3.0
+   Compiling arrow-row v57.3.0
+   Compiling arrow-ord v57.3.0
+   Compiling arrow-ipc v57.3.0
+   Compiling arrow-string v57.3.0
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling arrow-cast v57.3.0
+   Compiling arrow-csv v57.3.0
+   Compiling arrow-json v57.3.0
+   Compiling parquet v57.3.0
+   Compiling arrow v57.3.0
+   Compiling sqlx-macros-core v0.8.6
+   Compiling tracing-opentelemetry v0.23.0
+   Compiling env_logger v0.10.2
+   Compiling aws-config v1.8.15
+   Compiling roaring v0.10.12
+   Compiling sqlx-macros v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling datafusion-common v52.4.0
+   Compiling datafusion-expr-common v52.4.0
+   Compiling datafusion-physical-expr-common v52.4.0
+   Compiling datafusion-functions-aggregate-common v52.4.0
+   Compiling datafusion-functions-window-common v52.4.0
+   Compiling datafusion-expr v52.4.0
+   Compiling datafusion-physical-expr v52.4.0
+   Compiling datafusion-execution v52.4.0
+   Compiling datafusion-sql v52.4.0
+   Compiling datafusion-functions v52.4.0
+   Compiling datafusion-functions-aggregate v52.4.0
+   Compiling datafusion-optimizer v52.4.0
+   Compiling datafusion-functions-window v52.4.0
+   Compiling datafusion-physical-plan v52.4.0
+   Compiling datafusion-physical-expr-adapter v52.4.0
+   Compiling datafusion-functions-nested v52.4.0
+   Compiling datafusion-session v52.4.0
+   Compiling datafusion-datasource v52.4.0
+   Compiling datafusion-catalog v52.4.0
+   Compiling datafusion-pruning v52.4.0
+   Compiling datafusion-datasource-csv v52.4.0
+   Compiling datafusion-datasource-arrow v52.4.0
+   Compiling datafusion-datasource-json v52.4.0
+   Compiling datafusion-physical-optimizer v52.4.0
+   Compiling datafusion-datasource-parquet v52.4.0
+   Compiling datafusion-functions-table v52.4.0
+   Compiling datafusion-catalog-listing v52.4.0
+   Compiling datafusion v52.4.0
+   Compiling hyperstreamdb v0.1.12 (/home/ralbright/projects/hyperstreamdb)
+warning: unused import: `std::sync::Arc`
+ --> src/core/table/writer.rs:6:5
+  |
+6 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `serde_json::Value as JsonValue`
+ --> src/core/table/maintenance.rs:6:5
+  |
+6 | use serde_json::Value as JsonValue;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ManifestEntry` and `Manifest`
+ --> src/core/table/maintenance.rs:9:29
+  |
+9 | use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager};
+  |                             ^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/core/table/query.rs:205:13
+    |
+205 |         let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/core/table/writer.rs:115:13
+    |
+115 |         let mut writer = HybridSegmentWriter::new(config);
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+error[E0425]: cannot find function `distance_jaccard_u32_16_simd` in this scope
+    --> src/core/index/hnsw_rs/dist.rs:1528:25
+     |
+1528 |         let simd_dist = distance_jaccard_u32_16_simd(&va, &vb);
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `distance_jaccard_u64_8_simd` in this scope
+    --> src/core/index/hnsw_rs/dist.rs:1558:25
+     |
+1558 |         let simd_dist = distance_jaccard_u64_8_simd(&va, &vb);
+     |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: unused variable: `expr`
+   --> src/core/table/query.rs:199:66
+    |
+199 | ...(&self, entry: &ManifestEntry, expr: Option<&FilterExpr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_expr`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `manifest_version`
+   --> src/core/table/query.rs:199:93
+    |
+199 | ...tion<&FilterExpr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                       ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest_version`
+
+warning: unused variable: `columns`
+   --> src/core/table/query.rs:199:116
+    |
+199 | ...pr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_columns`
+
+warning: unused variable: `key_column`
+   --> src/core/table/writer.rs:148:52
+    |
+148 |     pub fn merge(&self, batches: Vec<RecordBatch>, key_column: &str, mode: MergeMode) -> Result<()> {
+    |                                                    ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_key_column`
+
+warning: unused variable: `filter`
+   --> src/core/table/maintenance.rs:160:38
+    |
+160 |     pub async fn delete_async(&self, filter: &str) -> Result<()> {
+    |                                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: unused variable: `name`
+   --> src/core/table/maintenance.rs:165:36
+    |
+165 |     pub async fn add_column(&self, name: &str, data_type: arrow::datatypes::DataType) -> Result<()> {
+    |                                    ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `data_type`
+   --> src/core/table/maintenance.rs:165:48
+    |
+165 |     pub async fn add_column(&self, name: &str, data_type: arrow::datatypes::DataType) -> Result<()> {
+    |                                                ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_data_type`
+
+warning: unused variable: `name`
+   --> src/core/table/maintenance.rs:170:37
+    |
+170 |     pub async fn drop_column(&self, name: &str) -> Result<()> {
+    |                                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+For more information about this error, try `rustc --explain E0425`.
+warning: `hyperstreamdb` (lib test) generated 13 warnings
+error: could not compile `hyperstreamdb` (lib test) due to 2 previous errors; 13 warnings emitted
