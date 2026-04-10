@@ -41,11 +41,11 @@ def measure_batch_performance(query, database, context, metric_name="l2", warmup
     
     # Warmup run to ensure GPU is initialized
     if warmup:
-        _ = batch_fn(query, database[:100], context=context)
+        _ = batch_fn(query, database[:100], device=context)
     
     # Benchmark run
     start = time.time()
-    distances = batch_fn(query, database, context=context)
+    distances = batch_fn(query, database, device=context)
     elapsed = time.time() - start
     
     n_vectors = len(database)

@@ -1,0 +1,10 @@
+[
+  {
+    "name": "concurrent_queries",
+    "throughput": 34.071118376431784,
+    "elapsed_sec": 29.0567147731781,
+    "memory_delta_mb": -5730.73828125,
+    "qps": 34.07129841512079,
+    "total_queries": 990
+  }
+]

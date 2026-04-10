@@ -198,10 +198,27 @@ def format_results_markdown(results: List[Dict]) -> str:
     """Format benchmark results as markdown table."""
     if not results:
         return "No results to display"
+        
+    md = "## Benchmark Results\n\n"
+    
+    # Auto-capture hardware info
+    try:
+        import platform
+        import psutil
+        
+        system = platform.system()
+        release = platform.release()
+        processor = platform.processor()
+        ram_gb = round(psutil.virtual_memory().total / (1024.0 **3))
+        cpu_count = psutil.cpu_count(logical=True)
+        
+        md += f"**Hardware & OS:** {system} {release} | {processor} ({cpu_count} threads) | {ram_gb} GB RAM\n\n"
+    except Exception:
+        pass
     
     # Build header
     headers = list(results[0].keys())
-    md = "| " + " | ".join(headers) + " |\n"
+    md += "| " + " | ".join(headers) + " |\n"
     md += "| " + " | ".join(["---"] * len(headers)) + " |\n"
     
     # Build rows

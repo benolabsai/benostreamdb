@@ -1,0 +1,21 @@
+=== HyperStreamDB Basics Demo ===
+Using stable CPU device context
+
+Loading AG News dataset...
+Embedding 500 articles using all-MiniLM-L6-v2...
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 3911.04it/s]
+[1mBertModel LOAD REPORT[0m from: sentence-transformers/all-MiniLM-L6-v2
+Key                     | Status     |  | 
+------------------------+------------+--+-
+embeddings.position_ids | UNEXPECTED |  | 
+
+Notes:
+- UNEXPECTED:	can be ignored when loading from different task/architecture; not ok if you expect identical arch.
+Ingesting 500 entries into HyperStreamDB...
+Traceback (most recent call last):
+  File "/home/ralbright/projects/hyperstreamdb/demo/01_basics.py", line 102, in <module>
+    run_demo()
+  File "/home/ralbright/projects/hyperstreamdb/demo/01_basics.py", line 45, in run_demo
+    table = hdb.open_table(db_path, device=ctx)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: open_table() got an unexpected keyword argument 'device'

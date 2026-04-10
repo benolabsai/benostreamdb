@@ -17,6 +17,8 @@
 use anyhow::{Result, Context};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing;
+
 use crate::core::index::hnsw_rs::prelude::*;
 use super::ivf::simple_kmeans;
 use super::pq::{PqEncoder, PqConfig};
@@ -100,7 +102,7 @@ impl HnswGraph {
             (HnswGraph::L2(h), VectorValue::Float16(q)) => h.search(q, k, ef, filter),
             
             _ => {
-                eprintln!("Error: HnswGraph / query type mismatch");
+                tracing::error!("HnswGraph / query type mismatch");
                 vec![]
             }
         }
@@ -121,7 +123,7 @@ impl HnswGraph {
             
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
             
-            _ => eprintln!("Error: HnswGraph / insert value type mismatch"),
+            _ => tracing::error!("HnswGraph / insert value type mismatch"),
         }
     }
 
@@ -136,6 +138,7 @@ impl HnswGraph {
             _ => {
                 // Fallback to sequential for other types
                 for (v, id) in data {
+
                     let val = VectorValue::Float32(v.to_vec());
                     self.insert((val, id));
                 }
@@ -174,7 +177,7 @@ pub struct HnswIvfIndex {
     /// Optional PQ encoder for compression (Enterprise feature)
     _pq_encoder: Option<PqEncoder>,
     /// Hardware acceleration context (Open Source)
-    compute_context: crate::core::index::gpu::ComputeContext,
+    _compute_context: crate::core::index::gpu::ComputeContext,
 }
 
 impl HnswIvfIndex {
@@ -209,7 +212,7 @@ impl HnswIvfIndex {
         
         let hnsw_m = hnsw_m.unwrap_or(16);
         
-        println!("Building HNSW-IVF index: {} vectors, {} clusters, {} dims, M={}, use_pq={}", 
+        tracing::info!("Building HNSW-IVF index: {} vectors, {} clusters, {} dims, M={}, use_pq={}", 
                  n_vectors, n_lists, dim, hnsw_m, use_pq);
 
         let start = std::time::Instant::now();
@@ -225,19 +228,20 @@ impl HnswIvfIndex {
         };
         
         let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
+
         
         // Train PQ encoder if requested
         let pq_encoder = if use_pq {
             // Use 8-bit quantization with m sub-vectors (e.g., 16 or 32)
             let m = if dim >= 32 && dim.is_multiple_of(16) { 16 } else if dim >= 8 && dim.is_multiple_of(8) { 8 } else { 1 };
-            println!("  - Training PQ encoder with m={} subspaces...", m);
+            tracing::debug!("  - Training PQ encoder with m={} subspaces...", m);
             let config = PqConfig { m, k: 256, dim };
             Some(PqEncoder::train(&vectors, config)?)
         } else {
             None
         };
 
-        println!("  - K-Means took: {:.2?} ({} iterations, {} clusters)", t0.elapsed(), max_iters, n_lists);
+        tracing::debug!("  - K-Means took: {:.2?} ({} iterations, {} clusters)", t0.elapsed(), max_iters, n_lists);
 
         // Step 2: Group vectors by cluster in parallel
         let t1 = std::time::Instant::now();
@@ -261,7 +265,7 @@ impl HnswIvfIndex {
                     a
                 }
             );
-        println!("  - Grouping vectors took: {:.2?}", t1.elapsed());
+        tracing::debug!("  - Grouping vectors took: {:.2?}", t1.elapsed());
 
         // Step 3: Build HNSW graph for each cluster in parallel
         let t2 = std::time::Instant::now();
@@ -291,9 +295,9 @@ impl HnswIvfIndex {
                 (cluster_id, (hnsw, row_id_mapping))
             })
             .collect();
-        println!("  - Building HNSW graphs took: {:.2?} ({} clusters)", t2.elapsed(), cluster_graphs.len());
+        tracing::debug!("  - Building HNSW graphs took: {:.2?} ({} clusters)", t2.elapsed(), cluster_graphs.len());
 
-        println!("HNSW-IVF index built in {:.2?}: {} non-empty clusters", start.elapsed(), cluster_graphs.len());
+        tracing::info!("Hnsw-IVF index built in {:.2?}: {} non-empty clusters", start.elapsed(), cluster_graphs.len());
 
         Ok(HnswIvfIndex {
             centroids,
@@ -302,7 +306,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             _pq_encoder: pq_encoder,
-            compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
+            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
 
@@ -317,8 +321,8 @@ impl HnswIvfIndex {
 
         // Step 1: Find n_probe nearest clusters (coarse search)
         let all_centroids_flat: Vec<f32> = self.centroids.iter().flatten().cloned().collect();
-        let context = crate::core::index::gpu::get_global_gpu_context().unwrap_or(self.compute_context);
-        let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric, &context)
+
+        let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric)
             .unwrap_or_else(|_| {
                 match self.metric {
                     VectorMetric::L2 => crate::core::index::distance::l2_distance_batch(query_f32, &self.centroids),
@@ -365,6 +369,7 @@ impl HnswIvfIndex {
                                 if f.contains(global_id as u32) {
                                     Some((global_id, neighbor.distance))
                                 } else {
+
                                     None
                                 }
                             } else {
@@ -612,7 +617,7 @@ impl HnswIvfIndex {
             _n_lists: 0, // Not strictly used for search
             dim,
             _pq_encoder: None,
-            compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
+            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
         
         let index_arc = Arc::new(index);
@@ -795,7 +800,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             _pq_encoder: None,
-            compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
+            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
         
         let index_arc = Arc::new(index);
@@ -917,7 +922,7 @@ impl HnswIvfIndex {
             _n_lists: n_lists,
             dim,
             _pq_encoder: None,
-            compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
+            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
     

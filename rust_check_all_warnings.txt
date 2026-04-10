@@ -1,0 +1,1018 @@
+    Blocking waiting for file lock on build directory
+   Compiling pyo3-build-config v0.26.0
+    Checking arrow-array v57.3.0
+   Compiling hyperstreamdb v0.1.12 (/home/ralbright/projects/hyperstreamdb)
+    Checking ciborium-ll v0.2.2
+    Checking ciborium v0.2.2
+    Checking criterion v0.5.1
+   Compiling pyo3-macros-backend v0.26.0
+   Compiling pyo3-ffi v0.26.0
+   Compiling pyo3 v0.26.0
+   Compiling numpy v0.26.0
+    Checking arrow-select v57.3.0
+    Checking arrow-row v57.3.0
+    Checking arrow-arith v57.3.0
+    Checking arrow-ord v57.3.0
+    Checking arrow-ipc v57.3.0
+    Checking arrow-string v57.3.0
+    Checking arrow-cast v57.3.0
+   Compiling pyo3-macros v0.26.0
+    Checking arrow-json v57.3.0
+    Checking arrow-csv v57.3.0
+    Checking parquet v57.3.0
+    Checking arrow-pyarrow v57.3.0
+    Checking pythonize v0.26.0
+    Checking arrow v57.3.0
+    Checking datafusion-common v52.4.0
+    Checking datafusion-expr-common v52.4.0
+    Checking datafusion-physical-expr-common v52.4.0
+    Checking datafusion-functions-window-common v52.4.0
+    Checking datafusion-functions-aggregate-common v52.4.0
+    Checking datafusion-expr v52.4.0
+    Checking datafusion-physical-expr v52.4.0
+    Checking datafusion-execution v52.4.0
+    Checking datafusion-sql v52.4.0
+    Checking datafusion-functions v52.4.0
+    Checking datafusion-functions-aggregate v52.4.0
+    Checking datafusion-functions-window v52.4.0
+    Checking datafusion-optimizer v52.4.0
+    Checking datafusion-physical-plan v52.4.0
+    Checking datafusion-physical-expr-adapter v52.4.0
+    Checking datafusion-functions-nested v52.4.0
+    Checking datafusion-session v52.4.0
+    Checking datafusion-datasource v52.4.0
+    Checking datafusion-pruning v52.4.0
+    Checking datafusion-catalog v52.4.0
+    Checking datafusion-datasource-json v52.4.0
+    Checking datafusion-datasource-csv v52.4.0
+    Checking datafusion-datasource-arrow v52.4.0
+    Checking datafusion-datasource-parquet v52.4.0
+    Checking datafusion-physical-optimizer v52.4.0
+    Checking datafusion-catalog-listing v52.4.0
+    Checking datafusion-functions-table v52.4.0
+    Checking datafusion v52.4.0
+warning: unused import: `std::sync::Arc`
+ --> src/core/table/writer.rs:6:5
+  |
+6 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `serde_json::Value as JsonValue`
+ --> src/core/table/maintenance.rs:6:5
+  |
+6 | use serde_json::Value as JsonValue;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ManifestEntry` and `Manifest`
+ --> src/core/table/maintenance.rs:9:29
+  |
+9 | use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager};
+  |                             ^^^^^^^^  ^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/core/table/query.rs:205:13
+    |
+205 |         let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/core/table/writer.rs:115:13
+    |
+115 |         let mut writer = HybridSegmentWriter::new(config);
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+error[E0599]: no function or associated item named `new` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:339:28
+    |
+339 |         let table = Table::new(uri.to_string())?;
+    |                            ^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `new` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Atomic`
+            candidate #2: `DataOwned`
+            candidate #3: `Digest`
+            candidate #4: `HashMapExt`
+            candidate #5: `HashSetExt`
+            candidate #6: `KeyInit`
+            candidate #7: `KeyIvInit`
+            candidate #8: `UniformSampler`
+            candidate #9: `VariableOutput`
+            candidate #10: `VariableOutputCore`
+            candidate #11: `aws_lc_rs::aead::BoundKey`
+            candidate #12: `brotli::enc::backward_references::hash_to_binary_tree::Allocable`
+            candidate #13: `brotli::enc::threading::AnyBoxConstructor`
+            candidate #14: `futures_intrusive::buffer::ring_buffer::RingBuf`
+            candidate #15: `itertools::adaptors::coalesce::CountItem`
+            candidate #16: `parking_lot_core::thread_parker::ThreadParkerT`
+            candidate #17: `parquet::column::reader::decoder::ColumnValueDecoder`
+            candidate #18: `petgraph::graph_impl::IndexType`
+            candidate #19: `petgraph::matrix_graph::Nullable`
+            candidate #20: `protobuf::message::Message`
+            candidate #21: `pyo3::impl_::pyclass::PyClassThreadChecker`
+            candidate #22: `pyo3::pycell::impl_::PyClassBorrowChecker`
+            candidate #23: `rand::distr::uniform::UniformSampler`
+            candidate #24: `rand::distr::uniform::UniformSampler`
+            candidate #25: `ring::aead::BoundKey`
+            candidate #26: `sha2::digest::Mac`
+            candidate #27: `sha2::digest::typenum::Bit`
+            candidate #28: `vsimd::isa::InstructionSet`
+
+error[E0599]: no function or associated item named `create` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:351:28
+    |
+351 |         let table = Table::create(uri.to_string(), schema)?;
+    |                            ^^^^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `create` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `create`, perhaps you need to implement one of them:
+            candidate #1: `CacheFactory`
+            candidate #2: `FileFormatFactory`
+            candidate #3: `FunctionFactory`
+            candidate #4: `PhysicalExprAdapterFactory`
+            candidate #5: `SchemaAdapterFactory`
+            candidate #6: `TableProviderFactory`
+            candidate #7: `regex_syntax::hir::interval::Interval`
+            candidate #8: `thrift::protocol::TInputProtocolFactory`
+            candidate #9: `thrift::protocol::TOutputProtocolFactory`
+            candidate #10: `thrift::transport::TReadTransportFactory`
+            candidate #11: `thrift::transport::TWriteTransportFactory`
+help: there is an associated function `create_async` with a similar name
+    |
+351 |         let table = Table::create_async(uri.to_string(), schema)?;
+    |                                  ++++++
+
+error[E0599]: no function or associated item named `create_partitioned_async` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:389:44
+    |
+389 |         let mut table = rt.block_on(Table::create_partitioned_async(uri.to_string(), rust_schema, rust_spec))
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `create_partitioned_async` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is an associated function `create_async` with a similar name
+   --> src/core/table/mod.rs:163:5
+    |
+163 |     pub async fn create_async(uri: String, schema: SchemaRef) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0282]: type annotations needed
+   --> src/python_binding.rs:390:23
+    |
+390 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    |                       ^                                            - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+390 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    |                        ++++++++++++
+
+error[E0599]: no method named `set_max_parallel_readers` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:428:20
+    |
+428 |         self.table.set_max_parallel_readers(max_readers);
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `set_max_parallel_readers` not found for this struct
+
+error[E0599]: no method named `auto_detect_parallel_readers` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:436:20
+    |
+436 |         self.table.auto_detect_parallel_readers();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `auto_detect_parallel_readers` not found for this struct
+    |
+help: one of the expressions' fields has a method of the same name
+    |
+436 |         self.table.query_config.auto_detect_parallel_readers();
+    |                    +++++++++++++
+
+error[E0599]: no method named `spawn_iceberg_observer` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:442:49
+    |
+442 |             self.query_pool.block_on(self.table.spawn_iceberg_observer(
+    |                                      -----------^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `spawn_iceberg_observer` not found for this struct
+
+error[E0282]: type annotations needed
+   --> src/python_binding.rs:446:21
+    |
+446 |         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    |                     ^                                            - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+446 |         }).map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    |                      ++++++++++++
+
+error[E0599]: no method named `get_max_parallel_readers` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:452:20
+    |
+452 |         self.table.get_max_parallel_readers()
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `get_max_parallel_readers` not found for this struct
+
+error[E0599]: no method named `get_index_all` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:460:20
+    |
+460 |         self.table.get_index_all()
+    |                    ^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `get_index_all` not found for this struct
+    |
+help: there is a method `set_index_all` with a similar name, but with different arguments
+   --> src/core/table/mod.rs:192:5
+    |
+192 |     pub fn set_index_all(&mut self, enabled: bool) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `set_primary_key` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:464:20
+    |
+464 |         self.table.set_primary_key(columns);
+    |                    ^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `set_primary_key` not found for this struct
+    |
+help: there is a method `add_primary_key` with a similar name
+    |
+464 -         self.table.set_primary_key(columns);
+464 +         self.table.add_primary_key(columns);
+    |
+
+error[E0599]: no method named `get_primary_key` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:468:20
+    |
+468 |         self.table.get_primary_key()
+    |                    ^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `get_primary_key` not found for this struct
+    |
+help: there is a method `add_primary_key` with a similar name, but with different arguments
+   --> src/core/table/maintenance.rs:88:5
+    |
+ 88 |     pub async fn add_primary_key(&self, column: String) -> Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `set_index_config` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:488:20
+    |
+488 |         self.table.set_index_config(column, enabled, tokenizer, device);
+    |                    ^^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `set_index_config` not found for this struct
+    |
+help: there is a method `set_index_all` with a similar name, but with different arguments
+   --> src/core/table/mod.rs:192:5
+    |
+192 |     pub fn set_index_all(&mut self, enabled: bool) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `add_index` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:494:20
+    |
+494 |         self.table.add_index(column, tokenizer, device);
+    |                    ^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `add_index` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `add_index`, perhaps you need to implement it:
+            candidate #1: `ThriftHiveMetastore`
+
+error[E0599]: no method named `drop_index` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:499:20
+    |
+499 |         self.table.drop_index(column);
+    |                    ^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `drop_index` not found for this struct
+
+error[E0599]: no method named `set_default_device` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:505:20
+    |
+505 |         self.table.set_default_device(device);
+    |                    ^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `set_default_device` not found for this struct
+
+error[E0599]: no method named `get_default_device` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:510:20
+    |
+510 |         self.table.get_default_device()
+    |                    ^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `get_default_device` not found for this struct
+
+error[E0599]: no function or associated item named `new` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:339:28
+    |
+339 |         let table = Table::new(uri.to_string())?;
+    |                            ^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `new` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `std::result::Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `new`, perhaps you need to implement one of them:
+            candidate #1: `Atomic`
+            candidate #2: `DataOwned`
+            candidate #3: `Digest`
+            candidate #4: `HashMapExt`
+            candidate #5: `HashSetExt`
+            candidate #6: `KeyInit`
+            candidate #7: `KeyIvInit`
+            candidate #8: `UniformSampler`
+            candidate #9: `VariableOutput`
+            candidate #10: `VariableOutputCore`
+            candidate #11: `aws_lc_rs::aead::BoundKey`
+            candidate #12: `brotli::enc::backward_references::hash_to_binary_tree::Allocable`
+            candidate #13: `brotli::enc::threading::AnyBoxConstructor`
+            candidate #14: `futures_intrusive::buffer::ring_buffer::RingBuf`
+            candidate #15: `itertools::adaptors::coalesce::CountItem`
+            candidate #16: `parking_lot_core::thread_parker::ThreadParkerT`
+            candidate #17: `parquet::column::reader::decoder::ColumnValueDecoder`
+            candidate #18: `petgraph::graph_impl::IndexType`
+            candidate #19: `petgraph::matrix_graph::Nullable`
+            candidate #20: `protobuf::message::Message`
+            candidate #21: `pyo3::impl_::pyclass::PyClassThreadChecker`
+            candidate #22: `pyo3::pycell::impl_::PyClassBorrowChecker`
+            candidate #23: `rand::distr::uniform::UniformSampler`
+            candidate #24: `rand::distr::uniform::UniformSampler`
+            candidate #25: `ring::aead::BoundKey`
+            candidate #26: `sha2::digest::Mac`
+            candidate #27: `sha2::digest::typenum::Bit`
+            candidate #28: `vsimd::isa::InstructionSet`
+
+error[E0599]: no method named `add_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:541:20
+    |
+541 |         self.table.add_index_columns(columns, tokenizer)
+    |                    ^^^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `add_index_columns` not found for this struct
+    |
+help: there is a method `add_column` with a similar name
+    |
+541 -         self.table.add_index_columns(columns, tokenizer)
+541 +         self.table.add_column(columns, tokenizer)
+    |
+
+error[E0282]: type annotations needed
+   --> src/python_binding.rs:542:23
+    |
+542 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                       ^                                             - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+542 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                        ++++++++++++
+
+error[E0599]: no function or associated item named `create` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:351:28
+    |
+351 |         let table = Table::create(uri.to_string(), schema)?;
+    |                            ^^^^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `create` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `std::result::Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following traits define an item `create`, perhaps you need to implement one of them:
+            candidate #1: `CacheFactory`
+            candidate #2: `FileFormatFactory`
+            candidate #3: `FunctionFactory`
+            candidate #4: `PhysicalExprAdapterFactory`
+            candidate #5: `SchemaAdapterFactory`
+            candidate #6: `TableProviderFactory`
+            candidate #7: `regex_syntax::hir::interval::Interval`
+            candidate #8: `thrift::protocol::TInputProtocolFactory`
+            candidate #9: `thrift::protocol::TOutputProtocolFactory`
+            candidate #10: `thrift::transport::TReadTransportFactory`
+            candidate #11: `thrift::transport::TWriteTransportFactory`
+help: there is an associated function `create_async` with a similar name
+    |
+351 |         let table = Table::create_async(uri.to_string(), schema)?;
+    |                                  ++++++
+
+error[E0599]: no method named `remove_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:547:20
+    |
+547 |         self.table.remove_index_columns(columns);
+    |                    ^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `remove_index_columns` not found for this struct
+
+error[E0599]: no function or associated item named `create_partitioned_async` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:389:44
+    |
+389 |         let mut table = rt.block_on(Table::create_partitioned_async(uri.to_string(), rust_schema, rust_spec))
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^ function or associated item not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- function or associated item `create_partitioned_async` not found for this struct
+    |
+note: if you're trying to build a new `table::Table`, consider using `table::Table::new_with_runtime` which returns `std::result::Result<table::Table, AnyhowError>`
+   --> src/core/table/mod.rs:157:5
+    |
+157 |     pub fn new_with_runtime(uri: String, rt: Arc<Runtime>) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: there is an associated function `create_async` with a similar name
+   --> src/core/table/mod.rs:163:5
+    |
+163 |     pub async fn create_async(uri: String, schema: SchemaRef) -> Result<Self> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `remove_all_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:552:20
+    |
+552 |         self.table.remove_all_index_columns();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `remove_all_index_columns` not found for this struct
+
+error[E0599]: no method named `index_all_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:557:20
+    |
+557 |         self.table.index_all_columns()
+    |                    ^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `index_all_columns` not found for this struct
+
+error[E0282]: type annotations needed
+   --> src/python_binding.rs:558:23
+    |
+558 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                       ^                                             - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+558 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                        ++++++++++++
+
+error[E0599]: no method named `get_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:805:20
+    |
+805 |         self.table.get_index_columns()
+    |                    ^^^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `get_index_columns` not found for this struct
+    |
+help: there is a method `set_index_all` with a similar name, but with different arguments
+   --> src/core/table/mod.rs:192:5
+    |
+192 |     pub fn set_index_all(&mut self, enabled: bool) {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0599]: no method named `remove_all_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:810:20
+    |
+810 |         self.table.remove_all_index_columns();
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `remove_all_index_columns` not found for this struct
+
+error[E0599]: no method named `add_index_columns` found for struct `table::Table` in the current scope
+   --> src/python_binding.rs:811:20
+    |
+811 |         self.table.add_index_columns(columns, None)
+    |                    ^^^^^^^^^^^^^^^^^
+    |
+   ::: src/core/table/mod.rs:38:1
+    |
+ 38 | pub struct Table {
+    | ---------------- method `add_index_columns` not found for this struct
+    |
+help: there is a method `add_column` with a similar name
+    |
+811 -         self.table.add_index_columns(columns, None)
+811 +         self.table.add_column(columns, None)
+    |
+
+error[E0282]: type annotations needed
+   --> src/python_binding.rs:812:23
+    |
+812 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                       ^                                             - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+812 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    |                        ++++++++++++
+
+error[E0599]: no method named `checkpoint` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1005:24
+     |
+1005 |             self.table.checkpoint()
+     |                        ^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `checkpoint` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `checkpoint`, perhaps you need to implement it:
+             candidate #1: `winnow::stream::Stream`
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1006:21
+     |
+1006 |         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                     ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1006 |         }).map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                      ++++++++++++
+
+error[E0599]: no method named `remove_orphan_files` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1011:20
+     |
+1011 |         self.table.remove_orphan_files(older_than_days as u64)
+     |                    ^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `remove_orphan_files` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1012:23
+     |
+1012 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                       ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1012 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                        ++++++++++++
+
+error[E0599]: no method named `replace_sort_order` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1120:20
+     |
+1120 |         self.table.replace_sort_order(&col_refs, &ascending)
+     |                    ^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `replace_sort_order` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1121:23
+     |
+1121 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                       ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1121 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                        ++++++++++++
+
+error[E0599]: no method named `update_spec` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1136:49
+     |
+1136 |             self.query_pool.block_on(self.table.update_spec(&rust_fields))
+     |                                                 ^^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `update_spec` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1137:21
+     |
+1137 |         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                     ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1137 |         }).map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                      ++++++++++++
+
+error[E0599]: no method named `update_schema` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1144:49
+     |
+1144 |             self.query_pool.block_on(self.table.update_schema(hdb_schema))
+     |                                                 ^^^^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `update_schema` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1145:21
+     |
+1145 |         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                     ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1145 |         }).map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                      ++++++++++++
+
+error[E0599]: no method named `rollback_to_snapshot` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1151:49
+     |
+1151 |             self.query_pool.block_on(self.table.rollback_to_snapshot(snapshot_id))
+     |                                                 ^^^^^^^^^^^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `rollback_to_snapshot` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1152:21
+     |
+1152 |         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                     ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1152 |         }).map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+     |                      ++++++++++++
+
+error[E0599]: no method named `runtime` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1161:29
+     |
+1161 |         let rt = self.table.runtime();
+     |                             ^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `runtime` not found for this struct
+
+error[E0599]: no method named `runtime` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1202:29
+     |
+1202 |         let rt = self.table.runtime();
+     |                             ^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `runtime` not found for this struct
+
+error[E0599]: no method named `read_file` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1283:34
+     |
+1283 |         let batches = self.table.read_file(&file_path, columns, filter.as_deref())
+     |                                  ^^^^^^^^^
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `read_file` not found for this struct
+     |
+help: there is a method `read_filter_async` with a similar name
+     |
+1283 -         let batches = self.table.read_file(&file_path, columns, filter.as_deref())
+1283 +         let batches = self.table.read_filter_async(&file_path, columns, filter.as_deref())
+     |
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1284:23
+     |
+1284 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                       ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1284 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                        ++++++++++++
+
+error[E0599]: no method named `get_splits` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1292:33
+     |
+1292 |         let splits = self.table.get_splits(max_split_size)
+     |                                 ^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `get_splits` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1293:23
+     |
+1293 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                       ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1293 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                        ++++++++++++
+
+error[E0599]: no method named `read_split` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1330:34
+     |
+1330 |         let batches = self.table.read_split(&rust_split, columns, None)
+     |                                  ^^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `read_split` not found for this struct
+
+error[E0282]: type annotations needed
+    --> src/python_binding.rs:1331:23
+     |
+1331 |             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                       ^                                             - type must be known at this point
+     |
+help: consider giving this closure parameter an explicit type
+     |
+1331 |             .map_err(|e: /* Type */| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+     |                        ++++++++++++
+
+error[E0599]: no method named `table_uri` found for struct `table::Table` in the current scope
+    --> src/python_binding.rs:1355:20
+     |
+1355 |         self.table.table_uri()
+     |                    ^^^^^^^^^ method not found in `table::Table`
+     |
+    ::: src/core/table/mod.rs:38:1
+     |
+  38 | pub struct Table {
+     | ---------------- method `table_uri` not found for this struct
+
+error[E0063]: missing field `implementation` in initializer of `ComputeContext`
+  --> src/python_gpu_context.rs:72:22
+   |
+72 |             context: ComputeContext {
+   |                      ^^^^^^^^^^^^^^ missing `implementation`
+
+error[E0063]: missing field `implementation` in initializer of `ComputeContext`
+  --> src/python_gpu_context.rs:91:9
+   |
+91 |         ComputeContext { backend, device_id: 0 }.is_available()
+   |         ^^^^^^^^^^^^^^ missing `implementation`
+
+error[E0599]: no method named `is_available` found for struct `ComputeContext` in the current scope
+  --> src/python_gpu_context.rs:91:50
+   |
+91 |         ComputeContext { backend, device_id: 0 }.is_available()
+   |                                                  ^^^^^^^^^^^^ method not found in `ComputeContext`
+   |
+  ::: src/core/index/gpu.rs:39:1
+   |
+39 | pub struct ComputeContext {
+   | ------------------------- method `is_available` not found for this struct
+
+warning: unused variable: `expr`
+   --> src/core/table/query.rs:199:66
+    |
+199 | ...(&self, entry: &ManifestEntry, expr: Option<&FilterExpr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_expr`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `manifest_version`
+   --> src/core/table/query.rs:199:93
+    |
+199 | ...tion<&FilterExpr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                       ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_manifest_version`
+
+warning: unused variable: `columns`
+   --> src/core/table/query.rs:199:116
+    |
+199 | ...pr>, manifest_version: u64, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_columns`
+
+warning: unused variable: `key_column`
+   --> src/core/table/writer.rs:148:52
+    |
+148 |     pub fn merge(&self, batches: Vec<RecordBatch>, key_column: &str, mode: MergeMode) -> Result<()> {
+    |                                                    ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_key_column`
+
+warning: unused variable: `filter`
+   --> src/core/table/maintenance.rs:160:38
+    |
+160 |     pub async fn delete_async(&self, filter: &str) -> Result<()> {
+    |                                      ^^^^^^ help: if this is intentional, prefix it with an underscore: `_filter`
+
+warning: unused variable: `name`
+   --> src/core/table/maintenance.rs:165:36
+    |
+165 |     pub async fn add_column(&self, name: &str, data_type: arrow::datatypes::DataType) -> Result<()> {
+    |                                    ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `data_type`
+   --> src/core/table/maintenance.rs:165:48
+    |
+165 |     pub async fn add_column(&self, name: &str, data_type: arrow::datatypes::DataType) -> Result<()> {
+    |                                                ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_data_type`
+
+warning: unused variable: `name`
+   --> src/core/table/maintenance.rs:170:37
+    |
+170 |     pub async fn drop_column(&self, name: &str) -> Result<()> {
+    |                                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `va`
+    --> src/core/index/hnsw_rs/dist.rs:1526:13
+     |
+1526 |         let va : Vec<u32> = (0..i).into_iter().map( |_| between.sample(&mut rng)).collect();
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_va`
+
+warning: unused variable: `vb`
+    --> src/core/index/hnsw_rs/dist.rs:1527:13
+     |
+1527 |         let vb : Vec<u32> = (0..i).into_iter().map( |_| between.sample(&mut rng)).collect();
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_vb`
+
+warning: unused variable: `va`
+    --> src/core/index/hnsw_rs/dist.rs:1559:13
+     |
+1559 |         let va : Vec<u64> = (0..i).into_iter().map( |_| between.sample(&mut rng)).collect();
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_va`
+
+warning: unused variable: `vb`
+    --> src/core/index/hnsw_rs/dist.rs:1560:13
+     |
+1560 |         let vb : Vec<u64> = (0..i).into_iter().map( |_| between.sample(&mut rng)).collect();
+     |             ^^ help: if this is intentional, prefix it with an underscore: `_vb`
+
+error[E0507]: cannot move out of dereference of `PyRef<'_, PyDevice>`
+   --> src/python_binding.rs:653:18
+    |
+653 |             Some(ctx_borrow.context)
+    |                  ^^^^^^^^^^^^^^^^^^ move occurs because value has type `ComputeContext`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+653 |             Some(ctx_borrow.context.clone())
+    |                                    ++++++++
+
+error[E0507]: cannot move out of dereference of `PyRef<'_, PyDevice>`
+   --> src/python_binding.rs:747:18
+    |
+747 |             Some(ctx_borrow.context)
+    |                  ^^^^^^^^^^^^^^^^^^ move occurs because value has type `ComputeContext`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+747 |             Some(ctx_borrow.context.clone())
+    |                                    ++++++++
+
+error[E0507]: cannot move out of dereference of `PyRef<'_, PyDevice>`
+   --> src/python_binding.rs:959:18
+    |
+959 |             Some(ctx_borrow.context)
+    |                  ^^^^^^^^^^^^^^^^^^ move occurs because value has type `ComputeContext`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+959 |             Some(ctx_borrow.context.clone())
+    |                                    ++++++++
+
+error[E0507]: cannot move out of dereference of `PyRef<'_, PyDevice>`
+    --> src/python_binding.rs:1083:18
+     |
+1083 |             Some(ctx_borrow.context)
+     |                  ^^^^^^^^^^^^^^^^^^ move occurs because value has type `ComputeContext`, which does not implement the `Copy` trait
+     |
+help: consider cloning the value if the performance cost is acceptable
+     |
+1083 |             Some(ctx_borrow.context.clone())
+     |                                    ++++++++
+
+error[E0507]: cannot move out of `self.context` which is behind a shared reference
+   --> src/python_gpu_context.rs:127:62
+    |
+127 |         crate::core::index::gpu::set_global_gpu_context(Some(self.context));
+    |                                                              ^^^^^^^^^^^^ move occurs because `self.context` has type `ComputeContext`, which does not implement the `Copy` trait
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+127 |         crate::core::index::gpu::set_global_gpu_context(Some(self.context.clone()));
+    |                                                                          ++++++++
+
+warning: unused variable: `gpu_context`
+  --> src/python_distance.rs:58:13
+   |
+58 |         let gpu_context = ctx.get_context();
+   |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_gpu_context`
+
+Some errors have detailed explanations: E0063, E0282, E0507, E0599.
+For more information about an error, try `rustc --explain E0063`.
+warning: `hyperstreamdb` (lib) generated 14 warnings
+error: could not compile `hyperstreamdb` (lib) due to 56 previous errors; 14 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `hyperstreamdb` (lib test) generated 18 warnings (14 duplicates)
+error: could not compile `hyperstreamdb` (lib test) due to 56 previous errors; 18 warnings emitted
