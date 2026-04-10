@@ -53,6 +53,176 @@ pub struct ColumnIndexConfig {
 }
 
 
+// ============================================================================
+// Table Builder
+// ============================================================================
+
+pub struct TableBuilder {
+    uri: String,
+    catalog: Option<Arc<dyn crate::core::catalog::Catalog>>,
+    catalog_namespace: Option<String>,
+    catalog_table_name: Option<String>,
+    runtime: Option<Arc<Runtime>>,
+    index_all: bool,
+    default_device: Option<String>,
+    query_config: QueryConfig,
+    data_store: Option<Arc<dyn ObjectStore>>,
+}
+
+impl TableBuilder {
+    pub fn new(uri: impl Into<String>) -> Self {
+        Self {
+            uri: uri.into(),
+            catalog: None,
+            catalog_namespace: None,
+            catalog_table_name: None,
+            runtime: None,
+            index_all: true,
+            default_device: None,
+            query_config: QueryConfig::default(),
+            data_store: None,
+        }
+    }
+
+    pub fn with_catalog(
+        mut self,
+        catalog: Arc<dyn crate::core::catalog::Catalog>,
+        namespace: &str,
+        table_name: &str,
+    ) -> Self {
+        self.catalog = Some(catalog);
+        self.catalog_namespace = Some(namespace.to_string());
+        self.catalog_table_name = Some(table_name.to_string());
+        self
+    }
+
+    pub fn with_runtime(mut self, rt: Arc<Runtime>) -> Self {
+        self.runtime = Some(rt);
+        self
+    }
+
+    pub fn with_index_all(mut self, index_all: bool) -> Self {
+        self.index_all = index_all;
+        self
+    }
+
+    pub fn with_default_device(mut self, device: &str) -> Self {
+        self.default_device = Some(device.to_string());
+        self
+    }
+
+    pub fn with_query_config(mut self, config: QueryConfig) -> Self {
+        self.query_config = config;
+        self
+    }
+
+    pub fn with_data_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
+        self.data_store = Some(store);
+        self
+    }
+
+    pub async fn build_async(self) -> Result<Table> {
+        // Normalize URI to absolute path if it is local
+        let uri = if !self.uri.contains("://") || self.uri.starts_with("file://") {
+            let path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
+            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| {
+                if let Ok(current) = std::env::current_dir() {
+                    current.join(path)
+                } else {
+                    std::path::PathBuf::from(path)
+                }
+            });
+            format!("file://{}", abs_path.display())
+        } else {
+            self.uri.clone()
+        };
+
+        if let Some((base, prefix, ns, table)) = Table::detect_iceberg_rest(&uri) {
+            return Box::pin(Table::new_from_rest(base, prefix, ns, table, &uri)).await;
+        }
+
+        let store = create_object_store(&uri)?;
+        
+        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
+        let (manifest, version) = manifest_manager.load_latest().await.unwrap_or_default();
+        let schema_val = if version > 0 {
+             Table::load_initial_schema(store.clone(), &uri).await
+        } else {
+             Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
+        };
+        let partition_spec = Arc::new(manifest.partition_spec.clone());
+
+        // Initialize WAL
+        let wal_dir = if uri.starts_with("file://") {
+            let path = uri.strip_prefix("file://").unwrap();
+            std::path::PathBuf::from(path).join("_wal")
+        } else {
+             let safe_uri = uri.replace("://", "_").replace("/", "_");
+             std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
+        };
+
+        if !wal_dir.exists() {
+            std::fs::create_dir_all(&wal_dir).unwrap_or_default();
+        }
+
+        let mut wal = WriteAheadLog::new(wal_dir);
+        let _ = wal.spawn_worker();
+        
+        // Replay WAL (Recovery)
+        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
+            tracing::warn!("WAL Recovery Warning: {}" , e);
+            (Vec::new(), Vec::new())
+        });
+        
+        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
+            recovered_batches, schema_val,
+        );
+
+        let table = Table { 
+            uri: uri.clone(), 
+            store, 
+            data_store: self.data_store,
+            rt: self.runtime,
+            query_config: self.query_config,
+            index_all: self.index_all,
+            index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
+            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            default_device: Arc::new(std::sync::RwLock::new(self.default_device)),
+            schema: Arc::new(std::sync::RwLock::new(schema_val)),
+            write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
+            memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
+            wal: Arc::new(Mutex::new(wal)),
+            background_tasks: Arc::new(Mutex::new(Vec::new())),
+            catalog: self.catalog,
+            catalog_namespace: self.catalog_namespace,
+            catalog_table_name: self.catalog_table_name,
+            sort_order: Arc::new(std::sync::RwLock::new(None)),
+            sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
+            #[cfg(feature = "enterprise")]
+            enterprise_license: None,
+            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
+            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
+            partition_spec,
+        };
+        
+        table.sync_primary_key_from_schema_async().await.ok();
+        Ok(table)
+    }
+
+    pub fn build(mut self) -> Result<Table> {
+        let rt = match self.runtime {
+            Some(ref r) => r.clone(),
+            None => {
+                let r = Arc::new(Runtime::new()?);
+                self.runtime = Some(r.clone());
+                r
+            }
+        };
+        rt.block_on(self.build_async())
+    }
+}
+
 /// Main Table struct - represents a HyperStreamDB table
 pub struct Table {
     pub uri: String,
@@ -460,98 +630,7 @@ impl Table {
     }
 
     pub fn new(uri: String) -> Result<Self> {
-        // Normalize URI to absolute path if it is local
-        let uri = if !uri.contains("://") || uri.starts_with("file://") {
-            let path = uri.strip_prefix("file://").unwrap_or(&uri);
-            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| {
-                // If path doesn't exist yet (e.g. create_async), we manually build absolute path
-                if let Ok(current) = std::env::current_dir() {
-                    current.join(path)
-                } else {
-                    std::path::PathBuf::from(path)
-                }
-            });
-            format!("file://{}", abs_path.display())
-        } else {
-            uri
-        };
-
-        if let Some((base, prefix, ns, table)) = Self::detect_iceberg_rest(&uri) {
-            let rt = Arc::new(Runtime::new()?);
-            let rest_uri = uri.clone();
-            return rt.block_on(async {
-                Self::new_from_rest(base, prefix, ns, table, &rest_uri).await
-            });
-        }
-
-        let store = create_object_store(&uri)?;
-        let rt = Arc::new(Runtime::new()?);
-        
-        // Load schema eagerly (blocking)
-        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
-        let (manifest, _) = rt.block_on(manifest_manager.load_latest()).unwrap_or_default();
-        let schema_val = rt.block_on(Self::load_initial_schema(store.clone(), &uri));
-        let partition_spec = Arc::new(manifest.partition_spec.clone());
-
-        // Initialize WAL (Sync wrapper)
-        let wal_dir = if uri.starts_with("file://") {
-            let path = uri.strip_prefix("file://").unwrap();
-            std::path::PathBuf::from(path).join("_wal")
-        } else {
-             let safe_uri = uri.replace("://", "_").replace("/", "_");
-             std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
-        };
-
-        if !wal_dir.exists() {
-            std::fs::create_dir_all(&wal_dir).unwrap_or_default();
-        }
-
-        let mut wal = WriteAheadLog::new(wal_dir);
-        rt.block_on(async {
-            wal.spawn_worker().unwrap_or_default();
-        });
-        
-        // Replay WAL (Recovery)
-        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
-            tracing::warn!("WAL Recovery Warning: {}" , e);
-            (Vec::new(), Vec::new())
-        });
-        
-        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
-            recovered_batches, schema_val,
-        );
-
-        let table = Table { 
-            uri: uri.clone(), 
-            store: store.clone(), 
-            data_store: None,
-            rt: Some(rt),
-            query_config: QueryConfig::default(),
-            index_all: true,
-            index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
-            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
-            default_device: Arc::new(std::sync::RwLock::new(None)),
-            schema: Arc::new(std::sync::RwLock::new(schema_val)),
-            write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
-            memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
-            wal: Arc::new(Mutex::new(wal)),
-            background_tasks: Arc::new(Mutex::new(Vec::new())),
-            catalog: None,
-            catalog_namespace: None,
-            catalog_table_name: None,
-            sort_order: Arc::new(std::sync::RwLock::new(None)),
-            sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
-            #[cfg(feature = "enterprise")]
-            enterprise_license: None,
-            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
-            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
-            partition_spec,
-        };
-        
-        // Sync PKs after initialization
-        let _ = table.rt.as_ref().unwrap().block_on(table.sync_primary_key_from_schema_async());
-        Ok(table)
+        TableBuilder::new(uri).with_index_all(true).build()
     }
 
     /// Load a table from Nessie Catalog at specific branch/tag/hash
@@ -771,7 +850,7 @@ impl Table {
         let (_, version) = manager.load_latest().await.unwrap_or((Manifest::default(), 0));
         
         if version > 0 {
-            let mut table = Self::new_native_async(native_uri).await?;
+            let mut table = TableBuilder::new(native_uri).with_index_all(false).build_async().await?;
             table.catalog = Some(Arc::new(client));
             table.catalog_namespace = Some(namespace);
             table.catalog_table_name = Some(table_name);
@@ -793,7 +872,7 @@ impl Table {
                         if warehouse_version > 0 {
                             // It's a HyperStreamDB table in the warehouse, open it directly
                             tracing::info!("✅ Opening existing HyperStreamDB table from REST catalog: {}", metadata.location);
-                            let mut table = Self::new_native_async(metadata.location).await?;
+                            let mut table = TableBuilder::new(metadata.location).with_index_all(false).build_async().await?;
                             table.catalog = Some(Arc::new(client));
                             table.catalog_namespace = Some(namespace);
                             table.catalog_table_name = Some(table_name);
@@ -990,107 +1069,7 @@ impl Table {
     /// Create a new Table instance (Asynchronous)
     /// This is safe to call from within an async runtime.
     pub async fn new_async(uri: String) -> Result<Self> {
-        // Normalize URI to absolute path if it is local
-        let uri = if !uri.contains("://") || uri.starts_with("file://") {
-            let path = uri.strip_prefix("file://").unwrap_or(&uri);
-            let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| {
-                if let Ok(current) = std::env::current_dir() {
-                    current.join(path)
-                } else {
-                    std::path::PathBuf::from(path)
-                }
-            });
-            format!("file://{}", abs_path.display())
-        } else {
-            uri
-        };
-
-        // 1. Check if it's an Iceberg REST URI
-        if let Some((base, prefix, ns, table)) = Self::detect_iceberg_rest(&uri) {
-            return Self::new_from_rest(base, prefix, ns, table, &uri).await;
-        }
-
-        Self::new_native_async(uri).await
-    }
-
-    /// Internal core logic for opening a native HyperStreamDB table asynchronously
-    async fn new_native_async(uri: String) -> Result<Self> {
-        let store = create_object_store(&uri)?;
-        // For async usage, we do NOT create a dedicated runtime.
-        // This avoids the panic on Drop when running inside an async context.
-        // NOTE: Sync methods (read, write) will panic if called on this instance.
-        
-        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
-        let (manifest, version) = manifest_manager.load_latest().await?;
-        let partition_spec = Arc::new(manifest.partition_spec.clone());
-        
-        let schema_val = if version > 0 {
-             Self::load_initial_schema(store.clone(), &uri).await
-        } else {
-             Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
-        };
-        let index_cols = Arc::new(std::sync::RwLock::new(Vec::<String>::new()));
-
-        // Initialize WAL
-        let wal_dir = if uri.starts_with("file://") {
-            let path = uri.strip_prefix("file://").unwrap();
-            std::path::PathBuf::from(path).join("_wal")
-        } else {
-             let safe_uri = uri.replace("://", "_").replace("/", "_");
-             std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
-        };
-
-        if !wal_dir.exists() {
-            std::fs::create_dir_all(&wal_dir).unwrap_or_default();
-        }
-
-        let mut wal = WriteAheadLog::new(wal_dir);
-        let _ = wal.spawn_worker();
-        
-        // Replay WAL (Recovery)
-        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
-            println!("WAL Recovery Warning: {}", e);
-            (Vec::new(), Vec::new())
-        });
-        
-        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
-            recovered_batches, schema_val,
-        );
-
-        // Note: We DO NOT truncate WAL here.
-        // Data remains dirty in memory. If we crash now, we need WAL again.
-        // We only truncate when we Flush to Parquet.
-
-        let table = Table { 
-            uri: uri.to_string(), 
-            store, 
-            data_store: None,
-            rt: None,
-            query_config: QueryConfig::default(),
-            index_all: false,
-            index_columns: index_cols,
-            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())), // TODO: Load from metadata
-            default_device: Arc::new(std::sync::RwLock::new(None)),
-            schema: Arc::new(std::sync::RwLock::new(schema_val)),
-            write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
-            memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
-            wal: Arc::new(Mutex::new(wal)),
-            background_tasks: Arc::new(Mutex::new(Vec::new())),
-            catalog: None,
-            catalog_namespace: None,
-            catalog_table_name: None,
-            sort_order: Arc::new(std::sync::RwLock::new(None)),
-            sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
-            #[cfg(feature = "enterprise")]
-            enterprise_license: None,
-            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
-            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
-            partition_spec,
-        };
-        
-        table.sync_primary_key_from_schema_async().await?;
-        Ok(table)
+        TableBuilder::new(uri).with_index_all(false).build_async().await
     }
     
     /// Create a new table with an explicit schema (Asynchronous)
@@ -1125,7 +1104,7 @@ impl Table {
         metadata.save_to_store(store.as_ref(), 1).await?;
 
         // Return a table instance pointing to the now-initialized location
-        Self::new_native_async(uri).await
+        TableBuilder::new(uri).with_index_all(false).build_async().await
     }
 
     /// Create a new table with an explicit schema and partition specification (Asynchronous)
@@ -1170,7 +1149,7 @@ impl Table {
         metadata.save_to_store(store.as_ref(), 1).await?;
 
         // Return a table instance pointing to the now-initialized location
-        Self::new_native_async(uri).await
+        TableBuilder::new(uri).with_index_all(false).build_async().await
     }
 
     pub fn create(uri: String, schema: SchemaRef) -> Result<Self> {
