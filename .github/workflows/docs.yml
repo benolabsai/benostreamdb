@@ -49,6 +49,7 @@ jobs:
       - name: Prepare Sphinx Guides
         run: |
           # Copy existing markdown guides into source directory
+          mkdir -p docs/source/guides/
           cp docs/*.md docs/source/guides/
           # Ensure filename matches index.rst expectation
           mv docs/source/guides/INSTALLATION.md docs/source/guides/installation.md || true
