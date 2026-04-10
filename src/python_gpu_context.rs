@@ -63,8 +63,15 @@ impl PyDevice {
                 // opencl3 is always available
                 ComputeBackend::Rocm
             }
+            "auto" | "gpu" => {
+                let context = crate::core::index::gpu::ComputeContext::auto_detect();
+                return Ok(Self {
+                    context,
+                    stats: Arc::new(Mutex::new(GPUStats::default())),
+                });
+            }
             _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown device type '{}'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm'", backend_str)));
+                return Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown device type '{}'. Valid types: 'cpu', 'cuda', 'mps', 'intel', 'rocm', 'gpu', 'auto'", backend_str)));
             }
         };
 

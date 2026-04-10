@@ -56,7 +56,7 @@ Repository = "https://github.com/rla3rd/hyperstreamdb"
 features = ["python"]
 # Map pip extras to Cargo features for source builds
 # e.g. pip install hyperstreamdb[cuda] --no-binary :all:
-extra-features = { cuda = ["cuda"] }
+extra-features = { cuda = ["python", "cuda"], mps = ["python", "mps"], rocm = ["python", "rocm"], intel = ["python", "intel"] }
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings (multi-version compatible)
