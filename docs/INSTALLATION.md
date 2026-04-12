@@ -21,11 +21,11 @@ pip install hyperstreamdb
 
 For GPU-accelerated vector operations, install the appropriate backend:
 
-**NVIDIA CUDA:**
+**GPU Support (NVIDIA/AMD/Intel/Apple):**
+Hardware acceleration is now part of the base package.
 ```bash
-# Ubuntu/Debian
-sudo apt-get install cuda-toolkit-12-3
-# Verify: nvidia-smi
+pip install hyperstreamdb
+# Verify: nvidia-smi / rocm-smi / clinfo
 ```
 
 **AMD ROCm:**
@@ -41,11 +41,11 @@ sudo amdgpu-install --usecase=rocm
 - Included with macOS 12.3+ on Apple Silicon (M1, M2, M3, M4, M5)
 - No additional installation required
 
-**Intel OpenCL:**
+**Intel XPU / Graphics:**
+Intel Arc, Data Center GPUs, and Iris Xe graphics are supported natively on Linux via WGPU.
 ```bash
-# Ubuntu/Debian
-sudo apt-get install intel-opencl-icd
-# Verify: clinfo
+# Verify Vulkan/WGPU support
+vulkaninfo | grep vendor
 ```
 
 See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
@@ -193,7 +193,7 @@ import hyperstreamdb as hdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/OpenCL
+ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors
@@ -235,7 +235,7 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 - **CUDA** - NVIDIA GPUs (Linux, Windows via WSL2)
 - **ROCm** - AMD GPUs (Linux)
 - **Metal (MPS)** - Apple Silicon (macOS)
-- **OpenCL** - Intel GPUs (Linux, Windows via WSL2)
+- **Intel XPU** - Intel Graphics (Native Linux via WGPU)
 - **CPU** - Fallback for all platforms
 
 **Supported Distance Metrics:**
@@ -442,7 +442,7 @@ We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/
 ```
 
 ### Hardware Acceleration
-- **Standard**: Build with CPU + Intel GPU (OpenCL) support (default).
+- **Standard**: Build with CPU + Intel Graphics/XPU support (default).
 - **CUDA**: Build for NVIDIA GPUs:
   ```bash
   ./build-connectors.sh --cuda
@@ -516,7 +516,7 @@ hyperstreamdb/
 - [x] Iceberg V3 features (Row Lineage, Default Values, HyperLogLog NDV)
 - [x] Standard Iceberg API (`update_spec`, `replace_sort_order`, `rewrite_data_files`, `rollback_to_snapshot`)
 - [x] Python Vector Distance API with GPU acceleration
-- [x] Multi-backend GPU support (CUDA, ROCm, Metal, OpenCL)
+- [x] Multi-backend GPU support (CUDA, ROCm, Metal, XPU)
 - [x] Sparse and binary vector operations
 
 ### 🔄 In Progress

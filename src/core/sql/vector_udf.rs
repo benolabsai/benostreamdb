@@ -341,72 +341,90 @@ macro_rules! make_vector_dist_udf {
                         
                         Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
                     },
-                    // Left is array, right is scalar - broadcast scalar to all rows
-                    (ColumnarValue::Array(l), ColumnarValue::Scalar(r_scalar)) => {
-                        let mut results = Vec::with_capacity(l.len());
-                        let v2 = extract_scalar_vec(r_scalar)?;
-                        
-                        for i in 0..l.len() {
-                            let v1 = extract_f32_vec(l, i)?;
-                            
-                            // Validate dimensions match
-                            if v1.len() != v2.len() {
-                                return Err(datafusion::error::DataFusionError::Execution(
-                                    format!("Vector dimension mismatch: expected {}, got {}", v1.len(), v2.len())
-                                ));
-                            }
-                            
-                            if $func_name == "dist_hamming" {
-                                let is_binary = v1.iter().all(|&x| x == 0.0 || x == 1.0) && 
-                                               v2.iter().all(|&x| x == 0.0 || x == 1.0);
-                                
-                                if is_binary {
-                                    let bytes1: Vec<u8> = v1.iter().map(|&x| x as u8).collect();
-                                    let bytes2: Vec<u8> = v2.iter().map(|&x| x as u8).collect();
-                                    results.push(distance::hamming_distance_packed(&bytes1, &bytes2) as f32);
-                                } else {
-                                    results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
-                                }
-                            } else {
-                                results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
-                            }
+            // Left is array, right is scalar - broadcast scalar to all rows
+            (ColumnarValue::Array(l), ColumnarValue::Scalar(r_scalar)) => {
+                let v2 = extract_scalar_vec(r_scalar)?;
+                if l.len() == 0 { return Ok(ColumnarValue::Array(Arc::new(Float32Array::from(Vec::<f32>::new())))); }
+                let dim = v2.len();
+                
+                if $func_name == "dist_hamming" {
+                    let mut results = Vec::with_capacity(l.len());
+                    for i in 0..l.len() {
+                        let v1 = extract_f32_vec(l, i)?;
+                        if v1.len() != dim { return Err(datafusion::error::DataFusionError::Execution(format!("Dimension mismatch"))); }
+                        let is_binary = v1.iter().all(|&x| x == 0.0 || x == 1.0) && v2.iter().all(|&x| x == 0.0 || x == 1.0);
+                        if is_binary {
+                            let bytes1: Vec<u8> = v1.iter().map(|&x| x as u8).collect();
+                            let bytes2: Vec<u8> = v2.iter().map(|&x| x as u8).collect();
+                            results.push(distance::hamming_distance_packed(&bytes1, &bytes2) as f32);
+                        } else {
+                            results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
                         }
-                        
-                        Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
-                    },
-                    // Right is array, left is scalar - broadcast scalar to all rows
-                    (ColumnarValue::Scalar(l_scalar), ColumnarValue::Array(r)) => {
-                        let mut results = Vec::with_capacity(r.len());
-                        let v1 = extract_scalar_vec(l_scalar)?;
-                        
-                        for i in 0..r.len() {
-                            let v2 = extract_f32_vec(r, i)?;
-                            
-                            // Validate dimensions match
-                            if v1.len() != v2.len() {
-                                return Err(datafusion::error::DataFusionError::Execution(
-                                    format!("Vector dimension mismatch: expected {}, got {}", v1.len(), v2.len())
-                                ));
+                    }
+                    Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
+                } else {
+                    let mut flattened_batch = Vec::with_capacity(l.len() * dim);
+                    for i in 0..l.len() {
+                        let v1 = extract_f32_vec(l, i)?;
+                        if v1.len() != dim { return Err(datafusion::error::DataFusionError::Execution(format!("Dimension mismatch: expected {}, got {}", dim, v1.len()))); }
+                        flattened_batch.extend_from_slice(&v1);
+                    }
+                    
+                    let results = match crate::core::index::gpu::compute_distance(&v2, &flattened_batch, dim, $metric) {
+                        Ok(dist) => dist,
+                        Err(_) => {
+                            let mut cpu_res = Vec::with_capacity(l.len());
+                            for i in 0..l.len() {
+                                cpu_res.push(distance::$dist_fn(&v2, &flattened_batch[i*dim..(i+1)*dim]));
                             }
-                            
-                            if $func_name == "dist_hamming" {
-                                let is_binary = v1.iter().all(|&x| x == 0.0 || x == 1.0) && 
-                                               v2.iter().all(|&x| x == 0.0 || x == 1.0);
-                                
-                                if is_binary {
-                                    let bytes1: Vec<u8> = v1.iter().map(|&x| x as u8).collect();
-                                    let bytes2: Vec<u8> = v2.iter().map(|&x| x as u8).collect();
-                                    results.push(distance::hamming_distance_packed(&bytes1, &bytes2) as f32);
-                                } else {
-                                    results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
-                                }
-                            } else {
-                                results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
-                            }
+                            cpu_res
                         }
-                        
-                        Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
-                    },
+                    };
+                    Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
+                }
+            },
+            // Right is array, left is scalar - broadcast scalar to all rows
+            (ColumnarValue::Scalar(l_scalar), ColumnarValue::Array(r)) => {
+                let v1 = extract_scalar_vec(l_scalar)?;
+                if r.len() == 0 { return Ok(ColumnarValue::Array(Arc::new(Float32Array::from(Vec::<f32>::new())))); }
+                let dim = v1.len();
+                
+                if $func_name == "dist_hamming" {
+                    let mut results = Vec::with_capacity(r.len());
+                    for i in 0..r.len() {
+                        let v2 = extract_f32_vec(r, i)?;
+                        if v2.len() != dim { return Err(datafusion::error::DataFusionError::Execution(format!("Dimension mismatch"))); }
+                        let is_binary = v1.iter().all(|&x| x == 0.0 || x == 1.0) && v2.iter().all(|&x| x == 0.0 || x == 1.0);
+                        if is_binary {
+                            let bytes1: Vec<u8> = v1.iter().map(|&x| x as u8).collect();
+                            let bytes2: Vec<u8> = v2.iter().map(|&x| x as u8).collect();
+                            results.push(distance::hamming_distance_packed(&bytes1, &bytes2) as f32);
+                        } else {
+                            results.push(compute_distance_with_gpu(&v1, &v2, $metric, distance::$dist_fn));
+                        }
+                    }
+                    Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
+                } else {
+                    let mut flattened_batch = Vec::with_capacity(r.len() * dim);
+                    for i in 0..r.len() {
+                        let v2 = extract_f32_vec(r, i)?;
+                        if v2.len() != dim { return Err(datafusion::error::DataFusionError::Execution(format!("Dimension mismatch: expected {}, got {}", dim, v2.len()))); }
+                        flattened_batch.extend_from_slice(&v2);
+                    }
+                    
+                    let results = match crate::core::index::gpu::compute_distance(&v1, &flattened_batch, dim, $metric) {
+                        Ok(dist) => dist,
+                        Err(_) => {
+                            let mut cpu_res = Vec::with_capacity(r.len());
+                            for i in 0..r.len() {
+                                cpu_res.push(distance::$dist_fn(&v1, &flattened_batch[i*dim..(i+1)*dim]));
+                            }
+                            cpu_res
+                        }
+                    };
+                    Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
+                }
+            },
                     // Both are scalars
                     (ColumnarValue::Scalar(l_scalar), ColumnarValue::Scalar(r_scalar)) => {
                         let v1 = extract_scalar_vec(l_scalar)?;

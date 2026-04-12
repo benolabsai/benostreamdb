@@ -1,25 +1,87 @@
-from .hyperstreamdb import *
+from .hyperstreamdb import Device as _Device
 from .hyperstreamdb import Table as _RustTable
 from .hyperstreamdb import Session as _RustSession
+from .hyperstreamdb import *
 
-def _list_available_backends():
-    backends = ['cpu']
-    for b in ['cuda', 'rocm', 'mps', 'intel']:
-        if Device.is_available(b):
-            backends.append(b)
-    return backends
+def _has_torch():
+    try:
+        import torch
+        return True
+    except ImportError:
+        return False
 
-def _auto_detect():
-    for b in ['cuda', 'rocm', 'mps', 'intel']:
-        if Device.is_available(b):
-            return Device(b)
-    return Device('cpu')
+class Device:
+    """
+    HyperStreamDB Compute Device (CPU, CUDA, MPS, ROCm, Intel).
+    - **Torch Alignment** - Automatically aliases `cuda` to `rocm` on AMD hardware if `torch.version.hip` is detected.
+    """
+    def __new__(cls, device: str = "cpu", index: int = 0):
+        device = device.lower()
+        # 1. Handle Torch-style alignment
+        if device.startswith("cuda"):
+            # If Torch is present and on AMD, or if native probing finds only ROCm
+            if _has_torch():
+                import torch
+                if getattr(torch.version, 'hip', None):
+                    return _Device("rocm", index=index)
+            
+            # If not using torch but only AMD hardware is present, alias cuda to rocm
+            if not _Device.is_available("cuda") and _Device.is_available("rocm"):
+                return _Device("rocm", index=index)
+        
+        if (device.startswith("xpu") or device == "intel"):
+            return _Device("intel", index=index)
 
-Device.list_available_backends = staticmethod(_list_available_backends)
-Device.auto_detect = staticmethod(_auto_detect)
-Device.backend = property(lambda self: self.type_name)
-Device.device_id = property(lambda self: self.index)
+        # 2. Native direct mapping
+        return _Device(device, index=index)
+
+    @staticmethod
+    def is_available(device_type: str) -> bool:
+        device_type = device_type.lower()
+        if device_type == "cuda":
+            # Torch compatibility: 'cuda' is true if either NVIDIA or AMD is present
+            return _Device.is_available("cuda") or _Device.is_available("rocm")
+        if device_type == "xpu":
+            return _Device.is_available("intel")
+        return _Device.is_available(device_type)
+
+    @staticmethod
+    def list_available_backends():
+        backends = ['cpu']
+        # Use precise strings for native listing
+        for b in ['cuda', 'rocm', 'mps', 'intel']:
+            if _Device.is_available(b):
+                backends.append(b)
+        return backends
+
+    @staticmethod
+    def auto_detect():
+        # 1. Check Torch first | **Torch Alignment** | ❌ No | ✅ ROCm-as-CUDA |
+        if _has_torch():
+            import torch
+            if torch.cuda.is_available():
+                if getattr(torch.version, 'hip', None):
+                    return _Device("rocm")
+                return _Device("cuda")
+            
+            # Check for Intel IPEX
+            if hasattr(torch, "xpu") and torch.xpu.is_available():
+                return _Device("intel")
+
+        # 2. Fallback to native probing
+        for b in ['cuda', 'rocm', 'mps', 'intel']:
+            if _Device.is_available(b):
+                return _Device(b)
+        return _Device('cpu')
+
+    @staticmethod
+    def deactivate():
+        _Device.deactivate()
+
+_Device.backend = property(lambda self: self.type_name)
+_Device.device_id = property(lambda self: self.index)
 ComputeContext = Device
+GPUContext = Device
 
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd

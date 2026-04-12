@@ -121,7 +121,7 @@ proptest! {
                         error_msg.contains("not supported") ||
                         error_msg.contains("failed to initialize") ||
                         error_msg.contains("CUDA") ||
-                        error_msg.contains("OpenCL") ||
+                        error_msg.contains("WGPU") ||
                         error_msg.contains("Metal") ||
                         error_msg.contains("CL_PLATFORM_NOT_FOUND") ||
                         error_msg.contains("CL_DEVICE_NOT_FOUND") ||
