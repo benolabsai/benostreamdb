@@ -205,17 +205,15 @@ fn test_dump_reload_graph_flatten() {
     let neighborhood_before_dump = FlatNeighborhood::from(&hnsw);
     let nbg_2_before = neighborhood_before_dump.get_neighbours(2).unwrap();
     println!("voisins du point 2 {:?}", nbg_2_before);
-    // dump in a file. Must take care of name as tests runs in // !!!
-    let fname = String::from("dumpreloadtestflat");
-    let _res = hnsw.file_dump(&fname);
-    // This will dump in 2 files named dumpreloadtest.hnsw.graph and dumpreloadtest.hnsw.data
-    //
+    // dump in a file. Use tempdir for parallel safety.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let fname = temp_dir.path().join("dumpreloadtestflat");
+    let fname_str = fname.to_str().unwrap().to_string();
+    let _res = hnsw.file_dump(&fname_str);
+
     // reload
     log::debug!("\n\n  hnsw reload");
-    // we will need a procedural macro to get from distance name to its instanciation. 
-    // from now on we test with DistL1
-    let graphfname = String::from("dumpreloadtestflat.hnsw.graph");
-    let graphpath = PathBuf::from(graphfname);
+    let graphpath = PathBuf::from(format!("{}.hnsw.graph", fname_str));
     let graphfileres = OpenOptions::new().read(true).open(&graphpath);
     if graphfileres.is_err() {
         println!("test_dump_reload: could not open file {:?}", graphpath.as_os_str());
@@ -223,8 +221,7 @@ fn test_dump_reload_graph_flatten() {
     }
     let graphfile = graphfileres.unwrap();
     //  
-    let datafname = String::from("dumpreloadtestflat.hnsw.data");
-    let datapath = PathBuf::from(datafname);
+    let datapath = PathBuf::from(format!("{}.hnsw.data", fname_str));
     let datafileres = OpenOptions::new().read(true).open(&datapath);
     if datafileres.is_err() {
         println!("test_dump_reload : could not open file {:?}", datapath.as_os_str());

@@ -645,7 +645,7 @@ impl HnswIvfIndex {
 
         let disk_cache = DiskCache::new(store.clone());
 
-        let root_path = if base_path.contains("://") {
+        let mut root_path = if base_path.contains("://") {
              if let Ok(url) = url::Url::parse(base_path) {
                  url.path().trim_start_matches('/').to_string()
              } else {
@@ -654,6 +654,13 @@ impl HnswIvfIndex {
         } else {
             base_path.to_string()
         };
+
+        // Robustness: If the path points to a specific cluster shard or graph file, strip it to get the base
+        if let Some(idx) = root_path.find(".cluster_") {
+            root_path = root_path[..idx].to_string();
+        } else if let Some(idx) = root_path.find(".hnsw.graph") {
+            root_path = root_path[..idx].to_string();
+        }
 
         let centroids_path = format!("{}.centroids.parquet", root_path);
         let centroids_bytes = disk_cache.get_bytes(&centroids_path).await?;
@@ -814,7 +821,14 @@ impl HnswIvfIndex {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         use std::fs::File;
 
-        let centroids_path = format!("{}.centroids.parquet", base_path);
+        let mut base_path_str = base_path.to_string();
+        if let Some(idx) = base_path_str.find(".cluster_") {
+            base_path_str = base_path_str[..idx].to_string();
+        } else if let Some(idx) = base_path_str.find(".hnsw.graph") {
+            base_path_str = base_path_str[..idx].to_string();
+        }
+
+        let centroids_path = format!("{}.centroids.parquet", base_path_str);
         let file = File::open(&centroids_path)?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
         let reader = builder.build()?;
@@ -989,6 +1003,27 @@ mod tests {
         
         for (id, _) in &results_filtered {
             assert!(filter.contains(*id as u32), "Result ID {} was not in the filter!", id);
+        }
+    }
+
+    #[test]
+    fn test_hnsw_ivf_path_robustness() {
+        let base_path_str = "/tmp/test_robust";
+        
+        let paths = vec![
+            format!("{}.cluster_0.hnsw.graph", base_path_str),
+            format!("{}.cluster_99.hnsw.graph", base_path_str),
+            format!("{}.hnsw.graph", base_path_str),
+        ];
+
+        for p in paths {
+            let mut root = p.clone();
+            if let Some(idx) = root.find(".cluster_") {
+                root = root[..idx].to_string();
+            } else if let Some(idx) = root.find(".hnsw.graph") {
+                root = root[..idx].to_string();
+            }
+            assert_eq!(root, base_path_str, "Failed to strip suffix from {}", p);
         }
     }
 }

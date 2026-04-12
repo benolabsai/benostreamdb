@@ -93,7 +93,7 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
     let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
     // ids 1..10 in 2022/A. id > 5 => ids 6, 7, 8, 9, 10 (count 5).
     // Vector search k=5, so we should get all 5.
-    assert_eq!(total_rows, 5);
+    println!("RESULTS: {:?}", results.iter().map(|b| b.column(0).as_any().downcast_ref::<datafusion::arrow::array::Int32Array>().unwrap().values().to_vec()).collect::<Vec<_>>()); assert_eq!(total_rows, 5);
 
     Ok(())
 }
