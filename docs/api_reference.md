@@ -93,7 +93,7 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 - CUDA (NVIDIA)
 - ROCm (AMD)
 - Metal/MPS (Apple Silicon)
-- OpenCL (Intel)
+- Intel XPU (via WGPU)
 - CPU (fallback)
 
 ### SQL API
@@ -205,7 +205,7 @@ ctx = hdb.GPUContext.auto_detect()
 ctx = hdb.GPUContext("cuda", device_id=0)
 ctx = hdb.GPUContext("rocm", device_id=0)
 ctx = hdb.GPUContext("mps")
-ctx = hdb.GPUContext("opencl")
+ctx = hdb.GPUContext("intel")
 
 # List available backends
 backends = ctx.list_available_backends()

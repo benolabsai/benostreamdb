@@ -19,7 +19,8 @@ A production-ready indexed data lake format that combines the transactional guar
 | **Boolean Indexes** | ❌ No | ✅ Native Boolean |
 | **Vector Search** | ❌ No | ✅ HNSW |
 | **pgvector SQL** | ❌ No | ✅ Full Compatibility |
-| **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/Metal/OpenCL |
+| **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/XPU/Metal |
+| **Torch Alignment** | ❌ No | ✅ ROCm-as-CUDA |
 | **Python Vector API** | ❌ No | ✅ NumPy-compatible |
 | **Fluent Query API** | ❌ No | ✅ Method Chaining |
 | **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
@@ -71,19 +72,18 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 ### Installation
 
-**Standard Install (CPU + OpenCL/Metal):**
-The default package includes automatic hardware detection for Apple Metal, Intel OpenCL, and AMD ROCm.
+**Standard Install (CPU + WGPU/Vulkan):**
+The default package includes automatic high-performance hardware detection for Apple Metal, Intel Graphics/XPU, and AMD ROCm via **WGPU**.
 
 ```bash
 pip install hyperstreamdb
 ```
 
-**CUDA Support (NVIDIA):**
-CUDA requires the **CUDA Toolkit** to be installed at compile time. You can build from source using the `[cuda]` extra:
+**GPU Support:**
+The standard package includes automatic detection for all hardware (NVIDIA CUDA, AMD ROCm, Intel XPU, and Apple Metal).
 
 ```bash
-# Requires: CUDA Toolkit and Rust toolchain
-pip install hyperstreamdb[cuda] --no-binary :all:
+pip install hyperstreamdb
 ```
 
 **Windows Users:**
@@ -102,11 +102,10 @@ sudo apt-get install cuda-toolkit-12-3
 ```
 
 **AMD ROCm:**
+ROCm support is now native on Linux via WGPU/Vulkan.
 ```bash
-# Ubuntu
-wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_5.7.50700-1_all.deb
-sudo apt-get install ./amdgpu-install_5.7.50700-1_all.deb
-sudo amdgpu-install --usecase=rocm
+# Verify Vulkan support (standard in modern ROCm drivers)
+vulkaninfo | grep vendor
 # Verify: rocm-smi
 ```
 
@@ -114,11 +113,11 @@ sudo amdgpu-install --usecase=rocm
 - Included with macOS 12.3+ on Apple Silicon (M1, M2, M3, M4, M5)
 - No additional installation required
 
-**Intel OpenCL:**
+**Intel XPU / Graphics:**
+Intel Arc and Data Center GPUs are supported natively on Linux.
 ```bash
-# Ubuntu/Debian
-sudo apt-get install intel-opencl-icd
-# Verify: clinfo
+# Verify intel-media-va-driver or similar is present
+clinfo | grep Intel
 ```
 
 See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
@@ -266,7 +265,7 @@ import hyperstreamdb as hdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/OpenCL
+ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors
@@ -306,9 +305,10 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 
 **Supported GPU Backends:**
 - **CUDA** - NVIDIA GPUs (Linux, Windows via WSL2)
-- **ROCm** - AMD GPUs (Linux)
+- **ROCm** - AMD GPUs (Native Linux via WGPU)
+- **Intel XPU** - Intel Graphics (Native Linux via WGPU)
 - **Metal (MPS)** - Apple Silicon (macOS)
-- **OpenCL** - Intel GPUs (Linux, Windows via WSL2)
+- **Torch Alignment** - Automatically aliases `cuda` to `rocm` on AMD hardware if `torch.version.hip` is detected.
 - **CPU** - Fallback for all platforms
 
 **Supported Distance Metrics:**
@@ -515,7 +515,7 @@ We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/
 ```
 
 ### Hardware Acceleration
-- **Standard**: Build with CPU + Intel GPU (OpenCL) support (default).
+- **Standard**: Build with CPU + Intel Graphics/XPU support (default).
 - **CUDA**: Build for NVIDIA GPUs:
   ```bash
   ./build-connectors.sh --cuda
@@ -589,7 +589,7 @@ hyperstreamdb/
 - [x] Iceberg V3 features (Row Lineage, Default Values, HyperLogLog NDV)
 - [x] Standard Iceberg API (`update_spec`, `replace_sort_order`, `rewrite_data_files`, `rollback_to_snapshot`)
 - [x] Python Vector Distance API with GPU acceleration
-- [x] Multi-backend GPU support (CUDA, ROCm, Metal, OpenCL)
+- [x] Multi-backend GPU support (CUDA, ROCm, Metal, XPU)
 - [x] Sparse and binary vector operations
 
 ### 🔄 In Progress
