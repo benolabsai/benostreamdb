@@ -9,15 +9,13 @@
 /// - Intel oneAPI / Level Zero
 use anyhow::Result;
 use super::VectorMetric;
-use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use once_cell::sync::Lazy;
 
 #[cfg(feature = "cuda")]
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 
-thread_local! {
-    static GLOBAL_GPU_CONTEXT: RefCell<Option<ComputeContext>> = const { RefCell::new(None) };
-}
+static GLOBAL_GPU_CONTEXT: Lazy<RwLock<Option<ComputeContext>>> = Lazy::new(|| RwLock::new(None));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComputeBackend {
@@ -84,28 +82,6 @@ static PTX_L1: &str = include_str!(concat!(env!("OUT_DIR"), "/l1_distance.ptx"))
 static PTX_HAMMING: &str = include_str!(concat!(env!("OUT_DIR"), "/hamming_distance.ptx"));
 #[cfg(feature = "cuda")]
 static PTX_JACCARD: &str = include_str!(concat!(env!("OUT_DIR"), "/jaccard_distance.ptx"));
-
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_KMEANS: &str = include_str!("opencl/kmeans_assignment.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_L2: &str = include_str!("opencl/l2_distance.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_COSINE: &str = include_str!("opencl/cosine_distance.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_INNER_PRODUCT: &str = include_str!("opencl/inner_product.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_L1: &str = include_str!("opencl/l1_distance.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_HAMMING: &str = include_str!("opencl/hamming_distance.cl");
-#[allow(dead_code)]
-#[cfg(any(feature = "intel", feature = "rocm"))]
-static OPENCL_SRC_JACCARD: &str = include_str!("opencl/jaccard_distance.cl");
 
 // Backend Implementations
 // ============================================================================
@@ -237,24 +213,177 @@ impl GpuBackend for MetalBackend {
         enc.end_encoding();
         cmd_buf.commit();
         cmd_buf.wait_until_completed();
-        unsafe { Ok(std::slice::from_raw_parts(l_buf.contents() as *const u32, n_vectors).to_vec()) }
+        unsafe { Ok(std::slice::from_raw_parts(l_buf.contents() as *const f32, n_vectors).to_vec()) }
     }
 }
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
-#[derive(Debug)]
-pub struct OpenCLBackend { name: String }
+// WGPU Backend
+// ============================================================================
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
-impl OpenCLBackend {
-    pub fn new(name: Option<&str>) -> Result<Self> { Ok(Self { name: name.unwrap_or("OpenCL").to_string() }) }
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+pub struct WgpuBackend {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pipeline: wgpu::ComputePipeline,
+    name: String,
 }
 
-#[cfg(any(feature = "intel", feature = "rocm"))]
-impl GpuBackend for OpenCLBackend {
-    fn name(&self) -> &str { &self.name }
-    fn compute_distance(&self, _q: &[f32], _v: &[f32], _d: usize, _m: VectorMetric) -> Result<Vec<f32>> { compute_cpu(_q, _v, _d, _m) }
-    fn compute_kmeans_assignment(&self, _v: &[f32], _c: &[f32], _d: usize) -> Result<Vec<u32>> { 
+#[cfg(target_os = "linux")]
+impl WgpuBackend {
+    pub fn new(display_name: &str, vendor_id: Option<u32>) -> Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN,
+            ..Default::default()
+        });
+
+        let adapter = if let Some(vid) = vendor_id {
+            instance.enumerate_adapters(wgpu::Backends::VULKAN)
+                .into_iter()
+                .find(|a| a.get_info().vendor == vid)
+                .ok_or_else(|| anyhow::anyhow!("Failed to find WGPU adapter for vendor 0x{:04x}", vid))?
+        } else {
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })).ok_or_else(|| anyhow::anyhow!("Failed to find WGPU adapter on Vulkan"))?
+        };
+
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: Some("Compute"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+            },
+            None,
+        ))?;
+
+        let shader_src = include_str!("wgpu_kernel.wgsl");
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Distance Compute Shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(shader_src)),
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Distance Compute Pipeline"),
+            layout: None,
+            module: &shader,
+            entry_point: "main",
+            compilation_options: Default::default(),
+        });
+
+        Ok(Self { 
+            device, 
+            queue, 
+            pipeline,
+            name: display_name.to_string(),
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GpuBackend for WgpuBackend {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn compute_distance(&self, query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
+        use wgpu::util::DeviceExt;
+        
+        fn as_u8_slice<T>(data: &[T]) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * std::mem::size_of::<T>()) }
+        }
+
+        let num_vectors = (vectors.len() / dim) as u32;
+        let metric_type: u32 = match metric {
+            VectorMetric::L2 => 0,
+            VectorMetric::InnerProduct => 1,
+            VectorMetric::Cosine => 2,
+            VectorMetric::L1 => 3,
+            VectorMetric::Hamming => 4,
+            VectorMetric::Jaccard => 5,
+        };
+
+        let query_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Query Buffer"),
+            contents: as_u8_slice(query),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let vectors_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vectors Buffer"),
+            contents: as_u8_slice(vectors),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let output_size = (num_vectors as usize * std::mem::size_of::<f32>()) as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output Buffer"),
+            size: output_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: output_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let config_data = [dim as u32, num_vectors, metric_type, 0];
+        let config_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Config Buffer"),
+            contents: as_u8_slice(&config_data),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group_layout = self.pipeline.get_bind_group_layout(0);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: query_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: vectors_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: output_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: config_buffer.as_entire_binding() },
+            ],
+        });
+
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.pipeline);
+            cpass.set_bind_group(0, &bind_group, &[]);
+            let workgroups = (num_vectors + 63) / 64;
+            cpass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, output_size);
+        self.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+
+        self.device.poll(wgpu::Maintain::Wait);
+        
+        if let Ok(Ok(())) = receiver.recv() {
+            let data = buffer_slice.get_mapped_range();
+            let result = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, num_vectors as usize).to_vec() };
+            drop(data);
+            staging_buffer.unmap();
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!("Failed to read WGPU output"))
+        }
+    }
+
+    fn compute_kmeans_assignment(&self, _v: &[f32], _c: &[f32], _d: usize) -> Result<Vec<u32>> {
         super::ivf::simple_kmeans_assignment(_v, _c, _d)
     }
 }
@@ -263,15 +392,46 @@ impl GpuBackend for OpenCLBackend {
 // ============================================================================
 
 impl ComputeContext {
+    pub fn from_backend(backend: ComputeBackend) -> Result<Self> {
+        let imp: Option<std::sync::Arc<dyn GpuBackend>> = match backend {
+            ComputeBackend::Cpu => Some(std::sync::Arc::new(CpuBackend)),
+            ComputeBackend::Cuda => {
+                #[cfg(feature = "cuda")]
+                { Some(std::sync::Arc::new(CudaBackend::new(0)?)) }
+                #[cfg(not(feature = "cuda"))]
+                { anyhow::bail!("CUDA not enabled") }
+            },
+            ComputeBackend::Mps => {
+                #[cfg(all(target_os = "macos", feature = "mps"))]
+                { Some(std::sync::Arc::new(MetalBackend::new()?)) }
+                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                { anyhow::bail!("MPS not enabled") }
+            },
+            ComputeBackend::Rocm => {
+                #[cfg(target_os = "linux")]
+                { Some(std::sync::Arc::new(WgpuBackend::new("WGPU_ROCm", Some(0x1002))?)) }
+                #[cfg(not(target_os = "linux"))]
+                { anyhow::bail!("ROCm not enabled on this platform") }
+            },
+            ComputeBackend::Intel => {
+                #[cfg(target_os = "linux")]
+                { Some(std::sync::Arc::new(WgpuBackend::new("WGPU_Intel_XPU", Some(0x8086))?)) }
+                #[cfg(not(target_os = "linux"))]
+                { anyhow::bail!("Intel not enabled on this platform") }
+            }
+        };
+        Ok(Self { backend, device_id: if backend == ComputeBackend::Cpu { -1 } else { 0 }, implementation: imp })
+    }
+
     pub fn auto_detect() -> Self {
         #[cfg(feature = "cuda")]
         if let Ok(b) = CudaBackend::new(0) { return Self { backend: ComputeBackend::Cuda, device_id: 0, implementation: Some(Arc::new(b)) }; }
         #[cfg(all(target_os = "macos", feature = "mps"))]
         if let Ok(b) = MetalBackend::new() { return Self { backend: ComputeBackend::Mps, device_id: 0, implementation: Some(Arc::new(b)) }; }
-        #[cfg(feature = "rocm")]
-        if let Ok(b) = OpenCLBackend::new(Some("AMD")) { return Self { backend: ComputeBackend::Rocm, device_id: 0, implementation: Some(Arc::new(b)) }; }
-        #[cfg(feature = "intel")]
-        if let Ok(b) = OpenCLBackend::new(Some("Intel")) { return Self { backend: ComputeBackend::Intel, device_id: 0, implementation: Some(Arc::new(b)) }; }
+        #[cfg(target_os = "linux")]
+        if let Ok(b) = WgpuBackend::new("WGPU_ROCm", Some(0x1002)) { return Self { backend: ComputeBackend::Rocm, device_id: 0, implementation: Some(Arc::new(b)) }; }
+        #[cfg(target_os = "linux")]
+        if let Ok(b) = WgpuBackend::new("WGPU_Intel_XPU", Some(0x8086)) { return Self { backend: ComputeBackend::Intel, device_id: 0, implementation: Some(Arc::new(b)) }; }
         Self { backend: ComputeBackend::Cpu, device_id: -1, implementation: Some(Arc::new(CpuBackend)) }
     }
 
@@ -298,10 +458,16 @@ impl ComputeContext {
                 #[cfg(not(all(target_os = "macos", feature = "mps")))]
                 { false }
             }
-            ComputeBackend::Rocm | ComputeBackend::Intel => {
-                #[cfg(any(feature = "intel", feature = "rocm"))]
-                { true } // OpenCL fallback
-                #[cfg(not(any(feature = "intel", feature = "rocm")))]
+            ComputeBackend::Rocm => {
+                #[cfg(target_os = "linux")]
+                { WgpuBackend::new("Test", Some(0x1002)).is_ok() }
+                #[cfg(not(target_os = "linux"))]
+                { false }
+            }
+            ComputeBackend::Intel => {
+                #[cfg(target_os = "linux")]
+                { WgpuBackend::new("Test", Some(0x8086)).is_ok() }
+                #[cfg(not(target_os = "linux"))]
                 { false }
             }
         }
@@ -349,8 +515,19 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
-pub fn set_global_gpu_context(ctx: Option<ComputeContext>) { GLOBAL_GPU_CONTEXT.with(|c| *c.borrow_mut() = ctx); }
-pub fn get_global_gpu_context() -> Option<ComputeContext> { GLOBAL_GPU_CONTEXT.with(|c| c.borrow().clone()) }
+pub fn set_global_gpu_context(ctx: Option<ComputeContext>) { 
+    if let Ok(mut lock) = GLOBAL_GPU_CONTEXT.write() {
+        *lock = ctx;
+    }
+}
+
+pub fn get_global_gpu_context() -> Option<ComputeContext> { 
+    if let Ok(lock) = GLOBAL_GPU_CONTEXT.read() {
+        lock.clone()
+    } else {
+        None
+    }
+}
 
 #[cfg(test)]
 mod tests {

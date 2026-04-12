@@ -9,58 +9,43 @@ HyperStreamDB supports GPU acceleration for vector distance computations across 
 - **NVIDIA CUDA** - For NVIDIA GPUs (GeForce, Quadro, Tesla)
 - **AMD ROCm** - For AMD Radeon GPUs
 - **Apple Metal (MPS)** - For Apple Silicon Macs
-- **Intel OpenCL** - For Intel integrated and discrete GPUs (Linux, WSL2)
+- **Intel XPU** - For Intel integrated and discrete GPUs (Native Linux via WGPU)
 
 GPU acceleration provides 10x+ speedup for batch distance operations on large vector databases (100,000+ vectors).
 
 ## Installation
 
-### Standard Install (PyPI)
+### Unified Binary (PyPI)
 
-The default `pip install` includes automatic runtime detection for **MPS** (macOS), **Intel OpenCL**, and **AMD ROCm (via OpenCL)**. No extra setup is needed — if the hardware and drivers are present, HyperStreamDB detects them automatically.
+HyperStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between "standard" and "CUDA" builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.
 
 ```bash
 pip install hyperstreamdb
 ```
 
-### CUDA Install (Source Build)
-
-NVIDIA CUDA support requires the **CUDA Toolkit** to be installed on your system at compile time. You must build from source:
-
-```bash
-# Requires: CUDA Toolkit 11.0+ and Rust toolchain
-pip install hyperstreamdb[cuda] --no-binary :all:
-```
-
-Or clone and build directly:
-
-```bash
-git clone https://github.com/rla3rd/hyperstreamdb.git
-cd hyperstreamdb
-pip install -e ".[cuda]"
-```
-
-> **Note:** A future release will use runtime CUDA detection (via `cudarc`), eliminating the need for source builds.
-
-## Quick Start
+> **Hardware Requirements:** 
+> - **NVIDIA**: Requires NVIDIA drivers (`libcuda.so` on Linux, `nvcuda.dll` on Windows).
+> - **AMD**: Requires ROCm/Vulkan drivers.
+> - **Intel**: Requires Level Zero/Vulkan drivers.
+> - **Apple**: Requires macOS 12.3+ (Built-in).
 
 ```python
 import hyperstreamdb as hdb
 
 # Auto-detect and use best available GPU backend
 device = hdb.Device("auto")
-print(f"Using backend: {device.type}")
+print(f"Using backend: {device.backend}")
 
-# Or pick a specific backend
-device = hdb.Device("cuda")    # NVIDIA (requires source build with CUDA)
-device = hdb.Device("mps")     # Apple Silicon (auto-detected on macOS)
-device = hdb.Device("intel")   # Intel OpenCL (auto-detected)
-device = hdb.Device("rocm")    # AMD OpenCL (auto-detected)
+# Pick a specific backend (Torch-aligned strings)
+device = hdb.Device("cuda")    # NVIDIA or AMD ROCm (Torch standard)
+device = hdb.Device("xpu")     # Intel XPU (Torch standard)
+device = hdb.Device("mps")     # Apple Silicon
 device = hdb.Device("cpu")     # CPU fallback (always available)
 
 # Check availability
-print(hdb.Device.is_available("cuda"))   # True if CUDA compiled in + driver present
-print(hdb.Device.is_available("intel"))  # True if Intel OpenCL driver present
+print(hdb.Device.is_available("cuda"))  # True if NVIDIA or AMD ROCm present
+print(hdb.Device.is_available("xpu"))   # True if Intel hardware present
+```
 ```
 
 ## NVIDIA CUDA Setup
@@ -143,10 +128,26 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 
 ### Requirements
 
-- **GPU**: AMD Radeon RX 5000 series or newer, or Radeon Instinct
-  - Recommended: RX 6000/7000 series, MI100/MI200 series
-- **OS**: Linux only (Ubuntu 20.04/22.04, RHEL 8/9, SLES 15)
-- **ROCm**: Version 5.0 or later (6.x recommended)
+- **GPU**: AMD Radeon RX 5000 series or newer (RDNA 1, 2, 3), or Instinct MI series.
+- **OS**: Linux (Primary support for compute workloads).
+- **Backend**: HyperStreamDB uses **WGPU/Vulkan** for AMD compute, ensuring compatibility across a wide range of Linux distributions.
+
+### Installation on Linux (Ubuntu/Debian)
+
+While HyperStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.
+
+```bash
+# Download and install AMD GPU driver installer
+wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_6.0.2-1_all.deb
+sudo apt install ./amdgpu-install_6.0.2-1_all.deb
+
+# Install the ROCm usecase (includes optimized Vulkan drivers)
+sudo amdgpu-install --usecase=rocm,vulkan
+
+# Add user to necessary groups
+sudo usermod -a -G video,render $USER
+sudo reboot
+```
 
 ### Supported GPUs
 
@@ -162,9 +163,9 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 ### Installation on Ubuntu
 
 ```bash
-# Download and install AMD GPU driver
-wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_5.7.50700-1_all.deb
-sudo apt-get install ./amdgpu-install_5.7.50700-1_all.deb
+# Download and install AMD GPU driver installer
+wget https://repo.radeon.com/amdgpu-install/latest/ubuntu/noble/amdgpu-install_6.0.2-1_all.deb
+sudo apt install ./amdgpu-install_6.0.2-1_all.deb
 
 # Install ROCm
 sudo amdgpu-install --usecase=rocm
@@ -267,56 +268,61 @@ print(f"Computed {len(distances)} distances on Apple GPU")
 - M1 Max/Ultra and M2 Max/Ultra have more GPU cores for better performance
 - Recommended for databases up to available system memory
 
-## Intel OpenCL Setup
+## Intel XPU Setup
 
 ### Requirements
 
-- **GPU**: Intel Iris Xe or newer (integrated or discrete)
-  - Recommended: Arc A-series discrete GPUs
-- **Driver**: Intel Graphics Driver with OpenCL support
-- **OS**: Linux or WSL2 (Windows with WSL2)
+- **GPU**: Intel Iris Xe, Arc A-Series (Alchemist), Arc B-Series (Battlemage), or Data Center GPU Max.
+- **OS**: Linux (Native) or Windows via WSL2.
+- **Drivers**: Requires Level Zero and Vulkan user-mode drivers.
 
-### Supported GPUs
+### Installation on Linux (Ubuntu/Debian)
 
-| Series | Architecture | Supported |
-|--------|-------------|-----------|
-| Iris Xe (11th gen+) | Xe-LP | ✅ Yes |
-| Arc A-series | Xe-HPG | ✅ Yes |
-| Data Center GPU Max | Xe-HPC | ✅ Yes |
+For Intel hardware, you must install the compute and media runtimes to enable WGPU acceleration.
+
+```bash
+# Add Intel graphics repository (Noble 24.04 instructions)
+wget -qO - https://repositories.intel.com/graphics/intel-graphics.key | sudo gpg --dearmor --yes -o /usr/share/keyrings/intel-graphics.gpg
+echo "deb [arch=amd64,i386 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/graphics/ubuntu noble main" | sudo tee /etc/apt/sources.list.d/intel-graphics.list
+sudo apt update
+
+# Install Level Zero and Media runtimes
+sudo apt install intel-level-zero-gpu intel-media-va-driver-non-free
+
+# Verify installation
+vulkaninfo | grep "vendorID = 0x8086"
+```
 
 ### Installation on Linux (Ubuntu/Debian)
 
 ```bash
-# Install Intel OpenCL runtime
-sudo apt-get update
-sudo apt-get install intel-opencl-icd
-
-# Install OpenCL headers (for development)
-sudo apt-get install opencl-headers
-
-# Verify installation
-clinfo
+```bash
+# Verify Vulkan/WGPU installation
+vulkaninfo | grep vendor
+# Or check adapter listing in HyperStreamDB
+python -c "import hyperstreamdb as hdb; print(hdb.Device.list_available_backends())"
 ```
 
 ### Installation on Windows (via WSL2)
 
-Windows users should install the Intel OpenCL runtime within their WSL2 distribution following the Linux installation steps above. 
+Windows users should ensure they have the latest Intel Graphics drivers installed on the host. These provide Vulkan support to WSL2, enabling HyperStreamDB to detect and use the GPU via WGPU.
 
 ### Verification
 
 ```python
 import hyperstreamdb as hdb
 
-# Create OpenCL context
-ctx = hdb.GPUContext("opencl")
-print(f"OpenCL backend initialized: {ctx.backend}")
+# Create XPU (Intel) context
+device = hdb.Device("xpu")
+print(f"Intel backend initialized: {device.backend}")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
-print(f"Computed {len(distances)} distances on Intel GPU")
+distances = hdb.compute_distance(query, database, dim=768, metric="l2")
+print(f"Success: Computed on {device.backend}")
+```
 ```
 
 ## Multi-GPU Systems
@@ -347,9 +353,9 @@ print(f"Using device: {ctx.device_id}")
 **Solutions:**
 1. Verify GPU drivers are installed:
    - NVIDIA: `nvidia-smi`
-   - AMD: `rocm-smi`
-   - Intel: `clinfo`
-   - Apple: Check "About This Mac" → ensure Apple Silicon
+   - AMD: `rocm-smi` or `vulkaninfo`
+   - Intel: `vulkaninfo` (Check for vendor `0x8086`)
+   - Apple: Check System Settings → Hardware
 
 2. Check backend availability:
    ```python
@@ -399,7 +405,7 @@ print(f"Using device: {ctx.device_id}")
 3. **Memory transfer overhead**: Creating new context each time
    - Solution: Reuse GPU context across multiple operations
 
-4. **Wrong backend**: Using OpenCL on NVIDIA GPU
+4. **Wrong backend**: Using Intel XPU path on NVIDIA GPU
    - Solution: Use CUDA for NVIDIA, ROCm for AMD
 
 ### Driver Version Mismatch
@@ -431,16 +437,16 @@ Expected speedups for batch operations (100,000 vectors, 768 dimensions):
 | ROCm | RX 7900 XTX | 12-18x |
 | Metal | M1 Max | 8-12x |
 | Metal | M2-M5 Pro/Max/Ultra | 15-30x |
-| OpenCL | Arc A770 | 6-10x |
+| XPU | Arc A770 | 6-10x |
 
 *Benchmarks measured with float32 data, L2 distance metric*
 
 ## Best Practices
 
-1. **Reuse GPU context** across multiple operations
+1. **Reuse Device** across multiple operations
 2. **Use float32** instead of float64 for better GPU performance
 3. **Batch operations** when possible (process multiple queries together)
-4. **Profile your workload** using `ctx.get_stats()`
+4. **Profile your workload**
 5. **Choose appropriate backend** for your hardware
 6. **Monitor GPU memory** usage for large databases
 7. **Use sparse/binary vectors** when applicable to reduce memory

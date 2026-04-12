@@ -54,7 +54,7 @@ def test_context_backend_property(backend, device_id):
             error_msg = str(exc_info.value)
             assert 'available' in error_msg.lower()
         else:
-            # ROCM and Intel use OpenCL which does not always error on immediate creation but during execution
+            # ROCM and Intel use WGPU which does not always error on immediate creation but during execution
             try:
                 hdb.ComputeContext(backend, index=device_id)
             except RuntimeError:

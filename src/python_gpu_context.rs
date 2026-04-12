@@ -55,13 +55,17 @@ impl PyDevice {
                 #[cfg(not(target_os = "macos"))]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'mps' is only available on macOS.")); }
             }
-            "intel" | "opencl" | "graphics" => {
-                // opencl3 is always available
-                ComputeBackend::Intel
+            "intel" | "graphics" => {
+                #[cfg(target_os = "linux")]
+                { ComputeBackend::Intel }
+                #[cfg(not(target_os = "linux"))]
+                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'intel' (XPU) is only supported on Linux.")); }
             }
             "rocm" => {
-                // opencl3 is always available
-                ComputeBackend::Rocm
+                #[cfg(target_os = "linux")]
+                { ComputeBackend::Rocm }
+                #[cfg(not(target_os = "linux"))]
+                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'rocm' is only supported on Linux.")); }
             }
             "auto" | "gpu" => {
                 let context = crate::core::index::gpu::ComputeContext::auto_detect();
@@ -92,7 +96,7 @@ impl PyDevice {
             "cpu" => ComputeBackend::Cpu,
             "cuda" => ComputeBackend::Cuda,
             "mps" | "metal" => ComputeBackend::Mps,
-            "intel" | "opencl" | "graphics" => ComputeBackend::Intel,
+            "intel" | "graphics" => ComputeBackend::Intel,
             "rocm" => ComputeBackend::Rocm,
             _ => return false,
         };

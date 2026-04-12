@@ -68,7 +68,7 @@ def test_unavailable_backend_error():
     backends = hdb.ComputeContext.list_available_backends()
     
     # Try to create a context with a backend that's not available
-    # ROCM and Intel use OpenCL which does not always error on immediate creation but during execution
+    # ROCM and Intel use WGPU which does not always error on immediate creation but during execution
     all_backends = ['cuda', 'mps']
     unavailable = [b for b in all_backends if b not in backends]
     

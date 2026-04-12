@@ -26,7 +26,7 @@ The API supports six distance metrics:
 | **CUDA** | NVIDIA GPUs | Linux, WSL2 | ✅ Supported |
 | **ROCm** | AMD GPUs | Linux | ✅ Supported |
 | **Metal (MPS)** | Apple Silicon | macOS | ✅ Supported |
-| **OpenCL** | Intel GPUs | Linux, WSL2 | ✅ Supported |
+| **Intel XPU** | Intel GPUs | Linux | ✅ Supported |
 | **CPU** | All platforms | Fallback | ✅ Always available |
 
 ### Backend Priority
@@ -35,7 +35,7 @@ When using `GPUContext.auto_detect()`, backends are selected in this priority or
 1. CUDA (NVIDIA)
 2. Metal/MPS (Apple Silicon)
 3. ROCm (AMD)
-4. OpenCL (Intel)
+4. Intel XPU (via WGPU)
 5. CPU (fallback)
 
 ## Installation
@@ -111,24 +111,17 @@ ctx = hdb.GPUContext.auto_detect()
 print(ctx.backend)  # Should show "mps" on Apple Silicon
 ```
 
-#### Intel OpenCL
+#### Intel XPU (WGPU)
 
 **Requirements:**
 - Intel GPU (Iris Xe or newer recommended)
-- Intel Graphics Driver with OpenCL support
-- Linux or WSL2
-
-**Installation (Linux):**
+**Installation (Linux / WSL2):**
+Intel hardware is supported natively via WGPU. Ensure you have modern graphics drivers and the `vulkan-loader` installed.
 ```bash
 # Ubuntu/Debian
-sudo apt-get install intel-opencl-icd
-
-# Verify installation
-clinfo
+sudo apt-get install vulkan-tools
+vulkaninfo | grep vendor
 ```
-
-**Installation (Windows via WSL2):**
-- Users on Windows should install Intel OpenCL runtimes within their WSL2 distribution.
 
 ## Quick Start
 
@@ -332,7 +325,7 @@ class GPUContext:
         Create GPU context with specific backend.
         
         Args:
-            backend: Backend name ("cuda", "rocm", "mps", "opencl", "cpu")
+            backend: Backend name ("cuda", "rocm", "mps", "intel", "cpu")
             device_id: GPU device ID for multi-GPU systems (default: 0)
         
         Raises:

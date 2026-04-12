@@ -20,12 +20,12 @@ fn assert_parity(
     use hyperstreamdb::core::index::VectorMetric;
 
     // Compute with backend A
-    let ctx_a = ComputeContext { backend: backend_a, device_id: 0, implementation: None };
+    let ctx_a = ComputeContext::from_backend(backend_a)?;
     set_global_gpu_context(Some(ctx_a));
     let dist_a = compute_distance(query, vectors, dim, VectorMetric::L2)?;
 
     // Compute with backend B
-    let ctx_b = ComputeContext { backend: backend_b, device_id: 0, implementation: None };
+    let ctx_b = ComputeContext::from_backend(backend_b)?;
     set_global_gpu_context(Some(ctx_b));
     let dist_b = compute_distance(query, vectors, dim, VectorMetric::L2)?;
 
@@ -74,10 +74,15 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
         assert_parity("MPS Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Mps)?;
     }
      
-    // 3. Test ROCm if enabled (OpenCL based)
-    #[cfg(feature = "rocm")]
+    // 3. Test ROCm and Intel WGPU interfaces on Linux
+    #[cfg(target_os = "linux")]
     {
-        assert_parity("ROCm Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Rocm)?;
+        if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Rocm) {
+            assert_parity("ROCm Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Rocm)?;
+        }
+        if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Intel) {
+            assert_parity("Intel Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Intel)?;
+        }
     }
 
     Ok(())
