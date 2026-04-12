@@ -105,22 +105,23 @@ impl HybridSegmentWriter {
                     offset: None,
                     length: None,
                 });
-            } else if filename.contains(".hnsw.") {
-                  // Vector Index
-                  let parts: Vec<&str> = filename.split('.').collect();
-                  let col = parts.get(1).map(|s| s.to_string());
-                  
-                  if (filename.ends_with(".hnsw.graph") || filename.ends_with(".centroids.parquet"))
-                      && !index_files.iter().any(|idx| idx.column_name == col && idx.index_type == "vector") {
-                          index_files.push(crate::core::manifest::IndexFile {
-                            file_path: filename.clone(),
-                            index_type: "vector".to_string(),
-                            column_name: col,
-                            blob_type: None,
-                            offset: None,
-                            length: None,
-                          });
-                      }
+            } else if filename.contains(".hnsw.") || filename.ends_with(".centroids.parquet") {
+                   // Vector Index
+                   let col_opt = filename.split('.').nth(1).map(|s| s.to_string());
+
+                   if let Some(col) = col_opt {
+                       if !index_files.iter().any(|idx| idx.column_name.as_ref() == Some(&col) && idx.index_type == "vector") {
+                           let base_path = format!("{}.{}", self.config.segment_id, col);
+                           index_files.push(crate::core::manifest::IndexFile {
+                               file_path: base_path,
+                               index_type: "vector".to_string(),
+                               column_name: Some(col),
+                               blob_type: None,
+                               offset: None,
+                               length: None,
+                           });
+                       }
+                   }
             }
         }
         

@@ -125,13 +125,16 @@ impl InMemoryVectorIndex {
             let values = fsl.values().as_any().downcast_ref::<Float32Array>()
                 .context("Expected Float32Array values in FixedSizeListArray")?;
             
-            // Bulk extend for high performance
-            self.vectors.extend_from_slice(values.values());
+            // Respect slicing: only copy the range of the value array that belongs to this FSL slice
+            let start_offset = fsl.offset() * self.dim;
+            let len = fsl.len() * self.dim;
+            let slice = &values.values()[start_offset..start_offset + len];
+            
+            self.vectors.extend_from_slice(slice);
             self.count += fsl.len();
         } else if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
             for i in 0..list.len() {
                 if list.is_null(i) {
-                     // Fill with zeros to maintain alignment or handle nulls
                      self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                 } else {
                     let vector_array = list.value(i);
@@ -243,5 +246,40 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].0, 0); // v1 is closest
         assert_eq!(results[1].0, 1); // v2 is second closest
+    }
+
+    #[test]
+    fn test_memory_index_sliced_array() {
+        let dim = 4;
+        let mut index = InMemoryVectorIndex::new(dim);
+        
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("vec", DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dim as i32
+            ), true),
+        ]));
+
+        let v1 = vec![Some(1.0), Some(0.0), Some(0.0), Some(0.0)];
+        let v2 = vec![Some(0.0), Some(1.0), Some(0.0), Some(0.0)];
+        let v3 = vec![Some(0.0), Some(0.0), Some(1.0), Some(0.0)];
+
+        let array = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+            vec![Some(v1), Some(v2.clone()), Some(v3)],
+            dim as i32
+        );
+
+        // Slice the array to only include v2
+        let sliced_array = array.slice(1, 1);
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(sliced_array)]).unwrap();
+        index.insert_batch(&batch, "vec", 0).unwrap();
+
+        assert_eq!(index.count, 1);
+        assert_eq!(index.vectors.len(), dim);
+        
+        let query = crate::core::index::VectorValue::Float32(v2.into_iter().map(|x| x.unwrap()).collect());
+        let results = index.search(&query, 1, None);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1, 0.0); // Exact match
     }
 }
