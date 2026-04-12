@@ -15,15 +15,28 @@ impl<S: Subscriber> Layer<S> for ReloadableFilter {
     fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
         self.filter.read().unwrap().enabled(metadata, ctx)
     }
-
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-        self.filter.read().unwrap().on_event(event, ctx);
-    }
 }
 
 static SHARED_FILTER: once_cell::sync::OnceCell<Arc<RwLock<EnvFilter>>> = once_cell::sync::OnceCell::new();
+static INIT: std::sync::Once = std::sync::Once::new();
 
 pub fn init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut init_err: Option<Box<dyn std::error::Error>> = None;
+    
+    INIT.call_once(|| {
+        if let Err(e) = do_init_tracing(service_name) {
+            init_err = Some(e);
+        }
+    });
+
+    if let Some(e) = init_err {
+        return Err(e);
+    }
+    
+    Ok(())
+}
+
+fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     global::set_text_map_propagator(TraceContextPropagator::new());
 
     let base_filter = EnvFilter::from_default_env();

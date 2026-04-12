@@ -424,6 +424,25 @@ impl ComputeContext {
     }
 
     pub fn auto_detect() -> Self {
+        {
+            let read = GLOBAL_GPU_CONTEXT.read().unwrap();
+            if let Some(ctx) = &*read {
+                return ctx.clone();
+            }
+        }
+
+        let mut write = GLOBAL_GPU_CONTEXT.write().unwrap();
+        // Check again after acquiring lock
+        if let Some(ctx) = &*write {
+            return ctx.clone();
+        }
+
+        let ctx = Self::do_auto_detect();
+        *write = Some(ctx.clone());
+        ctx
+    }
+
+    fn do_auto_detect() -> Self {
         #[cfg(feature = "cuda")]
         if let Ok(b) = CudaBackend::new(0) { return Self { backend: ComputeBackend::Cuda, device_id: 0, implementation: Some(Arc::new(b)) }; }
         #[cfg(all(target_os = "macos", feature = "mps"))]

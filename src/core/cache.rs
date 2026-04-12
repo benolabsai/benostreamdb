@@ -59,7 +59,22 @@ impl DiskCache {
             }
 
             let b = self.store.get(&object_store::path::Path::from(path)).await?.bytes().await?;
-            let _ = std::fs::write(&cache_path, &b);
+            
+            // Atomic write: write to unique temp file then rename
+            let thread_id = format!("{:?}", std::thread::current().id());
+            let temp_name = format!("{}.{}.{}.tmp", hash, std::process::id(), thread_id);
+            let temp_path = cache_dir.join(temp_name);
+            
+            if let Ok(mut f) = std::fs::File::create(&temp_path) {
+                use std::io::Write;
+                if f.write_all(&b).is_ok() {
+                    // rename is atomic on POSIX
+                    let _ = std::fs::rename(&temp_path, &cache_path);
+                } else {
+                    let _ = std::fs::remove_file(&temp_path);
+                }
+            }
+
             Ok(b)
         } else {
             let res = self.store.get(&object_store::path::Path::from(path)).await

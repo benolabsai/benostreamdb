@@ -783,19 +783,15 @@ fn test_dump_reload_1() {
     for i in 0..data.len() {
         hnsw.insert((&data[i], i));
     }
-    // some loggin info
-    hnsw.dump_layer_info();
-    // dump in a file.  Must take care of name as tests runs in // !!!
-    let fname = String::from("dumpreloadtest1");
-    let _res = hnsw.file_dump(&fname);
-    // This will dump in 2 files named dumpreloadtest.hnsw.graph and dumpreloadtest.hnsw.data
-    //
+    // dump in a file. Use tempdir for parallel safety.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let fname = temp_dir.path().join("dumpreloadtest1");
+    let fname_str = fname.to_str().unwrap().to_string();
+    let _res = hnsw.file_dump(&fname_str);
+
     // reload
     log::debug!("\n\n  hnsw reload");
-    // we will need a procedural macro to get from distance name to its instanciation. 
-    // from now on we test with DistL1
-    let graphfname = String::from("dumpreloadtest1.hnsw.graph");
-    let graphpath = PathBuf::from(graphfname);
+    let graphpath = PathBuf::from(format!("{}.hnsw.graph", fname_str));
     let graphfileres = OpenOptions::new().read(true).open(&graphpath);
     if graphfileres.is_err() {
         println!("test_dump_reload: could not open file {:?}", graphpath.as_os_str());
@@ -803,8 +799,7 @@ fn test_dump_reload_1() {
     }
     let graphfile = graphfileres.unwrap();
     //  
-    let datafname = String::from("dumpreloadtest1.hnsw.data");
-    let datapath = PathBuf::from(datafname);
+    let datapath = PathBuf::from(format!("{}.hnsw.data", fname_str));
     let datafileres = OpenOptions::new().read(true).open(&datapath);
     if datafileres.is_err() {
         println!("test_dump_reload : could not open file {:?}", datapath.as_os_str());
@@ -852,19 +847,15 @@ fn test_dump_reload_myfn() {
     for i in 0..data.len() {
         hnsw.insert((&data[i], i));
     }
-    // some loggin info
-    hnsw.dump_layer_info();
-    // dump in a file.  Must take care of name as tests runs in // !!!
-    let fname = String::from("dumpreloadtest_myfn");
-    let _res = hnsw.file_dump(&fname);
-    // This will dump in 2 files named dumpreloadtest.hnsw.graph and dumpreloadtest.hnsw.data
-    //
+    // dump in a file. Use tempdir for parallel safety.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let fname = temp_dir.path().join("dumpreloadtest_myfn");
+    let fname_str = fname.to_str().unwrap().to_string();
+    let _res = hnsw.file_dump(&fname_str);
+
     // reload
     log::debug!("\n\n  hnsw reload");
-    // we will need a procedural macro to get from distance name to its instanciation. 
-    // from now on we test with DistL1
-    let graphfname = String::from("dumpreloadtest_myfn.hnsw.graph");
-    let graphpath = PathBuf::from(graphfname);
+    let graphpath = PathBuf::from(format!("{}.hnsw.graph", fname_str));
     let graphfileres = OpenOptions::new().read(true).open(&graphpath);
     if graphfileres.is_err() {
         println!("test_dump_reload: could not open file {:?}", graphpath.as_os_str());
@@ -872,8 +863,7 @@ fn test_dump_reload_myfn() {
     }
     let graphfile = graphfileres.unwrap();
     //  
-    let datafname = String::from("dumpreloadtest_myfn.hnsw.data");
-    let datapath = PathBuf::from(datafname);
+    let datapath = PathBuf::from(format!("{}.hnsw.data", fname_str));
     let datafileres = OpenOptions::new().read(true).open(&datapath);
     if datafileres.is_err() {
         println!("test_dump_reload : could not open file {:?}", datapath.as_os_str());
@@ -918,19 +908,15 @@ fn test_dump_reload_graph_only() {
     for i in 0..data.len() {
         hnsw.insert((&data[i], i));
     }
-    // some loggin info
-    hnsw.dump_layer_info();
-    // dump in a file. Must take care of name as tests runs in // !!!
-    let fname = String::from("dumpreloadtestgraph");
-    let _res = hnsw.file_dump(&fname);
-    // This will dump in 2 files named dumpreloadtest.hnsw.graph and dumpreloadtest.hnsw.data
-    //
+    // dump in a file. Use tempdir for parallel safety.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let fname = temp_dir.path().join("dumpreloadtestgraph");
+    let fname_str = fname.to_str().unwrap().to_string();
+    let _res = hnsw.file_dump(&fname_str);
+
     // reload
     log::debug!("\n\n  hnsw reload");
-    // we will need a procedural macro to get from distance name to its instanciation. 
-    // from now on we test with DistL1
-    let graphfname = String::from("dumpreloadtestgraph.hnsw.graph");
-    let graphpath = PathBuf::from(graphfname);
+    let graphpath = PathBuf::from(format!("{}.hnsw.graph", fname_str));
     let graphfileres = OpenOptions::new().read(true).open(&graphpath);
     if graphfileres.is_err() {
         println!("test_dump_reload: could not open file {:?}", graphpath.as_os_str());
@@ -938,8 +924,7 @@ fn test_dump_reload_graph_only() {
     }
     let graphfile = graphfileres.unwrap();
     //  
-    let datafname = String::from("dumpreloadtestgraph.hnsw.data");
-    let datapath = PathBuf::from(datafname);
+    let datapath = PathBuf::from(format!("{}.hnsw.data", fname_str));
     let datafileres = OpenOptions::new().read(true).open(&datapath);
     if datafileres.is_err() {
         println!("test_dump_reload : could not open file {:?}", datapath.as_os_str());
