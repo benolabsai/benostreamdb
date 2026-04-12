@@ -510,7 +510,7 @@ mod tests {
         // - Manifests v1, v2, v3
         // - The 3 original data files (since they are ONLY in v1-v3)
         let deleted = table.vacuum_async(1).await?;
-        println!("Vacuum deleted {} files", deleted);
+        tracing::info!("Vacuum deleted {} files", deleted);
         
         // We expect at least 3 data files + 3 manifest files = 6 files deleted
         assert!(deleted >= 6);

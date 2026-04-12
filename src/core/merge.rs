@@ -126,7 +126,7 @@ impl MergePlanner {
     ) -> Result<Vec<(Option<SegmentId>, SegmentId)>> 
     where F: Fn(&SegmentId, &str) -> Result<Option<RoaringBitmap>>
     {
-        println!("Executing Merge on {} candidates", candidate_segments.len());
+        tracing::info!("Executing Merge on {} candidates", candidate_segments.len());
         
         let mut updates_by_segment: HashMap<SegmentId, Vec<usize>> = HashMap::new();
         let mut unmatched_rows: Vec<usize> = Vec::new();
@@ -198,7 +198,7 @@ impl MergePlanner {
         
         // 2. Process Updates (Copy-on-Write)
         for (seg_id, source_row_indices) in updates_by_segment {
-            println!("Updating Segment {} with {} rows", seg_id, source_row_indices.len());
+            tracing::info!("Updating Segment {} with {} rows", seg_id, source_row_indices.len());
             
             // A. Read Original Segment
             // Use empty base path for reader configuration because store is already rooted at base_path
@@ -276,7 +276,7 @@ impl MergePlanner {
         
         // 3. Process Inserts (Unmatched)
         if !unmatched_rows.is_empty() {
-            println!("Inserting {} new rows", unmatched_rows.len());
+            tracing::info!("Inserting {} new rows", unmatched_rows.len());
             let indices_arr = arrow::array::UInt32Array::from(unmatched_rows.iter().map(|&x| x as u32).collect::<Vec<u32>>());
             let inserts_batch = arrow::compute::take_record_batch(source_batch, &indices_arr)?;
             

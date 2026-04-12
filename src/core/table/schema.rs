@@ -51,7 +51,7 @@ impl Table {
         
         // Commit Metadata Only Change
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(new_id)).await?;
-        println!("Schema Evolution: Added column '{}' (Schema ID: {})", name, new_schema_id);
+        tracing::info!("Schema Evolution: Added column '{}' (Schema ID: {})", name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
         let mut lock = self.schema.write().unwrap();
@@ -113,7 +113,7 @@ impl Table {
         };
         
         manifest_manager.commit(&[], &[], metadata).await?;
-        println!("Partition Evolution: New spec ID {} with {} fields", new_spec_id, fields.len());
+        tracing::info!("Partition Evolution: New spec ID {} with {} fields", new_spec_id, fields.len());
         
         Ok(())
     }
@@ -139,7 +139,7 @@ impl Table {
         manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
-        println!("Schema Evolution: Dropped column '{}' (Schema ID: {})", name, new_schema_id);
+        tracing::info!("Schema Evolution: Dropped column '{}' (Schema ID: {})", name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
         let mut lock = self.schema.write().unwrap();
@@ -167,7 +167,7 @@ impl Table {
         manifest.schemas.push(current_schema.clone());
         manifest.current_schema_id = new_schema_id;
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
-        println!("Schema Evolution: Renamed '{}' -> '{}' (Schema ID: {})", old_name, new_name, new_schema_id);
+        tracing::info!("Schema Evolution: Renamed '{}' -> '{}' (Schema ID: {})", old_name, new_name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
         let mut lock = self.schema.write().unwrap();
@@ -200,7 +200,7 @@ impl Table {
         manifest.current_schema_id = new_schema_id;
         
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
-        println!("Schema Evolution: Updated column type '{}' to '{}' (Schema ID: {})", name, new_type, new_schema_id);
+        tracing::info!("Schema Evolution: Updated column type '{}' to '{}' (Schema ID: {})", name, new_type, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
         let mut lock = self.schema.write().unwrap();
@@ -249,7 +249,7 @@ impl Table {
         manifest.current_schema_id = new_schema_id;
         
         manifest_manager.update_schema(manifest.schemas, manifest.current_schema_id, Some(manifest.last_column_id)).await?;
-        println!("Schema Evolution: Moved column '{}' to index {} (Schema ID: {})", name, new_index, new_schema_id);
+        tracing::info!("Schema Evolution: Moved column '{}' to index {} (Schema ID: {})", name, new_index, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
         let mut lock = self.schema.write().unwrap();

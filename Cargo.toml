@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -106,7 +106,7 @@ anyhow = "1.0"
 
 # logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 uuid = { version = "1.10", features = ["v4", "fast-rng", "macro-diagnostics"] }
 chrono = "0.4"

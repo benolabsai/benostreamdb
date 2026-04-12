@@ -1628,15 +1628,19 @@ impl PartitionSpec {
         for i in 0..batch.num_rows() {
             let mut key = Vec::with_capacity(self.fields.len());
             for field in &self.fields {
-                // Determine source columns
+                                // Determine source columns
                 let source_ids = field.get_source_ids();
                 let mut cols = Vec::new();
                 
-                // Try finding by name first
+                // Prioritize finding by Name (most intuitive for users)
+                let mut found = false;
                 if let Ok(idx) = batch.schema().index_of(&field.name) {
                     cols.push(batch.column(idx));
-                } else {
-                    // Search by Iceberg IDs
+                    found = true;
+                }
+
+                // Fallback to Iceberg IDs only if name lookup failed
+                if !found {
                     for id in &source_ids {
                         let idx = batch.schema().fields().iter().position(|f| {
                             f.metadata().get("iceberg.id")

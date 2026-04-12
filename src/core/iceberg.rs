@@ -1240,19 +1240,24 @@ impl IcebergWriter {
                  s if s.starts_with("truncate[") => r#"["null", "string"]"#,
                  "identity" => {
                      let source_id = field.source_ids.first().copied().or(field.source_id);
-                     if let Some(id) = source_id {
-                         if let Some(source_field) = schema.fields.iter().find(|f| f.id == id) {
-                             match source_field.type_str.as_str() {
-                                 "Int32" | "int" => r#"["null", "int"]"#,
-                                 "Int64" | "long" => r#"["null", "long"]"#,
-                                 "Float32" | "float" => r#"["null", "float"]"#,
-                                 "Float64" | "double" => r#"["null", "double"]"#,
-                                 "Boolean" | "bool" | "boolean" => r#"["null", "boolean"]"#,
-                                 "string" | "utf8" | "utf-8" | "String" | "Utf8" => r#"["null", "string"]"#,
-                                 _ => r#"["null", "string"]"#,
-                             }
+                     // Robustness: Prioritize Name-based resolution, fallback to ID (Name-First strategy)
+                     let resolved_field = schema.fields.iter().find(|sf| sf.name == field.name).cloned().or_else(|| {
+                         if let Some(id) = source_id {
+                             schema.fields.iter().find(|f| f.id == id).cloned()
                          } else {
-                             r#"["null", "string"]"#
+                             None
+                         }
+                     });
+
+                     if let Some(f) = resolved_field {
+                         match f.type_str.as_str() {
+                             "Int32" | "int" => r#"["null", "int"]"#,
+                             "Int64" | "long" => r#"["null", "long"]"#,
+                             "Float32" | "float" => r#"["null", "float"]"#,
+                             "Float64" | "double" => r#"["null", "double"]"#,
+                             "Boolean" | "bool" | "boolean" => r#"["null", "boolean"]"#,
+                             "string" | "utf8" | "utf-8" | "String" | "Utf8" => r#"["null", "string"]"#,
+                             _ => r#"["null", "string"]"#,
                          }
                      } else {
                          r#"["null", "string"]"#
