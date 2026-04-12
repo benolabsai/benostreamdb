@@ -398,7 +398,7 @@ impl PyTable {
             
         // CRITICAL: Attach the runtime to the table so sync methods don't panic
         table.rt = Some(rt.clone());
-        println!("DEBUG: Rust Table created with runtime: {}", table.rt.is_some());
+        tracing::debug!("Rust Table created with runtime: {}", table.rt.is_some());
         
         let query_pool = rt;
         Ok(PyTable { table, query_pool, device })
@@ -1902,7 +1902,8 @@ pub fn load_default_catalog(py: Python<'_>) -> PyResult<Py<PyAny>> {
 #[pyfunction]
 #[pyo3(signature = (level="INFO"))]
 pub fn init_logging(level: &str) -> PyResult<()> {
-    std::env::set_var("RUST_LOG", level);
+    crate::telemetry::tracing::update_log_level(level)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
     crate::telemetry::tracing::init_tracing("hyperstreamdb")
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
