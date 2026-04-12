@@ -213,7 +213,7 @@ impl GpuBackend for MetalBackend {
         enc.end_encoding();
         cmd_buf.commit();
         cmd_buf.wait_until_completed();
-        unsafe { Ok(std::slice::from_raw_parts(l_buf.contents() as *const f32, n_vectors).to_vec()) }
+        unsafe { Ok(std::slice::from_raw_parts(l_buf.contents() as *const u32, n_vectors).to_vec()) }
     }
 }
 
