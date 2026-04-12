@@ -3375,7 +3375,11 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
+<<<<<<< Updated upstream
 version = "0.2.3"
+=======
+version = "0.2.2"
+>>>>>>> Stashed changes
 dependencies = [
  "ahash 0.8.12",
  "anyhow",

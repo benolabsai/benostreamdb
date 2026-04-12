@@ -10,6 +10,7 @@ use futures::StreamExt;
 use chrono::Utc;
 use tracing;
 use arrow::record_batch::RecordBatch;
+use arrow::array::Array;
 
 pub type SegmentId = String;
 
@@ -1659,16 +1660,37 @@ impl PartitionSpec {
                         if col.is_null(i) {
                             serde_json::Value::Null
                         } else {
-                            // Basic extraction (Handle Utf8, Int64, Int32 for common identity partitioning)
-                            if let Some(s) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
-                                serde_json::Value::String(s.value(i).to_string())
-                            } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
-                                serde_json::Value::Number(serde_json::Number::from(n.value(i)))
-                            } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
-                                serde_json::Value::Number(serde_json::Number::from(n.value(i)))
-                            } else {
-                                serde_json::to_value(format!("{:?}", col.slice(i, 1))).unwrap_or(serde_json::Value::Null)
-                            }
+                             if let Some(s) = col.as_any().downcast_ref::<arrow::array::StringArray>() {
+                                 serde_json::Value::String(s.value(i).to_string())
+                             } else if let Some(s) = col.as_any().downcast_ref::<arrow::array::LargeStringArray>() {
+                                 serde_json::Value::String(s.value(i).to_string())
+                             } else if let Some(dict) = col.as_any().downcast_ref::<arrow::array::DictionaryArray<arrow::datatypes::Int32Type>>() {
+                                 let values = dict.values().as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                                 if dict.is_null(i) {
+                                     serde_json::Value::Null
+                                 } else {
+                                     let key = dict.key(i).unwrap();
+                                     serde_json::Value::String(values.value(key as usize).to_string())
+                                 }
+                             } else if let Some(dict) = col.as_any().downcast_ref::<arrow::array::DictionaryArray<arrow::datatypes::Int64Type>>() {
+                                 let values = dict.values().as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                                 if dict.is_null(i) {
+                                     serde_json::Value::Null
+                                 } else {
+                                     let key = dict.key(i).unwrap() as usize;
+                                     serde_json::Value::String(values.value(key).to_string())
+                                 }
+                             } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                                 serde_json::Value::Number(serde_json::Number::from(n.value(i)))
+                             } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                                 serde_json::Value::Number(serde_json::Number::from(n.value(i)))
+                             } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                 serde_json::Number::from_f64(n.value(i)).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null)
+                             } else if let Some(n) = col.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                 serde_json::Number::from_f64(n.value(i) as f64).map(serde_json::Value::Number).unwrap_or(serde_json::Value::Null)
+                             } else {
+                                 serde_json::to_value(format!("{:?}", col.slice(i, 1))).unwrap_or(serde_json::Value::Null)
+                             }
                         }
                     },
                     _ => {

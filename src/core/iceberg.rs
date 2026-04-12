@@ -1247,7 +1247,8 @@ impl IcebergWriter {
                                  "Int64" | "long" => r#"["null", "long"]"#,
                                  "Float32" | "float" => r#"["null", "float"]"#,
                                  "Float64" | "double" => r#"["null", "double"]"#,
-                                 "Boolean" | "bool" => r#"["null", "boolean"]"#,
+                                 "Boolean" | "bool" | "boolean" => r#"["null", "boolean"]"#,
+                                 "string" | "utf8" | "utf-8" | "String" | "Utf8" => r#"["null", "string"]"#,
                                  _ => r#"["null", "string"]"#,
                              }
                          } else {
