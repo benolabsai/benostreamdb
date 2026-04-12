@@ -108,7 +108,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
             Box::into_raw(Box::new(session)) as jlong
         },
         Err(e) => {
-            eprintln!("FFI Error opening session: {}", e);
+            tracing::error!("FFI Error opening session: {}", e);
             0
         }
     }
@@ -196,7 +196,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
             }
         },
         Err(e) => {
-             eprintln!("FFI Error creating table: {}", e);
+             tracing::error!("FFI Error creating table: {}", e);
              "[]".to_string()
         }
     };
@@ -234,7 +234,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
             }
         },
         Err(e) => {
-             eprintln!("FFI Error creating table: {}", e);
+             tracing::error!("FFI Error creating table: {}", e);
              "[]".to_string()
         }
     };
@@ -267,7 +267,7 @@ fn open_session_helper(mut env: JNIEnv, path: JString) -> jlong {
     match HyperStreamSession::new(&path_str) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
-            eprintln!("FFI Error opening session: {}", e);
+            tracing::error!("FFI Error opening session: {}", e);
             0
         }
     }

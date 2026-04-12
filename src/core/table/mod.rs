@@ -1340,7 +1340,7 @@ impl Table {
         
         let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
         let candidate_paths: std::collections::HashSet<String> = candidates.iter().map(|(e, _)| e.file_path.clone()).collect();
-        eprintln!("DEBUG: delete_async: filter='{}', potential candidates: {}", filter, candidates.len());
+        tracing::debug!("delete_async: filter='{}', potential candidates: {}", filter, candidates.len());
         
         let mut all_updated_entries = Vec::new();
 
@@ -1351,7 +1351,7 @@ impl Table {
                 continue;
             }
 
-            eprintln!("DEBUG: delete_async: processing segment {}", entry.file_path);
+            tracing::debug!("delete_async: processing segment {}", entry.file_path);
             let file_path_str = entry.file_path.clone();
             
             // Fix path resolution: find correct physical subdirectory
@@ -1538,7 +1538,7 @@ impl Table {
                                 let deleted = reader.load_merged_deletes().await?;
                                 let alive_bm = bm.clone() - deleted.clone();
                                 
-                                println!("DEBUG: PK Check for {}: Index bits: {}, Deleted bits: {}, Alive bits: {}", 
+                                tracing::debug!("PK Check for {}: Index bits: {}, Deleted bits: {}, Alive bits: {}", 
                                     f.column, bm.len(), deleted.len(), alive_bm.len());
                                 
                                 if let Some(current) = bitmap_opt {
@@ -2527,7 +2527,7 @@ mod tests {
         table.truncate_async().await?;
         let batches = table.read_async(None, None, None).await?;
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-        println!("After truncate, read {} records in {} batches", total_rows, batches.len());
+        tracing::info!("After truncate, read {} records in {} batches", total_rows, batches.len());
         assert!(total_rows == 0, "Table should be empty after truncate, but found {} rows!", total_rows);
 
         // 4. Autocommit

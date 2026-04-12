@@ -46,7 +46,7 @@ impl PyDevice {
                 { ComputeBackend::Cuda }
                 #[cfg(not(feature = "cuda"))]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "CUDA backend not available. Install from source with: pip install hyperstreamdb[cuda] --no-binary :all:"
+                    "CUDA backend not available in this build. Ensure NVIDIA drivers are installed and try 'pip install hyperstreamdb'. See GPU_SETUP_GUIDE.md for detailed troubleshooting."
                 )); }
             }
             "mps" | "metal" => {

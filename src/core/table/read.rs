@@ -442,7 +442,7 @@ impl Table {
                 Ok(b_vec) => {
                      all_batches.extend(b_vec);
                 },
-                Err(e) => eprintln!("Error reading batch {}: {}", i, e),
+                Err(e) => tracing::error!("Error reading batch {}: {}", i, e),
             }
         }
 
@@ -609,7 +609,7 @@ impl Table {
                     }
                 }
                 Err(e) => {
-                    eprintln!("DEBUG: Failed to evaluate filter expression on batch: {}", e);
+                    tracing::error!("Failed to evaluate filter expression on batch: {}", e);
                 }
             }
         }

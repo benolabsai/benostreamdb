@@ -44,7 +44,7 @@ impl Table {
         
         for task in tasks {
             if let Err(e) = task.await {
-                eprintln!("Warning: Background indexing task failed: {}", e);
+                tracing::warn!("Background indexing task failed: {}", e);
             }
         }
         
@@ -87,7 +87,7 @@ impl Table {
             buffer.clear();
         }
         
-        println!("Table truncated: metadata reset, all {} segments removed, buffers cleared.", remove_paths.len());
+        tracing::info!("Table truncated: metadata reset, all {} segments removed, buffers cleared.", remove_paths.len());
         Ok(())
     }
 
@@ -131,7 +131,7 @@ impl Table {
                 if let Some((existing_dtype, existing_nullable)) = existing_field_info {
                     // Check if we need to widen the type (e.g. Int32 -> Int64)
                     if existing_dtype != *field.data_type() {
-                        println!("Schema Evolution: Widening column '{}' from {:?} to {:?}", field.name(), existing_dtype, field.data_type());
+                        tracing::info!("Schema Evolution: Widening column '{}' from {:?} to {:?}", field.name(), existing_dtype, field.data_type());
                         
                         let idx = evolved_schema.index_of(field.name()).unwrap();
                         let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
@@ -142,7 +142,7 @@ impl Table {
                     
                     // Check if we need to change Nullability (Required -> Nullable)
                     if !existing_nullable && field.is_nullable() {
-                        println!("Schema Evolution: Changing column '{}' to nullable", field.name());
+                        tracing::info!("Schema Evolution: Changing column '{}' to nullable", field.name());
                         let idx = evolved_schema.index_of(field.name()).unwrap();
                         let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
                         let mut new_field = (**field).clone();
@@ -153,7 +153,7 @@ impl Table {
                     }
                 } else {
                     // New column added
-                    println!("Schema Evolution: Adding new column '{}'", field.name());
+                    tracing::info!("Schema Evolution: Adding new column '{}'", field.name());
                     let mut fields: Vec<arrow::datatypes::Field> = evolved_schema.fields().iter().map(|f| (**f).clone()).collect();
                     fields.push((**field).clone());
                     evolved_schema = Schema::new(fields);
@@ -190,7 +190,7 @@ impl Table {
             match r {
                 Ok(b) => Some(b),
                 Err(e) => {
-                    eprintln!("Warning: Batch schema coercion failed during write: {}", e);
+                    tracing::warn!("Batch schema coercion failed during write: {}", e);
                     None
                 }
             }
@@ -311,7 +311,7 @@ impl Table {
 
         if should_flush || self.get_autocommit() {
             if should_flush {
-                println!("Write buffer exceeded limit. Flushing to disk (Spillover)...");
+                tracing::info!("Write buffer exceeded limit. Flushing to disk (Spillover)...");
             }
             self.commit_async().await?;
         }
@@ -352,7 +352,7 @@ impl Table {
         // Copyright The Lance Authors. Modified for HyperStreamDB Parquet layout.
         // MODIFIED by Richard Albright / HyperStreamDB on 2026-03-29 to integrate with Iceberg V2/V3 manifests and sidecar indexing.
         if let Some(vector_col) = self.get_vector_column_for_shuffling(&coalesced_batch) {
-            println!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
+            tracing::info!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
             coalesced_batch = self.shuffle_batch_by_centroids(&coalesced_batch, &vector_col).await?;
         }
         
@@ -506,7 +506,7 @@ impl Table {
                                 }
                             }
 
-                            eprintln!("DEBUG: Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_index_files);
+                            tracing::debug!("Background indexing task: segment={}, found index_files={:?}", merged_entry.file_path, updated_index_files);
                             merged_entry.index_files = updated_index_files;
                             // NOTE: We MUST preserve the record_count and column_stats from entry_clone,
                             // as updated_entry (from index_writer) only contains the index metadata.
@@ -518,13 +518,13 @@ impl Table {
 
                             let remove_paths = vec![merged_entry.file_path.clone()];
                             match manifest_manager_clone.commit(&[merged_entry], &remove_paths, commit_metadata).await {
-                                Ok(_) => eprintln!("Successfully attached {} indexes to manifest for segment {}", 
+                                Ok(_) => tracing::info!("Successfully attached {} indexes to manifest for segment {}", 
                                                  index_count, file_path),
-                                Err(e) => eprintln!("Failed to attach indexes for segment {}: {}", file_path, e),
+                                Err(e) => tracing::error!("Failed to attach indexes for segment {}: {}", file_path, e),
                             }
                         }
                         _ => {
-                            eprintln!("Index building failed for segment {}", segment_id_clone);
+                            tracing::error!("Index building failed for segment {}", segment_id_clone);
                         }
                     }
                 });
@@ -634,7 +634,7 @@ impl Table {
                     })
                 ];
                 catalog.commit_table(ns, table, updates).await?;
-                println!("Committed snapshot {} to catalog {}.{}", new_manifest.version, ns, table);
+                tracing::info!("Committed snapshot {} to catalog {}.{}", new_manifest.version, ns, table);
             }
         }
 

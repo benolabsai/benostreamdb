@@ -124,9 +124,7 @@ impl HybridSegmentWriter {
             }
         }
         
-        if !index_files.is_empty() {
-            eprintln!("DEBUG: to_manifest_entry: segment_id={}, generated index_files={:?}", self.config.segment_id, index_files);
-        }
+
 
         ManifestEntry {
             file_path: self.config.parquet_path.clone().unwrap_or(parquet_file),
@@ -346,7 +344,7 @@ impl HybridSegmentWriter {
             files.push(path.to_str().unwrap().to_string());
         }
 
-        println!("Written data to {} ({} rows)", path.display(), batch.num_rows());
+        tracing::info!("Written data to {} ({} rows)", path.display(), batch.num_rows());
         self.record_count.fetch_add(batch.num_rows(), std::sync::atomic::Ordering::Relaxed);
         
         Ok(())
@@ -409,7 +407,7 @@ impl HybridSegmentWriter {
     /// Build indexes for a batch (can be called asynchronously after write_batch).
     /// This is the expensive operation that should run in background.
     pub fn build_indexes(&self, batch: &RecordBatch) -> Result<()> {
-        println!("Building indexes for batch of {} rows", batch.num_rows());
+        tracing::info!("Building indexes for batch of {} rows", batch.num_rows());
         let schema = batch.schema();
         let _fields = schema.fields();
 
@@ -439,20 +437,20 @@ impl HybridSegmentWriter {
     pub fn index_column(&self, col_name: &str, col_array: &std::sync::Arc<dyn Array>) -> Result<()> {
         // Apply per-column device override if specified
         if let Some(device_str) = self.config.column_devices.get(col_name) {
-            println!("Applying device override for column {}: {}", col_name, device_str);
+            tracing::info!("Applying device override for column {}: {}", col_name, device_str);
             if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
-                println!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
+                tracing::info!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
                 set_global_gpu_context(Some(ctx));
             } else {
-                println!("Failed to parse device string: {}", device_str);
+                tracing::warn!("Failed to parse device string: {}", device_str);
             }
         } else if let Some(ref device_str) = self.config.default_device {
-            println!("Applying default device for column {}: {}", col_name, device_str);
+            tracing::info!("Applying default device for column {}: {}", col_name, device_str);
             if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
-                println!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
+                tracing::info!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
                 set_global_gpu_context(Some(ctx));
             } else {
-                println!("Failed to parse default device string: {}", device_str);
+                tracing::warn!("Failed to parse default device string: {}", device_str);
             }
         }
 
@@ -487,7 +485,7 @@ impl HybridSegmentWriter {
         match col_array.data_type() {
                 // Scalar Indexing (RoaringBitmap for Int32)
                 arrow::datatypes::DataType::Int32 => {
-                    println!("Indexing Int32 column: {}", col_name);
+                    tracing::info!("Indexing Int32 column: {}", col_name);
                     let _array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
                     
                     // Scalar index (.idx) is removed for Int32 as we use more precise Inverted Index
@@ -568,7 +566,7 @@ impl HybridSegmentWriter {
 
                 arrow::datatypes::DataType::List(inner) | arrow::datatypes::DataType::FixedSizeList(inner, _) => {
                      if *inner.data_type() == arrow::datatypes::DataType::Float32 {
-                        println!("Indexing Vector column: {} (type={:?})", col_name, col_array.data_type());
+                        tracing::info!("Indexing Vector column: {} (type={:?})", col_name, col_array.data_type());
                         
                         let vectors: Vec<Vec<f32>> = match col_array.data_type() {
                             arrow::datatypes::DataType::FixedSizeList(_, _) => {
@@ -604,9 +602,9 @@ impl HybridSegmentWriter {
                         if self.config.index_all || in_config {
                             let use_pq = vectors.len() > 5_000;
                             if use_pq {
-                                println!("Auto-enabling PQ for segment ({} vectors)", vectors.len());
+                                tracing::info!("Auto-enabling PQ for segment ({} vectors)", vectors.len());
                             }
-                            println!("Building HNSW-IVF index (blocking): {} vectors, {} dims, use_pq={}", vectors.len(), _dim, use_pq);
+                            tracing::info!("Building HNSW-IVF index (blocking): {} vectors, {} dims, use_pq={}", vectors.len(), _dim, use_pq);
                             let hnsw_ivf_index = HnswIvfIndex::build(vectors, crate::core::index::VectorMetric::L2, None, None, use_pq)
                                 .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
                             
@@ -619,12 +617,12 @@ impl HybridSegmentWriter {
                                 files.extend(saved_files);
                             }
                         } else {
-                            println!("Skipping vector indexing for column {} (delayed/background mode)", col_name);
+                            tracing::info!("Skipping vector indexing for column {} (delayed/background mode)", col_name);
                         }
                      }
                 },
                 arrow::datatypes::DataType::Int64 => {
-                    println!("Indexing Int64 column: {}", col_name);
+                    tracing::info!("Indexing Int64 column: {}", col_name);
                     let _array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
                     
                     // No mock .idx for Int64
@@ -700,7 +698,7 @@ impl HybridSegmentWriter {
                 },
 
                 arrow::datatypes::DataType::Float64 => {
-                    println!("Indexing Float64 column: {}", col_name);
+                    tracing::info!("Indexing Float64 column: {}", col_name);
                     let _array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
                     
                     // No mock .idx for Float64
@@ -777,7 +775,7 @@ impl HybridSegmentWriter {
                 },
 
                 arrow::datatypes::DataType::Float32 => {
-                    println!("Indexing Float32 column: {}", col_name);
+                    tracing::info!("Indexing Float32 column: {}", col_name);
                     let array = col_array.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
                     
                     // No mock .idx for Float32
@@ -834,7 +832,7 @@ impl HybridSegmentWriter {
                 
                 // String/Utf8 Inverted Index - for category/tag filtering
                 arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
-                    println!("Indexing String column: {}", col_name);
+                    tracing::info!("Indexing String column: {}", col_name);
                     
                     // Unified handling: cast to Utf8 to reuse existing logic
                     let casted_array = arrow::compute::cast(col_array, &arrow::datatypes::DataType::Utf8)
@@ -857,7 +855,7 @@ impl HybridSegmentWriter {
                         }
                     }
                     
-                    println!("  Found {} unique values", inverted_map.len());
+                    tracing::info!("  Found {} unique values", inverted_map.len());
                     
                     // Build Arrow Arrays for Parquet
                     let mut key_builder = arrow::array::StringBuilder::new();
@@ -901,13 +899,13 @@ impl HybridSegmentWriter {
                         files.push(inv_path.to_str().unwrap().to_string());
                     }
                     
-                    println!("String Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("String Inverted Index written to {}", inv_path.to_str().unwrap());
                 },
                 
                 // Date32 Inverted Index - for date equality/range filtering
                 // Date32 = days since Unix epoch (1970-01-01)
                 arrow::datatypes::DataType::Date32 => {
-                    println!("Indexing Date32 column: {}", col_name);
+                    tracing::info!("Indexing Date32 column: {}", col_name);
                     let array = col_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
                     
                     // Build inverted index: Date -> RowIDs
@@ -918,7 +916,7 @@ impl HybridSegmentWriter {
                         }
                     }
                     
-                    println!("  Found {} unique dates", inverted_map.len());
+                    tracing::info!("  Found {} unique dates", inverted_map.len());
                     
                     // Build Arrow Arrays for Parquet
                     let mut key_builder = arrow::array::Date32Builder::new();
@@ -960,13 +958,13 @@ impl HybridSegmentWriter {
                         files.push(inv_path.to_str().unwrap().to_string());
                     }
                     
-                    println!("Date32 Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Date32 Inverted Index written to {}", inv_path.to_str().unwrap());
                 },
                 
                 // Timestamp Inverted Index - truncate to day for practical indexing
                 // High-cardinality timestamps are truncated to day granularity
                 arrow::datatypes::DataType::Timestamp(_, _) => {
-                    println!("Indexing Timestamp column: {} (truncated to day)", col_name);
+                    tracing::info!("Indexing Timestamp column: {} (truncated to day)", col_name);
                     
                     // Truncate timestamps to day granularity for indexing
                     // This makes the inverted index practical (365 keys/year vs millions)
@@ -995,7 +993,7 @@ impl HybridSegmentWriter {
                         inverted_map.entry(day).or_default().push(row_i as u32);
                     }
                     
-                    println!("  Found {} unique days", inverted_map.len());
+                    tracing::info!("  Found {} unique days", inverted_map.len());
                     
                     // Build Arrow Arrays (store as Date32 for the index key)
                     let mut key_builder = arrow::array::Date32Builder::new();
@@ -1037,12 +1035,12 @@ impl HybridSegmentWriter {
                         files.push(inv_path.to_str().unwrap().to_string());
                     }
                     
-                    println!("Timestamp Inverted Index (day granularity) written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Timestamp Inverted Index (day granularity) written to {}", inv_path.to_str().unwrap());
                 },
                 
                 // Keep default
                 arrow::datatypes::DataType::Boolean => {
-                    println!("Indexing Boolean column: {} (native boolean index)", col_name);
+                    tracing::info!("Indexing Boolean column: {} (native boolean index)", col_name);
                      // Build inverted index: Boolean -> RowIDs (true/false as native booleans)
                     let mut inverted_map: std::collections::HashMap<bool, Vec<u32>> = std::collections::HashMap::new();
 
@@ -1094,12 +1092,12 @@ impl HybridSegmentWriter {
                         let mut files = self.generated_files.lock().unwrap();
                         files.push(inv_path.to_str().unwrap().to_string());
                     }
-                    println!("Boolean Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Boolean Inverted Index written to {}", inv_path.to_str().unwrap());
                 },
 
                 // Time32 (s/ms) -> Int32 keys
                 arrow::datatypes::DataType::Time32(unit) => {
-                    println!("Indexing Time32 column: {}", col_name);
+                    tracing::info!("Indexing Time32 column: {}", col_name);
                     let mut inverted_map: std::collections::HashMap<i32, Vec<u32>> = std::collections::HashMap::new();
                     
                     match unit {
@@ -1173,7 +1171,7 @@ impl HybridSegmentWriter {
 
                 // Time64 (us/ns) -> Int64 keys
                 arrow::datatypes::DataType::Time64(unit) => {
-                    println!("Indexing Time64 column: {}", col_name);
+                    tracing::info!("Indexing Time64 column: {}", col_name);
                     let mut inverted_map: std::collections::HashMap<i64, Vec<u32>> = std::collections::HashMap::new();
                     
                     match unit {
@@ -1247,7 +1245,7 @@ impl HybridSegmentWriter {
 
                 // Binary / LargeBinary / FixedSizeBinary -> Key is Vec<u8>
                 arrow::datatypes::DataType::Binary | arrow::datatypes::DataType::LargeBinary | arrow::datatypes::DataType::FixedSizeBinary(_) => {
-                     println!("Indexing Binary column: {}", col_name);
+                     tracing::info!("Indexing Binary column: {}", col_name);
                      // Cast to BinaryArray for uniform handling (if possible, else matching works)
                      // Simple handling: Iterate as BinaryArray (works for large and regular if we cast, or just use generics. 
                      // arrow::compute::cast to Binary is easiest)
@@ -1291,7 +1289,7 @@ impl HybridSegmentWriter {
 
                 // Decimal128
                 arrow::datatypes::DataType::Decimal128(precision, scale) => {
-                     println!("Indexing Decimal128 column: {}", col_name);
+                     tracing::info!("Indexing Decimal128 column: {}", col_name);
                      let array = col_array.as_any().downcast_ref::<arrow::array::Decimal128Array>().unwrap();
                      
                      let mut inverted_map: std::collections::HashMap<i128, Vec<u32>> = std::collections::HashMap::new();
@@ -1331,7 +1329,7 @@ impl HybridSegmentWriter {
 
                 // Dictionary Types (Recursive)
                 arrow::datatypes::DataType::Dictionary(_, value_type) => {
-                    println!("Indexing Dictionary column: {} (unpacking to {:?})", col_name, value_type.as_ref());
+                    tracing::info!("Indexing Dictionary column: {} (unpacking to {:?})", col_name, value_type.as_ref());
                     // Cast to value type to unpack
                     let casted = arrow::compute::cast(col_array, value_type)
                         .map_err(|e| anyhow::anyhow!("Failed to unpack dictionary: {}", e))?;
@@ -1341,7 +1339,7 @@ impl HybridSegmentWriter {
 
                 _ => {
                     // Skip unsupported
-                    eprintln!("Warning: Skipping indexing for unsupported type: {:?}", col_array.data_type());
+                    tracing::warn!("Skipping indexing for unsupported type: {:?}", col_array.data_type());
                 }
             }
 
@@ -1384,7 +1382,7 @@ impl HybridSegmentWriter {
              let mut files = self.generated_files.lock().unwrap();
              files.push(inv_path.to_str().unwrap().to_string());
         }
-        println!("Inverted Index written to {}", inv_path.display());
+        tracing::info!("Inverted Index written to {}", inv_path.display());
         Ok(())
     }
 }
