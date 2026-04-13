@@ -69,8 +69,10 @@ jobs:
           mkdir -p docs/build/html/rust
           cp -r target/doc/* docs/build/html/rust/
 
-      - name: Add CNAME
-        run: echo "www.hyperstreamdb.org" > docs/build/html/CNAME
+      - name: Add CNAME and .nojekyll
+        run: |
+          echo "www.hyperstreamdb.org" > docs/build/html/CNAME
+          touch docs/build/html/.nojekyll
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
