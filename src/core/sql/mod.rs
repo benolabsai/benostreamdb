@@ -97,6 +97,8 @@ impl TableProvider for HyperStreamTableProvider {
             partitions[i % target_partitions].push(segment);
         }
         let partitions: Vec<_> = partitions.into_iter().filter(|p| !p.is_empty()).collect();
+        
+        tracing::info!("SQL Scan: Created {} partitions", partitions.len());
 
         // fetch index columns to prioritize filters
         let _index_cols = self.table.get_index_columns(); // This returns Vec<String>
@@ -169,8 +171,31 @@ impl TableProvider for HyperStreamTableProvider {
         // Selection Logic:
         // Aggregate all pushable filters
         let mut all_filters = Vec::new();
+        let mut bm25_params = None;
+
         for filter in filters {
-            if let Some((_col, sql)) = expr_to_sql(filter) {
+            if let Some((col, sql)) = expr_to_sql(filter) {
+                // Check if this is a BM25 candidate: Column has BM25 index and is an equality match
+                let has_bm25 = self.table.indexing.index_configs.read().unwrap()
+                    .get(&col)
+                    .map(|cfg| cfg.tokenizer.is_some())
+                    .unwrap_or(false);
+
+                if has_bm25 && bm25_params.is_none() {
+                    if let Expr::BinaryExpr(b) = filter {
+                        if b.op == datafusion::logical_expr::Operator::Eq {
+                            // Extract the literal value
+                            if let datafusion::logical_expr::Expr::Literal(scalar, _) = &*b.right {
+                                if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) = scalar {
+                                    tracing::info!("SQL BM25 Pushdown: Triggering keyword search for '{}' on column '{}'", query_str, col);
+                                    let params = crate::core::planner::VectorSearchParams::new(&col, crate::core::index::VectorValue::Keyword(query_str.clone()), limit.unwrap_or(100));
+                                    bm25_params = Some(params);
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 all_filters.push(sql);
             }
         }
@@ -186,7 +211,7 @@ impl TableProvider for HyperStreamTableProvider {
             partitions,
             projection.cloned(),
             best_filter,
-            None, // vector_params
+            bm25_params,
             limit,
             self.schema(),
         )?))
@@ -196,8 +221,23 @@ impl TableProvider for HyperStreamTableProvider {
         &self,
         filters: &[&Expr],
     ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
-        // We support filter pushdown effectively (Inexact means we filter, but DF should verify)
-        Ok(filters.iter().map(|_| TableProviderFilterPushDown::Inexact).collect())
+        let index_configs = self.table.indexing.index_configs.read().unwrap();
+        
+        Ok(filters.iter().map(|f| {
+            if let Expr::BinaryExpr(b) = f {
+                if b.op == datafusion::logical_expr::Operator::Eq {
+                    if let Expr::Column(c) = &*b.left {
+                        let has_bm25 = index_configs.get(&c.name)
+                            .map(|cfg| cfg.tokenizer.is_some())
+                            .unwrap_or(false);
+                        if has_bm25 {
+                            return TableProviderFilterPushDown::Exact;
+                        }
+                    }
+                }
+            }
+            TableProviderFilterPushDown::Inexact
+        }).collect())
     }
 }
 

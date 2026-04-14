@@ -3375,7 +3375,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -3397,6 +3397,7 @@ dependencies = [
  "cpu-time",
  "criterion",
  "cudarc",
+ "dashmap",
  "datafusion",
  "datafusion-expr-common",
  "datafusion-functions",

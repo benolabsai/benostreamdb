@@ -4,6 +4,9 @@
 
 HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.
 
+> [!NOTE]
+> This guide covers **standalone** distance functions for CPU/GPU. For persistent vector storage and search with TurboQuant indexing (TQ8/TQ4), please see [Vector Configuration](VECTOR_CONFIGURATION.md).
+
 ## Supported Distance Metrics
 
 The API supports six distance metrics:

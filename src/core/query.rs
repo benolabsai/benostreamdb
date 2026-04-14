@@ -349,6 +349,7 @@ pub async fn execute_vector_search_with_config(
         crate::core::index::VectorValue::Float16(v) => v.len(),
         crate::core::index::VectorValue::Binary(v) => v.len() * 8, // Approx bits
         crate::core::index::VectorValue::Sparse(s) => s.dim,
+        crate::core::index::VectorValue::Keyword(_) => 0, // Keyword search doesn't have a fixed vector dimension
     };
     let avg_rows_per_segment = if !entries.is_empty() {
         entries.iter().map(|e| e.record_count as usize).sum::<usize>() / entries.len()
@@ -393,7 +394,7 @@ pub async fn execute_vector_search_with_config(
                     .strip_suffix(".parquet")
                     .unwrap_or(&file_path_str);
                 
-                tracing::debug!("Entry index files: {:?}", entry.index_files);
+                tracing::info!("Query execution: Entry {} has index files: {:?}", entry.file_path, entry.index_files);
                 // Resolve partition-aware path for vector search
                 let path = std::path::Path::new(&file_path_str);
                 let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
@@ -428,14 +429,18 @@ pub async fn execute_vector_search_with_config(
         .collect();
     
     // Execute all searches (bounded by semaphore)
+    let search_futures_count = search_futures.len();
+    tracing::info!("Vector search starting on {} entries", search_futures_count);
     let results = join_all(search_futures).await;
     
     // Collect successful results, fail on any error
     let mut all_results_with_distances = Vec::new();
-    for result in results {
-        all_results_with_distances.extend(result?);
+    for (_i, result) in results.into_iter().enumerate() {
+        let r = result?;
+        all_results_with_distances.extend(r);
     }
     
+    tracing::info!("Vector search found {} total batches across all segments", all_results_with_distances.len());
     merge_and_rerank_vector_results(all_results_with_distances, request.k, 0)
 }
 

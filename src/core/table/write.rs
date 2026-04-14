@@ -77,7 +77,7 @@ impl Table {
         
         // Step 4: Clear memory index
         {
-            let mut idx = self.memory_index.write().unwrap();
+            let mut idx = self.indexing.memory_index.write().unwrap();
             *idx = None;
         }
         
@@ -108,14 +108,76 @@ impl Table {
              return Ok(());
         }
 
+        let batches = batches;
+        
         let mut is_empty_schema = false;
         if let Some(first_batch) = batches.first() {
             let mut lock = self.schema.write().unwrap();
             is_empty_schema = lock.fields().is_empty();
             if is_empty_schema {
-                *lock = first_batch.schema();
+                let incoming_schema = first_batch.schema();
+                let table_pattern = self.label_pattern;
+                
+                let mut fields = Vec::with_capacity(incoming_schema.fields().len());
+                for (i, field) in incoming_schema.fields().iter().enumerate() {
+                    let mut new_name = (*field).name().clone();
+                    
+                    // Check if name is numeric or empty, and apply pattern
+                    let is_numeric = new_name.chars().all(|c| c.is_ascii_digit());
+                    if is_numeric || new_name.is_empty() {
+                        new_name = match table_pattern {
+                            crate::core::table::LabelPattern::ExcelAlpha => crate::core::table::excel_column_label(i),
+                            crate::core::table::LabelPattern::Polars => format!("column_{}", i + 1),
+                            crate::core::table::LabelPattern::Pandas => i.to_string(),
+                        };
+                    }
+                    
+                    let new_field = (**field).clone().with_name(new_name);
+                    fields.push(new_field);
+                }
+                *lock = Arc::new(arrow::datatypes::Schema::new(fields));
             }
             drop(lock);
+        }
+
+        // 2. Primary Key Uniqueness Validation (In-buffer check)
+        let pk_cols = self.primary_key.read().unwrap().clone();
+        if !pk_cols.is_empty() {
+            let buffer = self.write_buffer.read().unwrap();
+            for batch in &batches {
+                // Check if any row in batch duplicates a key in the buffer or in the batch itself
+                // (O(N) check for simplicity, can be optimized later)
+                for pk_col in &pk_cols {
+                    if let Some(col) = batch.column_by_name(pk_col) {
+                        // Cast to string for universal comparison if needed, or handle by type
+                        // For now, let's just check if it's in the buffer using a simple loop
+                        // This is primarily for the integration test's correctness.
+                        for i in 0..batch.num_rows() {
+                            let val = crate::core::manifest::ManifestValue::from_array(col, i);
+                            
+                            // Check against buffer
+                            for b_batch in buffer.iter() {
+                                if let Some(b_col) = b_batch.column_by_name(pk_col) {
+                                    for j in 0..b_batch.num_rows() {
+                                        let b_val = crate::core::manifest::ManifestValue::from_array(b_col, j);
+                                        if val == b_val {
+                                            return Err(anyhow::anyhow!("Primary key violation: Duplicate value '{}' in column '{}'", val, pk_col));
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Check against other rows in the same batch (before index i)
+                            for j in 0..i {
+                                let b_val = crate::core::manifest::ManifestValue::from_array(col, j);
+                                if val == b_val {
+                                    return Err(anyhow::anyhow!("Primary key violation: Duplicate value '{}' in column '{}' within the same batch", val, pk_col));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let mut target_schema = self.arrow_schema();
@@ -169,6 +231,21 @@ impl Table {
             }
         }
 
+        // 1. Strict Nullability Validation
+        // Ensure no required (NOT NULL) columns contain nulls in the incoming batches,
+        // using the potential EVOLVED schema.
+        for batch in &batches {
+            for field in target_schema.fields() {
+                if !field.is_nullable() {
+                    if let Some(col) = batch.column_by_name(field.name()) {
+                        if col.null_count() > 0 {
+                            return Err(anyhow::anyhow!("Null constraint violation: column '{}' is NOT NULL but batch contains {} nulls", field.name(), col.null_count()));
+                        }
+                    }
+                }
+            }
+        }
+
         let batches: Vec<Result<RecordBatch>> = batches.into_iter().map(|b| {
             if b.schema() != target_schema {
                 let mut cols = Vec::with_capacity(target_schema.fields().len());
@@ -203,8 +280,8 @@ impl Table {
 
         // 1. Write-Ahead Log (Durability) & 2. Indexing (In-Memory) in PARALLEL
         let wal = self.wal.clone();
-        let memory_index = self.memory_index.clone();
-        let target_col = self.index_columns.read().unwrap().first().cloned()
+        let memory_index = self.indexing.memory_index.clone();
+        let target_col = self.indexing.index_columns.read().unwrap().first().cloned()
              .or_else(|| {
                  batches.first().and_then(|b| {
                      b.schema().fields().iter()
@@ -335,7 +412,7 @@ impl Table {
 
         // Reset memory index
         {
-            let mut idx = self.memory_index.write().unwrap();
+            let mut idx = self.indexing.memory_index.write().unwrap();
             *idx = None;
         }
 
@@ -380,16 +457,13 @@ impl Table {
         
         let mut all_new_entries = Vec::new();
         let mut all_generated_files: Vec<String> = Vec::new();
-        let index_cols = self.index_columns.read().unwrap().clone();
-        let index_all_flag = self.index_all;
+        let index_cols = self.indexing.index_columns.read().unwrap().clone();
+        let index_all_flag = self.indexing.index_all;
 
-        let index_configs_map: HashMap<String, String> = {
-            let configs = self.index_configs.read().unwrap();
-            configs.iter().filter_map(|(col, cfg)| {
-                cfg.device.as_ref().map(|d| (col.clone(), d.clone()))
-            }).collect()
+        let index_configs_map: HashMap<String, crate::core::table::ColumnIndexConfig> = {
+            self.indexing.index_configs.read().unwrap().clone()
         };
-        let default_device = self.default_device.read().unwrap().clone();
+        let default_device = self.indexing.default_device.read().unwrap().clone();
         let default_device_for_stream = default_device.clone();
 
         // Parallelize partition writing using futures stream
@@ -475,18 +549,28 @@ impl Table {
                         format!("{}/{}", base_path_clone, hive_path)
                     };
 
+                    let parquet_path_rel = if hive_path.is_empty() {
+                        format!("{}.parquet", segment_id_clone)
+                    } else {
+                        format!("{}/{}.parquet", hive_path, segment_id_clone)
+                    };
+
                     let config_index = SegmentConfig::new(&full_base_path, &segment_id_clone)
                         .with_index_all(index_all_flag)
                         .with_columns_to_index(index_cols_clone)
                         .with_partition_values(partition_values_clone.clone())
-                        .with_column_devices(index_configs_clone)
-                        .with_default_device(default_device_clone);
+                        .with_column_devices(index_configs_clone.iter().filter_map(|(c, cfg)| cfg.device.as_ref().map(|d| (c.clone(), d.clone()))).collect())
+                        .with_default_device(default_device_clone)
+                        .with_parquet_path(parquet_path_rel);
                     
-                    let index_res = tokio::task::spawn_blocking(move || {
-                        let mut index_writer = HybridSegmentWriter::new(config_index);
+                    let index_res = tokio::spawn(async move {
+                        let mut index_writer = HybridSegmentWriter::new(config_index)
+                            .with_index_configs(index_configs_clone);
                         index_writer.primary_key = pk_clone;
                         index_writer.set_store(table_store);
-                        index_writer.build_indexes(&batch_for_indexing)?;
+                        // In commit path, we typically have ONE batch per segment write
+                        index_writer.build_indexes(&batch_for_indexing, 0)?; 
+                        index_writer.finish_indexing().await?;
                         let files = index_writer.get_generated_files();
                         let updated_entry_info = index_writer.to_manifest_entry();
                         Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((updated_entry_info, files))
@@ -497,7 +581,7 @@ impl Table {
                             // Atomic metadata update: Add index files to the existing entry
                             let mut merged_entry = entry_clone;
                             let mut updated_index_files = updated_entry.index_files;
-                            
+
                             // Prefix index files if in a partitioned subdirectory
                             let hive_path = spec_bg.partition_to_path(&partition_values_clone);
                             if !hive_path.is_empty() {
@@ -572,8 +656,8 @@ impl Table {
 
         // 4. Update Table Metadata (Iceberg v2 Spec)
         // Determine the root for metadata. If we have a catalog, use its reported location.
-        let meta_location = if let Some(catalog) = &self.catalog {
-            if let (Some(ns), Some(t)) = (&self.catalog_namespace, &self.catalog_table_name) {
+        let meta_location = if let Some(catalog) = &self.catalog_state.catalog {
+            if let (Some(ns), Some(t)) = (&self.catalog_state.namespace, &self.catalog_state.table_name) {
                 catalog.load_table(ns, t).await.map(|m| m.location).unwrap_or_else(|_| self.uri.clone())
             } else {
                 self.uri.clone()
@@ -621,8 +705,8 @@ impl Table {
         table_meta.save_to_store(meta_store, new_meta_version).await?;
         
         // 5. Commit to Catalog if configured (Iceberg Atomic Swap)
-        if let Some(catalog) = &self.catalog {
-            if let (Some(ns), Some(table)) = (&self.catalog_namespace, &self.catalog_table_name) {
+        if let Some(catalog) = &self.catalog_state.catalog {
+            if let (Some(ns), Some(table)) = (&self.catalog_state.namespace, &self.catalog_state.table_name) {
                 let updates = vec![
                     serde_json::json!({
                         "action": "add-snapshot",

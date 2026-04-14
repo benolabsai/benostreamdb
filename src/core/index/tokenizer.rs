@@ -52,6 +52,7 @@ impl TokenizerRegistry {
         let mut tr = Self {
             tokenizers: HashMap::new(),
         };
+        tr.register("default", Arc::new(StandardTokenizer));
         tr.register("whitespace", Arc::new(WhitespaceTokenizer));
         tr.register("standard", Arc::new(StandardTokenizer));
         tr.register("identity", Arc::new(IdentityTokenizer));
