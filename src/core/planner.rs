@@ -146,6 +146,40 @@ impl FilterExpr {
             }
         }
     }
+
+    /// Recursively find all columns referenced in the filter
+    pub fn get_referenced_columns(&self) -> std::collections::HashSet<String> {
+        match self {
+            FilterExpr::DataFusion(expr) => {
+                let mut cols = std::collections::HashSet::new();
+                find_column_names(expr, &mut cols);
+                cols
+            }
+        }
+    }
+}
+
+/// Internal helper to recursively find column names in an Expr
+fn find_column_names(expr: &Expr, cols: &mut std::collections::HashSet<String>) {
+    match expr {
+        Expr::Column(c) => { cols.insert(c.name.clone()); },
+        Expr::BinaryExpr(b) => {
+            find_column_names(&b.left, cols);
+            find_column_names(&b.right, cols);
+        },
+        Expr::Not(e) => find_column_names(e, cols),
+        Expr::IsNotNull(e) => find_column_names(e, cols),
+        Expr::IsNull(e) => find_column_names(e, cols),
+        Expr::Cast(c) => find_column_names(&c.expr, cols),
+        Expr::TryCast(c) => find_column_names(&c.expr, cols),
+        Expr::InList(in_list) => {
+            find_column_names(&in_list.expr, cols);
+            for e in &in_list.list {
+                find_column_names(e, cols);
+            }
+        },
+        _ => {}
+    }
 }
 
 impl QueryFilter {
@@ -802,7 +836,7 @@ impl QueryPlanner {
         // 1. Partition-level Pruning (Coarse-grained)
         // If the query column is a partition column, we can prune entire files instantly.
         if let Some(entry_val) = entry.partition_values.get(&filter.column) {
-
+            println!("Pruning Check: Column {} has partition value {:?}. Filter range: {:?} - {:?}", filter.column, entry_val, filter.min, filter.max);
             if let Some(min_val) = &filter.min {
                 let res = if filter.min_inclusive {
                     self.compare_lt(entry_val, min_val) // if part < min -> NO match
@@ -811,6 +845,7 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res { 
+                    println!("  -> Pruned by partition min: {} < {:?}", entry_val, min_val);
                     return false; 
                 }
             }
@@ -823,12 +858,14 @@ impl QueryPlanner {
                      ord == Some(std::cmp::Ordering::Greater) || ord == Some(std::cmp::Ordering::Equal)
                  };
                  if res { 
+                     println!("  -> Pruned by partition max: {} > {:?}", entry_val, max_val);
                      return false; 
                 }
             }
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
+                    println!("  -> Pruned by partition values IN list: {:?} not in {:?}", entry_val, values);
                     return false;
                 }
             }

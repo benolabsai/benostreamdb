@@ -122,6 +122,7 @@ pub struct TableBuilder {
     default_device: Option<String>,
     query_config: QueryConfig,
     data_store: Option<Arc<dyn ObjectStore>>,
+    label_pattern: crate::core::table::LabelPattern,
 }
 
 impl TableBuilder {
@@ -136,6 +137,7 @@ impl TableBuilder {
             default_device: None,
             query_config: QueryConfig::default(),
             data_store: None,
+            label_pattern: crate::core::table::LabelPattern::default(),
         }
     }
 
@@ -173,6 +175,11 @@ impl TableBuilder {
 
     pub fn with_data_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
         self.data_store = Some(store);
+        self
+    }
+
+    pub fn with_auto_label_columns(mut self, pattern: crate::core::table::LabelPattern) -> Self {
+        self.label_pattern = pattern;
         self
     }
 
@@ -239,18 +246,25 @@ impl TableBuilder {
             data_store: self.data_store,
             rt: self.runtime,
             query_config: self.query_config,
-            index_all: self.index_all,
-            index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
-            index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
-            default_device: Arc::new(std::sync::RwLock::new(self.default_device)),
+            
+            indexing: crate::core::table::TableIndexState {
+                index_all: self.index_all,
+                index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
+                index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
+                default_device: Arc::new(std::sync::RwLock::new(self.default_device)),
+                memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
+            },
+
+            catalog_state: crate::core::table::TableCatalogState {
+                catalog: self.catalog,
+                namespace: self.catalog_namespace,
+                table_name: self.catalog_table_name,
+            },
+
             schema: Arc::new(std::sync::RwLock::new(schema_val)),
             write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
-            memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
             wal: Arc::new(Mutex::new(wal)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
-            catalog: self.catalog,
-            catalog_namespace: self.catalog_namespace,
-            catalog_table_name: self.catalog_table_name,
             sort_order: Arc::new(std::sync::RwLock::new(None)),
             sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
             #[cfg(feature = "enterprise")]
@@ -259,9 +273,11 @@ impl TableBuilder {
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
             partition_spec,
+            label_pattern: self.label_pattern,
         };
         
         table.sync_primary_key_from_schema_async().await.ok();
+        let _ = table.infer_index_metadata_from_physical_async().await;
         Ok(table)
     }
 

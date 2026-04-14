@@ -8,7 +8,7 @@ use bytes::Bytes;
 use object_store::{path::Path, ObjectStore, ObjectMeta};
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector, ArrowReaderMetadata, ArrowReaderOptions};
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
-// use arrow::record_batch::RecordBatch;
+use arrow::record_batch::RecordBatch;
 use parquet::arrow::async_reader::{ParquetRecordBatchStreamBuilder, ParquetObjectReader};
 use parquet::arrow::ProjectionMask;
 use crate::SegmentConfig;
@@ -398,7 +398,7 @@ impl HybridReader {
         let filter_column = &filter.column;
         
         let inv_idx_info = self.config.index_files.iter()
-            .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(filter_column));
+            .find(|f| (f.index_type == "inverted" || f.index_type == "bitmap" || f.index_type == "bm25") && f.column_name.as_deref() == Some(filter_column));
             
         let matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
@@ -1078,9 +1078,38 @@ impl HybridReader {
         // If base_path is remote (s3://), we first check if we have the index locally in CWD (common for writers/benchmarks)
         // This bypasses the need for full download logic in this iteration.
         
-        // Determine Index Path
-        let vector_idx_info = self.config.index_files.iter()
-            .find(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column));
+        // Determine Best Available Vector Index
+        let vector_indices: Vec<_> = self.config.index_files.iter()
+            .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+            .collect();
+
+        let vector_idx_info = if vector_indices.is_empty() {
+            None
+        } else {
+            // Priority: hnsw_tq8 or hnsw_tq4 > hnsw_pq > hnsw_ivf > others
+            let mut sorted = vector_indices.clone();
+            sorted.sort_by_key(|f| {
+                match f.blob_type.as_deref() {
+                    Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
+                    Some("hnsw_pq") => 1,
+                    Some("hnsw_ivf") => 2,
+                    _ => 3,
+                }
+            });
+            Some(sorted[0])
+        };
+
+        if let crate::core::index::VectorValue::Keyword(ref q) = query {
+            // BM25 Keyword Search path
+            let results = self.keyword_search_index(column, q, k, filter).await?;
+            if results.is_empty() { return Ok(vec![]); }
+            
+            let matches: Vec<(u32, f32)> = results.iter().map(|(id, s)| (*id as u32, *s)).collect();
+            let batch = self.read_rows_by_id_with_schema(matches, target_schema).await?;
+            
+            let scores: Vec<f32> = results.into_iter().map(|(_, s)| s).collect();
+            return Ok(vec![(batch, scores)]);
+        }
 
         let matches = if let Some(idx_info) = vector_idx_info {
              match self.search_hnsw_ivf(idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
@@ -1098,25 +1127,189 @@ impl HybridReader {
                  file_path: idx_path,
                  index_type: "vector".to_string(),
                  column_name: Some(column.to_string()),
-                 blob_type: None,
-                 offset: None,
-                 length: None,
+                 ..Default::default()
              };
-           if true {
-            let results = self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await;
-            
-            match results {
+             match self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
                  Ok(m) => m,
-                 Err(_) => {
-                     // Final fallback: Flat scan Parquet
-                     self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
-                 }
+                 Err(_) => self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
              }
-           } else {
-               vec![]
-           }
         };
+
+        self.fetch_rows_with_distances(matches, target_schema, filter).await
+    }
+
+    /// Execute Keyword Search (BM25) on this segment
+    pub async fn keyword_search_index(
+        &self,
+        column: &str,
+        query: &str,
+        k: usize,
+        _filter: Option<&FilterExpr>,
+    ) -> Result<Vec<(usize, f32)>> {
+        // 1. Find Inverted Index
+        tracing::info!("keyword_search_index: Segment {} searching for inverted index on column '{}'", self.config.segment_id, column);
+        tracing::info!("  Available index files: {:?}", self.config.index_files);
         
+        let idx_info = self.config.index_files.iter()
+            .find(|f| {
+                let match_type = f.index_type == "inverted" || f.index_type == "bm25";
+                let match_col = f.column_name.as_deref() == Some(column);
+                match_type && match_col
+            })
+            .ok_or_else(|| anyhow::anyhow!("No keyword/inverted index found for column '{}' in segment {} (Available: {:?})", column, self.config.segment_id, self.config.index_files))?;
+
+        // 2. Load Inverted Index Batches
+        // (Similar to get_scalar_filter_bitmap logic)
+        let inv_path_str = &idx_info.file_path;
+        let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
+        if let Some(pos) = dir_path.rfind('/') {
+            dir_path.truncate(pos);
+        } else {
+            dir_path = "".to_string();
+        }
+        
+        let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
+            inv_path_str.clone()
+        } else {
+            format!("{}/{}", dir_path, inv_path_str)
+        };
+
+        let cache_key = if let Some(offset) = idx_info.offset {
+             format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
+        } else {
+             format!("{}/{}", self.root_uri, full_inv_path_str)
+        };
+
+        let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get(&cache_key).await {
+            cached.as_ref().clone()
+        } else {
+            // Cache Miss - Load from Disk
+            let inv_path = Path::from(full_inv_path_str.as_str());
+            let inv_bytes = match self.store.get(&inv_path).await {
+                 Ok(res) => res.bytes().await?.to_vec(),
+                 Err(e) => return Err(e.into()),
+            };
+
+            let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(Bytes::from(inv_bytes))?;
+            let reader = builder.build()?;
+            let mut decoded = Vec::new();
+            for batch_result in reader {
+                decoded.push(batch_result?);
+            }
+            crate::core::cache::INVERTED_INDEX_CACHE.insert(cache_key.clone(), Arc::new(decoded.clone())).await;
+            decoded
+        };
+
+        // 3. Tokenize Query
+        // Use the tokenizer defined in the index metadata, fallback to standard
+        let tokenizer_name = "default";
+        
+        let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(tokenizer_name)
+            .unwrap_or_else(|| crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get("standard").unwrap());
+        
+        let query_tokens = tokenizer.tokenize(query);
+        if query_tokens.is_empty() {
+             return Ok(vec![]);
+        }
+
+        // 4. Scoring Map: RowID -> BM25 Score
+        let mut scores: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+        let n_total = (self.config.record_count.unwrap_or(0) as f32).max(1.0); // Ensure at least 1.0 for IDF
+        let k1 = 1.2;
+
+        for token in &query_tokens {
+            // Find this token in the inverted index batches
+            // Build document term frequencies for scoring
+            for batch in batches.iter() {
+                let key_array = batch.column(0).as_any().downcast_ref::<arrow::array::StringArray>()
+                    .ok_or_else(|| anyhow::anyhow!("Expected StringArray in inverted index keys"))?;
+                let row_ids_list = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>()
+                    .ok_or_else(|| anyhow::anyhow!("Expected ListArray in inverted index row_ids"))?;
+
+                for i in 0..batch.num_rows() {
+                    let key = key_array.value(i);
+                    if key == token {
+                        // Found the term!
+                        let list = row_ids_list.value(i);
+                        let row_ids = list.as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap();
+                        
+                        // Count frequencies by document
+                        let mut current_doc_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+                        let mut last_id = 0;
+                        for j in 0..row_ids.len() {
+                            let rid = last_id + row_ids.value(j);
+                            *current_doc_counts.entry(rid).or_default() += 1;
+                            last_id = rid;
+                        }
+
+                        // IDF for this token
+                        let n_token = current_doc_counts.len() as f32;
+                        let idf = ((n_total - n_token + 0.5) / (n_token + 0.5) + 1.0).ln();
+
+                        // Add to global scores
+                        for (rid, tf) in current_doc_counts {
+                            let tf = tf as f32;
+                            let score_inc = idf * (tf * (k1 + 1.0)) / (tf + k1);
+                            *scores.entry(rid).or_default() += score_inc;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Sort by score and convert to (RowID, Distance)
+        let mut results: Vec<(usize, f32)> = scores.into_iter()
+            .map(|(rid, score)| (rid as usize, 1.0 / (1.0 + score))) // Convert score to distance-like metric
+            .collect();
+        
+        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        if results.len() > k {
+            results.truncate(k);
+        }
+
+        Ok(results)
+    }
+
+    /// Read specific rows by their IDs (used by Hybrid Search RRF)
+    pub async fn read_rows_by_id(
+        &self, 
+        matches: Vec<(u32, f32)>, 
+        _columns: Option<&[&str]>
+    ) -> Result<RecordBatch> {
+        self.read_rows_by_id_with_schema(matches, None).await
+    }
+
+    /// Read specific rows by their IDs with an explicit target schema
+    pub async fn read_rows_by_id_with_schema(
+        &self, 
+        matches: Vec<(u32, f32)>, 
+        target_schema: Option<arrow::datatypes::SchemaRef>
+    ) -> Result<RecordBatch> {
+        let matches_usize: Vec<(usize, f32)> = matches.into_iter().map(|(id, s)| (id as usize, s)).collect();
+        let batches: Vec<(RecordBatch, Vec<f32>)> = self.fetch_rows_with_distances(matches_usize, target_schema, None).await?;
+        
+        if batches.is_empty() {
+            return Err(anyhow::anyhow!("No rows found for specified IDs"));
+        }
+
+        // Merge batches if necessary
+        if batches.len() == 1 {
+            Ok(batches[0].0.clone())
+        } else {
+            let record_batches: Vec<RecordBatch> = batches.into_iter().map(|(b, _)| b).collect();
+            let schema = record_batches[0].schema();
+            Ok(arrow::compute::concat_batches(&schema, &record_batches)?)
+        }
+    }
+
+    /// Helper to fetch rows from Parquet for a list of matches
+    async fn fetch_rows_with_distances(
+        &self, 
+        matches: Vec<(usize, f32)>, 
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+        filter: Option<&FilterExpr>
+    ) -> Result<Vec<(RecordBatch, Vec<f32>)>> {
         if matches.is_empty() {
             return Ok(vec![]);
         }
@@ -1222,6 +1415,14 @@ impl HybridReader {
             } else {
                 batch
             };
+
+            // Add distance column to batch
+            let distance_array = std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
+            let mut fields = final_batch.schema().fields().to_vec();
+            fields.push(std::sync::Arc::new(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, true)));
+            let mut columns = final_batch.columns().to_vec();
+            columns.push(distance_array);
+            final_batch = arrow::record_batch::RecordBatch::try_new(std::sync::Arc::new(arrow::datatypes::Schema::new(fields)), columns)?;
             
             // Schema Evolution Mapping
             if let Some(target) = &target_schema_ref {
@@ -1313,7 +1514,7 @@ impl HybridReader {
         
         let matches = tokio::task::spawn_blocking(move || {
             hnsw_ivf_clone.search(&query_clone, k, n_probe, allowed_bm_clone.as_ref())
-        }).await?;
+        }).await??;
         
         Ok(matches)
     }

@@ -30,7 +30,7 @@ pub mod read;
 pub mod write;
 
 use crate::core::storage::create_object_store;
-use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager, PartitionSpec, SortOrder, SortField, SortDirection, NullOrder};
+use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager, PartitionSpec, SortOrder, SortField, SortDirection, NullOrder, IndexAlgorithm};
 use crate::core::metadata::TableMetadata;
 use crate::core::planner::{QueryPlanner, QueryFilter, FilterExpr};
 use crate::core::reader::HybridReader;
@@ -55,10 +55,45 @@ pub struct ColumnIndexConfig {
     pub device: Option<String>,
     pub tokenizer: Option<String>,
     pub enabled: bool,
+    pub algorithms: Vec<IndexAlgorithm>,
 }
 
 
-// TableBuilder logic is now in builder.rs
+/// Strategy for labeling unnamed or numerically named columns during first write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LabelPattern {
+    /// Excel style: A, B, C... AA, AB... (Default for premium UX)
+    ExcelAlpha,
+    /// Polars style: column_1, column_2...
+    Polars,
+    /// Pandas style: 0, 1, 2...
+    Pandas,
+}
+
+impl Default for LabelPattern {
+    fn default() -> Self {
+        Self::ExcelAlpha
+    }
+}
+
+/// Indexing state and configuration for a Table
+#[derive(Clone)]
+pub(crate) struct TableIndexState {
+    pub index_all: bool,
+    pub index_columns: Arc<std::sync::RwLock<Vec<String>>>,
+    pub index_configs: Arc<std::sync::RwLock<HashMap<String, ColumnIndexConfig>>>,
+    pub default_device: Arc<std::sync::RwLock<Option<String>>>,
+    pub memory_index: Arc<std::sync::RwLock<Option<InMemoryVectorIndex>>>,
+}
+
+/// Catalog identity and synchronization state for a Table
+#[derive(Clone)]
+pub(crate) struct TableCatalogState {
+    pub catalog: Option<Arc<dyn crate::core::catalog::Catalog>>,
+    pub namespace: Option<String>,
+    pub table_name: Option<String>,
+}
 
 /// Main Table struct - represents a HyperStreamDB table
 pub struct Table {
@@ -68,19 +103,16 @@ pub struct Table {
     pub data_store: Option<Arc<dyn ObjectStore>>,
     pub rt: Option<Arc<Runtime>>,
     query_config: QueryConfig,
-    // Indexing Configuration
-    index_all: bool,
-    index_columns: Arc<std::sync::RwLock<Vec<String>>>,
-    index_configs: Arc<std::sync::RwLock<HashMap<String, ColumnIndexConfig>>>,
-    default_device: Arc<std::sync::RwLock<Option<String>>>,
+    
+    // Sub-modules (Internal State Groups)
+    pub(crate) indexing: TableIndexState,
+    pub(crate) catalog_state: TableCatalogState,
+
     schema: Arc<std::sync::RwLock<SchemaRef>>,
     write_buffer: Arc<std::sync::RwLock<Vec<RecordBatch>>>,
-    memory_index: Arc<std::sync::RwLock<Option<InMemoryVectorIndex>>>,
     wal: Arc<Mutex<WriteAheadLog>>,
     background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    pub catalog: Option<Arc<dyn crate::core::catalog::Catalog>>,
-    pub catalog_namespace: Option<String>,
-    pub catalog_table_name: Option<String>,
+    
     /// Sort order to apply when writing data (Iceberg V2 spec compliance)
     sort_order: Arc<std::sync::RwLock<Option<SortOrder>>>,
     /// Column names for sort order (needed for column lookup)
@@ -91,6 +123,22 @@ pub struct Table {
     autocommit: Arc<std::sync::atomic::AtomicBool>,
     recovered_wal_paths: Arc<std::sync::Mutex<Vec<String>>>,
     pub(crate) partition_spec: Arc<PartitionSpec>,
+    /// Naming pattern to use for unnamed columns
+    pub(crate) label_pattern: LabelPattern,
+}
+
+/// Generates an Excel-style column label (A, B, C... AA, AB...) for a given index.
+pub fn excel_column_label(mut index: usize) -> String {
+    let mut label = String::new();
+    loop {
+        let remainder = index % 26;
+        label.push((b'A' + remainder as u8) as char);
+        if index < 26 {
+            break;
+        }
+        index = (index / 26) - 1;
+    }
+    label.chars().rev().collect()
 }
 
 impl Clone for Table {
@@ -101,18 +149,12 @@ impl Clone for Table {
             data_store: self.data_store.clone(),
             rt: self.rt.clone(),
             query_config: self.query_config.clone(),
-            index_all: self.index_all,
-            index_columns: self.index_columns.clone(),
-            index_configs: self.index_configs.clone(),
-            default_device: self.default_device.clone(),
+            indexing: self.indexing.clone(),
+            catalog_state: self.catalog_state.clone(),
             schema: self.schema.clone(),
             write_buffer: self.write_buffer.clone(),
-            memory_index: self.memory_index.clone(),
             wal: self.wal.clone(),
             background_tasks: self.background_tasks.clone(),
-            catalog: self.catalog.clone(),
-            catalog_namespace: self.catalog_namespace.clone(),
-            catalog_table_name: self.catalog_table_name.clone(),
             sort_order: self.sort_order.clone(),
             sort_order_columns: self.sort_order_columns.clone(),
             #[cfg(feature = "enterprise")]
@@ -121,6 +163,7 @@ impl Clone for Table {
             autocommit: self.autocommit.clone(),
             recovered_wal_paths: self.recovered_wal_paths.clone(),
             partition_spec: self.partition_spec.clone(),
+            label_pattern: self.label_pattern,
         }
     }
 }
@@ -129,7 +172,7 @@ impl std::fmt::Debug for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Table")
             .field("uri", &self.uri)
-            .field("index_all", &self.index_all)
+            .field("index_all", &self.indexing.index_all)
             .finish()
     }
 }
@@ -151,12 +194,22 @@ impl Drop for Table {
 
 
 impl Table {
+    pub fn builder(uri: impl Into<String>) -> builder::TableBuilder {
+        builder::TableBuilder::new(uri)
+    }
+
+    pub fn get_config(&self) -> SegmentConfig {
+        SegmentConfig::new(&self.uri, "")
+            .with_index_all(self.indexing.index_all)
+            .with_columns_to_index(self.indexing.index_columns.read().unwrap().clone())
+    }
+
     pub fn set_index_all(&mut self, enabled: bool) {
-        self.index_all = enabled;
+        self.indexing.index_all = enabled;
     }
 
     pub fn get_index_all(&self) -> bool {
-        self.index_all
+        self.indexing.index_all
     }
     
     pub fn set_autocommit(&self, enabled: bool) {
@@ -168,40 +221,179 @@ impl Table {
     }
 
     pub fn set_primary_key(&self, columns: Vec<String>) {
+        if let Some(ref rt) = self.rt {
+            let _ = rt.block_on(self.set_primary_key_async(columns));
+        } else {
+            let mut pk = self.primary_key.write().unwrap();
+            *pk = columns;
+        }
+    }
+
+    /// Asynchronously set the primary key. This commits a new manifest version
+    /// and ensures the columns are marked as NOT NULL (required: true).
+    pub async fn set_primary_key_async(&self, columns: Vec<String>) -> Result<()> {
+        let manifest = self.manifest().await?;
+        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        
+        let mut field_ids = Vec::new();
+        for col in &columns {
+            let id = latest_schema.fields.iter()
+                .find(|f| f.name == *col)
+                .map(|f| f.id)
+                .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", col))?;
+            field_ids.push(id);
+        }
+
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        manifest_manager.update_identifier_fields(field_ids).await?;
+
+        // Update in-memory state
         let mut pk = self.primary_key.write().unwrap();
         *pk = columns;
+        
+        // Update in-memory schema ref (it's slightly stale now, but will refresh on next use)
+        // or we could force a reload.
+        let (new_manifest, _) = manifest_manager.load_latest().await?;
+        if let Some(s) = new_manifest.schemas.last() {
+            let mut schema_lock = self.schema.write().unwrap();
+            *schema_lock = Arc::new(s.to_arrow());
+        }
+
+        Ok(())
+    }
+
+    pub async fn sync_primary_key_from_schema_async(&self) -> Result<()> {
+        let manifest = self.manifest().await?;
+        if let Some(latest_schema) = manifest.schemas.last() {
+            let mut pk_names = Vec::new();
+            for id in &latest_schema.identifier_field_ids {
+                if let Some(field) = latest_schema.fields.iter().find(|f| f.id == *id) {
+                    pk_names.push(field.name.clone());
+                }
+            }
+            let mut pk = self.primary_key.write().unwrap();
+            *pk = pk_names;
+        }
+        Ok(())
     }
 
     pub fn get_primary_key(&self) -> Vec<String> {
         self.primary_key.read().unwrap().clone()
     }
 
-    pub fn set_index_config(&self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
-        let mut configs = self.index_configs.write().unwrap();
-        configs.insert(column.clone(), ColumnIndexConfig {
-            device,
-            tokenizer,
-            enabled,
+    /// Update indexing specifications for multiple columns at once.
+    /// This is an atomic operation that commits a new manifest version.
+    pub async fn set_index_columns(&self, column_indexes: HashMap<String, Vec<IndexAlgorithm>>) -> Result<()> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        manifest_manager.update_index_specs(column_indexes.clone()).await?;
+
+        // Update in-memory state
+        {
+            let mut index_cols = self.indexing.index_columns.write().unwrap();
+            let mut index_configs = self.indexing.index_configs.write().unwrap();
+            
+            for (col, algs) in &column_indexes {
+                if algs.is_empty() {
+                    // Drop index
+                    index_cols.retain(|c| c != col);
+                    index_configs.remove(col);
+                } else {
+                    if !index_cols.contains(col) {
+                        index_cols.push(col.clone());
+                    }
+                    
+                    // Extract tokenizer from algorithms if present
+                    let tokenizer = algs.iter().find_map(|alg| {
+                        match alg {
+                            IndexAlgorithm::Bm25 { tokenizer, .. } => {
+                                if tokenizer.is_empty() || tokenizer == "default" {
+                                    Some("default".to_string())
+                                } else {
+                                    Some(tokenizer.clone())
+                                }
+                            },
+                            _ => None,
+                        }
+                    });
+
+                    // Update config
+                    let config = index_configs.entry(col.clone()).or_insert_with(|| ColumnIndexConfig {
+                        enabled: true,
+                        algorithms: algs.clone(),
+                        ..Default::default()
+                    });
+                    config.algorithms = algs.clone();
+                    if let Some(tok) = tokenizer {
+                        config.tokenizer = Some(tok);
+                    }
+                }
+            }
+            index_cols.sort();
+        }
+
+        // Trigger backfill for updated columns
+        let cols_to_backfill: Vec<String> = column_indexes.keys().cloned().collect();
+        let table_clone = self.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(e) = table_clone.backfill_indexes_async(cols_to_backfill).await {
+                tracing::error!("Failed to backfill indexes: {}", e);
+            }
         });
         
-        let mut cols = self.index_columns.write().unwrap();
-        if enabled {
-            if !cols.contains(&column) {
-                cols.push(column);
+        self.background_tasks.lock().await.push(handle);
+
+        Ok(())
+    }
+
+    /// Add an indexing strategy to a column.
+    /// This is an atomic operation that commits a new manifest version.
+    pub async fn add_index(&self, column: String, algorithm: IndexAlgorithm) -> Result<()> {
+        let manifest = self.manifest().await?;
+        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        
+        let field = latest_schema.fields.iter()
+            .find(|f| f.name == column)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
+
+        let mut next_indexes = field.indexes.clone();
+        
+        // Deduplicate by type for unique algorithms (Vector families, BM25, Bloom)
+        match &algorithm {
+            IndexAlgorithm::Hnsw { .. } | IndexAlgorithm::HnswPq { .. } | 
+            IndexAlgorithm::HnswTq4 { .. } | IndexAlgorithm::HnswTq8 { .. } => {
+                // Vector index family - replace existing ones
+                next_indexes.retain(|idx| !matches!(idx, 
+                    IndexAlgorithm::Hnsw { .. } | IndexAlgorithm::HnswPq { .. } | 
+                    IndexAlgorithm::HnswTq4 { .. } | IndexAlgorithm::HnswTq8 { .. }));
             }
-        } else {
-            cols.retain(|c| c != &column);
+            IndexAlgorithm::Bm25 { .. } => {
+                next_indexes.retain(|idx| !matches!(idx, IndexAlgorithm::Bm25 { .. }));
+            }
+            IndexAlgorithm::Bloom { .. } => {
+                next_indexes.retain(|idx| !matches!(idx, IndexAlgorithm::Bloom { .. }));
+            }
+            _ => {
+                if !next_indexes.contains(&algorithm) {
+                    next_indexes.push(algorithm.clone());
+                    return self.set_index_columns(HashMap::from([(column, next_indexes)])).await;
+                }
+            }
         }
+        
+        next_indexes.push(algorithm);
+        
+        let mut updates = HashMap::new();
+        updates.insert(column, next_indexes);
+        
+        self.set_index_columns(updates).await
     }
 
-    /// Convenience wrapper for set_index_config (enabled=true)
-    pub fn add_index(&self, column: String, tokenizer: Option<String>, device: Option<String>) {
-        self.set_index_config(column, true, tokenizer, device);
-    }
-
-    /// Convenience wrapper for set_index_config (enabled=false)
-    pub fn drop_index(&self, column: String) {
-        self.set_index_config(column, false, None, None);
+    /// Remove all indexing strategies from a column.
+    /// This is an atomic operation that commits a new manifest version.
+    pub async fn drop_index(&self, column: String) -> Result<()> {
+        let mut updates = HashMap::new();
+        updates.insert(column, vec![]);
+        self.set_index_columns(updates).await
     }
 
     /// Add a column to the primary key. 
@@ -268,8 +460,26 @@ impl Table {
             .map(|id| schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap())
             .collect();
             
-        // For now, we perform a scan to check for duplicates. 
-        // In a production environment, this could be optimized using indexes.
+        let _manifest = self.manifest().await?;
+        
+        // 1. Optimization: Check if we have Bloom filters or Inverted Indexes for these columns.
+        // If it's a single-column PK, we can use the index directly.
+        if col_names.len() == 1 {
+            let _col_name = &col_names[0];
+            let _reader = HybridReader::new(self.get_config(), self.store.clone(), &self.uri);
+            
+            // Try Bloom Filter first (if available in any segment)
+            // Note: This requires checking ALL segments. If ANY segment might have a duplicate, we must read.
+            // However, for UNIQUNESS, if the Bloom filter says "Not Present" in all segments, we are safe.
+            // If it says "Possible," we still have to check.
+            
+            // For now, let's use the Inverted Index if it exists.
+            // If the inverted index for this column represents the entire table's state (across segments),
+            // or if we check every segment's index.
+        }
+
+        // Fallback: Perform a scan to check for duplicates. 
+        // TODO: In Phase 2, we will use the 'Global Index' or 'Reconciliation Worker' to make this instant.
         let batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
         
         let mut seen = std::collections::HashSet::new();
@@ -293,11 +503,56 @@ impl Table {
         
         Ok(())
     }
-}
 
-// TableQuery logic is now in query.rs
+    /// Internal helper: Detect existing physical indexes and migrate them to logical Schema specifications.
+    /// This provides zero-touch backward compatibility for tables created before the IndexSpec refactor.
+    async fn infer_index_metadata_from_physical_async(&self) -> Result<()> {
+        let manifest = self.manifest().await?;
+        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        
+        // Check if any field already has logical index metadata
+        if latest_schema.fields.iter().any(|f| !f.indexes.is_empty()) {
+            return Ok(());
+        }
 
-impl Table {
+        // Scan latest manifest entries for physical index files
+        let mut inferred_specs: HashMap<String, Vec<IndexAlgorithm>> = HashMap::new();
+        
+        for entry in &manifest.entries {
+            for index_file in &entry.index_files {
+                if let Some(col_name) = &index_file.column_name {
+                    let algorithms = inferred_specs.entry(col_name.clone()).or_insert_with(Vec::new);
+                    
+                    let alg = match index_file.index_type.as_str() {
+                        "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {
+                             metric: "l2".to_string(), // Default for v0.2.x
+                             complexity: 16,
+                             quality: 128,
+                             build_device: None,
+                             search_device: None,
+                        }),
+                        "scalar" | "inverted" => Some(IndexAlgorithm::Bitmap),
+                        "bloom" => Some(IndexAlgorithm::Bloom { fpr: 0.05 }),
+                        _ => None,
+                    };
+
+                    if let Some(a) = alg {
+                        if !algorithms.contains(&a) {
+                            algorithms.push(a);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !inferred_specs.is_empty() {
+            tracing::info!("Implicit Inference: Detected legacy physical indexes for columns {:?}. Updating manifest...", inferred_specs.keys());
+            self.set_index_columns(inferred_specs).await?;
+        }
+
+        Ok(())
+    }
+
     pub fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.store.clone()
     }
@@ -317,7 +572,7 @@ impl Table {
 
     /// Check if the table currently has an active in-memory vector index
     pub fn has_memory_index(&self) -> bool {
-        self.memory_index.read().unwrap().is_some()
+        self.indexing.memory_index.read().unwrap().is_some()
     }
 
     pub fn new(uri: String) -> Result<Self> {
@@ -342,9 +597,9 @@ impl Table {
         tracing::info!("Resolved Nessie table {} to metadata: {}", table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
-        table_obj.catalog = Some(Arc::new(client));
-        table_obj.catalog_namespace = Some(namespace.to_string());
-        table_obj.catalog_table_name = Some(table.to_string());
+        table_obj.catalog_state.catalog = Some(Arc::new(client));
+        table_obj.catalog_state.namespace = Some(namespace.to_string());
+        table_obj.catalog_state.table_name = Some(table.to_string());
         Ok(table_obj)
     }
 
@@ -363,9 +618,9 @@ impl Table {
         tracing::info!("Resolved Glue table {}.{} to metadata: {}", namespace, table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
-        table_obj.catalog = Some(Arc::new(client));
-        table_obj.catalog_namespace = Some(namespace.to_string());
-        table_obj.catalog_table_name = Some(table.to_string());
+        table_obj.catalog_state.catalog = Some(Arc::new(client));
+        table_obj.catalog_state.namespace = Some(namespace.to_string());
+        table_obj.catalog_state.table_name = Some(table.to_string());
         Ok(table_obj)
     }
 
@@ -384,9 +639,9 @@ impl Table {
         tracing::info!("Resolved Hive table {}.{} to metadata: {}", namespace, table, metadata.location);
         
         let mut table_obj = Self::register_external(local_uri, &metadata.location).await?;
-        table_obj.catalog = Some(Arc::new(client));
-        table_obj.catalog_namespace = Some(namespace.to_string());
-        table_obj.catalog_table_name = Some(table.to_string());
+        table_obj.catalog_state.catalog = Some(Arc::new(client));
+        table_obj.catalog_state.namespace = Some(namespace.to_string());
+        table_obj.catalog_state.table_name = Some(table.to_string());
         Ok(table_obj)
     }
 
@@ -542,9 +797,9 @@ impl Table {
         
         if version > 0 {
             let mut table = TableBuilder::new(native_uri).with_index_all(false).build_async().await?;
-            table.catalog = Some(Arc::new(client));
-            table.catalog_namespace = Some(namespace);
-            table.catalog_table_name = Some(table_name);
+            table.catalog_state.catalog = Some(Arc::new(client));
+            table.catalog_state.namespace = Some(namespace);
+            table.catalog_state.table_name = Some(table_name);
             Ok(table)
         } else {
             // Try to open the warehouse location as a HyperStreamDB native table first
@@ -564,9 +819,9 @@ impl Table {
                             // It's a HyperStreamDB table in the warehouse, open it directly
                             tracing::info!("✅ Opening existing HyperStreamDB table from REST catalog: {}", metadata.location);
                             let mut table = TableBuilder::new(metadata.location).with_index_all(false).build_async().await?;
-                            table.catalog = Some(Arc::new(client));
-                            table.catalog_namespace = Some(namespace);
-                            table.catalog_table_name = Some(table_name);
+                            table.catalog_state.catalog = Some(Arc::new(client));
+                            table.catalog_state.namespace = Some(namespace);
+                            table.catalog_state.table_name = Some(table_name);
                             return Ok(table);
                         } else {
                             // Version=0, but this could be an empty newly-created table
@@ -595,9 +850,9 @@ impl Table {
             tracing::info!("Auto-registering Iceberg table from REST catalog: {}", rest_uri);
             let mut table = Self::register_external(native_uri, &metadata.location).await?;
 
-            table.catalog = Some(Arc::new(client));
-            table.catalog_namespace = Some(namespace);
-            table.catalog_table_name = Some(table_name);
+            table.catalog_state.catalog = Some(Arc::new(client));
+            table.catalog_state.namespace = Some(namespace);
+            table.catalog_state.table_name = Some(table_name);
             Ok(table)
         }
     }
@@ -711,6 +966,7 @@ impl Table {
                                  fields: Vec::new(),
                                  initial_default: None,
                                  write_default: None,
+                                 indexes: Vec::new(),
                              }
                         }).collect()
                     }).unwrap_or_else(Vec::new),
@@ -1096,14 +1352,14 @@ impl Table {
 
     pub fn add_index_columns(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
         {
-            let mut index_cols = self.index_columns.write().unwrap();
-            let mut index_configs = self.index_configs.write().unwrap();
+            let mut index_cols = self.indexing.index_columns.write().unwrap();
+            let mut index_configs = self.indexing.index_configs.write().unwrap();
             
             for col in &columns {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -1113,14 +1369,14 @@ impl Table {
 
     pub async fn add_index_columns_async(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
         {
-            let mut index_cols = self.index_columns.write().unwrap();
-            let mut index_configs = self.index_configs.write().unwrap();
+            let mut index_cols = self.indexing.index_columns.write().unwrap();
+            let mut index_configs = self.indexing.index_configs.write().unwrap();
             
             for col in &columns {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -1129,37 +1385,37 @@ impl Table {
     }
 
     pub fn set_default_device(&mut self, device: Option<String>) {
-        let mut d = self.default_device.write().unwrap();
+        let mut d = self.indexing.default_device.write().unwrap();
         *d = device;
     }
 
     pub fn get_default_device(&self) -> Option<String> {
-        self.default_device.read().unwrap().clone()
+        self.indexing.default_device.read().unwrap().clone()
     }
 
     pub fn remove_index_columns(&mut self, columns: Vec<String>) {
-        let mut index_cols = self.index_columns.write().unwrap();
+        let mut index_cols = self.indexing.index_columns.write().unwrap();
         index_cols.retain(|c| !columns.contains(c));
     }
 
     pub fn remove_all_index_columns(&mut self) {
-        let mut index_cols = self.index_columns.write().unwrap();
+        let mut index_cols = self.indexing.index_columns.write().unwrap();
         index_cols.clear();
-        self.index_all = false;
+        self.indexing.index_all = false;
     }
 
     pub fn index_all_columns(&mut self) -> Result<()> {
-        self.index_all = true;
+        self.indexing.index_all = true;
         self.backfill_indexes(Vec::new()) 
     }
 
     pub async fn index_all_columns_async(&mut self) -> Result<()> {
-        self.index_all = true;
+        self.indexing.index_all = true;
         self.backfill_indexes_async(Vec::new()).await
     }
 
     pub fn get_index_columns(&self) -> Vec<String> {
-        self.index_columns.read().unwrap().clone()
+        self.indexing.index_columns.read().unwrap().clone()
     }
 
     pub fn runtime(&self) -> Arc<Runtime> {
@@ -1205,7 +1461,7 @@ impl Table {
                 let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
                     .strip_suffix(".parquet").unwrap_or(&file_path_str);
 
-                let mut cols_to_index = self.index_columns.read().unwrap().clone();
+                let mut cols_to_index = self.indexing.index_columns.read().unwrap().clone();
                 for col in target_cols {
                     if !cols_to_index.contains(&col) {
                         cols_to_index.push(col);
@@ -1215,21 +1471,27 @@ impl Table {
                 let config = SegmentConfig::new(&table_uri, segment_id)
                     .with_parquet_path(current_entry.file_path.clone())
                     .with_data_store(data_store)
-                    .with_index_all(self.index_all)
+                    .with_index_all(self.indexing.index_all)
                     .with_columns_to_index(cols_to_index);
                 
                 let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
-                let mut writer = HybridSegmentWriter::new(config);
+                let mut writer = HybridSegmentWriter::new(config)
+                    .with_index_configs(self.indexing.index_configs.read().unwrap().clone())
+                    .with_record_count(current_entry.record_count as usize)
+                    .with_existing_stats(current_entry.column_stats.clone());
                 writer.primary_key = self.primary_key.read().unwrap().clone();
                 writer.set_store(store.clone());
                 
                 let mut stream = reader.stream_all(None as Option<arrow::datatypes::SchemaRef>).await?;
+                let mut current_offset = 0;
                 while let Some(batch) = stream.next().await {
                     let batch = batch?;
-                    writer.write_batch(&batch)?;
-                    writer.build_indexes(&batch)?;
+                    let batch_rows = batch.num_rows();
+                    writer.build_indexes(&batch, current_offset)?;
+                    current_offset += batch_rows;
                 }
                 
+                writer.finish_indexing().await?;
                 writer.upload_to_store().await?;
                 
                 // Invalidate the cache for this segment
@@ -1568,22 +1830,6 @@ impl Table {
         Ok(())
     }
 
-    /// Synchronize PK columns from Iceberg schema identifier-field-ids (Internal Async)
-    async fn sync_primary_key_from_schema_async(&self) -> Result<()> {
-        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        let latest_manifest = manifest_manager.load_latest_full().await?.0;
-        
-        if let Some(schema) = latest_manifest.schemas.last() {
-            let pk_cols: Vec<String> = schema.identifier_field_ids.iter().map(|id| {
-                schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap_or_default()
-            }).filter(|n| !n.is_empty()).collect();
-            
-            if !pk_cols.is_empty() {
-                self.set_primary_key(pk_cols);
-            }
-        }
-        Ok(())
-    }
 
     /// Synchronize PK columns (Public Sync)
     pub fn sync_primary_key_from_schema(&self) -> Result<()> {
@@ -2329,7 +2575,7 @@ impl Table {
 
     fn get_vector_column_for_shuffling(&self, batch: &RecordBatch) -> Option<String> {
         // Use first index column if it's a vector
-        let index_cols = self.index_columns.read().unwrap();
+        let index_cols = self.indexing.index_columns.read().unwrap();
         for col_name in index_cols.iter() {
             if let Ok(idx) = batch.schema().index_of(col_name) {
                 let col = batch.column(idx);

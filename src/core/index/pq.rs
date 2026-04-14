@@ -14,7 +14,7 @@ use super::ivf::simple_kmeans;
 use tracing;
 
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PqConfig {
     /// Number of sub-vectors (m)
     pub m: usize,
@@ -24,7 +24,7 @@ pub struct PqConfig {
     pub dim: usize,
 }
 
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PqEncoder {
     pub config: PqConfig,
     /// Codebooks: m x k x (dim/m)
@@ -107,5 +107,45 @@ impl PqEncoder {
             dist += lut[i][code as usize];
         }
         dist
+    }
+}
+
+impl crate::core::index::Quantizer for PqEncoder {
+    fn encode(&self, vector: &[f32]) -> Vec<u8> {
+        self.encode(vector)
+    }
+
+    fn decode(&self, bytes: &[u8]) -> Vec<f32> {
+        let mut vector = Vec::with_capacity(self.config.dim);
+        for i in 0..self.config.m {
+            let code = bytes[i] as usize;
+            vector.extend_from_slice(&self.codebooks[i][code]);
+        }
+        vector
+    }
+
+    fn distance_adc(&self, query: &[f32], encoded: &[u8]) -> f32 {
+        let sub_dim = self.config.dim / self.config.m;
+        let mut dist = 0.0;
+        for i in 0..self.config.m {
+            let start = i * sub_dim;
+            let end = (i + 1) * sub_dim;
+            let sub_query = &query[start..end];
+            let code = encoded[i] as usize;
+            dist += l2_distance_squared(sub_query, &self.codebooks[i][code]);
+        }
+        dist
+    }
+
+    fn name(&self) -> String {
+        format!("pq_{}", self.config.m)
+    }
+
+    fn bits(&self) -> usize {
+        8
+    }
+
+    fn dim(&self) -> usize {
+        self.config.dim
     }
 }

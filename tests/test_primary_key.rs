@@ -106,3 +106,40 @@ async fn test_compound_primary_key_uniqueness() -> anyhow::Result<()> {
     
     Ok(())
 }
+
+#[tokio::test]
+async fn test_primary_key_nullability_enforcement() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    let uri = format!("file://{}", path);
+
+    // 1. Setup Table with Nullable Column
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("pk", DataType::Int32, true), // ALLOW NULLS (for now)
+    ]));
+    
+    let table = Table::create_async(uri.clone(), schema.clone()).await?;
+    
+    // 2. Set PK - should evolve schema to NOT NULL
+    table.set_primary_key_async(vec!["pk".to_string()]).await?;
+    
+    // Verify Iceberg schema in manifest is now NOT NULL (required: true)
+    let manifest_manager = hyperstreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
+    let (latest, _, _) = manifest_manager.load_latest_full().await?;
+    let field = latest.schemas.last().unwrap().fields.iter().find(|f| f.name == "pk").unwrap();
+    assert!(field.required, "PK column should have evolved to NOT NULL (expected required: true)");
+
+    // 3. Try to write NULL value - should be caught by pre-flight validation
+    let batch_with_null = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))]
+    )?;
+    
+    let res = table.write_async(vec![batch_with_null]).await;
+    assert!(res.is_err(), "Should have failed to write batch with NULL in PK column");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("Null constraint violation"), "Error message should mention null constraint violation");
+    assert!(err_msg.contains("'pk'"), "Error message should mention column 'pk'");
+    
+    Ok(())
+}

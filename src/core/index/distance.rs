@@ -274,3 +274,91 @@ pub fn sparse_l2_distance_squared(
     
     sum
 }
+
+/// Optimized L2 distance for quantized u8 vectors
+#[inline(always)]
+pub fn l2_distance_u8(a: &[u8], b: &[u8]) -> f32 {
+    let mut sum = 0;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let diff = (x as i32) - (y as i32);
+        sum += diff * diff;
+    }
+    sum as f32
+}
+
+/// Asymmetric Distance Calculation (ADC) for quantized vectors.
+/// Calculates L2 distance between a float32 query and a quantized u8 vector.
+#[inline(always)]
+pub fn l2_distance_adc(query: &[f32], encoded: &[u8], offset: f32, scale: f32) -> f32 {
+    let mut sum = 0.0;
+    let inv_scale = 1.0 / scale;
+    
+    // Unrolled for performance
+    let chunks_q = query.chunks_exact(8);
+    let chunks_e = encoded.chunks_exact(8);
+    let rem_q = chunks_q.remainder();
+    let rem_e = chunks_e.remainder();
+
+    for (q_chunk, e_chunk) in chunks_q.zip(chunks_e) {
+        for i in 0..8 {
+            let decoded = (e_chunk[i] as f32 * inv_scale) + offset;
+            let diff = q_chunk[i] - decoded;
+            sum += diff * diff;
+        }
+    }
+
+    for (q, e) in rem_q.iter().zip(rem_e.iter()) {
+        let decoded = (*e as f32 * inv_scale) + offset;
+        let diff = *q - decoded;
+        sum += diff * diff;
+    }
+    sum
+}
+
+/// Optimized L2 distance for packed 4-bit quantized vectors (u4)
+#[inline(always)]
+pub fn l2_distance_u4(a: &[u8], b: &[u8]) -> f32 {
+    let mut sum = 0;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        // Low nibbles
+        let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
+        sum += diff_low * diff_low;
+        
+        // High nibbles
+        let diff_high = (((x >> 4) & 0x0F) as i32) - (((y >> 4) & 0x0F) as i32);
+        sum += diff_high * diff_high;
+    }
+    sum as f32
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DistL2u8;
+
+impl DistL2u8 {
+    #[inline(always)]
+    pub fn distance(&self, a: &[u8], b: &[u8]) -> f32 {
+        l2_distance_u8(a, b)
+    }
+}
+
+impl super::hnsw_rs::dist::Distance<u8> for DistL2u8 {
+    fn eval(&self, va: &[u8], vb: &[u8]) -> f32 {
+        self.distance(va, vb)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DistL2u4;
+
+impl DistL2u4 {
+    #[inline(always)]
+    pub fn distance(&self, a: &[u8], b: &[u8]) -> f32 {
+        l2_distance_u4(a, b)
+    }
+}
+
+impl super::hnsw_rs::dist::Distance<u8> for DistL2u4 {
+    fn eval(&self, va: &[u8], vb: &[u8]) -> f32 {
+        self.distance(va, vb)
+    }
+}

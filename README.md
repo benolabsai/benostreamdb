@@ -17,12 +17,8 @@ A production-ready indexed data lake format that combines the transactional guar
 | **Time Travel** | ✅ Yes | ✅ Yes |
 | **Scalar Indexes** | ❌ No | ✅ RoaringBitmap |
 | **Boolean Indexes** | ❌ No | ✅ Native Boolean |
-| **Vector Search** | ❌ No | ✅ HNSW |
-| **pgvector SQL** | ❌ No | ✅ Full Compatibility |
-| **GPU Acceleration** | ❌ No | ✅ CUDA/ROCm/XPU/Metal |
-| **Torch Alignment** | ❌ No | ✅ ROCm-as-CUDA |
-| **Python Vector API** | ❌ No | ✅ NumPy-compatible |
-| **Fluent Query API** | ❌ No | ✅ Method Chaining |
+| **TurboQuant** | ❌ No | ✅ TQ8 & TQ4 (8-bit/4-bit) |
+| **Fluent Indexing API** | ❌ No | ✅ Method Chaining |
 | **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
 | **Native SQL** | ❌ No | ✅ DataFusion |
 | **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
@@ -159,10 +155,12 @@ table = hdb.Table("s3://bucket/my-table")
 import pandas as pd
 df = pd.DataFrame({
     "id": [1, 2, 3],
-    "text": ["hello", "world", "test"],
     "embedding": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
 })
-table.write_pandas(df)
+table.insert(df) # Convenient alias for write_pandas
+
+# Create high-performance vector index (TQ8 - 4x compression)
+table.add_index("embedding", "hnsw_tq8")
 
 # Query with filters (uses indexes!) - Fluent API
 results = table.query().filter("id > 1").execute()
@@ -255,6 +253,30 @@ async fn main() -> anyhow::Result<()> {
 - **Performance**: Same underlying optimized execution as traditional APIs
 - **Interoperable**: Mix with SQL queries and traditional `to_pandas()` calls
 - **GPU Acceleration**: Automatic GPU context propagation for vector operations
+- **TurboQuant Optimized**: Seamless integration with 8-bit/4-bit quantization
+
+### TurboQuant Quantization (TQ8 / TQ4)
+
+HyperStreamDB features **TurboQuant**, an optimized quantization engine that reduces vector storage costs while maintaining high search accuracy:
+
+- **TQ8 (8-bit)**: 4x compression vs. float32. Near-lossless accuracy (typically >99% recall retention). Ideal for general-purpose RAG.
+- **TQ4 (4-bit)**: 8x compression vs. float32. Maximum efficiency for massive datasets where storage cost is the primary bottleneck.
+
+```python
+# Use enterprise defaults (HNSW-TQ8)
+table.add_index("embedding", "hnsw_tq8")
+
+# High-compression mode
+table.add_index("embedding", "hnsw_tq4")
+
+# Custom HNSW-PQ configuration
+table.add_index("embedding", {
+    "type": "hnsw_pq",
+    "complexity": 32,
+    "quality": 300,
+    "compression": 32 # PQ subspaces
+})
+```
 
 ### Python Vector Distance API with GPU Acceleration
 

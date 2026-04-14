@@ -8,7 +8,7 @@ use futures::StreamExt;
 
 use crate::core::planner::{VectorSearchParams, QueryPlanner, FilterExpr, QueryFilter};
 use crate::core::reader::HybridReader;
-use crate::core::manifest::{ManifestManager, ManifestEntry, IndexFile};
+use crate::core::manifest::{ManifestManager, ManifestEntry, IndexFile, IndexAlgorithm};
 use crate::core::query::{QueryConfig, execute_vector_search_with_config, VectorSearchRequest};
 use super::fluent::TableQuery;
 use arrow::datatypes::Schema;
@@ -17,6 +17,7 @@ use crate::core::index::gpu::get_global_gpu_context;
 use crate::SegmentConfig;
 
 use super::Table;
+use crate::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
 
 impl Table {
 
@@ -265,7 +266,7 @@ impl Table {
             }
             _ => None,
         };
-        self.read_expr_with_config_async(expr, vector_filter, columns, config).await
+        self.read_expr_with_config_async(expr, vector_filter, columns, config, filter_str).await
     }
 
     pub async fn read_expr_with_config_async(
@@ -274,6 +275,7 @@ impl Table {
         vector_filter: Option<VectorSearchParams>,
         columns: Option<&[&str]>,
         config: QueryConfig,
+        filter_str: Option<&str>,
     ) -> Result<Vec<RecordBatch>> {
         use futures::StreamExt;
 
@@ -288,11 +290,7 @@ impl Table {
                    (crate::core::manifest::Manifest::default(), segments, 0)
                 }
             }
-        };
-
-
-
-        let entries_to_read = if version > 0 {
+        };        let entries_to_read = if version > 0 {
             if expr.is_some() || vector_filter.is_some() {
                 let planner = QueryPlanner::new();
                 planner.prune_entries(&all_entries, expr.as_ref(), vector_filter.as_ref()).into_iter().map(|(e, _)| e).collect()
@@ -307,7 +305,80 @@ impl Table {
                 all_entries.clone() // Already contains discovered segments if in autodetection path
             }
         };
-        // Handle vector search
+        
+        // --- SMART HYBRID TRIGGER ---
+        // If we have both a vector filter AND a text filter on a BM25/Inverted indexed column,
+        // we switch to the Hybrid Coordinator path.
+        if let (Some(ref vs_params), Some(ref e)) = (&vector_filter, &expr) {
+             let manifest = self.manifest().await?;
+             let filtered_cols = e.get_referenced_columns();
+             
+             let current_schema = manifest.schemas.iter()
+                 .find(|s| s.schema_id == manifest.current_schema_id);
+             
+             let has_bm25_index = current_schema.map(|s| {
+                 s.fields.iter().any(|f| {
+                     let matches_col = filtered_cols.contains(&f.name);
+                     let has_index = f.indexes.iter().any(|idx| {
+                         matches!(idx, IndexAlgorithm::Bm25 { .. })
+                     });
+                     if matches_col {
+                         println!("Smart Trigger Check: Column '{}' has BM25 index: {}", f.name, has_index);
+                         if !has_index {
+                             println!("  Found indexes: {:?}", f.indexes);
+                         }
+                     }
+                     matches_col && has_index
+                 })
+             }).unwrap_or(false);
+
+             if has_bm25_index {
+                 tracing::info!("Smart Trigger: Executing Hybrid Search (RRF) for columns {:?}", filtered_cols);
+                 let coordinator = HybridSearchCoordinator::new();
+                 
+                 // Extract search terms from FilterExpr for the BM25 engine
+                 let extracted_query = {
+                     let conditions = e.extract_and_conditions();
+                     let mut terms = Vec::new();
+                     for f in conditions {
+                         if filtered_cols.contains(&f.column) {
+                            if let Some(v) = &f.min {
+                                if let Some(s) = v.as_str() { terms.push(s.to_string()); }
+                            }
+                            if let Some(vals) = &f.values {
+                                for v in vals {
+                                    if let Some(s) = v.as_str() { terms.push(s.to_string()); }
+                                }
+                            }
+                         }
+                     }
+                     if terms.is_empty() {
+                         filter_str.unwrap_or("").to_string()
+                     } else {
+                         terms.join(" ")
+                     }
+                 };
+
+                 let keyword_params = KeywordSearchParams {
+                     column: filtered_cols.iter().next().unwrap().clone(),
+                     query: extracted_query,
+                 };
+
+                 let scored_results = coordinator.execute_hybrid(
+                     self,
+                     filter_str,
+                     Some(vs_params.clone()),
+                     Some(keyword_params),
+                     vs_params.k,
+                 ).await?;
+
+                 // Convert ScoredResults back to RecordBatches by fetching from Parquet
+                 // This is a simplified version of the final row-fetcher
+                 return self.fetch_results_by_id(scored_results, columns).await;
+             }
+        }
+
+        // Handle standard vector search
         if let Some(ref vs_params) = vector_filter {
              // 1. Search Disk
              let request = VectorSearchRequest::new(
@@ -322,7 +393,7 @@ impl Table {
              .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect()));
              
              let mut results = execute_vector_search_with_config(
-                entries_to_read,
+                entries_to_read.clone(),
                 self.store.clone(),
                 self.data_store.clone(),
                 &self.uri,
@@ -331,7 +402,7 @@ impl Table {
 
              // 2. Search Memory
              let memory_hits = {
-                 let idx = self.memory_index.read().unwrap();
+                 let idx = self.indexing.memory_index.read().unwrap();
                  if let Some(mem_idx) = idx.as_ref() {
                      let filter_bitmap = if let Some(ref e) = expr {
                          let buffer = self.write_buffer.read().unwrap();
@@ -506,7 +577,7 @@ impl Table {
         config: QueryConfig,
     ) -> Result<Vec<RecordBatch>> {
         let expr = FilterExpr::from_filters(filters);
-        self.read_expr_with_config_async(expr, vector_filter, columns, config).await
+        self.read_expr_with_config_async(expr, vector_filter, columns, config, None).await
     }
 
     pub async fn read_segment_expr(
@@ -545,8 +616,8 @@ impl Table {
             .with_delete_files(entry.delete_files.clone())
             .with_index_files(entry.index_files.clone())
             .with_file_size(entry.file_size_bytes as u64)
-            .with_index_all(self.index_all)
-            .with_columns_to_index(self.index_columns.read().unwrap().clone());
+            .with_index_all(self.indexing.index_all)
+            .with_columns_to_index(self.indexing.index_columns.read().unwrap().clone());
 
         let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
         if let Some(s) = &iceberg_schema {
@@ -665,5 +736,131 @@ impl Table {
             }
         }
         Ok(entries)
+    }
+
+    pub async fn execute_vector_search_as_scored(
+        &self,
+        params: VectorSearchParams,
+    ) -> Result<Vec<ScoredResult>> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
+        
+        let request = VectorSearchRequest::new(
+            params.column.clone(),
+            params.query.clone(),
+            params.k,
+            params.metric,
+        ).with_ef_search(params.ef_search);
+
+        // For now, we reuse the existing vector search and convert RecordBatches to ScoredResults
+        // In a future optimization, we'll return ScoredResults directly from the reader to avoid Parquet I/O if possible
+        let batches = execute_vector_search_with_config(
+            all_entries,
+            self.store.clone(),
+            self.data_store.clone(),
+            &self.uri,
+            request,
+        ).await?;
+
+        let mut scored_results = Vec::new();
+        for batch in batches {
+            // RecordBatch results from vector search include a "distance" column
+            let dist_col = batch.column(batch.num_columns() - 1)
+                .as_any()
+                .downcast_ref::<arrow::array::Float32Array>()
+                .ok_or_else(|| anyhow::anyhow!("Missing distance column in vector search result"))?;
+            
+            // Note: Parallel vector search currently doesn't preserve segment/row IDs in the final RecordBatch
+            // We'll need to add those to the schema in Phase 3. 
+            // For Phase 2, we use a synthetic segment ID "vector_path"
+            for i in 0..batch.num_rows() {
+                scored_results.push(ScoredResult {
+                    segment_id: "vector_path".to_string(),
+                    row_id: i as u32,
+                    score: dist_col.value(i),
+                });
+            }
+        }
+        Ok(scored_results)
+    }
+
+    pub async fn execute_keyword_search_as_scored(
+        &self,
+        params: KeywordSearchParams,
+    ) -> Result<Vec<ScoredResult>> {
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+        
+        let mut all_scored = Vec::new();
+        for entry in all_entries {
+            let file_path_str = entry.file_path.clone();
+            let segment_id = file_path_str
+                .split('/')
+                .next_back()
+                .unwrap_or(&file_path_str)
+                .strip_suffix(".parquet")
+                .unwrap_or(&file_path_str);
+
+            let config = SegmentConfig::new(&self.uri, segment_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone())
+                .with_record_count(entry.record_count as u64);
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            let matches = reader.keyword_search_index(&params.column, &params.query, 1000, None).await?;
+            
+            for (row_id, score) in matches {
+                all_scored.push(ScoredResult {
+                    segment_id: segment_id.to_string(),
+                    row_id: row_id as u32,
+                    score,
+                });
+            }
+        }
+        Ok(all_scored)
+    }
+
+    /// Helper to fetch full RecordBatches for a set of fused IDs
+    pub async fn fetch_results_by_id(
+        &self,
+        results: Vec<ScoredResult>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        if results.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Group by segment to minimize I/O
+        let mut by_segment: HashMap<String, Vec<(u32, f32)>> = HashMap::new();
+        for r in results {
+            by_segment.entry(r.segment_id).or_default().push((r.row_id, r.score));
+        }
+
+        let mut final_batches = Vec::new();
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+        
+        for (seg_id, rows) in by_segment {
+            if seg_id == "vector_path" { continue; } 
+
+            // Find segment in all entries
+            let entry = all_entries.iter()
+                .find(|e| e.file_path.contains(&seg_id))
+                .ok_or_else(|| anyhow::anyhow!("Segment {} not found in manifest", seg_id))?;
+
+            let config = SegmentConfig::new(&self.uri, &seg_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone());
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            
+            // Convert fused row IDs and scores to RecordBatch
+            let batch = reader.read_rows_by_id(rows, columns).await?;
+            final_batches.push(batch);
+        }
+
+        Ok(final_batches)
     }
 }

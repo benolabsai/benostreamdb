@@ -42,7 +42,7 @@ fn bench_query_indexed(c: &mut Criterion) {
         .with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(writer_config);
     writer.write_batch(&batch).unwrap();
-    writer.build_indexes(&batch).unwrap();
+    writer.build_indexes(&batch, 0).unwrap();
     let entry = writer.to_manifest_entry();
     
     // For Reader: Use relative path logic since store is rooted at tmp_dir
@@ -81,7 +81,7 @@ fn bench_vector_search(c: &mut Criterion) {
     
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
-    writer.build_indexes(&batch).unwrap();
+    writer.build_indexes(&batch, 0).unwrap();
     
     // Generate a random query vector
     let mut rng = rand::thread_rng();
@@ -128,7 +128,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
     
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
-    writer.build_indexes(&batch).unwrap();
+    writer.build_indexes(&batch, 0).unwrap();
     
     let mut rng = rand::thread_rng();
     let query_vec: Vec<f32> = (0..vec_dim).map(|_| rng.gen()).collect();
@@ -192,7 +192,7 @@ fn bench_high_selectivity(c: &mut Criterion) {
         .with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
-    writer.build_indexes(&batch).unwrap();
+    writer.build_indexes(&batch, 0).unwrap();
     let entry = writer.to_manifest_entry();
     
     // For Reader: Use relative path logic
