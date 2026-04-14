@@ -205,7 +205,7 @@ impl ExecutionPlan for HyperStreamExec {
                     // Hybrid Search: Vector + Scalar
                     use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
                     
-                    let request = VectorSearchRequest::new(
+                    let mut request = VectorSearchRequest::new(
                         vp.column.clone(),
                         vp.query.clone(),
                         vp.k,
@@ -214,6 +214,11 @@ impl ExecutionPlan for HyperStreamExec {
                     .with_filter(filter_expr)
                     .with_config(table.query_config().clone())
                     .with_ef_search(vp.ef_search);
+
+                    // Pass projected columns if available
+                    if let Some(ref proj_names) = col_names_owned {
+                        request = request.with_columns(Some(proj_names.clone()));
+                    }
                     
                     match execute_vector_search_with_config(
                         vec![entry.clone()],
@@ -225,15 +230,25 @@ impl ExecutionPlan for HyperStreamExec {
                         Ok(batches) => {
                             for batch in batches {
                                 let mut b = batch;
-                                if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                
+                                // If batch has one extra column (distance) that isn't in expected schema, drop it
+                                if b.num_columns() == expected_schema_inner.fields().len() + 1 && b.schema().fields().last().unwrap().name() == "distance" {
+                                    let mut cols = b.columns().to_vec();
+                                    cols.pop();
+                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
+                                    options.row_count = Some(b.num_rows());
+                                    b = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), cols, &options)
+                                        .map_err(|e| DataFusionError::Execution(format!("Schema mismatch in Hybrid Search: {}", e)))?;
+                                } else if b.num_columns() == expected_schema_inner.fields().len() {
                                     // Soft-replace schema to ignore metadata mismatches
                                     let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
                                     options.row_count = Some(b.num_rows());
                                     let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
-                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in Vector Search: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
+                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in Hybrid Search: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
                                     b = b_new;
                                 } else {
-                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in Vector Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                    tracing::error!("Field count mismatch: Expected {:?}, Got {:?}", expected_schema_inner.fields().iter().map(|f| f.name()).collect::<Vec<_>>(), b.schema().fields().iter().map(|f| f.name()).collect::<Vec<_>>());
+                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in Hybrid Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
                                     return;
                                 }
                                 yield Ok(b);

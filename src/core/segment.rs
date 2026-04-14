@@ -27,6 +27,9 @@ pub struct HybridSegmentWriter {
     pub store: Option<Arc<dyn ObjectStore>>,
     pub primary_key: Vec<String>,
     pub index_configs: HashMap<String, crate::core::table::ColumnIndexConfig>,
+    // Add additive buffers for multi-batch indexing
+    pub(crate) inverted_data: std::sync::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
+    pub index_metadata: std::sync::Mutex<HashMap<String, String>>,
 }
 
 impl HybridSegmentWriter {
@@ -39,11 +42,28 @@ impl HybridSegmentWriter {
             store: None,
             primary_key: Vec::new(),
             index_configs: HashMap::new(),
+            inverted_data: std::sync::Mutex::new(HashMap::new()),
+            index_metadata: std::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    pub fn with_index_configs(mut self, configs: HashMap<String, crate::core::table::ColumnIndexConfig>) -> Self {
+        self.index_configs = configs;
+        self
     }
 
     pub fn with_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
         self.store = Some(store);
+        self
+    }
+
+    pub fn with_existing_stats(self, stats: HashMap<String, ColumnStats>) -> Self {
+        *self.stats.lock().unwrap() = stats;
+        self
+    }
+
+    pub fn with_record_count(self, count: usize) -> Self {
+        self.record_count.store(count, std::sync::atomic::Ordering::SeqCst);
         self
     }
 
@@ -105,22 +125,35 @@ impl HybridSegmentWriter {
                     offset: None,
                     length: None,
                 });
-            } else if filename.contains(".hnsw.") || filename.ends_with(".centroids.parquet") {
+            } else if filename.ends_with(".hnsw.graph") {
                    // Vector Index
-                   let col_opt = filename.split('.').nth(1).map(|s| s.to_string());
-
-                   if let Some(col) = col_opt {
-                       if !index_files.iter().any(|idx| idx.column_name.as_ref() == Some(&col) && idx.index_type == "vector") {
-                           let base_path = format!("{}.{}", self.config.segment_id, col);
-                           index_files.push(crate::core::manifest::IndexFile {
-                               file_path: base_path,
-                               index_type: "vector".to_string(),
-                               column_name: Some(col),
-                               blob_type: None,
-                               offset: None,
-                               length: None,
-                           });
+                   let parts: Vec<&str> = filename.split('.').collect();
+                   if parts.len() >= 3 {
+                       let col = parts[1].to_string();
+                       let base_parts = &parts[..parts.len()-2];
+                       
+                       // Strip .cluster_X part to find the algo metadata
+                       let mut base_path = base_parts.join(".");
+                       if let Some(c_idx) = base_path.find(".cluster_") {
+                           base_path = base_path[..c_idx].to_string();
                        }
+                       
+                       let algo_name = self.index_metadata.lock().unwrap().get(&base_path).cloned();
+                       
+                       // The manifest file_path should be the unique base for THIS variant
+                       let mut manifest_path_raw = base_parts.join(".");
+                       if let Some(c_idx) = manifest_path_raw.find(".cluster_") {
+                           manifest_path_raw = manifest_path_raw[..c_idx].to_string();
+                       }
+
+                       index_files.push(crate::core::manifest::IndexFile {
+                           file_path: manifest_path_raw,
+                           index_type: "vector".to_string(),
+                           column_name: Some(col),
+                           blob_type: algo_name,
+                           offset: None,
+                           length: None,
+                       });
                    }
             }
         }
@@ -405,10 +438,88 @@ impl HybridSegmentWriter {
         Ok(final_paths)
     }
 
+    /// Flush all buffered indexes (Inverted, HNSW, etc) to storage and track them.
+    /// This should be called ONCE after all build_indexes() calls for a segment are complete.
+    pub async fn finish_indexing(&self) -> Result<()> {
+        let store = self.store.as_ref().ok_or_else(|| anyhow::anyhow!("No store configured for finishing indexes"))?;
+        
+        // Determine the directory prefix from the existing parquet path
+        let parent_prefix = if let Some(p) = &self.config.parquet_path {
+            if let Some(pos) = p.rfind('/') {
+                &p[..pos + 1]
+            } else {
+                ""
+            }
+        } else {
+            ""
+        };
+
+        // 1. Process Inverted Index Buffers - Drain the buffer into a local variable
+        let inverted_data = {
+            let mut inverted_lock = self.inverted_data.lock().unwrap();
+            std::mem::take(&mut *inverted_lock)
+        }; // Guard is dropped here
+
+        for (col_name, inverted_map) in inverted_data {
+            tracing::info!("Finishing Inverted Index for column '{}' ({} unique tokens)", col_name, inverted_map.len());
+            
+            // Build Arrow Arrays for Parquet
+            let mut key_builder = arrow::array::StringBuilder::new();
+            let value_builder = arrow::array::UInt32Builder::new();
+            let mut list_builder = arrow::array::ListBuilder::new(value_builder);
+
+            for (key, mut row_ids) in inverted_map {
+                key_builder.append_value(&key);
+                row_ids.sort_unstable();
+                let mut last_id = 0;
+                for row_id in row_ids {
+                    list_builder.values().append_value(row_id - last_id);
+                    last_id = row_id;
+                }
+                list_builder.append(true);
+            }
+
+            let key_array = std::sync::Arc::new(key_builder.finish());
+            let list_array = std::sync::Arc::new(list_builder.finish());
+
+            let inv_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+                arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
+                arrow::datatypes::Field::new("row_ids", arrow::datatypes::DataType::List(
+                    std::sync::Arc::new(arrow::datatypes::Field::new("item", arrow::datatypes::DataType::UInt32, true))
+                ), false),
+            ]));
+
+            let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
+            let filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
+            let full_path_str = format!("{}{}", parent_prefix, filename);
+            let target_path = object_store::path::Path::from(full_path_str.clone());
+
+            // Write to memory buffer then to store
+            let mut buffer = Vec::new();
+            {
+                let props = parquet::file::properties::WriterProperties::builder().build();
+                let mut writer = ArrowWriter::try_new(&mut buffer, inv_schema, Some(props))?;
+                writer.write(&inv_batch)?;
+                writer.close()?;
+            }
+            
+            store.put(&target_path, buffer.into()).await?;
+
+            {
+                let mut files = self.generated_files.lock().unwrap();
+                files.push(full_path_str.clone());
+            }
+            
+            tracing::info!("  Inverted Index written to storage: {}", full_path_str);
+        }
+
+        Ok(())
+    }
+
     /// Build indexes for a batch (can be called asynchronously after write_batch).
     /// This is the expensive operation that should run in background.
-    pub fn build_indexes(&self, batch: &RecordBatch) -> Result<()> {
-        tracing::info!("Building indexes for batch of {} rows", batch.num_rows());
+    pub fn build_indexes(&self, batch: &RecordBatch, row_offset: usize) -> Result<()> {
+        tracing::info!("Building indexes for batch of {} rows at offset {}", batch.num_rows(), row_offset);
         let schema = batch.schema();
         let _fields = schema.fields();
 
@@ -424,7 +535,7 @@ impl HybridSegmentWriter {
                 let in_config_list = self.config.columns_to_index.as_ref().map(|cols| cols.contains(&col_name.to_string())).unwrap_or(false);
                 
                 if self.config.index_all || is_pk || is_vector || in_config_list {
-                    self.index_column(col_name, col)
+                    self.index_column(col_name, col, row_offset)
                 } else {
                     Ok(())
                 }
@@ -435,7 +546,7 @@ impl HybridSegmentWriter {
 
     /// Build index for a single column. 
     /// Can be called during ingestion OR for post-hoc backfilling.
-    pub fn index_column(&self, col_name: &str, col_array: &std::sync::Arc<dyn Array>) -> Result<()> {
+    pub fn index_column(&self, col_name: &str, col_array: &std::sync::Arc<dyn Array>, row_offset: usize) -> Result<()> {
         // Apply per-column device override if specified
         if let Some(device_str) = self.config.column_devices.get(col_name) {
             tracing::info!("Applying device override for column {}: {}", col_name, device_str);
@@ -484,8 +595,7 @@ impl HybridSegmentWriter {
         };
 
         match col_array.data_type() {
-                // Scalar Indexing (RoaringBitmap for Int32)
-                arrow::datatypes::DataType::Int32 => {
+                 arrow::datatypes::DataType::Int32 => {
                     tracing::info!("Indexing Int32 column: {}", col_name);
                     let _array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
                     
@@ -601,26 +711,52 @@ impl HybridSegmentWriter {
                         // Build vector index ONLY if configured for immediate indexing
                         let in_config = self.config.columns_to_index.as_ref().map(|cols| cols.iter().any(|c| c == col_name)).unwrap_or(false);
                         if self.config.index_all || in_config {
-                            let use_pq = vectors.len() > 5_000;
-                            if use_pq {
-                                tracing::info!("Auto-enabling PQ for segment ({} vectors)", vectors.len());
+                            let mut algos = self.index_configs.get(col_name)
+                                .map(|c| c.algorithms.clone())
+                                .unwrap_or_else(|| self.config.column_algorithms.get(col_name).cloned().unwrap_or_default());
+                            
+                            // If it's a vector column but no specific algorithms were provided, use the global default (TurboQuant 8-bit)
+                            if algos.is_empty() {
+                                tracing::info!("No index algorithm specified for {}; defaulting to hnsw_tq8", col_name);
+                                algos.push(crate::core::manifest::IndexAlgorithm::default());
                             }
-                            tracing::info!("Building HNSW-IVF index (blocking): {} vectors, {} dims, use_pq={}", vectors.len(), _dim, use_pq);
-                            let hnsw_ivf_index = HnswIvfIndex::build(vectors, crate::core::index::VectorMetric::L2, None, None, use_pq)
-                                .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
-                            
-                            let local_base_path = local_staging_dir.join(format!("{}.{}", self.config.segment_id, col_name));
-                            let saved_files = hnsw_ivf_index.save(local_base_path.to_str().unwrap())
-                                .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
-                            
-                            {
-                                let mut files = self.generated_files.lock().unwrap();
-                                files.extend(saved_files);
+
+                            for (idx, algo) in algos.iter().enumerate() {
+                                let hnsw_ivf_index = HnswIvfIndex::build(vectors.clone(), crate::core::index::VectorMetric::L2, None, None, algo)
+                                    .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
+                                
+                                let algo_id = match algo {
+                                    crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",
+                                    crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
+                                    crate::core::manifest::IndexAlgorithm::HnswTq4 { .. } => "tq4",
+                                    crate::core::manifest::IndexAlgorithm::HnswTq8 { .. } => "tq8",
+                                    _ => "idx",
+                                };
+                                
+                                let suffix = if algos.len() > 1 { 
+                                    format!("{}.{}.{}", col_name, algo_id, idx) 
+                                } else { 
+                                    format!("{}.{}", col_name, algo_id) 
+                                };
+                                let local_base_path = local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
+                                
+                                 let saved_files = hnsw_ivf_index.save(local_base_path.to_str().unwrap())
+                                    .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
+                                
+                                {
+                                    let mut meta = self.index_metadata.lock().unwrap();
+                                    meta.insert(format!("{}.{}", self.config.segment_id, suffix), algo.to_string());
+                                }
+
+                                {
+                                    let mut files = self.generated_files.lock().unwrap();
+                                    files.extend(saved_files);
+                                }
                             }
                         } else {
                             tracing::info!("Skipping vector indexing for column {} (delayed/background mode)", col_name);
                         }
-                     }
+                    }
                 },
                 arrow::datatypes::DataType::Int64 => {
                     tracing::info!("Indexing Int64 column: {}", col_name);
@@ -842,65 +978,25 @@ impl HybridSegmentWriter {
                     
                     // Fetch tokenizer if configured
                     let tokenizer_name = config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| "identity".to_string());
+                    tracing::info!("  Using tokenizer: '{}' for column '{}'", tokenizer_name, col_name);
                     let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(&tokenizer_name)
                         .unwrap_or_else(|| crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get("identity").unwrap());
 
-                    // Build inverted index: Token -> RowIDs
-                    let mut inverted_map: std::collections::HashMap<String, Vec<u32>> = std::collections::HashMap::new();
-                    for (row_i, val) in array.iter().enumerate() {
+                    // Build inverted index: Token -> RowIDs (buffered in memory per segment)
+                    let mut inverted_lock = self.inverted_data.lock().unwrap();
+                    let col_inverted_map = inverted_lock.entry(col_name.to_string()).or_default();
+                    
+                    for (batch_i, val) in array.iter().enumerate() {
                         if let Some(v) = val {
                             let tokens = tokenizer.tokenize(v);
+                            let global_row_id = (row_offset + batch_i) as u32;
                             for token in tokens {
-                                inverted_map.entry(token).or_default().push(row_i as u32);
+                                col_inverted_map.entry(token).or_default().push(global_row_id);
                             }
                         }
                     }
                     
-                    tracing::info!("  Found {} unique values", inverted_map.len());
-                    
-                    // Build Arrow Arrays for Parquet
-                    let mut key_builder = arrow::array::StringBuilder::new();
-                    let value_builder = arrow::array::UInt32Builder::new();
-                    let mut list_builder = arrow::array::ListBuilder::new(value_builder);
-
-                    for (key, mut row_ids) in inverted_map {
-                        key_builder.append_value(&key);
-                        row_ids.sort_unstable();
-                        let mut last_id = 0;
-                        for row_id in row_ids {
-                            list_builder.values().append_value(row_id - last_id);
-                            last_id = row_id;
-                        }
-                        list_builder.append(true);
-                    }
-
-                    let key_array = std::sync::Arc::new(key_builder.finish());
-                    let list_array = std::sync::Arc::new(list_builder.finish());
-
-                    let inv_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
-                        arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
-                        arrow::datatypes::Field::new("row_ids", arrow::datatypes::DataType::List(
-                            std::sync::Arc::new(arrow::datatypes::Field::new("item", arrow::datatypes::DataType::UInt32, true))
-                        ), false),
-                    ]));
-
-                    let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
-                    let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
-                    let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
-                    let inv_file = File::create(&inv_tmp)?;
-                    let props = parquet::file::properties::WriterProperties::builder().build();
-                    let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
-                    writer.write(&inv_batch)?;
-                    writer.close()?;
-                    std::fs::rename(&inv_tmp, &inv_path)?;
-
-                    {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
-                    }
-                    
-                    tracing::info!("String Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("  Buffered tokens for {} rows in column '{}'", array.len(), col_name);
                 },
                 
                 // Date32 Inverted Index - for date equality/range filtering
@@ -1334,7 +1430,7 @@ impl HybridSegmentWriter {
                     // Cast to value type to unpack
                     let casted = arrow::compute::cast(col_array, value_type)
                         .map_err(|e| anyhow::anyhow!("Failed to unpack dictionary: {}", e))?;
-                    self.index_column(col_name, &casted)?;
+                    self.index_column(col_name, &casted, row_offset)?;
                 },
 
 
@@ -1443,7 +1539,7 @@ mod tests {
         writer.write_batch(&batch)?;
         
         // Build indexes (required for index files to be created)
-        writer.build_indexes(&batch)?;
+        writer.build_indexes(&batch, 0)?;
 
         // 3. Verify Files
         let base = format!("{}/{}", config.base_path, config.segment_id);

@@ -14,8 +14,15 @@ use pyo3::ffi::Py_uintptr_t;
 use crate::core::catalog::{Catalog, nessie::NessieClient, rest::RestCatalogClient, glue::GlueCatalogClient, hive::HiveMetastoreClient, unity::UnityCatalogClient, jdbc::JdbcCatalogClient, CatalogConfig, CatalogType};
 use tokio::runtime::Runtime;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 static SQL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").unwrap());
+
+/// Module-level global Tokio runtime for all Python-bound operations.
+/// Sharing a single runtime prevents 'Cannot drop a runtime in a context where blocking is not allowed' panics.
+static TOKIO_RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
+    Arc::new(Runtime::new().expect("Failed to create unified Tokio runtime for HyperStreamDB"))
+});
 
 fn sanitize_sql(query: &str) -> String {
     SQL_REGEX.replace_all(query, "l2_distance($1, $2)").to_string()
@@ -23,29 +30,122 @@ fn sanitize_sql(query: &str) -> String {
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use crate::python_gpu_context::PyDevice;
+use crate::core::manifest::IndexAlgorithm;
 
 // Helper function to parse metric string to VectorMetric enum
 // Uses native Rust names: L2, Cosine, InnerProduct, L1, Hamming, Jaccard
 // Also accepts lowercase aliases for backward compatibility
+
 fn parse_metric(metric_str: &str) -> PyResult<VectorMetric> {
     match metric_str {
-        // Lowercase (preferred - Pythonic convention)
-        "l2" => Ok(VectorMetric::L2),
-        "cosine" => Ok(VectorMetric::Cosine),
-        "innerproduct" | "inner_product" => Ok(VectorMetric::InnerProduct),
-        "l1" => Ok(VectorMetric::L1),
-        "hamming" => Ok(VectorMetric::Hamming),
-        "jaccard" => Ok(VectorMetric::Jaccard),
-        // Uppercase aliases (for compatibility with Rust enum names)
-        "L2" => Ok(VectorMetric::L2),
-        "Cosine" => Ok(VectorMetric::Cosine),
-        "InnerProduct" => Ok(VectorMetric::InnerProduct),
-        "L1" => Ok(VectorMetric::L1),
-        "Hamming" => Ok(VectorMetric::Hamming),
-        "Jaccard" => Ok(VectorMetric::Jaccard),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            format!("Invalid metric '{}'. Use: l2, cosine, innerproduct (or inner_product), l1, hamming, jaccard", metric_str)
-        )),
+        "l2" | "L2" => Ok(VectorMetric::L2),
+        "cosine" | "Cosine" => Ok(VectorMetric::Cosine),
+        "innerproduct" | "inner_product" | "InnerProduct" => Ok(VectorMetric::InnerProduct),
+        "l1" | "L1" => Ok(VectorMetric::L1),
+        "hamming" | "Hamming" => Ok(VectorMetric::Hamming),
+        "jaccard" | "Jaccard" => Ok(VectorMetric::Jaccard),
+        _ => Err(pyo3::exceptions::PyValueError::new_err(format!("Invalid metric '{}'", metric_str))),
+    }
+}
+
+fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> {
+    if let Ok(s) = val.extract::<String>() {
+        match s.to_lowercase().as_str() {
+            "hnsw" => Ok(IndexAlgorithm::Hnsw { 
+                metric: "l2".to_string(), 
+                complexity: 16, 
+                quality: 200, 
+                build_device: None, 
+                search_device: None 
+            }),
+            "hnsw_pq" | "pq" => Ok(IndexAlgorithm::HnswPq { 
+                metric: "l2".to_string(), 
+                complexity: 16, 
+                quality: 200, 
+                compression: 8 
+            }),
+            "hnsw_tq4" | "tq4" => Ok(IndexAlgorithm::HnswTq4 { 
+                metric: "l2".to_string(), 
+                complexity: 16, 
+                quality: 200 
+            }),
+            "hnsw_tq8" | "tq8" => Ok(IndexAlgorithm::HnswTq8 { 
+                metric: "l2".to_string(), 
+                complexity: 16, 
+                quality: 200 
+            }),
+            "bm25" => Ok(IndexAlgorithm::Bm25 {
+                k1: 1.2,
+                b: 0.75,
+                tokenizer: "default".to_string(),
+            }),
+            "bloom" => Ok(IndexAlgorithm::Bloom { fpr: 0.05 }),
+            "bitmap" | "inverted" => Ok(IndexAlgorithm::Bitmap),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown index type: {}", s))),
+        }
+    } else if let Ok(dict) = val.downcast::<PyDict>() {
+        let type_str: String = dict.get_item("type")?.ok_or_else(|| pyo3::exceptions::PyKeyError::new_err("Missing 'type' key in index config"))?.extract()?;
+        match type_str.to_lowercase().as_str() {
+            "hnsw" => {
+                let metric = dict.get_item("metric")?.and_then(|v| v.extract::<String>().ok()).unwrap_or_else(|| "l2".to_string());
+                let complexity = dict.get_item("complexity")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("m").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(16);
+                let quality = dict.get_item("quality")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("ef_construction").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(200);
+                let build_device = dict.get_item("build_device")?.and_then(|v| v.extract::<String>().ok());
+                let search_device = dict.get_item("search_device")?.and_then(|v| v.extract::<String>().ok());
+                Ok(IndexAlgorithm::Hnsw { metric, complexity, quality, build_device, search_device })
+            },
+            "hnsw_pq" | "pq" => {
+                let metric = dict.get_item("metric")?.and_then(|v| v.extract::<String>().ok()).unwrap_or_else(|| "l2".to_string());
+                let compression = dict.get_item("compression")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("subspaces").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(8);
+                let complexity = dict.get_item("complexity")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("m").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(16);
+                let quality = dict.get_item("quality")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("ef_construction").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(200);
+                Ok(IndexAlgorithm::HnswPq { metric, complexity, quality, compression })
+            },
+            "hnsw_tq4" | "tq4" => {
+                let metric = dict.get_item("metric")?.and_then(|v| v.extract::<String>().ok()).unwrap_or_else(|| "l2".to_string());
+                let complexity = dict.get_item("complexity")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("m").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(16);
+                let quality = dict.get_item("quality")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("ef_construction").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(200);
+                Ok(IndexAlgorithm::HnswTq4 { metric, complexity, quality })
+            },
+            "hnsw_tq8" | "tq8" => {
+                let metric = dict.get_item("metric")?.and_then(|v| v.extract::<String>().ok()).unwrap_or_else(|| "l2".to_string());
+                let complexity = dict.get_item("complexity")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("m").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(16);
+                let quality = dict.get_item("quality")?.and_then(|v| v.extract::<usize>().ok())
+                    .or_else(|| dict.get_item("ef_construction").ok().flatten().and_then(|v| v.extract::<usize>().ok()))
+                    .unwrap_or(200);
+                Ok(IndexAlgorithm::HnswTq8 { metric, complexity, quality })
+            },
+            "bm25" => {
+                let k1 = dict.get_item("k1")?.and_then(|v| v.extract().ok()).unwrap_or(1.2);
+                let b = dict.get_item("b")?.and_then(|v| v.extract().ok()).unwrap_or(0.75);
+                let tokenizer = dict.get_item("tokenizer")?.and_then(|v| v.extract().ok()).unwrap_or_else(|| "default".to_string());
+                Ok(IndexAlgorithm::Bm25 { k1, b, tokenizer })
+            },
+            "bloom" => {
+                let fpr = dict.get_item("fpr")?.and_then(|v| v.extract().ok()).unwrap_or(0.05);
+                Ok(IndexAlgorithm::Bloom { fpr })
+            },
+            "bitmap" | "inverted" => Ok(IndexAlgorithm::Bitmap),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(format!("Unknown index type: {}", type_str))),
+        }
+    } else {
+        Err(pyo3::exceptions::PyTypeError::new_err("Index algorithm must be a string or a dict"))
     }
 }
 
@@ -195,10 +295,11 @@ impl PyDataType {
     #[staticmethod]
     fn timestamp_us() -> Self { Self { dt: DataType::Timestamp(TimeUnit::Microsecond, None) } }
     #[staticmethod]
-    fn vector(dim: usize) -> Self {
+    #[pyo3(signature = (dim, nullable=true))]
+    fn vector(dim: usize, nullable: bool) -> Self {
         Self {
             dt: DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Float32, true)),
+                Arc::new(Field::new("item", DataType::Float32, nullable)),
                 dim as i32,
             )
         }
@@ -218,11 +319,13 @@ pub struct PyField {
 #[pymethods]
 impl PyField {
     #[new]
-    #[pyo3(signature = (name, data_type, nullable=true))]
-    fn new(name: String, data_type: PyDataType, nullable: bool) -> Self {
-        Self {
-            inner: Field::new(name, data_type.dt, nullable),
+    #[pyo3(signature = (name, data_type, nullable=true, metadata=None))]
+    fn new(name: String, data_type: PyDataType, nullable: bool, metadata: Option<HashMap<String, String>>) -> Self {
+        let mut field = Field::new(name, data_type.dt, nullable);
+        if let Some(m) = metadata {
+            field = field.with_metadata(m);
         }
+        Self { inner: field }
     }
 
     fn __repr__(&self) -> String {
@@ -258,14 +361,26 @@ pub struct PySchema {
     pub(crate) inner: arrow::datatypes::SchemaRef,
 }
 
+#[pymethods]
 impl PySchema {
-    pub fn new_internal(fields: Vec<PyField>) -> Self {
+    #[new]
+    #[pyo3(signature = (fields, metadata=None))]
+    fn new(fields: Vec<PyField>, metadata: Option<HashMap<String, String>>) -> Self {
         let arrow_fields: Vec<Field> = fields.into_iter().map(|f| f.inner).collect();
+        let mut schema = Schema::new(arrow_fields);
+        if let Some(m) = metadata {
+            schema = schema.with_metadata(m);
+        }
         Self {
-            inner: Arc::new(Schema::new(arrow_fields)),
+            inner: Arc::new(schema),
         }
     }
+
+    fn __repr__(&self) -> String {
+        format!("Schema(fields={:?})", self.inner.fields())
+    }
 }
+
 
 #[pyclass(name = "ManifestEntry")]
 #[derive(Clone, Debug)]
@@ -319,49 +434,28 @@ impl PyManifest {
     }
 }
 
-#[pymethods]
-impl PySchema {
-    #[new]
-    fn new(fields: Vec<PyField>) -> Self {
-        Self::new_internal(fields)
-    }
-
-    fn __repr__(&self) -> String {
-        format!("Schema(fields={:?})", self.inner.fields())
-    }
-}
 
 /// High-level Table API - Pandas-compatible interface
 /// This is a thin Python wrapper around the core Rust Table struct
 #[pyclass(name = "Table")]
 pub struct PyTable {
     table: Table,
-    /// Dedicated runtime for parallel query execution (bypasses Python GIL)
-    query_pool: Arc<Runtime>,
     device: Option<Py<PyDevice>>,
 }
 
 impl PyTable {
     pub fn new_internal(uri: &str, device: Option<Py<PyDevice>>) -> Result<Self, anyhow::Error> {
-        let table = Table::new(uri.to_string())?;
-        // Create dedicated runtime for parallel query execution
-        // This runtime is separate from the table's internal runtime
-        // and allows us to run multiple queries in parallel, bypassing Python GIL
-        let query_pool = Arc::new(
-            Runtime::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create query pool runtime: {}", e))?
-        );
-        Ok(PyTable { table, query_pool, device })
+        let mut table = TOKIO_RUNTIME.block_on(Table::builder(uri.to_string())
+            .with_runtime(TOKIO_RUNTIME.clone())
+            .build_async())?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable { table, device })
     }
 
     pub fn create_internal(uri: &str, schema: arrow::datatypes::SchemaRef, device: Option<Py<PyDevice>>) -> Result<Self, anyhow::Error> {
-        let table = Table::create(uri.to_string(), schema)?;
-        // Create dedicated runtime for parallel query execution
-        let query_pool = Arc::new(
-            Runtime::new()
-                .map_err(|e| anyhow::anyhow!("Failed to create query pool runtime: {}", e))?
-        );
-        Ok(PyTable { table, query_pool, device })
+        let mut table = TOKIO_RUNTIME.block_on(Table::create_async(uri.to_string(), schema))?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable { table, device })
     }
 }
 
@@ -390,35 +484,27 @@ impl PyTable {
         let rust_schema = extract_schema(schema)?;
         let rust_spec = extract_partition_spec(partition_spec)?;
         
-        let rt = Arc::new(Runtime::new()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?);
-        
-        let mut table = rt.block_on(Table::create_partitioned_async(uri.to_string(), rust_schema, rust_spec))
+        let mut table = TOKIO_RUNTIME.block_on(Table::create_partitioned_async(uri.to_string(), rust_schema, rust_spec))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             
         // CRITICAL: Attach the runtime to the table so sync methods don't panic
-        table.rt = Some(rt.clone());
-        tracing::debug!("Rust Table created with runtime: {}", table.rt.is_some());
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        tracing::debug!("Rust Table created with global runtime");
         
-        let query_pool = rt;
-        Ok(PyTable { table, query_pool, device })
+        Ok(PyTable { table, device })
     }
 
     /// Register an existing Iceberg table
     #[staticmethod]
     #[pyo3(signature = (uri, iceberg_metadata_uri))]
     fn register_external(uri: &str, iceberg_metadata_uri: &str) -> PyResult<Self> {
-        let rt = Arc::new(Runtime::new()
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create runtime: {}", e)))?);
-        
-        let mut table = rt.block_on(Table::register_external(uri.to_string(), iceberg_metadata_uri))
+        let mut table = TOKIO_RUNTIME.block_on(Table::register_external(uri.to_string(), iceberg_metadata_uri))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             
         // CRITICAL: Attach the runtime to the table
-        table.rt = Some(rt.clone());
+        table.rt = Some(TOKIO_RUNTIME.clone());
             
-        let query_pool = rt;
-        Ok(PyTable { table, query_pool, device: None })
+        Ok(PyTable { table, device: None })
     }
     
     /// Override parallel readers for vector search (disables auto-detection)
@@ -446,7 +532,7 @@ impl PyTable {
     /// Start a background observer to watch an external Iceberg table for changes
     fn spawn_iceberg_observer(&self, py: Python<'_>, iceberg_metadata_uri: &str, interval_seconds: u64) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.spawn_iceberg_observer(
+            TOKIO_RUNTIME.block_on(self.table.spawn_iceberg_observer(
                 iceberg_metadata_uri.to_string(),
                 std::time::Duration::from_secs(interval_seconds)
             ))
@@ -478,32 +564,90 @@ impl PyTable {
     /// Add a column to the primary key.
     fn add_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.add_primary_key(column))
+            TOKIO_RUNTIME.block_on(self.table.add_primary_key(column))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Remove a column from the primary key.
     fn drop_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.drop_primary_key(column))
+            TOKIO_RUNTIME.block_on(self.table.drop_primary_key(column))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Set indexing configuration for a specific column
-    #[pyo3(signature = (column, enabled=true, tokenizer=None, device=None))]
-    fn set_index_config(&mut self, column: String, enabled: bool, tokenizer: Option<String>, device: Option<String>) {
-        self.table.set_index_config(column, enabled, tokenizer, device);
+    /// Update indexing specifications for multiple columns at once.
+    fn set_index_columns(&mut self, py: Python<'_>, config: Bound<'_, PyDict>) -> PyResult<()> {
+        let mut rust_config = HashMap::new();
+        for (col, val) in config.into_iter() {
+            let col_name: String = col.extract()?;
+            let mut algs = Vec::new();
+            
+            if let Ok(list) = val.downcast::<pyo3::types::PyList>() {
+                for item in list {
+                    algs.push(parse_index_algorithm(item)?);
+                }
+            } else {
+                algs.push(parse_index_algorithm(val)?);
+            }
+            rust_config.insert(col_name, algs);
+        }
+
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(self.table.set_index_columns(rust_config))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Add an index to a column (convenience wrapper)
-    #[pyo3(signature = (column, tokenizer=None, device=None))]
-    fn add_index(&mut self, column: String, tokenizer: Option<String>, device: Option<String>) {
-        self.table.add_index(column, tokenizer, device);
+    /// Add an indexing strategy to a column.
+    #[pyo3(signature = (column, algorithm = None))]
+    fn add_index(&mut self, py: Python<'_>, column: String, algorithm: Option<Bound<'_, PyAny>>) -> PyResult<()> {
+        let rust_alg = if let Some(algo_obj) = algorithm {
+            parse_index_algorithm(algo_obj)?
+        } else {
+            // Smart Default based on Column Type
+            let schema = self.table.arrow_schema();
+            let field = schema.field_with_name(&column)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            
+            match field.data_type() {
+                arrow::datatypes::DataType::List(_) | arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                    IndexAlgorithm::Hnsw {
+                        metric: "l2".into(),
+                        complexity: 16,
+                        quality: 200,
+                        build_device: None,
+                        search_device: None
+                    }
+                },
+                _ => IndexAlgorithm::Bitmap,
+            }
+        };
+
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(self.table.add_index(column, rust_alg))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Drop an index from a column (convenience wrapper)
-    fn drop_index(&mut self, column: String) {
-        self.table.drop_index(column);
+    /// Explicitly quantize a column using TurboQuant or PQ.
+    /// This is an enterprise-grade compression feature.
+    #[pyo3(signature = (column, type_ = "TQ8", metric = "l2", complexity = 16, quality = 200))]
+    fn quantize(&mut self, py: Python<'_>, column: String, type_: &str, metric: &str, complexity: usize, quality: usize) -> PyResult<()> {
+        let algo = match type_.to_lowercase().as_str() {
+            "tq8" | "hnsw_tq8" => IndexAlgorithm::HnswTq8 { metric: metric.to_string(), complexity, quality },
+            "tq4" | "hnsw_tq4" => IndexAlgorithm::HnswTq4 { metric: metric.to_string(), complexity, quality },
+            "pq" | "hnsw_pq" => IndexAlgorithm::HnswPq { metric: metric.to_string(), complexity, quality, compression: 8 },
+            _ => return Err(pyo3::exceptions::PyValueError::new_err(format!("Unsupported quantization type: {}. Use TQ8, TQ4, or PQ.", type_))),
+        };
+
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(self.table.add_index(column, algo))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Remove all indexing strategies from a column.
+    fn drop_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(self.table.drop_index(column))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Set default device for all future indexes in this table
@@ -803,20 +947,13 @@ impl PyTable {
     /// Flush write buffer to disk (triggers vector shuffling and index building)
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.flush_async())
+            TOKIO_RUNTIME.block_on(self.table.flush_async())
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
     #[getter]
     fn index_columns(&self) -> Vec<String> {
         self.table.get_index_columns()
-    }
-
-    #[setter]
-    fn set_index_columns(&mut self, columns: Vec<String>) -> PyResult<()> {
-        self.table.remove_all_index_columns();
-        self.table.add_index_columns(columns, None)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
 
@@ -879,11 +1016,10 @@ impl PyTable {
         use futures::future::join_all;
         
         let table = Arc::new(self.table.clone());
-        let query_pool = self.query_pool.clone();
         
         // Release GIL and run all queries in parallel in Rust
         let results: Result<Vec<Vec<RecordBatch>>, anyhow::Error> = py.allow_threads(move || {
-            query_pool.block_on(async {
+            TOKIO_RUNTIME.block_on(async {
                 // Spawn all queries as concurrent tasks
                 let tasks: Vec<_> = queries.into_iter().map(|(column, query, k, filter): (String, Vec<f32>, usize, Option<String>)| {
                     let table_clone = table.clone();
@@ -933,7 +1069,7 @@ impl PyTable {
     /// Wait for all background tasks (like index building) to complete
     fn wait_for_background_tasks(&self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.wait_for_background_tasks_async())
+            TOKIO_RUNTIME.block_on(self.table.wait_for_background_tasks_async())
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
@@ -981,7 +1117,7 @@ impl PyTable {
     fn commit(&self, py: Python<'_>) -> PyResult<()> {
         // Flush write buffer to disk first (triggers vector shuffling and index building)
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.flush_async())
+            TOKIO_RUNTIME.block_on(self.table.flush_async())
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
         // Finalize metadata
@@ -997,7 +1133,7 @@ impl PyTable {
     /// Async commit (flushes then finalizes metadata asynchronously)
     fn commit_async(&self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(async {
+            TOKIO_RUNTIME.block_on(async {
                 self.table.flush_async().await?;
                 self.table.commit_async().await
             })
@@ -1140,7 +1276,7 @@ impl PyTable {
         }).collect();
 
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.update_spec(&rust_fields))
+            TOKIO_RUNTIME.block_on(self.table.update_spec(&rust_fields))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
@@ -1148,14 +1284,14 @@ impl PyTable {
     fn update_schema(&self, py: Python<'_>, schema: PySchema) -> PyResult<()> {
         let hdb_schema = crate::core::manifest::Schema::from_arrow(&schema.inner, 1);
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.update_schema(hdb_schema))
+            TOKIO_RUNTIME.block_on(self.table.update_schema(hdb_schema))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
     /// Rollback to a specific snapshot
     fn rollback_to_snapshot(&self, py: Python<'_>, snapshot_id: i64) -> PyResult<()> {
         py.allow_threads(|| {
-            self.query_pool.block_on(self.table.rollback_to_snapshot(snapshot_id))
+            TOKIO_RUNTIME.block_on(self.table.rollback_to_snapshot(snapshot_id))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
@@ -1205,46 +1341,21 @@ impl PyTable {
         }
     }
 
-    fn manifest(&self, _py: Python<'_>) -> PyResult<PyManifest> {
+    fn manifest(&self, py: Python<'_>) -> PyResult<PyObject> {
         // Load manifest info from table
         let rt = self.table.runtime();
-        let manifest_result: Result<(crate::core::manifest::Manifest, u64), anyhow::Error> = rt.block_on(async {
+        let manifest_result = rt.block_on(async {
             self.table.get_snapshot_segments_with_version().await
         });
         
         match manifest_result {
-            Ok((manifest, version)) => {
-                let mut entries = Vec::new();
-                for entry in &manifest.entries {
-                    entries.push(PyManifestEntry {
-                        file_path: entry.file_path.clone(),
-                        file_size_bytes: entry.file_size_bytes,
-                        record_count: entry.record_count,
-                        index_files_count: entry.index_files.len(),
-                        delete_files_count: entry.delete_files.len(),
-                    });
-                }
-                
-                Ok(PyManifest {
-                    version,
-                    timestamp_ms: manifest.timestamp_ms,
-                    current_schema_id: manifest.current_schema_id,
-                    partition_spec_id: manifest.partition_spec.spec_id,
-                    entries,
-                    properties: manifest.properties.clone(),
-                })
-            }
-            Err(_) => {
-                // Empty manifest for new/empty tables
-                Ok(PyManifest {
-                    version: 0,
-                    timestamp_ms: 0,
-                    current_schema_id: 0,
-                    partition_spec_id: 0,
-                    entries: Vec::new(),
-                    properties: std::collections::HashMap::new(),
-                })
-            }
+            Ok((manifest, _version)) => {
+                // Return as a dictionary for subscription support (manifest["schemas"])
+                pythonize::pythonize(py, &manifest)
+                    .map(|b| b.unbind())
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            },
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
     }
 
@@ -1411,7 +1522,7 @@ impl PyTable {
             None
         };
 
-        Ok(self.query_pool.block_on(self.table.explain(filter.as_deref(), vs_params)))
+        Ok(TOKIO_RUNTIME.block_on(self.table.explain(filter.as_deref(), vs_params)))
     }
 }
 
@@ -1419,28 +1530,27 @@ impl PyTable {
 #[pyclass]
 pub struct PyNessieCatalog {
     client: Arc<NessieClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
 impl PyNessieCatalog {
     #[new]
+    #[pyo3(signature = (url))]
     fn new(url: String) -> PyResult<Self> {
         let client = Arc::new(NessieClient::new(url));
-        let rt = Arc::new(Runtime::new().unwrap());
-        Ok(PyNessieCatalog { client, rt })
+        Ok(PyNessieCatalog { client })
     }
 
     /// Create a new table
     fn create_table(&self, branch: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&branch, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (returns PyTable)
     fn load_table(&self, branch: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&branch, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1455,13 +1565,13 @@ impl PyNessieCatalog {
     }
     
     fn create_branch(&self, branch_name: String, source_ref: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_branch(&branch_name, source_ref.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     fn table_exists(&self, branch: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&branch, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1471,7 +1581,6 @@ impl PyNessieCatalog {
 #[pyclass]
 pub struct PyRestCatalog {
     client: Arc<RestCatalogClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
@@ -1480,20 +1589,19 @@ impl PyRestCatalog {
     #[pyo3(signature = (url, prefix=None))]
     fn new(url: String, prefix: Option<String>) -> PyResult<Self> {
         let client = Arc::new(RestCatalogClient::new(url, prefix));
-        let rt = Arc::new(Runtime::new().unwrap());
-        Ok(PyRestCatalog { client, rt })
+        Ok(PyRestCatalog { client })
     }
 
     /// Create a new table
     fn create_table(&self, namespace: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&namespace, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (returns PyTable)
     fn load_table(&self, namespace: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&namespace, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1502,7 +1610,7 @@ impl PyRestCatalog {
     }
     
     fn table_exists(&self, namespace: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&namespace, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1512,7 +1620,6 @@ impl PyRestCatalog {
 #[pyclass]
 pub struct PyGlueCatalog {
     client: Arc<GlueCatalogClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
@@ -1520,27 +1627,25 @@ impl PyGlueCatalog {
     #[new]
     #[pyo3(signature = (catalog_id=None))]
     fn new(catalog_id: Option<String>) -> PyResult<Self> {
-        let rt = Arc::new(Runtime::new().unwrap());
-        let client = rt.block_on(async {
+        let client = TOKIO_RUNTIME.block_on(async {
             GlueCatalogClient::new(catalog_id).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
         Ok(PyGlueCatalog { 
             client: Arc::new(client),
-            rt 
         })
     }
 
     /// Create a new table
     fn create_table(&self, database: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&database, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (returns PyTable)
     fn load_table(&self, database: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&database, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1549,7 +1654,7 @@ impl PyGlueCatalog {
     }
     
     fn table_exists(&self, database: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&database, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1565,31 +1670,30 @@ impl PyGlueCatalog {
 #[pyclass]
 pub struct PyHiveCatalog {
     client: Arc<HiveMetastoreClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
 impl PyHiveCatalog {
     #[new]
+    #[pyo3(signature = (url))]
     fn new(url: String) -> PyResult<Self> {
-        let rt = Arc::new(Runtime::new().unwrap());
-        let client = rt.block_on(async {
+        let client = TOKIO_RUNTIME.block_on(async {
             HiveMetastoreClient::new(url)
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         let client = Arc::new(client);
-        Ok(PyHiveCatalog { client, rt })
+        Ok(PyHiveCatalog { client })
     }
 
     /// Create a new table
     fn create_table(&self, database: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&database, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (placeholder - returns informative error)
     fn load_table(&self, database: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&database, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1597,7 +1701,7 @@ impl PyHiveCatalog {
     }
     
     fn table_exists(&self, database: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&database, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1607,28 +1711,27 @@ impl PyHiveCatalog {
 #[pyclass]
 pub struct PyUnityCatalog {
     client: Arc<UnityCatalogClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
 impl PyUnityCatalog {
     #[new]
+    #[pyo3(signature = (url, token))]
     fn new(url: String, token: String) -> PyResult<Self> {
         let client = Arc::new(UnityCatalogClient::new(url, token));
-        let rt = Arc::new(Runtime::new().unwrap());
-        Ok(PyUnityCatalog { client, rt })
+        Ok(PyUnityCatalog { client })
     }
 
     /// Create a new table
     fn create_table(&self, catalog: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&catalog, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (returns PyTable)
     fn load_table(&self, catalog: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&catalog, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1636,7 +1739,7 @@ impl PyUnityCatalog {
     }
     
     fn table_exists(&self, catalog: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&catalog, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1646,7 +1749,6 @@ impl PyUnityCatalog {
 #[pyclass]
 pub struct PyJdbcCatalog {
     client: Arc<JdbcCatalogClient>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
@@ -1654,28 +1756,26 @@ impl PyJdbcCatalog {
     #[new]
     #[pyo3(signature = (uri, warehouse=None, catalog_name=None))]
     fn new(uri: String, warehouse: Option<String>, catalog_name: Option<String>) -> PyResult<Self> {
-        let rt = Arc::new(Runtime::new().unwrap());
         let catalog_name = catalog_name.unwrap_or_else(|| "default".to_string());
-        let client = rt.block_on(async {
+        let client = TOKIO_RUNTIME.block_on(async {
             JdbcCatalogClient::new(uri, warehouse, catalog_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
         Ok(PyJdbcCatalog { 
             client: Arc::new(client),
-            rt 
         })
     }
 
     /// Create a new table
     fn create_table(&self, namespace: String, table_name: String, schema: PySchema, location: Option<String>) -> PyResult<()> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.create_table(&namespace, &table_name, schema.inner, location.as_deref()).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
     /// Load a table (returns PyTable)
     fn load_table(&self, namespace: String, table_name: String) -> PyResult<PyTable> {
-        let metadata = self.rt.block_on(async {
+        let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&namespace, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
@@ -1683,7 +1783,7 @@ impl PyJdbcCatalog {
     }
     
     fn table_exists(&self, namespace: String, table_name: String) -> PyResult<bool> {
-        self.rt.block_on(async {
+        TOKIO_RUNTIME.block_on(async {
             self.client.table_exists(&namespace, &table_name).await
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
@@ -1724,7 +1824,6 @@ fn arrow_batches_to_pyarrow(py: Python<'_>, batches: Vec<RecordBatch>, schema: a
 #[pyclass(name = "Session")]
 pub struct PySession {
     inner: Arc<crate::core::sql::session::HyperStreamSession>,
-    rt: Arc<Runtime>,
 }
 
 #[pymethods]
@@ -1735,7 +1834,6 @@ impl PySession {
         let limit_bytes = memory_mb.map(|mb| mb * 1024 * 1024);
         Ok(Self {
             inner: Arc::new(crate::core::sql::session::HyperStreamSession::new(limit_bytes)),
-            rt: Arc::new(Runtime::new()?),
         })
     }
 
@@ -1746,7 +1844,7 @@ impl PySession {
 
     pub fn sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
         let query = sanitize_sql(&query);
-        let (batches, schema) = self.rt.block_on(self.inner.sql(&query))
+        let (batches, schema) = TOKIO_RUNTIME.block_on(self.inner.sql(&query))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
         arrow_batches_to_pyarrow(py, batches, schema)

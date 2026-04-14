@@ -215,6 +215,44 @@ pub enum ManifestValue {
     Null,
 }
 
+impl ManifestValue {
+    /// Extract a ManifestValue from an Arrow array at a specific index
+    pub fn from_array(array: &std::sync::Arc<dyn arrow::array::Array>, i: usize) -> Self {
+        if array.is_null(i) {
+            return ManifestValue::Null;
+        }
+
+        use arrow::datatypes::DataType;
+        match array.data_type() {
+            DataType::Utf8 => {
+                let arr = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                ManifestValue::String(arr.value(i).to_string())
+            }
+            DataType::Int32 => {
+                let arr = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                ManifestValue::Int32(arr.value(i))
+            }
+            DataType::Int64 => {
+                let arr = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                ManifestValue::Int64(arr.value(i))
+            }
+            DataType::Float32 => {
+                let arr = array.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                ManifestValue::Float32(arr.value(i))
+            }
+            DataType::Float64 => {
+                let arr = array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                ManifestValue::Float64(arr.value(i))
+            }
+            DataType::Boolean => {
+                let arr = array.as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap();
+                ManifestValue::Boolean(arr.value(i))
+            }
+            _ => ManifestValue::Null, // Unsupported complex types for equality/stats
+        }
+    }
+}
+
 impl From<Value> for ManifestValue {
     fn from(val: Value) -> Self {
         match val {
@@ -286,6 +324,164 @@ pub struct ManifestList {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum IndexAlgorithm {
+    Hnsw {
+        #[serde(default = "default_metric")]
+        metric: String,
+        #[serde(default = "default_complexity", alias = "m")]
+        complexity: usize,
+        #[serde(default = "default_quality", alias = "ef_construction")]
+        quality: usize,
+        #[serde(default)]
+        build_device: Option<String>,
+        #[serde(default)]
+        search_device: Option<String>,
+    },
+    HnswPq {
+        #[serde(default = "default_metric")]
+        metric: String,
+        #[serde(default = "default_complexity", alias = "m")]
+        complexity: usize,
+        #[serde(default = "default_quality", alias = "ef_construction")]
+        quality: usize,
+        #[serde(default = "default_compression", alias = "subspaces")]
+        compression: usize,
+    },
+    HnswTq4 {
+        #[serde(default = "default_metric")]
+        metric: String,
+        #[serde(default = "default_complexity", alias = "m")]
+        complexity: usize,
+        #[serde(default = "default_quality", alias = "ef_construction")]
+        quality: usize,
+    },
+    HnswTq8 {
+        #[serde(default = "default_metric")]
+        metric: String,
+        #[serde(default = "default_complexity", alias = "m")]
+        complexity: usize,
+        #[serde(default = "default_quality", alias = "ef_construction")]
+        quality: usize,
+    },
+    Bm25 {
+        #[serde(default)]
+        k1: f32,
+        #[serde(default)]
+        b: f32,
+        #[serde(default)]
+        tokenizer: String,
+    },
+    Bloom {
+        #[serde(default)]
+        fpr: f32,
+    },
+    Bitmap,
+}
+
+impl std::fmt::Display for IndexAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IndexAlgorithm::Hnsw { .. } => write!(f, "hnsw"),
+            IndexAlgorithm::HnswPq { .. } => write!(f, "hnsw_pq"),
+            IndexAlgorithm::HnswTq4 { .. } => write!(f, "hnsw_tq4"),
+            IndexAlgorithm::HnswTq8 { .. } => write!(f, "hnsw_tq8"),
+            IndexAlgorithm::Bm25 { .. } => write!(f, "bm25"),
+            IndexAlgorithm::Bloom { .. } => write!(f, "bloom"),
+            IndexAlgorithm::Bitmap => write!(f, "bitmap"),
+        }
+    }
+}
+
+
+impl Default for IndexAlgorithm {
+    fn default() -> Self {
+        Self::hnsw_tq8()
+    }
+}
+
+fn default_metric() -> String { "l2".to_string() }
+fn default_complexity() -> usize { 16 }
+fn default_quality() -> usize { 200 }
+fn default_compression() -> usize { 8 }
+
+impl IndexAlgorithm {
+    /// Create a standard HNSW index configuration.
+    pub fn hnsw() -> Self {
+        Self::Hnsw {
+            metric: default_metric(),
+            complexity: default_complexity(),
+            quality: default_quality(),
+            build_device: None,
+            search_device: None,
+        }
+    }
+
+    /// Create an 8-bit TurboQuant optimized index (4x compression).
+    pub fn hnsw_tq8() -> Self {
+        Self::HnswTq8 {
+            metric: default_metric(),
+            complexity: default_complexity(),
+            quality: default_quality(),
+        }
+    }
+
+    /// Create a 4-bit TurboQuant optimized index (8x compression).
+    pub fn hnsw_tq4() -> Self {
+        Self::HnswTq4 {
+            metric: default_metric(),
+            complexity: default_complexity(),
+            quality: default_quality(),
+        }
+    }
+
+    /// Create a Product Quantization index with a specific compression ratio.
+    pub fn hnsw_pq() -> Self {
+        Self::HnswPq {
+            metric: default_metric(),
+            complexity: default_complexity(),
+            quality: default_quality(),
+            compression: default_compression(),
+        }
+    }
+
+    pub fn with_metric(mut self, metric: impl Into<String>) -> Self {
+        let m = metric.into();
+        match &mut self {
+            Self::Hnsw { metric, .. } | Self::HnswPq { metric, .. } | 
+            Self::HnswTq4 { metric, .. } | Self::HnswTq8 { metric, .. } => *metric = m,
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_complexity(mut self, complexity: usize) -> Self {
+        match &mut self {
+            Self::Hnsw { complexity: c, .. } | Self::HnswPq { complexity: c, .. } | 
+            Self::HnswTq4 { complexity: c, .. } | Self::HnswTq8 { complexity: c, .. } => *c = complexity,
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_quality(mut self, quality: usize) -> Self {
+        match &mut self {
+            Self::Hnsw { quality: q, .. } | Self::HnswPq { quality: q, .. } | 
+            Self::HnswTq4 { quality: q, .. } | Self::HnswTq8 { quality: q, .. } => *q = quality,
+            _ => {}
+        }
+        self
+    }
+
+    pub fn with_compression(mut self, compression: usize) -> Self {
+        if let Self::HnswPq { compression: c, .. } = &mut self {
+            *c = compression;
+        }
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SchemaField {
     pub id: i32,
     pub name: String,
@@ -300,6 +496,9 @@ pub struct SchemaField {
     /// Iceberg V3: Default value for new rows when this column is null
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<Value>,
+    /// HyperStream Extension: Multiple indexing algorithms for this column
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indexes: Vec<IndexAlgorithm>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -410,6 +609,7 @@ impl SchemaField {
             fields: nested_fields,
             initial_default: None,
             write_default: None,
+            indexes: vec![],
         }
     }
 
@@ -637,7 +837,12 @@ impl Manifest {
     }
 }
 
-const MAX_ENTRIES_PER_MANIFEST: usize = 10000;
+const MAX_ENTRIES_PER_MANIFEST: usize = 1000;
+
+lazy_static::lazy_static! {
+    /// Global registry of commit locks to serialize manifest updates per directory.
+    static ref COMMIT_LOCKS: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>> = dashmap::DashMap::new();
+}
 
 #[derive(Clone)]
 pub struct ManifestManager {
@@ -681,7 +886,11 @@ impl ManifestManager {
     }
 
     fn get_dir_cache_key(&self) -> String {
-        format!("{}/{}", self.root_uri, self.manifest_dir)
+        let mut key = format!("{}/{}", self.root_uri, self.manifest_dir);
+        while key.ends_with('/') {
+            key.pop();
+        }
+        key
     }
 
     /// Check if any manifests exist in the directory
@@ -692,6 +901,38 @@ impl ManifestManager {
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    /// Load the latest manifest bypassing LATEST_VERSION_CACHE.
+    pub async fn load_latest_direct(&self) -> Result<(Manifest, u64)> {
+        let mut max_ver = 0;
+        let mut latest_loc = None;
+        
+        let mut stream = self.store.list(Some(&self.manifest_dir));
+        while let Some(meta) = stream.next().await {
+            let meta = meta?;
+            let path = meta.location.as_ref();
+            if path.ends_with(".json") {
+                if let Some(filename) = path.split('/').last() {
+                    if filename.starts_with('v') && filename.ends_with(".json") {
+                        if let Ok(ver) = filename[1..filename.len()-5].parse::<u64>() {
+                            if ver >= max_ver {
+                                max_ver = ver;
+                                latest_loc = Some(meta.location);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(loc) = latest_loc {
+             let manifest_bytes = self.store.get(&loc).await?.bytes().await?;
+             let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
+             Ok((manifest, max_ver))
+        } else {
+             Ok((Manifest::default(), 0))
         }
     }
 
@@ -839,10 +1080,13 @@ impl ManifestManager {
         Ok(path.to_string())
     }
 
-    /// Recursively load all entries from a manifest (including those in manifest_list_path)
     pub async fn load_all_entries(&self, manifest: &Manifest) -> Result<Vec<ManifestEntry>> {
-        let mut all_entries = manifest.entries.clone();
+        // Use a HashMap to deduplicate segments by file_path.
+        // Entries directly in the Manifest (staged/small tables) should override 
+        // entries found in Manifest Lists (sharded segments).
+        let mut entry_map: HashMap<String, ManifestEntry> = HashMap::new();
         
+        // 1. Process manifest lists first (lower priority)
         if let Some(list_path) = &manifest.manifest_list_path {
             let list = self.load_manifest_list(list_path).await?;
             
@@ -865,8 +1109,6 @@ impl ManifestManager {
                 futures.push(async move {
                     if entry_path.ends_with(".avro") {
                         if let Some(s) = table_schema {
-                             // Re-implement load_avro_manifest logic inline or call a static helper
-                             // to avoid &self capturing issues in move closure
                              Self::load_avro_manifest_static(store, entry_path, s, table_spec, root_uri).await
                         } else {
                              Self::load_avro_manifest_static(store, entry_path, Schema::default(), table_spec, root_uri).await
@@ -879,11 +1121,18 @@ impl ManifestManager {
 
             while let Some(res) = futures.next().await {
                 let sub_manifest = res?;
-                all_entries.extend(sub_manifest.entries);
+                for e in sub_manifest.entries {
+                    entry_map.insert(e.file_path.clone(), e);
+                }
             }
         }
+
+        // 2. Process manifest.entries last (higher priority - overrides manifest lists)
+        for e in &manifest.entries {
+            entry_map.insert(e.file_path.clone(), e.clone());
+        }
         
-        Ok(all_entries)
+        Ok(entry_map.into_values().collect())
     }
 
     /// Helper to load a manifest from an arbitrary path
@@ -1038,35 +1287,42 @@ impl ManifestManager {
         remove_paths: &[String],
         metadata: CommitMetadata
     ) -> Result<Manifest> {
+        let cache_key = self.get_dir_cache_key();
+        let lock = COMMIT_LOCKS.entry(cache_key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .value().clone();
+            
+        let _guard = lock.lock().await;
+
         let max_retries = 100;
-        
         for attempt in 0..max_retries {
-            let (current_manifest, current_ver) = self.load_latest().await?;
+            let (current_manifest, current_ver) = self.load_latest_direct().await?;
             
             // 1. Calculate new state
-            let mut active_map: HashMap<String, ManifestEntry> = if metadata.is_fast_append && !current_manifest.entries.is_empty() {
-                // Fast Path: Only load the top-level entries (assumes they are the most recent/relevant)
-                // and skip loading from manifest lists for now. 
-                // We will merge new entries and then split into a new manifest list.
-                current_manifest.entries.clone().into_iter().map(|e| (e.file_path.clone(), e)).collect()
-            } else {
-                // Slow Path: Load ALL entries including those in manifest lists
-                let all_entries = self.load_all_entries(&current_manifest).await?;
-                all_entries.into_iter().map(|e| (e.file_path.clone(), e)).collect()
-            };
+            let all_entries = self.load_all_entries(&current_manifest).await?;
+            let mut active_map: HashMap<String, ManifestEntry> = all_entries.into_iter().map(|e| (e.file_path.clone(), e)).collect();
+            let new_ver = current_ver + 1;
             
-            // Genesis Discovery removed - only explicitly committed entries should be in the manifest.
-            
-            // Hardened De-duplication: Always filter out items in remove_paths AND de-duplicate new/existing by path
+            // Hardened De-duplication
             for path in remove_paths {
                 active_map.remove(path);
             }
             
-            // Add new entries to state (overwrites if path exists)
+            // Add new entries to state (overwrites if path exists, but preserves indexes if we are adding unindexed version)
             for entry in add_entries {
+                // HyperStream Optimization: If the existing entry already has indexes, 
+                // and the new one doesn't (or has fewer), PRESERVE the indexes!
+                // This prevents 'flush_async' main thread from overwriting background indexing results.
+                if let Some(existing) = active_map.get(&entry.file_path) {
+                    if existing.index_files.len() > entry.index_files.len() {
+                        let mut merged = entry.clone();
+                        merged.index_files = existing.index_files.clone();
+                        active_map.insert(entry.file_path.clone(), merged);
+                        continue;
+                    }
+                }
                 active_map.insert(entry.file_path.clone(), entry.clone());
             }
-            let new_ver = current_ver + 1;
             let new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
             
             // 2. Decide if we need a ManifestList (Scalability)
@@ -1129,46 +1385,7 @@ impl ManifestManager {
                 
                 (Vec::new(), Some(list_path_loc.to_string()))
             } else {
-                // Determine if we should force Avro for single chunk too?
-                // Yes, for consistency.
-                let uuid = uuid::Uuid::new_v4();
-                let filename = format!("{}-m0.avro", uuid);
-                let path = self.manifest_dir.child(filename);
-                
-                let writer = crate::core::iceberg::IcebergWriter::new();
-                let default_schema = crate::core::manifest::Schema::default();
-                let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema);
-                let bytes = writer.write_manifest_file(&new_entries, &current_manifest.partition_spec, table_schema, new_ver as i64, new_ver as i64)?;
-                let manifest_length = bytes.len() as i64;
-                let rows_count: i64 = new_entries.iter().map(|e| e.record_count).sum();
-                
-                self.store.put(&path, bytes.into()).await?;
-                
-                let manifest_files = vec![ManifestListEntry {
-                    manifest_path: path.to_string(),
-                    manifest_length,
-                    partition_spec_id: current_manifest.partition_spec.spec_id,
-                    content: 0,
-                    sequence_number: new_ver as i64,
-                    min_sequence_number: new_ver as i64,
-                    added_snapshot_id: new_ver as i64,
-                    added_files_count: new_entries.len() as i32,
-                    existing_files_count: 0,
-                    deleted_files_count: 0,
-                    added_rows_count: rows_count,
-                    existing_rows_count: 0,
-                    deleted_rows_count: 0,
-                    partition_stats: HashMap::new(),
-                }];
-                
-                let list_uuid = uuid::Uuid::new_v4();
-                let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
-                let list_path_loc = self.manifest_dir.child(list_filename);
-                
-                let list_bytes = writer.write_manifest_list(&manifest_files)?;
-                self.store.put(&list_path_loc, list_bytes.into()).await?;
-                
-                (Vec::new(), Some(list_path_loc.to_string()))
+                (new_entries, None)
             };
             
             // 3. Create new Manifest
@@ -1291,59 +1508,71 @@ impl ManifestManager {
 
     /// Commit a set of imported entries (merges with current state)
     pub async fn commit_imported_entries(&self, entries: Vec<ManifestEntry>) -> Result<Manifest> {
-        let (current_manifest, current_ver) = self.load_latest().await?;
-        let all_existing = self.load_all_entries(&current_manifest).await?;
-        
-        // Merge entries, avoid duplicates
-        let mut entry_map: HashMap<String, ManifestEntry> = all_existing.into_iter()
-            .map(|e| (e.file_path.clone(), e))
-            .collect();
+        let max_retries = 10;
+        let mut attempt = 0;
+        loop {
+            let (current_manifest, current_ver) = self.load_latest().await?;
+            let all_existing = self.load_all_entries(&current_manifest).await?;
             
-        for entry in entries {
-            entry_map.insert(entry.file_path.clone(), entry);
-        }
-        
-        let merged_entries: Vec<ManifestEntry> = entry_map.into_values().collect();
-        let new_ver = current_ver + 1;
-        
-        let mut new_manifest = Manifest::new_with_spec(
-            new_ver,
-            merged_entries,
-            Some(current_ver),
-            current_manifest.schemas.clone(),
-            current_manifest.current_schema_id,
-            current_manifest.partition_spec.clone(),
-        );
+            // Merge entries, avoid duplicates, favor NEW entries for the SAME file_path
+            let mut entry_map: HashMap<String, ManifestEntry> = all_existing.into_iter()
+                .map(|e| (e.file_path.clone(), e))
+                .collect();
+                
+            for entry in &entries {
+                entry_map.insert(entry.file_path.clone(), entry.clone());
+            }
+            
+            let merged_entries: Vec<ManifestEntry> = entry_map.into_values().collect();
+            let new_ver = current_ver + 1;
+            
+            let mut new_manifest = Manifest::new_with_spec(
+                new_ver,
+                merged_entries,
+                Some(current_ver),
+                current_manifest.schemas.clone(),
+                current_manifest.current_schema_id,
+                current_manifest.partition_spec.clone(),
+            );
 
-        new_manifest.partition_specs = current_manifest.partition_specs.clone();
-        new_manifest.default_spec_id = current_manifest.default_spec_id;
-        new_manifest.properties = current_manifest.properties.clone();
-        new_manifest.sort_orders = current_manifest.sort_orders.clone();
-        new_manifest.default_sort_order_id = current_manifest.default_sort_order_id;
-        
-        // Write to storage
-        let filename = format!("v{}.json", new_ver);
-        let path = self.manifest_dir.child(filename);
-        let bytes = serde_json::to_vec_pretty(&new_manifest)?;
-        
-        use object_store::{PutMode, PutOptions};
-        let opts = PutOptions {
-            mode: PutMode::Create,
-            ..Default::default()
-        };
-        
-        self.store.put_opts(&path, bytes.into(), opts).await?;
-        tracing::info!("Imported {} external entries into Manifest v{}", new_manifest.entries.len(), new_ver);
-        
-        // Update Caches
-        let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
-        crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
-        
-        // Cache the new manifest file eagerly
-        let file_key = format!("{}/{}", self.root_uri, path);
-        crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
-        
-        Ok(new_manifest)
+            new_manifest.partition_specs = current_manifest.partition_specs.clone();
+            new_manifest.default_spec_id = current_manifest.default_spec_id;
+            new_manifest.properties = current_manifest.properties.clone();
+            new_manifest.sort_orders = current_manifest.sort_orders.clone();
+            new_manifest.default_sort_order_id = current_manifest.default_sort_order_id;
+            new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
+            
+            // Write to storage with conflict detection
+            let filename = format!("v{}.json", new_ver);
+            let path = self.manifest_dir.child(filename);
+            let bytes = serde_json::to_vec_pretty(&new_manifest)?;
+            
+            use object_store::{PutMode, PutOptions};
+            let opts = PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            };
+            
+            match self.store.put_opts(&path, bytes.into(), opts).await {
+                Ok(_) => {
+                    tracing::info!("Imported {} external entries into Manifest v{}", entries.len(), new_ver);
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    let file_key = self.get_cache_key(&path);
+                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    return Ok(new_manifest);
+                }
+                Err(e) if is_already_exists(&e) => {
+                    attempt += 1;
+                    if attempt >= max_retries { break; }
+                    tracing::warn!("Manifest conflict during entry import. Retrying attempt {}/{}", attempt, max_retries);
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Err(anyhow::anyhow!("Failed to commit imported entries after {} attempts", max_retries))
     }
 
     pub async fn update_schema(&self, new_schemas: Vec<Schema>, new_schema_id: i32, last_column_id: Option<i32>) -> Result<Manifest> {
@@ -1366,6 +1595,7 @@ impl ManifestManager {
                 new_schema_id,
                 current_manifest.partition_spec.clone(),
             );
+            new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
             new_manifest.last_column_id = last_column_id.unwrap_or(current_manifest.last_column_id);
             
             let filename = format!("v{}.json", new_ver);
@@ -1420,7 +1650,14 @@ impl ManifestManager {
             // Create a new schema version
             let mut new_schema = latest_schema.clone();
             new_schema.schema_id += 1;
-            new_schema.identifier_field_ids = new_ids;
+            new_schema.identifier_field_ids = new_ids.clone();
+            
+            // AUTOMATIC EVOLUTION: Set identifier fields to required: true (NOT NULL)
+            for field in &mut new_schema.fields {
+                if new_ids.contains(&field.id) {
+                    field.required = true;
+                }
+            }
             
             let new_schema_id = new_schema.schema_id;
             schemas.push(new_schema);
@@ -1470,6 +1707,81 @@ impl ManifestManager {
             }
         }
         Err(anyhow::anyhow!("Failed to commit manifest after {} attempts", max_retries))
+    }
+
+    /// Update indexing specifications for columns
+    pub async fn update_index_specs(&self, column_indexes: HashMap<String, Vec<IndexAlgorithm>>) -> Result<Manifest> {
+        let max_retries = 10;
+        let mut attempt = 0;
+        loop {
+            let (current_manifest, current_ver) = self.load_latest().await?;
+            let current_schema = current_manifest.schemas.last()
+                .ok_or_else(|| anyhow::anyhow!("No schema found in manifest"))?;
+            
+            let mut new_fields = current_schema.fields.clone();
+            let mut changed = false;
+            
+            for field in &mut new_fields {
+                if let Some(new_indexes) = column_indexes.get(&field.name) {
+                    field.indexes = new_indexes.clone();
+                    changed = true;
+                }
+            }
+            
+            if !changed {
+                return Ok(current_manifest);
+            }
+            
+            let new_schema = Schema {
+                schema_id: current_schema.schema_id + 1,
+                fields: new_fields,
+                identifier_field_ids: current_schema.identifier_field_ids.clone(),
+            };
+            
+            let mut new_schemas = current_manifest.schemas.clone();
+            new_schemas.push(new_schema.clone());
+            
+            let new_ver = current_ver + 1;
+            let mut new_manifest = Manifest::new_with_spec(
+                new_ver, 
+                current_manifest.entries.clone(), 
+                Some(current_ver),
+                new_schemas,
+                new_schema.schema_id,
+                current_manifest.partition_spec.clone(),
+            );
+            new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
+            new_manifest.properties = current_manifest.properties.clone();
+            
+            let filename = format!("v{}.json", new_ver);
+            let path = self.manifest_dir.child(filename);
+            let bytes = serde_json::to_vec_pretty(&new_manifest)?;
+            
+            use object_store::{PutMode, PutOptions};
+            let opts = PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            };
+            
+            match self.store.put_opts(&path, bytes.into(), opts).await {
+                Ok(_) => {
+                    tracing::info!("Committed Manifest v{} (Index Spec Update)", new_ver);
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    let file_key = self.get_cache_key(&path);
+                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    return Ok(new_manifest);
+                }
+                Err(e) if is_already_exists(&e) => {
+                     attempt += 1;
+                     if attempt >= max_retries { break; }
+                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                     continue;
+                }
+                Err(e) => return Err(e.into())
+            }
+        }
+        Err(anyhow::anyhow!("Failed to commit index spec update"))
     }
 
     /// Update partition specification

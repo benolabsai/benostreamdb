@@ -52,8 +52,8 @@ async fn test_mor_mixed_deletes_avro() -> anyhow::Result<()> {
     let table_schema_manifest = hyperstreamdb::core::manifest::Schema {
         schema_id: 0,
         fields: vec![
-            hyperstreamdb::core::manifest::SchemaField { id: 1, name: "id".to_string(), type_str: "int".to_string(), required: true, fields: vec![], initial_default: None, write_default: None },
-            hyperstreamdb::core::manifest::SchemaField { id: 2, name: "name".to_string(), type_str: "string".to_string(), required: true, fields: vec![], initial_default: None, write_default: None },
+            hyperstreamdb::core::manifest::SchemaField { id: 1, name: "id".to_string(), type_str: "int".to_string(), required: true, fields: vec![], initial_default: None, write_default: None, indexes: vec![] },
+            hyperstreamdb::core::manifest::SchemaField { id: 2, name: "name".to_string(), type_str: "string".to_string(), required: true, fields: vec![], initial_default: None, write_default: None, indexes: vec![] },
         ],
         identifier_field_ids: vec![],
     };

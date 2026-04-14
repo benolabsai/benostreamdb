@@ -234,32 +234,37 @@ ORDER BY distance
 LIMIT 10;
 ```
 
-### Index Build Parameters
-
-Index build parameters are set during index creation:
+Index build parameters are set during index creation using the fluent `add_index` method:
 
 ```python
 import hyperstreamdb as hdb
 
 table = hdb.Table("s3://bucket/my-table")
 
-# Create HNSW index with custom parameters
-table.create_index(
+# TurboQuant 8-bit quantization (Recommended Default)
+# 4x compression, near-lossless accuracy
+table.add_index("embedding", "hnsw_tq8")
+
+# TurboQuant 4-bit quantization
+# 8x compression, maximum efficiency
+table.add_index("embedding", "hnsw_tq4")
+
+# Custom HNSW parameters
+table.add_index(
     column="embedding",
-    index_type="hnsw",
-    params={
-        "m": 16,              # Number of connections per layer
-        "ef_construction": 200, # Build-time beam width
+    index_config={
+        "type": "hnsw",
+        "complexity": 16, # Max connections per node (formerly 'm')
+        "quality": 200,    # Construction beam width (formerly 'ef_construction')
     }
 )
 
-# Create IVF index with custom parameters
-table.create_index(
+# Product Quantization (PQ)
+table.add_index(
     column="embedding",
-    index_type="ivf",
-    params={
-        "n_lists": 1000,      # Number of clusters
-        "n_probes": 10,       # Default search probes
+    index_config={
+        "type": "hnsw_pq",
+        "compression": 32 # PQ subspaces (formerly 'subspaces')
     }
 )
 ```

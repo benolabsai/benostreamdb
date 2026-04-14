@@ -24,6 +24,7 @@ impl Table {
                       fields: Vec::new(),
                       initial_default: None,
                       write_default: None,
+                      indexes: Vec::new(),
                   }
              }).collect(), Vec::new())
         };

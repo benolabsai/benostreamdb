@@ -96,12 +96,20 @@ except ImportError:
 from typing import List, Optional, Union, Dict, Any
 import os
 
-def _resolve_uri(uri: str) -> str:
-    """Resolve a URI to an absolute path if it's a local relative path."""
-    if "://" not in uri and not uri.startswith("/"):
-        return os.path.abspath(uri)
-    return uri
+class IndexType:
+    """
+    HyperStreamDB Indexing Algorithms.
+    """
+    HNSW = "hnsw"
+    BM25 = "bm25"
+    BLOOM = "bloom"
+    BITMAP = "bitmap"
+    INVERTED = "inverted"
 
+def _resolve_uri(uri: str) -> str:
+    if not uri.startswith(("s3://", "file://", "az://", "gs://", "http://", "https://")):
+        return f"file://{os.abspath(uri)}" if hasattr(os, "abspath") else uri
+    return uri
 class Query:
     """
     Fluent Query interface for HyperStreamDB.
@@ -250,6 +258,10 @@ class Table:
             except ImportError:
                 pass
             raise TypeError(f"Unsupported data type for write: {type(data)}")
+
+    def insert(self, data: Any, device: Optional[Any] = None):
+        """Alias for write() for compatibility with common vector DB APIs."""
+        return self.write(data, device=device)
 
     def write_pandas(self, df: pd.DataFrame, device: Optional[Any] = None):
         """High-level Pandas ingestion with auto-vectorization."""
@@ -583,24 +595,39 @@ class Table:
     def set_index_config(self, column: str, enabled: bool = True, tokenizer: Optional[str] = None, device: Optional[str] = None):
         """
         Set indexing configuration for a specific column.
-        
-        Args:
-            column: Name of the column to configure.
-            enabled: Whether to enable indexing for this column (default: True).
-            tokenizer: Tokenizer name from the registry ('identity', 'whitespace', 'standard').
-            device: Compute device ('cpu', 'cuda', 'mps') if specific processing is needed.
+        (Legacy compatibility wrapper)
         """
-        self._inner.set_index_config(column, enabled, tokenizer, device)
+        if not enabled:
+            return self.drop_index(column)
+            
+        config = {"type": "hnsw"}
+        if tokenizer: config["tokenizer"] = tokenizer
+        if device: config["build_device"] = device
+        return self.add_index(column, config)
 
-    def add_index(self, column: str, tokenizer: Optional[str] = None, device: Optional[str] = None):
+    def set_index_columns(self, config: Dict[str, Union[str, List[Union[str, Dict[str, Any]]], Dict[str, Any]]]):
         """
-        Add an index to a column (convenience wrapper).
+        Update indexing specifications for multiple columns at once.
+        Supports both simple strings and advanced configuration dictionaries.
+        
+        Example:
+            table.set_index_columns({
+                "embedding": IndexType.HNSW,
+                "content": ["hnsw", "bm25"],
+                "category": "bitmap"
+            })
         """
-        return self._inner.add_index(column, tokenizer, device)
+        return self._inner.set_index_columns(config)
+
+    def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw"):
+        """
+        Add an indexing strategy to a column.
+        """
+        return self._inner.add_index(column, algorithm)
 
     def drop_index(self, column: str):
         """
-        Drop an index from a column (convenience wrapper).
+        Remove all indexing strategies from a column.
         """
         return self._inner.drop_index(column)
 

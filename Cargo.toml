@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.2.6"
+version = "0.3.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -88,6 +88,7 @@ pilota = "0.11"
 # Hardware Acceleration (moved to bottom of file)
 # indexing
 roaring = "0.10.2" # For scalar bitmaps
+dashmap = "6.0"      # Concurrent HashMaps
 # hnsw_rs removed and internalized to src/core/index/hnsw_rs
 bincode = "1.3"
 cpu-time = "1.0"

@@ -224,13 +224,22 @@ See [GPU Setup Guide](GPU_SETUP_GUIDE.md) for installation and configuration.
 ```python
 import hyperstreamdb as hdb
 
-# Configure HNSW index parameters
 table = hdb.Table("s3://bucket/table")
-table.create_vector_index(
+
+# TurboQuant 8-bit (4x compression)
+table.add_index("embedding", "hnsw_tq8")
+
+# TurboQuant 4-bit (8x compression)
+table.add_index("embedding", "hnsw_tq4")
+
+# Custom HNSW configuration
+table.add_index(
     column="embedding",
-    metric="cosine",
-    m=16,              # Number of connections per layer
-    ef_construction=200 # Size of dynamic candidate list
+    index_config={
+        "type": "hnsw",
+        "complexity": 16, # connections per node
+        "quality": 200     # construction search width
+    }
 )
 ```
 

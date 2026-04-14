@@ -120,6 +120,7 @@ pub struct SegmentConfig {
     /// Per-column device override (e.g. "cpu", "gpu", "mps")
     pub column_devices: std::collections::HashMap<String, String>,
     pub default_device: Option<String>,
+    pub column_algorithms: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
 }
 
 impl SegmentConfig {
@@ -138,6 +139,7 @@ impl SegmentConfig {
             partition_values: std::collections::HashMap::new(),
             column_devices: std::collections::HashMap::new(),
             default_device: None,
+            column_algorithms: std::collections::HashMap::new(),
         }
     }
 
@@ -198,6 +200,11 @@ impl SegmentConfig {
         } else {
             self.columns_to_index = Some(cols);
         }
+        self
+    }
+
+    pub fn with_column_algorithms(mut self, algos: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>) -> Self {
+        self.column_algorithms = algos;
         self
     }
 }

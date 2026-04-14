@@ -36,8 +36,8 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     // However, HnswIvfIndex::build and save can be tested.
     
     use hyperstreamdb::core::index::hnsw_ivf::HnswIvfIndex;
-    
-    let index = HnswIvfIndex::build(vectors.clone(), hyperstreamdb::core::index::VectorMetric::L2, Some(10), Some(16), false)?;
+    let algo = hyperstreamdb::core::manifest::IndexAlgorithm::hnsw();
+    let index = HnswIvfIndex::build(vectors.clone(), hyperstreamdb::core::index::VectorMetric::L2, Some(10), Some(16), &algo)?;
     
     // 4. Save Index to Store
     // HnswIvfIndex::save writes to local filesystem currently (std::fs::File).

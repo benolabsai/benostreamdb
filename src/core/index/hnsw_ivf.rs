@@ -22,7 +22,9 @@ use tracing;
 use crate::core::index::hnsw_rs::prelude::*;
 use super::ivf::simple_kmeans;
 use super::pq::{PqEncoder, PqConfig};
-use super::{VectorMetric, VectorValue};
+use super::turboquant::{TurboQuantEncoder};
+use super::{VectorMetric, VectorValue, Quantizer, QuantizerImpl};
+use crate::core::manifest::IndexAlgorithm;
 use rayon::prelude::*;
 use arrow::record_batch::RecordBatch;
 use arrow::array::{Array, AsArray};
@@ -82,6 +84,8 @@ pub enum HnswGraph {
     Hamming(Hnsw<f32, DistHamming>),
     Jaccard(Hnsw<f32, DistJaccard>),
     BinaryHamming(Hnsw<u8, DistHammingPacked>),
+    TurboQuant8(Hnsw<u8, crate::core::index::distance::DistL2u8>),
+    TurboQuant4(Hnsw<u8, crate::core::index::distance::DistL2u4>),
     SparseDot(Hnsw<crate::core::index::SparseVector, DistSparseDot>),
 }
 
@@ -96,6 +100,8 @@ impl HnswGraph {
             (HnswGraph::Jaccard(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::TurboQuant8(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::TurboQuant4(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(std::slice::from_ref(q), k, ef, filter),
             
             // Casting paths
@@ -119,6 +125,8 @@ impl HnswGraph {
             (HnswGraph::Jaccard(h), VectorValue::Float32(v)) => h.insert_slice((&v, local_id)),
             
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::TurboQuant8(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::TurboQuant4(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&vec![v], local_id)),
             
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
@@ -156,6 +164,8 @@ impl HnswGraph {
             HnswGraph::Hamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::Jaccard(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::BinaryHamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::TurboQuant8(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::TurboQuant4(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::SparseDot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
         }
     }
@@ -174,8 +184,8 @@ pub struct HnswIvfIndex {
     _n_lists: usize,
     /// Vector dimensionality
     dim: usize,
-    /// Optional PQ encoder for compression (Enterprise feature)
-    _pq_encoder: Option<PqEncoder>,
+    /// Optional quantizer for compression (TurboQuant or PQ)
+    pub quantizer: Option<QuantizerImpl>,
     /// Hardware acceleration context (Open Source)
     _compute_context: crate::core::index::gpu::ComputeContext,
 }
@@ -187,8 +197,9 @@ impl HnswIvfIndex {
         metric: VectorMetric,
         n_lists: Option<usize>,
         hnsw_m: Option<usize>,
-        use_pq: bool,
+        algo: &IndexAlgorithm,
     ) -> Result<Self> {
+        let start = std::time::Instant::now();
         if vectors.is_empty() {
             anyhow::bail!("Cannot build HNSW-IVF index from empty vector set");
         }
@@ -196,15 +207,13 @@ impl HnswIvfIndex {
         let dim = vectors[0].len();
         let n_vectors = vectors.len();
         
-        // Auto-detect optimal cluster count based on dataset size and CPU cores
+        // Auto-detect optimal cluster count
         let num_cpus = num_cpus::get();
         let n_lists = n_lists.unwrap_or_else(|| {
             if n_vectors < 1000 {
-                num_cpus.min(4) // Very small
+                num_cpus.min(4)
             } else if n_vectors < 10_000 {
-                num_cpus.max(16) // Small: match core count
-            } else if n_vectors < 100_000 {
-                (num_cpus * 2).max((n_vectors as f64).sqrt() as usize / 10).max(32)
+                num_cpus.max(16)
             } else {
                 ((n_vectors as f64).sqrt() / 5.0) as usize
             }
@@ -212,33 +221,28 @@ impl HnswIvfIndex {
         
         let hnsw_m = hnsw_m.unwrap_or(16);
         
-        tracing::info!("Building HNSW-IVF index: {} vectors, {} clusters, {} dims, M={}, use_pq={}", 
-                 n_vectors, n_lists, dim, hnsw_m, use_pq);
+        tracing::info!("Building HNSW-IVF index: {} vectors, {} clusters, algo={:?}", 
+                 n_vectors, n_lists, algo);
 
-        let start = std::time::Instant::now();
-
-        // Step 1: Cluster vectors using k-means (IVF)
+        // Step 1: Cluster vectors using k-means
         let t0 = std::time::Instant::now();
-        let max_iters = if n_vectors < 100_000 {
-            5  // Small: 5 iterations sufficient
-        } else if n_vectors < 1_000_000 {
-            8  // Medium: 8 iterations for better quality
-        } else {
-            10 // Large: 10 iterations for very large datasets
-        };
-        
+        let max_iters = 10;
         let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
-
         
-        // Train PQ encoder if requested
-        let pq_encoder = if use_pq {
-            // Use 8-bit quantization with m sub-vectors (e.g., 16 or 32)
-            let m = if dim >= 32 && dim.is_multiple_of(16) { 16 } else if dim >= 8 && dim.is_multiple_of(8) { 8 } else { 1 };
-            tracing::debug!("  - Training PQ encoder with m={} subspaces...", m);
-            let config = PqConfig { m, k: 256, dim };
-            Some(PqEncoder::train(&vectors, config)?)
-        } else {
-            None
+        // Step 2: Train Quantizer if requested
+        let quantizer = match algo {
+            IndexAlgorithm::HnswTq8 { .. } => {
+                Some(QuantizerImpl::TurboQuant(TurboQuantEncoder::train(&vectors, 8)?))
+            },
+            IndexAlgorithm::HnswTq4 { .. } => {
+                Some(QuantizerImpl::TurboQuant(TurboQuantEncoder::train(&vectors, 4)?))
+            },
+            IndexAlgorithm::HnswPq { compression, .. } => {
+                let subspaces = dim / compression;
+                let config = PqConfig { m: subspaces, k: 256, dim };
+                Some(QuantizerImpl::Pq(PqEncoder::train(&vectors, config)?))
+            },
+            _ => None,
         };
 
         tracing::debug!("  - K-Means took: {:.2?} ({} iterations, {} clusters)", t0.elapsed(), max_iters, n_lists);
@@ -269,32 +273,48 @@ impl HnswIvfIndex {
 
         // Step 3: Build HNSW graph for each cluster in parallel
         let t2 = std::time::Instant::now();
+        
+        let q_ref = quantizer.as_ref();
+
         let cluster_graphs: HashMap<usize, (HnswGraph, Vec<usize>)> = cluster_vectors
             .into_par_iter()
             .map(|(cluster_id, vecs): (usize, Vec<(Vec<f32>, usize)>)| {
                 let max_layers = 16;
                 let ef_construction = (hnsw_m * 2).max(40);
                 
-                let hnsw = match metric {
-                    VectorMetric::L2 => HnswGraph::L2(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistL2)),
-                    VectorMetric::Cosine => HnswGraph::Cosine(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistCosine)),
-                    VectorMetric::InnerProduct => HnswGraph::Dot(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistDot)),
-                    VectorMetric::L1 => HnswGraph::L1(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistL1)),
-                    VectorMetric::Hamming => HnswGraph::Hamming(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistHamming)),
-                    VectorMetric::Jaccard => HnswGraph::Jaccard(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistJaccard)),
+                // Determine HNSW node type and distance metric
+                let hnsw = if let Some(q) = quantizer.as_ref() {
+                    if q.bits() == 4 {
+                        HnswGraph::TurboQuant4(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u4))
+                    } else {
+                        HnswGraph::TurboQuant8(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u8))
+                    }
+                } else {
+                    match metric {
+                        VectorMetric::L2 => HnswGraph::L2(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistL2)),
+                        VectorMetric::Cosine => HnswGraph::Cosine(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistCosine)),
+                        VectorMetric::InnerProduct => HnswGraph::Dot(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistDot)),
+                        VectorMetric::L1 => HnswGraph::L1(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistL1)),
+                        VectorMetric::Hamming => HnswGraph::Hamming(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistHamming)),
+                        VectorMetric::Jaccard => HnswGraph::Jaccard(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, DistJaccard)),
+                    }
                 };
                 
-                // Build locally sequential to avoid Rayon nested parallelism overhead
-                // Since Step 3 is already in parallel (one cluster per core), 
-                // this saturates the CPU optimally.
+                // Build locally sequential
                 for (local_id, (vec, _)) in vecs.iter().enumerate() {
-                    hnsw.insert((crate::core::index::VectorValue::Float32(vec.clone()), local_id));
+                    if let Some(ref q) = q_ref {
+                        let encoded = q.encode(vec);
+                        hnsw.insert((crate::core::index::VectorValue::Binary(encoded), local_id));
+                    } else {
+                        hnsw.insert((crate::core::index::VectorValue::Float32(vec.clone()), local_id));
+                    }
                 }
                 
                 let row_id_mapping: Vec<usize> = vecs.iter().map(|(_, row_id)| *row_id).collect();
                 (cluster_id, (hnsw, row_id_mapping))
             })
             .collect();
+            
         tracing::debug!("  - Building HNSW graphs took: {:.2?} ({} clusters)", t2.elapsed(), cluster_graphs.len());
 
         tracing::info!("Hnsw-IVF index built in {:.2?}: {} non-empty clusters", start.elapsed(), cluster_graphs.len());
@@ -305,21 +325,30 @@ impl HnswIvfIndex {
             cluster_graphs,
             _n_lists: n_lists,
             dim,
-            _pq_encoder: pq_encoder,
+            quantizer,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
 
     /// Search for k nearest neighbors
-    pub fn search(&self, query: &VectorValue, k: usize, n_probe: usize, filter: Option<&roaring::RoaringBitmap>) -> Vec<(usize, f32)> {
+    pub fn search(&self, query: &VectorValue, k: usize, n_probe: usize, filter: Option<&roaring::RoaringBitmap>) -> Result<Vec<(usize, f32)>> {
         let query_f32 = match query {
             VectorValue::Float32(v) => v,
             VectorValue::Float16(v) => v,
-            VectorValue::Binary(_) => return vec![], // TODO: implement proper coarse search for non-float types
-            VectorValue::Sparse(_) => return vec![], // TODO: implement
+            VectorValue::Binary(_) => return Ok(vec![]), 
+            VectorValue::Sparse(_) => return Ok(vec![]), 
+            VectorValue::Keyword(_) => return Ok(vec![]), 
+        };
+
+        // Pre-quantize query if needed for faster graph traversal (SDC)
+        let effective_query = if let Some(QuantizerImpl::TurboQuant(ref q)) = self.quantizer {
+            VectorValue::Binary(q.encode(query_f32))
+        } else {
+            query.clone()
         };
 
         // Step 1: Find n_probe nearest clusters (coarse search)
+        // (Centroids are always f32 for stability)
         let all_centroids_flat: Vec<f32> = self.centroids.iter().flatten().cloned().collect();
 
         let distances = crate::core::index::gpu::compute_distance(query_f32, &all_centroids_flat, self.dim, self.metric)
@@ -358,7 +387,7 @@ impl HnswIvfIndex {
                         local_filter_opt = Some(bm);
                     }
                     
-                    let results = hnsw.search(query, cluster_k, ef_search, local_filter_opt.as_ref());
+                    let results = hnsw.search(&effective_query, cluster_k, ef_search, local_filter_opt.as_ref());
                     
                     // Map local indices back to global row IDs and apply filter
                     results.into_iter().filter_map(|neighbor| {
@@ -389,7 +418,7 @@ impl HnswIvfIndex {
         candidates.par_sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         candidates.dedup_by_key(|x| x.0);  // Remove duplicates
         candidates.truncate(k);
-        candidates
+        Ok(candidates)
     }
 
     /// Save HNSW-IVF index to disk
@@ -438,6 +467,10 @@ impl HnswIvfIndex {
                             VectorMetric::Hamming => "hamming".to_string(),
                             VectorMetric::Jaccard => "jaccard".to_string(),
                         }),
+                    },
+                    parquet::file::metadata::KeyValue {
+                        key: "quantizer_config".to_string(),
+                        value: self.quantizer.as_ref().map(|q| serde_json::to_string(q).unwrap_or_default()),
                     }
                 ]))
                 .build();
@@ -510,6 +543,7 @@ impl HnswIvfIndex {
         let mut cluster_graphs = HashMap::new();
         let mut dim = 0;
         let mut metric = VectorMetric::L2;
+        let mut _quantizer: Option<crate::core::index::QuantizerImpl> = None;
         
         // Temporary storage for building clusters
         let mut graphs_data: HashMap<usize, Vec<u8>> = HashMap::new();
@@ -616,7 +650,7 @@ impl HnswIvfIndex {
             cluster_graphs,
             _n_lists: 0, // Not strictly used for search
             dim,
-            _pq_encoder: None,
+            quantizer: None,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
         
@@ -687,12 +721,14 @@ impl HnswIvfIndex {
         let n_lists = centroids.len();
         let dim = centroids[0].len();
         
-        // Load metric from parquet metadata
-        let metric = {
+        // Load metric and quantizer from parquet metadata
+        let (metric, quantizer) = {
             let centroids_bytes_for_meta = disk_cache.get_bytes(&centroids_path).await?;
             let parquet_reader = parquet::file::reader::SerializedFileReader::new(centroids_bytes_for_meta)?;
             let file_metadata = parquet_reader.metadata().file_metadata();
             let mut loaded_metric = VectorMetric::L2;
+            let mut loaded_quantizer = None;
+            
             if let Some(kv_list) = file_metadata.key_value_metadata() {
                 for kv in kv_list {
                     if kv.key == "vector_metric" {
@@ -700,14 +736,20 @@ impl HnswIvfIndex {
                             loaded_metric = match val.as_str() {
                                 "cosine" => VectorMetric::Cosine,
                                 "ip" => VectorMetric::InnerProduct,
+                                "l1" => VectorMetric::L1,
+                                "hamming" => VectorMetric::Hamming,
+                                "jaccard" => VectorMetric::Jaccard,
                                 _ => VectorMetric::L2,
                             };
                         }
-                        break;
+                    } else if kv.key == "quantizer_config" {
+                        if let Some(ref val) = kv.value {
+                            loaded_quantizer = serde_json::from_str::<QuantizerImpl>(val).ok();
+                        }
                     }
                 }
             }
-            loaded_metric
+            (loaded_metric, loaded_quantizer)
         };
 
         let list_stream = store.list(None);
@@ -734,10 +776,13 @@ impl HnswIvfIndex {
         let fetch_concurrency = 16; 
         let root_path_clone = root_path.clone();
         
+        let quantizer_clone = quantizer.clone();
+        
         let bodies = futures::stream::iter(cluster_ids)
             .map(move |cluster_id| {
                 let root_path = root_path_clone.clone();
                 let dc = disk_cache.clone();
+                let q_inner = quantizer_clone.clone();
                 async move {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let data_key = format!("{}.cluster_{}.hnsw.data", root_path, cluster_id);
@@ -759,19 +804,29 @@ impl HnswIvfIndex {
                     // For now we assume L2 if not specified or derive from path?
                     // Better: HnswIvfIndex should save metric in centroids parquet metadata.
                     
-                    let hnsw = match metric {
-                        VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                        VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
-                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    let hnsw = if let Some(QuantizerImpl::TurboQuant(q)) = q_inner {
+                        if q.bits == 4 {
+                            HnswGraph::TurboQuant4(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u4, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                        } else {
+                            HnswGraph::TurboQuant8(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u8, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                        }
+                    } else {
+                        match metric {
+                            VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                            VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                            VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                            VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                            VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                            VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
+                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                        }
                     };
                         
                     let map_builder = ParquetRecordBatchReaderBuilder::try_new(res_mapping)?;
@@ -806,7 +861,7 @@ impl HnswIvfIndex {
             cluster_graphs,
             _n_lists: n_lists,
             dim,
-            _pq_encoder: None,
+            quantizer,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         };
         
@@ -877,6 +932,15 @@ impl HnswIvfIndex {
 
         println!("Loaded {} centroids of dimension {}", n_lists, dim);
 
+        let quantizer_path = format!("{}.quantizer", base_path_str);
+        let quantizer = if std::path::Path::new(&quantizer_path).exists() {
+            let q_bytes = std::fs::read(&quantizer_path)?;
+            let q: crate::core::index::QuantizerImpl = serde_json::from_slice(&q_bytes)?;
+            Some(q)
+        } else {
+            None
+        };
+
         let mut cluster_graphs = HashMap::new();
         for cluster_id in 0..n_lists {
             let hnsw_path = format!("{}.cluster_{}", base_path, cluster_id);
@@ -896,19 +960,29 @@ impl HnswIvfIndex {
                 .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
             
             // Use the metric loaded from centroids metadata
-            let hnsw = match metric {
-                VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
-                VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
-                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+            let hnsw = if let Some(crate::core::index::QuantizerImpl::TurboQuant(q)) = &quantizer {
+                if q.bits == 4 {
+                    HnswGraph::TurboQuant4(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u4, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                } else {
+                    HnswGraph::TurboQuant8(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u8, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                }
+            } else {
+                match metric {
+                    VectorMetric::L2 => HnswGraph::L2(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL2, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    VectorMetric::Cosine => HnswGraph::Cosine(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistCosine, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    VectorMetric::InnerProduct => HnswGraph::Dot(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistDot, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    VectorMetric::L1 => HnswGraph::L1(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistL1, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    VectorMetric::Hamming => HnswGraph::Hamming(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistHamming, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                    VectorMetric::Jaccard => HnswGraph::Jaccard(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, DistJaccard, &mut data_reader)
+                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?),
+                }
             };
             
             let file = File::open(&mapping_path)?;
@@ -935,7 +1009,7 @@ impl HnswIvfIndex {
             cluster_graphs,
             _n_lists: n_lists,
             dim,
-            _pq_encoder: None,
+            quantizer,
             _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
         })
     }
@@ -969,11 +1043,12 @@ mod tests {
             vectors.push(vec);
         }
 
-        let index = HnswIvfIndex::build(vectors.clone(), VectorMetric::L2, Some(2), Some(16), false).unwrap();
+        let algo = crate::core::manifest::IndexAlgorithm::hnsw();
+        let index = HnswIvfIndex::build(vectors.clone(), VectorMetric::L2, Some(2), Some(16), &algo).unwrap();
         let query = VectorValue::Float32(vectors[50].clone());
 
         // Unfiltered search (should find ID 50 easily since it's an exact match)
-        let results_unfiltered = index.search(&query, 5, 40, None);
+        let results_unfiltered = index.search(&query, 5, 40, None).unwrap();
         assert!(!results_unfiltered.is_empty(), "Should return results");
         
         let mut found_50 = false;
@@ -988,7 +1063,7 @@ mod tests {
         filter.insert(52);
         filter.insert(53);
 
-        let results_filtered = index.search(&query, 3, 40, Some(&filter));
+        let results_filtered = index.search(&query, 3, 40, Some(&filter)).unwrap();
         assert!(!results_filtered.is_empty(), "Filtered search should return results");
 
         let mut found_50_filtered = false;
