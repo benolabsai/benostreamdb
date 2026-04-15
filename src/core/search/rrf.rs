@@ -26,6 +26,12 @@ impl ReciprocalRankFusion {
         Self::new(60.0)
     }
 
+    /// Set the k parameter for RRF fusion.
+    pub fn with_k(mut self, k: f32) -> Self {
+        self.k = k;
+        self
+    }
+
     /// Fuse multiple ranked lists into a single ranked list.
     /// Input is a vector of ranked lists, where each list is already sorted by its internal score.
     pub fn fuse(&self, ranked_lists: Vec<Vec<ScoredResult>>, limit: usize) -> Vec<ScoredResult> {

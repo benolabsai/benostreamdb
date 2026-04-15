@@ -27,6 +27,7 @@ impl HybridSearchCoordinator {
         vector_params: Option<VectorSearchParams>,
         keyword_params: Option<KeywordSearchParams>,
         limit: usize,
+        rrf_k: Option<f32>,
     ) -> Result<Vec<ScoredResult>> {
         let mut search_handles = Vec::new();
 
@@ -69,7 +70,12 @@ impl HybridSearchCoordinator {
             return Ok(list);
         }
 
-        Ok(self.rrf.fuse(ranked_lists, limit))
+        if let Some(k) = rrf_k {
+            let rrf = ReciprocalRankFusion::new(k);
+            Ok(rrf.fuse(ranked_lists, limit))
+        } else {
+            Ok(self.rrf.fuse(ranked_lists, limit))
+        }
     }
 }
 

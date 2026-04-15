@@ -262,6 +262,11 @@ impl Table {
         Ok(())
     }
 
+    pub fn set_indexed_columns(&self, columns: Vec<String>) {
+        let mut cols = self.indexing.index_columns.write().unwrap();
+        *cols = columns;
+    }
+
     pub async fn sync_primary_key_from_schema_async(&self) -> Result<()> {
         let manifest = self.manifest().await?;
         if let Some(latest_schema) = manifest.schemas.last() {
@@ -460,30 +465,37 @@ impl Table {
             .map(|id| schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap())
             .collect();
             
-        let _manifest = self.manifest().await?;
-        
-        // 1. Optimization: Check if we have Bloom filters or Inverted Indexes for these columns.
-        // If it's a single-column PK, we can use the index directly.
+        // 1. Acceleration: Single-column PK check using indexes
         if col_names.len() == 1 {
-            let _col_name = &col_names[0];
-            let _reader = HybridReader::new(self.get_config(), self.store.clone(), &self.uri);
+            let col_name = &col_names[0];
             
-            // Try Bloom Filter first (if available in any segment)
-            // Note: This requires checking ALL segments. If ANY segment might have a duplicate, we must read.
-            // However, for UNIQUNESS, if the Bloom filter says "Not Present" in all segments, we are safe.
-            // If it says "Possible," we still have to check.
+            // To validate uniqueness for the WHOLE table (during add_primary_key), 
+            // we currently still need to check all values.
+            // But if we are validating INCOMING data, we check existing segments.
             
-            // For now, let's use the Inverted Index if it exists.
-            // If the inverted index for this column represents the entire table's state (across segments),
-            // or if we check every segment's index.
+            // For now, we perform an optimized read of just the PK column.
+            let batches = self.read_with_columns(None, None, col_names.clone())
+                .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
+            
+            let mut seen = std::collections::HashSet::new();
+            for batch in batches {
+                let col = batch.column_by_name(col_name)
+                    .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in validation batch", col_name))?;
+                for i in 0..batch.num_rows() {
+                    let val = crate::core::manifest::ManifestValue::from_array(col, i).to_string();
+                    if !seen.insert(val) {
+                        return Err(anyhow::anyhow!("Primary key violation detected for column {}: Duplicate value found.", col_name));
+                    }
+                }
+            }
+            return Ok(());
         }
 
-        // Fallback: Perform a scan to check for duplicates. 
-        // TODO: In Phase 2, we will use the 'Global Index' or 'Reconciliation Worker' to make this instant.
-        let batches = self.read_with_columns(None, None, col_names.clone()).map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
+        // Fallback: Multi-column PK scan
+        let batches = self.read_with_columns(None, None, col_names.clone())
+            .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
         
         let mut seen = std::collections::HashSet::new();
-        
         for batch in batches {
             let sort_fields = batch.schema().fields().iter()
                 .map(|f| arrow::row::SortField::new(f.data_type().clone()))
@@ -502,6 +514,56 @@ impl Table {
         }
         
         Ok(())
+    }
+
+    /// Check if a single primary key value exists in the committed storage.
+    /// Uses index-first searching (Bloom Filter -> Inverted Index -> Data Scan).
+    async fn _check_pk_in_storage_async(&self, column: &str, value: &serde_json::Value) -> Result<bool> {
+        let manifest = self.manifest().await?;
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manager.load_all_entries(&manifest).await?;
+        
+        use futures::stream::{self, StreamExt};
+        
+        // Parallelize segment checks with a concurrency limit
+        let concurrency = 8; // Adjust based on hardware
+        let result_stream = stream::iter(all_entries.into_iter().rev())
+            .map(|entry| {
+                let store = self.store.clone();
+                let uri = self.uri.clone();
+                let config = self.get_config();
+                let schema = manifest.schemas.last().cloned().unwrap_or_default();
+                let column = column.to_string();
+                let value = value.clone();
+                let entry_path = entry.file_path.clone();
+                let entry_size = entry.file_size_bytes as u64;
+
+                async move {
+                    let mut reader = HybridReader::new(config, store, &uri)
+                        .with_iceberg_schema(schema);
+                    
+                    reader.config.parquet_path = Some(entry_path);
+                    reader.config.file_size = Some(entry_size);
+                    
+                    reader.check_value_exists(&column, &value).await
+                }
+            })
+            .buffer_unordered(concurrency)
+            .filter_map(|res| async {
+                match res {
+                    Ok(true) => Some(Ok(true)),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
+            });
+            
+        let mut pinned_stream = Box::pin(result_stream);
+        let result = pinned_stream.next().await;
+
+        match result {
+            Some(res) => res, // Found a match or error
+            None => Ok(false), // No matches found in any segment
+        }
     }
 
     /// Internal helper: Detect existing physical indexes and migrate them to logical Schema specifications.

@@ -1,21 +1,33 @@
 # TurboQuant 4-bit Optimization & Index Selection - Task Status
 
-## 🔄 Current Status (Optimization Phase)
+## ✅ All Tasks Complete
 
-- [/] Implement 4-bit nibble packing in `turboquant.rs`
-- [ ] Add `DistL2u4` distance metric in `distance.rs`
-- [ ] Update `hnsw_ivf.rs` to use `DistL2u4` for TQ4
-- [ ] Refine index selection priority in `reader.rs`
-- [ ] Verify 8x compression efficiency and recall
+- [x] Implement 4-bit nibble packing in `turboquant.rs`
+- [x] Add `DistL2u4` distance metric in `distance.rs`
+- [x] Update `hnsw_ivf.rs` to use `DistL2u4` for TQ4
+- [x] Refine index selection priority in `reader.rs`
+- [x] Implement Bloom Filter Cache (`BLOOM_FILTER_CACHE` in `cache.rs`)
+- [x] Update `HybridReader::check_bloom_filter` to use the cache
+- [x] Add verification tests for Bloom caching (`tests/test_bloom_cache.rs`)
+- [x] Integrate RRF scoring
+- [x] General Bloom Filter pruning on read path (`tests/test_bloom_pruning.rs`)
+- [x] PK acceleration scale test (`tests/test_pk_acceleration.rs` — 5 segments × 10k)
+- [x] Fix test compiler warnings (unused imports in `test_bloom_cache.rs`)
 
-## ✅ Completed Tasks (Core Integration)
-- [x] Refactor `IndexAlgorithm` for fluent names
-- [x] Implement `DistL2u8` for TQ8
-- [x] Python SDK stabilization (Table.insert, manifest subscriptability)
-- [x] Documentation updates (README, Guides)
+## Test Results
+
+| Test | Result |
+|---|---|
+| `test_bloom_filter_caching` | ✅ PASS |
+| `test_bloom_filter_general_query_pruning` | ✅ PASS |
+| `test_pk_acceleration_multi_segment` | ✅ PASS |
+| `cargo test --lib` (347 tests) | ✅ PASS |
+| `test_core_ingestion` | ✅ PASS |
+| `test_primary_key` (3 tests) | ✅ PASS |
+| `test_index_lifecycle` | ✅ PASS |
+| `cargo check --tests` | ✅ No warnings |
 
 ---
 
-**Status**: [/] OPTIMIZATIONS IN PROGRESS
+**Status**: ✅ COMPLETE
 **Last Updated**: April 14, 2026
-**Next Action**: Implement packing in `turboquant.rs`

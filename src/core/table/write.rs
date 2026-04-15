@@ -140,38 +140,87 @@ impl Table {
             drop(lock);
         }
 
-        // 2. Primary Key Uniqueness Validation (In-buffer check)
+        // 2. Primary Key Uniqueness Validation
         let pk_cols = self.primary_key.read().unwrap().clone();
         if !pk_cols.is_empty() {
-            let buffer = self.write_buffer.read().unwrap();
-            for batch in &batches {
-                // Check if any row in batch duplicates a key in the buffer or in the batch itself
-                // (O(N) check for simplicity, can be optimized later)
-                for pk_col in &pk_cols {
+            // Accelerated path for single-column Primary Keys
+            if pk_cols.len() == 1 {
+                let pk_col = &pk_cols[0];
+                let mut seen_keys = std::collections::HashSet::new();
+                
+                {
+                    let buffer = self.write_buffer.read().unwrap();
+                    // 1. Pre-populate seen keys from the in-memory write buffer
+                    for b_batch in buffer.iter() {
+                        if let Some(b_col) = b_batch.column_by_name(pk_col) {
+                            for j in 0..b_batch.num_rows() {
+                                let b_val = crate::core::manifest::ManifestValue::from_array(b_col, j);
+                                seen_keys.insert(b_val.to_string());
+                            }
+                        }
+                    }
+                }
+                
+                // 2. Check each record in the incoming batches
+                for batch in &batches {
                     if let Some(col) = batch.column_by_name(pk_col) {
-                        // Cast to string for universal comparison if needed, or handle by type
-                        // For now, let's just check if it's in the buffer using a simple loop
-                        // This is primarily for the integration test's correctness.
                         for i in 0..batch.num_rows() {
-                            let val = crate::core::manifest::ManifestValue::from_array(col, i);
+                            let m_val = crate::core::manifest::ManifestValue::from_array(col, i);
                             
-                            // Check against buffer
-                            for b_batch in buffer.iter() {
-                                if let Some(b_col) = b_batch.column_by_name(pk_col) {
-                                    for j in 0..b_batch.num_rows() {
-                                        let b_val = crate::core::manifest::ManifestValue::from_array(b_col, j);
-                                        if val == b_val {
-                                            return Err(anyhow::anyhow!("Primary key violation: Duplicate value '{}' in column '{}'", val, pk_col));
+                            // Check for nulls in PK
+                            if matches!(m_val, crate::core::manifest::ManifestValue::Null) {
+                                return Err(anyhow::anyhow!("Null constraint violation: Primary key column '{}' cannot contain null values", pk_col));
+                            }
+
+                            let val_str = m_val.to_string();
+                            
+                            // Check against buffer and current batch
+                            if seen_keys.contains(&val_str) {
+                                return Err(anyhow::anyhow!("Duplicate primary key error: id = {}", val_str));
+                            }
+                            
+                            // 3. Check against storage (Index-driven)
+                            let val_json = serde_json::to_value(&m_val).unwrap_or(serde_json::Value::Null);
+                            if self._check_pk_in_storage_async(pk_col, &val_json).await? {
+                                return Err(anyhow::anyhow!("Duplicate primary key error: id = {}", val_str));
+                            }
+                            
+                            seen_keys.insert(val_str);
+                        }
+                    }
+                }
+            } else {
+                let buffer = self.write_buffer.read().unwrap();
+                // Fallback for multi-column PKs (O(N*M) check for now)
+                for batch in &batches {
+                    for pk_col in &pk_cols {
+                        if let Some(col) = batch.column_by_name(pk_col) {
+                            for i in 0..batch.num_rows() {
+                                let val = crate::core::manifest::ManifestValue::from_array(col, i);
+                                
+                                // Check for nulls in PK
+                                if matches!(val, crate::core::manifest::ManifestValue::Null) {
+                                    return Err(anyhow::anyhow!("Null constraint violation: Primary key column '{}' cannot contain null values", pk_col));
+                                }
+
+                                // Check against buffer
+                                for b_batch in buffer.iter() {
+                                    if let Some(b_col) = b_batch.column_by_name(pk_col) {
+                                        for j in 0..b_batch.num_rows() {
+                                            let b_val = crate::core::manifest::ManifestValue::from_array(b_col, j);
+                                            if val == b_val {
+                                                return Err(anyhow::anyhow!("Duplicate primary key error: id = {}", val));
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            
-                            // Check against other rows in the same batch (before index i)
-                            for j in 0..i {
-                                let b_val = crate::core::manifest::ManifestValue::from_array(col, j);
-                                if val == b_val {
-                                    return Err(anyhow::anyhow!("Primary key violation: Duplicate value '{}' in column '{}' within the same batch", val, pk_col));
+                                
+                                // Check against other rows in the same batch (before index i)
+                                for j in 0..i {
+                                    let b_val = crate::core::manifest::ManifestValue::from_array(col, j);
+                                    if val == b_val {
+                                        return Err(anyhow::anyhow!("Duplicate primary key error: id = {}", val));
+                                    }
                                 }
                             }
                         }
