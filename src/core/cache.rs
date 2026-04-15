@@ -11,6 +11,7 @@ use crate::core::index::hnsw_rs::hnsw::Hnsw;
 use crate::core::index::hnsw_rs::dist::DistL2;
 use arrow::record_batch::RecordBatch;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::bloom_filter::Sbbf;
 use std::path::PathBuf;
 use object_store::ObjectStore;
 use anyhow::Result;
@@ -172,6 +173,13 @@ pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>
     Cache::builder()
         .max_capacity(1000) // 1000 file footers (schema, row groups)
         .time_to_idle(Duration::from_secs(60 * 30)) 
+        .build()
+});
+
+pub static BLOOM_FILTER_CACHE: Lazy<Cache<String, Arc<Sbbf>>> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(2048) // Roughly 250MB if each is 128KB
+        .time_to_idle(Duration::from_secs(60 * 30))
         .build()
 });
 

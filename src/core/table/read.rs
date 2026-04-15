@@ -370,6 +370,7 @@ impl Table {
                      Some(vs_params.clone()),
                      Some(keyword_params),
                      vs_params.k,
+                     config.rrf_k,
                  ).await?;
 
                  // Convert ScoredResults back to RecordBatches by fetching from Parquet
@@ -655,8 +656,8 @@ impl Table {
         let mut batches = Vec::new();
         let mut index_used = false;
 
-        for filter in and_filters {
-             if let Ok(indexed_batches) = reader.query_index_first(&filter, target_schema.clone()).await {
+        for filter in &and_filters {
+             if let Ok(indexed_batches) = reader.query_index_first(filter, target_schema.clone()).await {
                  batches = indexed_batches;
                  index_used = true;
                  break;
@@ -664,6 +665,25 @@ impl Table {
         }
 
         if !index_used {
+            // Point Selection Optimization: Check Bloom Filters before scanning
+            for filter in &and_filters {
+                if let Some(vals) = &filter.values {
+                    if vals.len() == 1 {
+                        if !reader.check_bloom_filter(&filter.column, &vals[0]).await.unwrap_or(true) {
+                            tracing::debug!("Bloom Filter Pruned segment: {} for col: {}", segment_id, filter.column);
+                            return Ok(vec![]);
+                        }
+                    }
+                } else if let (Some(min), Some(max)) = (&filter.min, &filter.max) {
+                    if min == max {
+                        if !reader.check_bloom_filter(&filter.column, min).await.unwrap_or(true) {
+                            tracing::debug!("Bloom Filter Pruned segment: {} for col: {}", segment_id, filter.column);
+                            return Ok(vec![]);
+                        }
+                    }
+                }
+            }
+            
             let mut stream = reader.stream_all(target_schema).await?;
             while let Some(batch_result) = stream.next().await {
                 batches.push(batch_result?);

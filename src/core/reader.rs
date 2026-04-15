@@ -369,28 +369,166 @@ impl HybridReader {
     }
 
     /// Check if a value might exist in a column using Parquet Bloom Filters
-    pub async fn check_bloom_filter(&self, column: &str, _value: &serde_json::Value) -> Result<bool> {
+    pub async fn check_bloom_filter(&self, column: &str, value: &serde_json::Value) -> Result<bool> {
         let metadata: std::sync::Arc<parquet::file::metadata::ParquetMetaData> = self.get_parquet_metadata().await?;
         let schema = metadata.file_metadata().schema_descr();
         
         let col_idx = schema.columns().iter().position(|c| c.name() == column)
             .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in Parquet schema", column))?;
         
-        // Load Bloom Filters from all Row Groups
+        // Split Block Bloom Filters (SBBF) are used in Parquet.
+        use parquet::bloom_filter::Sbbf;
+        
         let mut possible = false;
+        let pq_path_str = self.config.parquet_path.clone().unwrap_or_default();
+        if pq_path_str.is_empty() { return Ok(true); }
+        let pq_path = object_store::path::Path::from(pq_path_str.clone());
+
+        // Get file size to handle Range correctly
+        let file_size = if let Some(s) = self.config.file_size {
+            s
+        } else {
+            self.store.head(&pq_path).await?.size as u64
+        };
+
         for i in 0..metadata.num_row_groups() {
             let rg_meta = metadata.row_group(i);
             let col_meta = rg_meta.column(col_idx);
             
-            if let Some(_bf_meta) = col_meta.bloom_filter_offset() {
-                // TODO: Actually read and check the Parquet Bloom Filter blob
-                // For now, we assume 'possible' to be safe, but the infrastructure is ready.
-                possible = true;
-                break;
+            if let Some(offset) = col_meta.bloom_filter_offset() {
+                let cache_key = format!("{}/{}:{}", self.root_uri, pq_path_str, offset);
+                
+                let sbbf = if let Some(cached) = crate::core::cache::BLOOM_FILTER_CACHE.get(&cache_key).await {
+                    tracing::debug!("Bloom Cache HIT for key: {}", cache_key);
+                    cached
+                } else {
+                    tracing::debug!("Bloom Cache MISS for key: {}", cache_key);
+                    let start = offset as u64;
+                    let end = (start + 2 * 1024 * 1024).min(file_size);
+                    
+                    // Fetch the Bloom Filter blob from storage
+                    let data_res = self.store.get_range(&pq_path, start..end).await;
+                    let data = match data_res {
+                        Ok(d) => d,
+                        Err(_) => self.store.get_range(&pq_path, start..file_size).await?,
+                    };
+                    
+                    let filter_res = Sbbf::from_bytes(&data);
+                    let filter = match filter_res {
+                        Ok(f) => f,
+                        Err(e) => {
+                            let msg = e.to_string();
+                            if msg.contains("extra bytes") {
+                                // Extract expected length from error: "expected 1048594 total bytes, got ..."
+                                if let Some(expected_pos) = msg.find("expected ") {
+                                    let rest = &msg[expected_pos + 9..];
+                                    if let Some(space_pos) = rest.find(' ') {
+                                        if let Ok(expected_len) = rest[..space_pos].parse::<usize>() {
+                                            if expected_len <= data.len() {
+                                                tracing::debug!("Retrying Bloom Filter parse with truncated length: {}", expected_len);
+                                                Sbbf::from_bytes(&data[..expected_len])?
+                                            } else { return Err(e.into()); }
+                                        } else { return Err(e.into()); }
+                                    } else { return Err(e.into()); }
+                                } else { return Err(e.into()); }
+                            } else { return Err(e.into()); }
+                        }
+                    };
+                    
+                    let arc_filter = Arc::new(filter);
+                    crate::core::cache::BLOOM_FILTER_CACHE.insert(cache_key.clone(), arc_filter.clone()).await;
+                    tracing::debug!("Bloom Cache INSERTED for key: {}", cache_key);
+                    arc_filter
+                };
+
+                let desc = schema.column(col_idx);
+                    let physical_type = desc.physical_type();
+                    
+                    let matches = match physical_type {
+                        parquet::basic::Type::INT64 => {
+                            if let Some(i) = value.as_i64() { sbbf.check(&i) } else { true }
+                        }
+                        parquet::basic::Type::INT32 => {
+                            if let Some(i) = value.as_i64() { 
+                                let i32_val = i as i32;
+                                sbbf.check(&i32_val) 
+                            } else { true }
+                        }
+                        parquet::basic::Type::BYTE_ARRAY | parquet::basic::Type::FIXED_LEN_BYTE_ARRAY => {
+                             if let Some(s) = value.as_str() { 
+                                 // s is &str. &s is &&str. &str implements AsBytes.
+                                 sbbf.check(&s) 
+                             } else if let Some(vals) = value.as_array() {
+                                 let bytes: Vec<u8> = vals.iter().filter_map(|v| v.as_u64().map(|n| n as u8)).collect();
+                                 if bytes.len() == vals.len() {
+                                     sbbf.check(&bytes)
+                                 } else { true }
+                             } else { true }
+                        }
+                        parquet::basic::Type::FLOAT => {
+                            if let Some(f) = value.as_f64() { 
+                                let f32_val = f as f32;
+                                sbbf.check(&f32_val) 
+                            } else { true }
+                        }
+                        parquet::basic::Type::DOUBLE => {
+                            if let Some(f) = value.as_f64() { sbbf.check(&f) } else { true }
+                        }
+                        _ => true,
+                    };
+
+                    if matches {
+                        possible = true;
+                        break;
+                    }
+                }
+            }
+        Ok(possible)
+    }
+
+    /// Check if a value exists in a column using the best available index
+    pub async fn check_value_exists(&self, column: &str, value: &serde_json::Value) -> Result<bool> {
+        // 1. Bloom Filter (Fastest rejection)
+        if !self.check_bloom_filter(column, value).await? {
+            return Ok(false);
+        }
+        
+        // 2. Inverted Index / Bitmap (Precise lookup)
+        // Convert serde_json::Value to QueryFilter for the index search
+        let filter = crate::core::planner::QueryFilter {
+             column: column.to_string(),
+             min: Some(value.clone()),
+             min_inclusive: true,
+             max: Some(value.clone()),
+             max_inclusive: true,
+             values: None,
+             negated: false,
+        };
+        
+        if let Some(bitmap) = self.get_scalar_filter_bitmap(&filter).await? {
+            return Ok(!bitmap.is_empty());
+        }
+        
+        // 3. Fallback: Full Scan (Slowest)
+        // This is only called if Bloom Filter said "Possible" and no Inverted Index exists.
+        let batches = self.stream_all(None).await?;
+        let mut stream = batches;
+        while let Some(batch_res) = stream.next().await {
+            let batch = batch_res?;
+            let col = batch.column_by_name(column)
+                .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in scan", column))?;
+            
+            // Check rows in batch
+            for i in 0..batch.num_rows() {
+                let val = crate::core::manifest::ManifestValue::from_array(col, i);
+                // Simple comparison (might need type handling optimization)
+                if format!("{}", val) == format!("{}", value).trim_matches('"') {
+                    return Ok(true);
+                }
             }
         }
         
-        Ok(possible)
+        Ok(false)
     }
 
     /// Helper: Get RoaringBitmap of rows matching a scalar filter using indexes

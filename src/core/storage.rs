@@ -16,7 +16,7 @@ use anyhow::{Result, Context};
 pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
     let output_store: Arc<dyn ObjectStore>;
 
-    if uri.starts_with('/') || uri.starts_with("file://") {
+    if uri.starts_with('/') || uri.starts_with("file://") || !uri.contains("://") {
         let path = uri.strip_prefix("file://").unwrap_or(uri);
         if !std::path::Path::new(path).exists() {
             std::fs::create_dir_all(path).context("Failed to create local directory")?;

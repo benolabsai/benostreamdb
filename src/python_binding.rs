@@ -774,14 +774,21 @@ impl PyTable {
                 }
             }
             
-            Some(params)
+            // Parse optional rrf_k parameter
+            let rrf_k = if let Ok(Some(rrf_obj)) = vf.get_item("rrf_k") {
+                rrf_obj.extract::<f32>().ok()
+            } else {
+                None
+            };
+            
+            Some((params, rrf_k))
         } else {
             None
         };
 
         // Clone for closure
         let filter_str = filter.clone();
-        let vs_params_clone = vs_params.clone();
+        let vs_params_combined = vs_params.clone();
         let columns_clone = columns.clone();
 
         let table_schema = self.table.arrow_schema();
@@ -811,11 +818,23 @@ impl PyTable {
             if let Some(c) = rust_context {
                 crate::core::index::gpu::set_global_gpu_context(Some(c));
             }
-            if let Some(cols) = columns_clone {
-                 self.table.read_with_columns(filter_str.as_deref(), vs_params_clone, cols)
+            
+            let mut config = self.table.query_config().clone();
+            let (vs_params, _rrf_k) = if let Some((p, k)) = vs_params_combined {
+                if let Some(val) = k {
+                    config = config.with_rrf_k(val);
+                }
+                (Some(p), k)
             } else {
-                 self.table.read(filter_str.as_deref(), vs_params_clone)
-            }
+                (None, None)
+            };
+
+            TOKIO_RUNTIME.block_on(self.table.read_with_config_async(
+                filter_str.as_deref(), 
+                vs_params, 
+                columns_clone.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>()).as_deref(), 
+                config
+            ))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         
         let final_schema = if vs_params.is_some() {
