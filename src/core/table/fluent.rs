@@ -13,6 +13,7 @@ pub struct TableQuery<'a> {
     pub vector_filter: Option<VectorSearchParams>,
     pub columns: Option<Vec<String>>,
     pub context: Option<ComputeContext>,
+    pub rrf_k: Option<f32>,
 }
 
 impl<'a> TableQuery<'a> {
@@ -23,6 +24,7 @@ impl<'a> TableQuery<'a> {
             vector_filter: None,
             columns: None,
             context: None,
+            rrf_k: None,
         }
     }
 
@@ -50,6 +52,11 @@ impl<'a> TableQuery<'a> {
         self
     }
 
+    pub fn rrf_k(mut self, k: f32) -> Self {
+        self.rrf_k = Some(k);
+        self
+    }
+
     pub async fn to_batches(self) -> Result<Vec<RecordBatch>> {
         let cols_refs: Option<Vec<&str>> = self.columns.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect());
         let cols_slice: Option<&[&str]> = cols_refs.as_deref();
@@ -59,6 +66,11 @@ impl<'a> TableQuery<'a> {
             set_global_gpu_context(Some(ctx));
         }
         
-        self.table.read_async(self.filter_str.as_deref(), self.vector_filter, cols_slice).await
+        let mut config = self.table.query_config().clone();
+        if let Some(k) = self.rrf_k {
+             config = config.with_rrf_k(k);
+        }
+        
+        self.table.read_with_config_async(self.filter_str.as_deref(), self.vector_filter, cols_slice, config).await
     }
 }

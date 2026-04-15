@@ -24,6 +24,9 @@ pub struct QueryConfig {
     /// 
     /// Auto-detection reserves 50% of available RAM for HNSW loads.
     pub max_parallel_readers: Option<usize>,
+
+    /// Constant for Reciprocal Rank Fusion (RRF). Defaults to 60.0.
+    pub rrf_k: Option<f32>,
 }
 
 
@@ -35,6 +38,12 @@ impl QueryConfig {
     /// Manually set max parallel readers (overrides auto-detection)
     pub fn with_max_parallel_readers(mut self, max: usize) -> Self {
         self.max_parallel_readers = Some(max.max(1)); // At least 1
+        self
+    }
+
+    /// Set rrf_k for hybrid search fusion
+    pub fn with_rrf_k(mut self, k: f32) -> Self {
+        self.rrf_k = Some(k);
         self
     }
     
