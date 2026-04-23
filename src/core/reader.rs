@@ -1635,11 +1635,10 @@ impl HybridReader {
         };
         
         // Load HNSW-IVF index
-        let hnsw_ivf = if idx_info.blob_type.is_some() {
-             HnswIvfIndex::load_puffin_async(self.store.clone(), &idx_path_str).await?
-        } else {
-             HnswIvfIndex::load_async_with_cache_key(self.store.clone(), &idx_path_str, &cache_key).await?
-        };
+        // NOTE: blob_type records the *algorithm* (e.g. "hnsw_tq8"), not the storage format.
+        // The writer always uses the multi-file layout (.centroids.parquet, .cluster_N.hnsw.*),
+        // so we always load via load_async_with_cache_key regardless of blob_type.
+        let hnsw_ivf = HnswIvfIndex::load_async_with_cache_key(self.store.clone(), &idx_path_str, &cache_key).await?;
         
         // Search with HNSW-IVF
         let query_clone = query.clone();
