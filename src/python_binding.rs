@@ -7,7 +7,7 @@ use once_cell::sync::Lazy;
 use crate::core::table::{Table, VectorSearchParams};
 use crate::core::compaction::CompactionOptions;
 use crate::core::index::VectorMetric;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::array::RecordBatchIterator;
 use arrow::ffi_stream::{FFI_ArrowArrayStream, ArrowArrayStreamReader};
 use pyo3::ffi::Py_uintptr_t;
@@ -878,15 +878,6 @@ impl PyTable {
         arrow_batches_to_pyarrow(py, casted_batches, final_schema)
     }
 
-    /// Read table to Pandas DataFrame with optional filtering and column projection
-    /// 
-    /// This method pushes predicates down to Rust for index acceleration.
-    /// Use the `columns` parameter to skip reading large columns like embeddings
-    /// when you only need scalar data.
-    /// 
-    /// Example:
-    ///     # Fast scalar query - skip reading 768D embeddings
-    ///     df = table.to_pandas(filter="category = 'science'", columns=["doc_id", "title"])
     #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None, **kwargs))]
     fn to_pandas(
         &self,
@@ -897,11 +888,128 @@ impl PyTable {
         device: Option<Py<PyDevice>>,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Py<PyAny>> {
-        // Get Arrow table with column projection
-        let arrow_table = self.to_arrow(py, filter, vector_filter, columns, device)?;
+        // Use streaming API under the hood to stabilize memory usage
+        let reader = self.to_arrow_stream(py, filter, vector_filter, columns, device)?;
+        
+        // Convert to Table first, then to Pandas
+        let arrow_table = reader.call_method0(py, "read_all")?;
         
         // Convert to Pandas via PyArrow, passing through kwargs
         arrow_table.call_method(py, "to_pandas", (), kwargs.as_ref())
+    }
+
+    /// Read table to PyArrow Table
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
+    fn to_arrow(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        // Use streaming API under the hood to stabilize memory usage
+        let reader = self.to_arrow_stream(py, filter, vector_filter, columns, device)?;
+        reader.call_method0(py, "read_all")
+    }
+
+    /// Read table to PyArrow RecordBatchReader (Streaming)
+    /// 
+    /// This is the recommended way to read large datasets that don't fit in memory.
+    /// 
+    /// Args:
+    ///     filter: Optional SQL-like filter string
+    ///     vector_filter: Optional dict for vector search
+    ///     columns: List of columns to read
+    ///     device: Optional ComputeContext for GPU acceleration
+    /// 
+    /// Returns:
+    ///     pyarrow.RecordBatchReader
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
+    fn to_arrow_stream(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        let columns_clone = columns.clone();
+        
+        let vs_params_combined = if let Some(ref vf) = vector_filter {
+            let column: String = vf.get_item("column")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'column' key"))?
+                .extract()?;
+            let k: usize = vf.get_item("k")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'k' key"))?
+                .extract()?;
+            let query_obj = vf.get_item("query")?
+                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key"))?;
+            let query: Vec<f32> = query_obj.extract()?;
+            let mut params = VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k);
+            
+            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
+                if let Ok(metric_str) = metric_obj.extract::<String>() {
+                    params = params.with_metric(parse_metric(&metric_str)?);
+                }
+            }
+            
+            let rrf_k = if let Ok(Some(rrf_obj)) = vf.get_item("rrf_k") {
+                rrf_obj.extract::<usize>().ok()
+            } else {
+                None
+            };
+            
+            Some((params, rrf_k))
+        } else {
+            None
+        };
+
+        let filter_str = filter.clone();
+        let table_schema = self.table.arrow_schema();
+        let projected_schema = if let Some(cols) = &columns {
+            let mut fields = Vec::new();
+            for c in cols {
+                if let Some((_, field)) = table_schema.column_with_name(c) {
+                    fields.push(std::sync::Arc::new(field.clone()));
+                }
+            }
+            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
+        } else {
+            table_schema
+        };
+
+        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
+        let rust_context = if let Some(py_ctx) = ctx {
+            let ctx_borrow = py_ctx.bind(py).borrow();
+            Some(ctx_borrow.context.clone())
+        } else {
+            None
+        };
+
+        let stream_res = py.allow_threads(move || {
+            if let Some(c) = rust_context {
+                crate::core::index::gpu::set_global_gpu_context(Some(c));
+            }
+            
+            let mut config = self.table.query_config().clone();
+            let (vs_params, _) = if let Some((p, k)) = vs_params_combined {
+                if let Some(val) = k {
+                    config = config.with_rrf_k(val);
+                }
+                (Some(p), k)
+            } else {
+                (None, None)
+            };
+
+            TOKIO_RUNTIME.block_on(self.table.read_stream_async(
+                filter_str.as_deref(), 
+                vs_params, 
+                columns_clone.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>()).as_deref()
+            ))
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+
+        arrow_stream_to_pyarrow(py, stream_res, projected_schema)
     }
 
     /// Write data to table.
@@ -1838,6 +1946,22 @@ fn arrow_batches_to_pyarrow(py: Python<'_>, batches: Vec<RecordBatch>, schema: a
         .unbind();
     
     Ok(table)
+}
+
+fn arrow_stream_to_pyarrow(py: Python<'_>, stream: futures::stream::BoxStream<'static, Result<RecordBatch>>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
+    use arrow::record_batch::RecordBatchStreamAdapter;
+    
+    // Export to C Stream
+    let adapter = RecordBatchStreamAdapter::new(schema, stream);
+    let stream = FFI_ArrowArrayStream::new(Box::new(adapter));
+    let stream_ptr = Box::into_raw(Box::new(stream)) as Py_uintptr_t;
+    
+    // Import in Python via PyArrow
+    let pyarrow = py.import("pyarrow")?;
+    let reader_class = pyarrow.getattr("RecordBatchReader")?;
+    let reader = reader_class.call_method1("_import_from_c", (stream_ptr,))?.unbind();
+    
+    Ok(reader)
 }
 
 #[pyclass(name = "Session")]
