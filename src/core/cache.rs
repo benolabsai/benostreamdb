@@ -125,8 +125,22 @@ pub static INDEX_CACHE: Lazy<Cache<String, Arc<RoaringBitmap>>> = Lazy::new(|| {
 });
 
 pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
+    let cache_gb: u64 = std::env::var("HYPERSTREAM_CACHE_GB")
+        .unwrap_or_else(|_| "2".to_string())
+        .parse()
+        .unwrap_or(2);
+    
+    // Allocate 10% of global cache to Byte Cache (max 512MB)
+    let limit_bytes = (cache_gb * 1024 * 1024 * 1024 / 10).min(512 * 1024 * 1024);
+    let max_kb = limit_bytes / 1024;
+
+    tracing::info!("Initializing Byte Cache with {} MB limit", limit_bytes / (1024 * 1024));
+
     Cache::builder()
-        .max_capacity(1000) // 1000 small files (manifests, etc)
+        .weigher(|_key, value: &Arc<Vec<u8>>| -> u32 {
+            (value.len() / 1024) as u32
+        })
+        .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 30)) // 30 mins
         .build()
 });
@@ -163,9 +177,24 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
 });
 
 pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = Lazy::new(|| {
+    let cache_gb: u64 = std::env::var("HYPERSTREAM_CACHE_GB")
+        .unwrap_or_else(|_| "2".to_string())
+        .parse()
+        .unwrap_or(2);
+    
+    // Allocate 25% of global cache to Inverted Index Cache
+    let limit_bytes = cache_gb * 1024 * 1024 * 1024 / 4;
+    let max_kb = limit_bytes / 1024;
+
+    tracing::info!("Initializing Inverted Index Cache with {} MB limit", limit_bytes / (1024 * 1024));
+
     Cache::builder()
-        .max_capacity(1000) // Cache 1000 decoded inverted index files
-        .time_to_idle(Duration::from_secs(60 * 5)) 
+        .weigher(|_key, value: &Arc<Vec<RecordBatch>>| -> u32 {
+            let bytes: usize = value.iter().map(|b| b.get_array_memory_size()).sum();
+            (bytes / 1024) as u32
+        })
+        .max_capacity(max_kb)
+        .time_to_idle(Duration::from_secs(60 * 15)) 
         .build()
 });
 

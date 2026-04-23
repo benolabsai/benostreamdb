@@ -18,6 +18,7 @@ use crate::SegmentConfig;
 
 use super::Table;
 use crate::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
+use futures::stream::BoxStream;
 
 impl Table {
 
@@ -43,6 +44,17 @@ impl Table {
 
     pub async fn read_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
         self.read_with_config_async(filter_str, vector_filter, columns, self.query_config.clone()).await
+    }
+
+    pub async fn read_stream_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let expr = match filter_str {
+            Some(f) => {
+                let schema = self.arrow_schema();
+                Some(FilterExpr::parse_sql(f, schema).await?)
+            }
+            _ => None,
+        };
+        self.read_expr_stream_async(expr, vector_filter, columns, self.query_config.clone(), filter_str).await
     }
 
     pub fn query(&self) -> TableQuery<'_> {
@@ -277,6 +289,19 @@ impl Table {
         config: QueryConfig,
         filter_str: Option<&str>,
     ) -> Result<Vec<RecordBatch>> {
+        let stream = self.read_expr_stream_async(expr, vector_filter, columns, config, filter_str).await?;
+        let results: Vec<Result<RecordBatch>> = stream.collect().await;
+        results.into_iter().collect()
+    }
+
+    pub async fn read_expr_stream_async(
+        &self,
+        expr: Option<FilterExpr>,
+        vector_filter: Option<VectorSearchParams>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+        filter_str: Option<&str>,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         use futures::StreamExt;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -375,7 +400,9 @@ impl Table {
 
                  // Convert ScoredResults back to RecordBatches by fetching from Parquet
                  // This is a simplified version of the final row-fetcher
-                 return self.fetch_results_by_id(scored_results, columns).await;
+                                   let results = self.fetch_results_by_id(scored_results, columns).await?;
+                  return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
+
              }
         }
 
@@ -472,7 +499,7 @@ impl Table {
                   }
               }
 
-              return Ok(results);
+              return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
         }
 
         // Extract Iceberg schema from the already-loaded manifest to avoid
@@ -490,35 +517,52 @@ impl Table {
         let concurrency = config.max_parallel_readers.unwrap_or_else(|| {
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
         });
+
+        struct ReadCtx {
+            table: Table,
+            expr: Option<Arc<FilterExpr>>,
+            schema: Option<Arc<crate::core::manifest::Schema>>,
+            gpu: Option<crate::core::index::gpu::ComputeContext>,
+            columns: Option<Vec<String>>,
+            version: u64,
+        }
+        let read_ctx = Arc::new(ReadCtx {
+            table: self.clone(),
+            expr: expr_arc.clone(),
+            schema: iceberg_schema_arc,
+            gpu: current_gpu_context,
+            columns: columns.map(|c| c.iter().map(|s| s.to_string()).collect()),
+            version: version as u64,
+        });
+
         let stream = futures::stream::iter(entries_to_read)
-            .map(|entry| {
-                let expr_clone = expr_arc.clone();
-                let schema_clone = iceberg_schema_arc.clone();
-                let ctx = current_gpu_context.clone();
-                async move {
-                    if let Some(c) = ctx {
-                        crate::core::index::gpu::set_global_gpu_context(Some(c));
+            .map({
+                let read_ctx = read_ctx.clone();
+                move |entry| {
+                    let ctx = read_ctx.clone();
+                    async move {
+                        if let Some(c) = ctx.gpu.clone() {
+                            crate::core::index::gpu::set_global_gpu_context(Some(c));
+                        }
+                        let cols_refs: Option<Vec<&str>> = ctx.columns.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+                        ctx.table.read_segment_expr(
+                            &entry, ctx.expr.as_deref(), ctx.version, cols_refs.as_deref(),
+                            ctx.schema.as_deref(),
+                        ).await
                     }
-                    self.read_segment_expr(
-                        &entry, expr_clone.as_deref(), version, columns,
-                        schema_clone.as_deref(),
-                    ).await
                 }
             })
             .buffer_unordered(concurrency);
 
-        let results: Vec<Result<Vec<RecordBatch>>> = stream.collect().await;
-        let mut all_batches = Vec::new();
-        for (i, res) in results.into_iter().enumerate() {
+        let results_stream = stream.flat_map(|res| {
             match res {
-                Ok(b_vec) => {
-                     all_batches.extend(b_vec);
-                },
-                Err(e) => tracing::error!("Error reading batch {}: {}", i, e),
+                Ok(b_vec) => futures::stream::iter(b_vec.into_iter().map(Ok)).boxed(),
+                Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
             }
-        }
+        });
 
         // --- Read from In-Memory Write Buffer ---
+        let mut mem_batches = Vec::new();
         {
             let buffer = self.write_buffer.read().unwrap();
             if !buffer.is_empty() {
@@ -536,7 +580,7 @@ impl Table {
 
                          if let Ok(filtered) = planner.filter_expr(&batch_to_scan, e) {
                              if filtered.num_rows() > 0 {
-                                 all_batches.push(filtered);
+                                 mem_batches.push(Ok(filtered));
                              }
                          }
                     }
@@ -547,18 +591,19 @@ impl Table {
                                 .filter_map(|name| batch.schema().index_of(name).ok())
                                 .collect();
                              if let Ok(projected) = batch.project(&indices) {
-                                 all_batches.push(projected);
+                                 mem_batches.push(Ok(projected));
                              }
                          } else {
-                             all_batches.push(batch.clone());
+                             mem_batches.push(Ok(batch.clone()));
                          }
                      }
                 }
             }
         }
         
+        let mem_stream = futures::stream::iter(mem_batches);
 
-        Ok(all_batches)
+        Ok(results_stream.chain(mem_stream).boxed())
     }
 
     pub async fn read_filter_async(
