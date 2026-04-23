@@ -1551,8 +1551,8 @@ mod tests {
         assert!(std::path::Path::new(&format!("{}.id.inv.parquet", base)).exists(), "Inverted index for id should exist");
         
         // Vector Index (embedding) - HNSW-IVF saves centroids and cluster graphs
-        assert!(std::path::Path::new(&format!("{}.embedding.centroids.parquet", base)).exists(), "Vector index centroids should exist");
-        assert!(std::path::Path::new(&format!("{}.embedding.cluster_0.hnsw.graph", base)).exists(), "Vector index graph should exist");
+        assert!(std::path::Path::new(&format!("{}.embedding.tq8.centroids.parquet", base)).exists(), "Vector index centroids should exist");
+        assert!(std::path::Path::new(&format!("{}.embedding.tq8.cluster_0.hnsw.graph", base)).exists(), "Vector index graph should exist");
 
         Ok(())
     }

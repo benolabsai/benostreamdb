@@ -24,18 +24,37 @@ use super::Table;
 /// rebuilds the in-memory vector index from recovered data.
 /// Returns (aligned_buffer, optional_memory_index, promoted_schema).
 pub(crate) fn recover_wal_state(
-    recovered_batches: Vec<RecordBatch>,
+    recovered_stream: Box<dyn Iterator<Item = Result<RecordBatch>>>,
     mut schema_val: SchemaRef,
 ) -> (Vec<RecordBatch>, Option<InMemoryVectorIndex>, SchemaRef) {
-    if recovered_batches.is_empty() {
+    let mut aligned_buffer = Vec::new();
+    let mut total_rows = 0;
+    
+    // 1. First pass: Collect batches and merge schema
+    let mut batches = Vec::new();
+    for batch_res in recovered_stream {
+        match batch_res {
+            Ok(batch) => {
+                // Safely merge schema
+                match arrow::datatypes::Schema::try_merge(vec![schema_val.as_ref().clone(), batch.schema().as_ref().clone()]) {
+                    Ok(s) => schema_val = Arc::new(s),
+                    Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
+                }
+                batches.push(batch);
+            }
+            Err(e) => tracing::error!("WAL Replay Error: {}", e),
+        }
+    }
+
+    if batches.is_empty() {
         return (Vec::new(), None, schema_val);
     }
 
-    tracing::info!("Recovering {} batches from WAL...", recovered_batches.len());
+    tracing::info!("Recovering {} batches from WAL...", batches.len());
 
     // Use first batch schema if current schema is empty
     if schema_val.fields().is_empty() {
-        if let Some(first) = recovered_batches.first() {
+        if let Some(first) = batches.first() {
             schema_val = first.schema();
         }
     }
@@ -43,7 +62,7 @@ pub(crate) fn recover_wal_state(
     // Safely attempt to merge all WAL schemas to capture any column additions
     // or type evolutions instead of fragile field count comparisons.
     let mut merged_schema = schema_val.as_ref().clone();
-    for batch in &recovered_batches {
+    for batch in &batches {
         match arrow::datatypes::Schema::try_merge(vec![merged_schema.clone(), batch.schema().as_ref().clone()]) {
             Ok(s) => merged_schema = s,
             Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
@@ -52,8 +71,8 @@ pub(crate) fn recover_wal_state(
     let schema_val = std::sync::Arc::new(merged_schema);
 
     // Align all recovered batches to the widest schema
-    let aligned_buffer: Vec<RecordBatch> = recovered_batches.into_iter().map(|b| {
-        if b.schema() != schema_val {
+    for b in batches {
+        let aligned = if b.schema() != schema_val {
             let mut cols = Vec::with_capacity(schema_val.fields().len());
             for field in schema_val.fields() {
                 let col = if let Some(c) = b.column_by_name(field.name()) {
@@ -66,8 +85,9 @@ pub(crate) fn recover_wal_state(
             RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
         } else {
             b
-        }
-    }).collect();
+        };
+        aligned_buffer.push(aligned);
+    }
 
     // Rebuild in-memory vector index from recovered data.
     // Look for an "embedding" column (the most common convention), supporting
@@ -94,10 +114,9 @@ pub(crate) fn recover_wal_state(
 
                 if let Some(d) = dim {
                     let mut idx = InMemoryVectorIndex::new(d);
-                    let mut offset = 0;
                     for batch in &aligned_buffer {
-                        let _ = idx.insert_batch(batch, col_name, offset);
-                        offset += batch.num_rows();
+                        let _ = idx.insert_batch(batch, col_name, total_rows);
+                        total_rows += batch.num_rows();
                     }
                     mem_index = Some(idx);
                 }
@@ -231,13 +250,15 @@ impl TableBuilder {
         let _ = wal.spawn_worker();
         
         // Replay WAL (Recovery)
-        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
+        let recovered_stream = wal.replay_stream().unwrap_or_else(|e| {
             tracing::warn!("WAL Recovery Warning: {}" , e);
-            (Vec::new(), Vec::new())
+            Box::new(std::iter::empty())
         });
         
+        let (_, recovered_paths) = wal.replay().unwrap_or_else(|_| (vec![], vec![])); // For paths cleanup only
+
         let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
-            recovered_batches, schema_val,
+            recovered_stream, schema_val,
         );
 
         let table = Table { 

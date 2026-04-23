@@ -175,14 +175,12 @@ impl WriteAheadLog {
         }
     }
 
-    /// Replay all log files in the WAL directory and return all batches.
-    /// This should be called on startup.
-    pub fn replay(&self) -> Result<(Vec<RecordBatch>, Vec<String>)> {
+    /// Replay all log files in the WAL directory and return an iterator of batches.
+    /// This should be used on startup for memory-efficient recovery.
+    pub fn replay_stream(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {
         if !self.dir.exists() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Box::new(std::iter::empty()));
         }
-
-        let mut all_batches = Vec::new();
 
         // 1. List all .arrow files in the directory
         let entries = std::fs::read_dir(&self.dir)?;
@@ -196,10 +194,10 @@ impl WriteAheadLog {
             }
         }
 
-        // Sort for deterministic replay (optional but good)
+        // Sort for deterministic replay
         wal_files.sort();
 
-        let mut replayed_paths = Vec::new();
+        let mut all_iterators = Vec::new();
 
         for path in wal_files {
             let file = File::open(&path)?;
@@ -208,27 +206,35 @@ impl WriteAheadLog {
             }
             
             let reader = BufReader::new(file);
-            let ipc_reader = StreamReader::try_new(reader, None);
-            
-            match ipc_reader {
-                Ok(reader) => {
-                    let mut count = 0;
-                    for batch in reader {
-                        all_batches.push(batch?);
-                        count += 1;
-                    }
-                    if count > 0 {
-                        println!("WAL: Replayed {} batches from {:?}", count, path);
-                        replayed_paths.push(path.to_str().unwrap().to_string());
-                    }
-                },
-                Err(e) => {
-                    println!("WAL Recovery Warning: Could not read log {:?}: {}", path, e);
+            let ipc_reader = StreamReader::try_new(reader, None)?;
+            all_iterators.push(ipc_reader);
+        }
+
+        Ok(Box::new(all_iterators.into_iter().flatten().map(|res| res.map_err(anyhow::Error::from))))
+    }
+
+    /// Replay all log files in the WAL directory and return all batches.
+    /// Legacy method, consider using replay_stream for large logs.
+    pub fn replay(&self) -> Result<(Vec<RecordBatch>, Vec<String>)> {
+        let stream = self.replay_stream()?;
+        let mut batches = Vec::new();
+        for b in stream {
+            batches.push(b?);
+        }
+        
+        // Return paths for cleanup (simplified for now)
+        let mut paths = Vec::new();
+        if self.dir.exists() {
+            for entry in std::fs::read_dir(&self.dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("arrow") {
+                    paths.push(path.to_str().unwrap().to_string());
                 }
             }
         }
 
-        Ok((all_batches, replayed_paths))
+        Ok((batches, paths))
     }
 
     /// Initialize the writer with a schema.
