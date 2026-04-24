@@ -47,6 +47,10 @@ impl Table {
     }
 
     pub async fn read_stream_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        self.read_with_config_stream_async(filter_str, vector_filter, columns, self.query_config.clone()).await
+    }
+
+    pub async fn read_with_config_stream_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>, config: QueryConfig) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         let expr = match filter_str {
             Some(f) => {
                 let schema = self.arrow_schema();
@@ -54,7 +58,7 @@ impl Table {
             }
             _ => None,
         };
-        self.read_expr_stream_async(expr, vector_filter, columns, self.query_config.clone(), filter_str).await
+        self.read_expr_stream_async(expr, vector_filter, columns, config, filter_str).await
     }
 
     pub fn query(&self) -> TableQuery<'_> {
