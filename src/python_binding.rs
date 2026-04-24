@@ -15,6 +15,7 @@ use crate::core::catalog::{Catalog, nessie::NessieClient, rest::RestCatalogClien
 use tokio::runtime::Runtime;
 use std::sync::Arc;
 use std::collections::HashMap;
+use futures::StreamExt;
 
 static SQL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").unwrap());
 
@@ -730,153 +731,6 @@ impl PyTable {
     /// Example:
     ///     # Vector search with cosine metric
     ///     df = table.to_pandas(vector_filter={"column": "embedding", "query": [1.0, 2.0], "k": 3, "metric": "cosine"})
-    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
-    fn to_arrow(
-        &self,
-        py: Python<'_>,
-        filter: Option<String>,
-        vector_filter: Option<Bound<'_, PyDict>>,
-        columns: Option<Vec<String>>,
-        device: Option<Py<PyDevice>>,
-    ) -> PyResult<Py<PyAny>> {
-        let _pyarrow = py.import("pyarrow")?;
-        // Parse vector filter if provided
-        let vs_params = if let Some(ref vf) = vector_filter {
-            let column: String = vf.get_item("column")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'column' key"))?
-                .extract()?;
-            let k: usize = vf.get_item("k")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'k' key"))?
-                .extract()?;
-            let query_obj = vf.get_item("query")?
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key"))?;
-            let query: Vec<f32> = query_obj.extract()?;
-            let mut params = VectorSearchParams::new(&column, crate::core::index::VectorValue::Float32(query), k);
-            
-            // Parse optional metric parameter
-            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
-                if let Ok(metric_str) = metric_obj.extract::<String>() {
-                    params = params.with_metric(parse_metric(&metric_str)?);
-                }
-            }
-            
-            // Parse optional ef_search parameter (for HNSW)
-            if let Ok(Some(ef_obj)) = vf.get_item("ef_search") {
-                if let Ok(ef_search) = ef_obj.extract::<usize>() {
-                    params = params.with_ef_search(ef_search);
-                }
-            }
-            
-            // Parse optional probes parameter (for IVF)
-            if let Ok(Some(probes_obj)) = vf.get_item("probes") {
-                if let Ok(probes) = probes_obj.extract::<usize>() {
-                    params = params.with_probes(probes);
-                }
-            }
-            
-            // Parse optional rrf_k parameter
-            let rrf_k = if let Ok(Some(rrf_obj)) = vf.get_item("rrf_k") {
-                rrf_obj.extract::<f32>().ok()
-            } else {
-                None
-            };
-            
-            Some((params, rrf_k))
-        } else {
-            None
-        };
-
-        // Clone for closure
-        let filter_str = filter.clone();
-        let vs_params_combined = vs_params.clone();
-        let columns_clone = columns.clone();
-
-        let table_schema = self.table.arrow_schema();
-        let projected_schema = if let Some(cols) = &columns_clone {
-            let mut fields = Vec::new();
-            for c in cols {
-                if let Some((_, field)) = table_schema.column_with_name(c) {
-                    fields.push(std::sync::Arc::new(field.clone()));
-                }
-            }
-            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
-        } else {
-            table_schema
-        };
-
-        // Determine which device to use: per-call device or table-level default
-        let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
-        let rust_context = if let Some(py_ctx) = ctx {
-            let ctx_borrow = py_ctx.bind(py).borrow();
-            Some(ctx_borrow.context.clone())
-        } else {
-            None
-        };
-
-        // Call core Table API with column projection, releasing the GIL
-        let batches = py.allow_threads(move || {
-            if let Some(c) = rust_context {
-                crate::core::index::gpu::set_global_gpu_context(Some(c));
-            }
-            
-            let mut config = self.table.query_config().clone();
-            let (vs_params, _rrf_k) = if let Some((p, k)) = vs_params_combined {
-                if let Some(val) = k {
-                    config = config.with_rrf_k(val);
-                }
-                (Some(p), k)
-            } else {
-                (None, None)
-            };
-
-            TOKIO_RUNTIME.block_on(self.table.read_with_config_async(
-                filter_str.as_deref(), 
-                vs_params, 
-                columns_clone.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>()).as_deref(), 
-                config
-            ))
-        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
-        
-        let final_schema = if vs_params.is_some() {
-            // Include distance column in schema if it was a vector search
-            let mut fields: Vec<arrow::datatypes::Field> = projected_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-            if !fields.iter().any(|f| f.name() == "distance") {
-                fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
-            }
-            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
-        } else {
-            projected_schema
-        };
-        
-        // Cast all batches to the final schema to support evolution (e.g. promoting Int32 to Int64)
-        let casted_batches: Vec<RecordBatch> = batches.into_iter()
-            .map(|b| {
-                final_schema.fields().iter()
-                    .map(|field| {
-                        if let Some(col) = b.column_by_name(field.name()) {
-                            if col.data_type() != field.data_type() {
-                                // Automatically cast types if they evolved (e.g. Int32 -> Int64)
-                                arrow::compute::cast(col, field.data_type())
-                                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Schema evolution cast failed for column '{}': {}", field.name(), e)))
-                            } else {
-                                Ok(col.clone())
-                            }
-                        } else {
-                            // Handle missing columns in older segments (NULL fill)
-                            Ok(arrow::array::new_null_array(field.data_type(), b.num_rows()))
-                        }
-                    })
-                    .collect::<Result<Vec<_>, pyo3::PyErr>>()
-                    .and_then(|cols| {
-                        RecordBatch::try_new(final_schema.clone(), cols)
-                            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Failed to create batch with evolved schema: {}", e)))
-                    })
-            })
-            .collect::<Result<Vec<RecordBatch>, pyo3::PyErr>>()?;
-
-        // Convert to Arrow C Data Interface
-        arrow_batches_to_pyarrow(py, casted_batches, final_schema)
-    }
 
     #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None, **kwargs))]
     fn to_pandas(
@@ -993,19 +847,20 @@ impl PyTable {
             }
             
             let mut config = self.table.query_config().clone();
-            let (vs_params, _) = if let Some((p, k)) = vs_params_combined {
+            let vs_params = if let Some((p, k)) = vs_params_combined {
                 if let Some(val) = k {
-                    config = config.with_rrf_k(val);
+                    config = config.with_rrf_k(val as f32);
                 }
-                (Some(p), k)
+                Some(p)
             } else {
-                (None, None)
+                None
             };
 
-            TOKIO_RUNTIME.block_on(self.table.read_stream_async(
+            TOKIO_RUNTIME.block_on(self.table.read_with_config_stream_async(
                 filter_str.as_deref(), 
                 vs_params, 
-                columns_clone.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>()).as_deref()
+                columns_clone.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>()).as_deref(),
+                config
             ))
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
 
@@ -1948,12 +1803,35 @@ fn arrow_batches_to_pyarrow(py: Python<'_>, batches: Vec<RecordBatch>, schema: a
     Ok(table)
 }
 
-fn arrow_stream_to_pyarrow(py: Python<'_>, stream: futures::stream::BoxStream<'static, Result<RecordBatch>>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
-    use arrow::record_batch::RecordBatchStreamAdapter;
+struct StreamRecordBatchReader {
+    schema: arrow::datatypes::SchemaRef,
+    stream: futures::stream::BoxStream<'static, anyhow::Result<RecordBatch>>,
+}
+
+impl RecordBatchReader for StreamRecordBatchReader {
+    fn schema(&self) -> arrow::datatypes::SchemaRef {
+        self.schema.clone()
+    }
+}
+
+impl Iterator for StreamRecordBatchReader {
+    type Item = Result<RecordBatch, arrow::error::ArrowError>;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        TOKIO_RUNTIME.block_on(self.stream.next()).map(|res| {
+            res.map_err(|e| arrow::error::ArrowError::ExternalError(e.into()))
+        })
+    }
+}
+
+fn arrow_stream_to_pyarrow(py: Python<'_>, stream: futures::stream::BoxStream<'static, anyhow::Result<RecordBatch>>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
+    let reader = StreamRecordBatchReader {
+        schema: schema.clone(),
+        stream,
+    };
     
     // Export to C Stream
-    let adapter = RecordBatchStreamAdapter::new(schema, stream);
-    let stream = FFI_ArrowArrayStream::new(Box::new(adapter));
+    let stream = FFI_ArrowArrayStream::new(Box::new(reader));
     let stream_ptr = Box::into_raw(Box::new(stream)) as Py_uintptr_t;
     
     // Import in Python via PyArrow
