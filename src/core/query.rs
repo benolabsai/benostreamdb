@@ -184,12 +184,14 @@ pub fn merge_and_rerank_vector_results(
             })
             .collect::<Result<Vec<_>>>()?;
         
-        // Add distance column
-        columns.push(Arc::new(arrow::array::Float32Array::from(distances)));
-        
-        // Create new schema with distance column
         let mut fields: Vec<arrow::datatypes::Field> = batch.schema().fields().iter().map(|f| f.as_ref().clone()).collect();
-        fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
+        
+        // Add distance column only if it doesn't already exist
+        if batch.schema().column_with_name("distance").is_none() {
+            columns.push(Arc::new(arrow::array::Float32Array::from(distances)));
+            fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
+        }
+        
         let schema_with_distance = Arc::new(arrow::datatypes::Schema::new(fields));
         
         let result_batch = RecordBatch::try_new(schema_with_distance, columns)?;

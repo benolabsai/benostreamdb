@@ -821,7 +821,7 @@ impl PyTable {
 
         let filter_str = filter.clone();
         let table_schema = self.table.arrow_schema();
-        let projected_schema = if let Some(cols) = &columns {
+        let mut projected_schema = if let Some(cols) = &columns {
             let mut fields = Vec::new();
             for c in cols {
                 if let Some((_, field)) = table_schema.column_with_name(c) {
@@ -832,6 +832,12 @@ impl PyTable {
         } else {
             table_schema
         };
+
+        if vs_params_combined.is_some() && projected_schema.column_with_name("distance").is_none() {
+            let mut fields = projected_schema.fields().to_vec();
+            fields.push(std::sync::Arc::new(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, true)));
+            projected_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
+        }
 
         let ctx = device.as_ref().or(self.device.as_ref()).map(|c| c.clone_ref(py));
         let rust_context = if let Some(py_ctx) = ctx {
