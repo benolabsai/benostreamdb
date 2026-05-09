@@ -615,7 +615,7 @@ impl HybridReader {
                 for i in 0..batch.num_rows() {
                     let key_ok = match (key_array.data_type(), &filter.min, &filter.max) {
                         (arrow::datatypes::DataType::Utf8, Some(min_val), _) => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap().value(i);
+                            let val = key_array.as_any().downcast_ref::<arrow::array::StringArray>().context("Invalid cast")?.value(i);
                             let mut ok = true;
                             if let Some(min_s) = min_val.as_str() {
                                 if filter.min_inclusive { ok &= val >= min_s; } else { ok &= val > min_s; }
@@ -628,7 +628,7 @@ impl HybridReader {
                             ok
                         },
                         (arrow::datatypes::DataType::Int32, Some(min_v), _) => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap().value(i);
+                            let val = key_array.as_any().downcast_ref::<arrow::array::Int32Array>().context("Invalid cast")?.value(i);
                             let mut ok = true;
                             if let Some(min_i) = min_v.as_i64() {
                                 let min_i = min_i as i32;
@@ -643,7 +643,7 @@ impl HybridReader {
                             ok
                         },
                         (arrow::datatypes::DataType::Int64, Some(min_v), _) => {
-                             let val = key_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap().value(i);
+                             let val = key_array.as_any().downcast_ref::<arrow::array::Int64Array>().context("Invalid cast")?.value(i);
                              let mut ok = true;
                              if let Some(min_i) = min_v.as_i64() {
                                  if filter.min_inclusive { ok &= val >= min_i; } else { ok &= val > min_i; }
@@ -656,7 +656,7 @@ impl HybridReader {
                              ok
                         },
                         (arrow::datatypes::DataType::Float64, Some(min_v), _) => {
-                             let val = key_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap().value(i);
+                             let val = key_array.as_any().downcast_ref::<arrow::array::Float64Array>().context("Invalid cast")?.value(i);
                              let mut ok = true;
                              if let Some(min_f) = min_v.as_f64() {
                                  if filter.min_inclusive { ok &= val >= min_f; } else { ok &= val > min_f; }
@@ -669,7 +669,7 @@ impl HybridReader {
                              ok
                         },
                         (arrow::datatypes::DataType::Date32, Some(min_v), _) => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap().value(i);
+                            let val = key_array.as_any().downcast_ref::<arrow::array::Date32Array>().context("Invalid cast")?.value(i);
                             let mut ok = true;
                             if let Some(min_i) = min_v.as_i64() {
                                 let min_i = min_i as i32;
@@ -719,7 +719,7 @@ impl HybridReader {
                         },
                         // Boolean equality
                         (arrow::datatypes::DataType::Boolean, Some(min), _) => {
-                             let val = key_array.as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap().value(i);
+                             let val = key_array.as_any().downcast_ref::<arrow::array::BooleanArray>().context("Invalid cast")?.value(i);
                              let target = min.as_bool().unwrap_or(false);
 
                              val == target
@@ -727,7 +727,7 @@ impl HybridReader {
                         // Binary equality
                         (arrow::datatypes::DataType::Binary, Some(min), Some(max)) 
                             if min == max && filter.min_inclusive && filter.max_inclusive => {
-                            let val = key_array.as_any().downcast_ref::<arrow::array::BinaryArray>().unwrap().value(i);
+                            let val = key_array.as_any().downcast_ref::<arrow::array::BinaryArray>().context("Invalid cast")?.value(i);
                             // Assume filter value is string or bytes? JSON usually string.
                             if let Some(s) = min.as_str() {
                                 val == s.as_bytes()
@@ -737,7 +737,7 @@ impl HybridReader {
                         },
                         // Decimal128 range (Best effort f64 comparison for now)
                         (arrow::datatypes::DataType::Decimal128(_p, s), Some(min), _) => {
-                             let val_i128 = key_array.as_any().downcast_ref::<arrow::array::Decimal128Array>().unwrap().value(i);
+                             let val_i128 = key_array.as_any().downcast_ref::<arrow::array::Decimal128Array>().context("Invalid cast")?.value(i);
                              // Convert i128 to f64 for comparison against JSON number
                              // Value = i128 / 10^scale
                              let divisor = 10_f64.powi(*s as i32);
@@ -1113,7 +1113,7 @@ impl HybridReader {
             if let Some(col) = batch.column_by_name(column) {
                 let vectors: Vec<Vec<f32>> = match col.data_type() {
                     arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                        let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+                        let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().context("Invalid cast")?;
                         (0..list.len()).map(|i| {
                             let item = list.value(i);
                             if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
@@ -1126,7 +1126,7 @@ impl HybridReader {
                         }).collect()
                     },
                     arrow::datatypes::DataType::List(_) => {
-                        let list = col.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                        let list = col.as_any().downcast_ref::<arrow::array::ListArray>().context("Invalid cast")?;
                         (0..list.len()).map(|i| {
                             let item = list.value(i);
                             if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
@@ -1171,7 +1171,7 @@ impl HybridReader {
         }
 
         // Sort by distance and take k
-        matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         if matches.len() > k {
             matches.truncate(k);
         }
@@ -1343,7 +1343,7 @@ impl HybridReader {
         let tokenizer_name = "default";
         
         let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(tokenizer_name)
-            .unwrap_or_else(|| crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get("standard").unwrap());
+            .ok_or_else(|| anyhow::anyhow!("Missing standard tokenizer"))?;
         
         let query_tokens = tokenizer.tokenize(query);
         if query_tokens.is_empty() {
@@ -1369,7 +1369,7 @@ impl HybridReader {
                     if key == token {
                         // Found the term!
                         let list = row_ids_list.value(i);
-                        let row_ids = list.as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap();
+                        let row_ids = list.as_any().downcast_ref::<arrow::array::UInt32Array>().context("Invalid cast")?;
                         
                         // Count frequencies by document
                         let mut current_doc_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
@@ -1683,7 +1683,7 @@ impl HybridReader {
                     current_end = Some(idx);
                 }
                 Some(start) => {
-                    let end = current_end.unwrap();
+                    let end = current_end.unwrap_or(start);
                     if idx <= end + gap_threshold {
                         // Coalesce
                         current_end = Some(idx);
@@ -1704,7 +1704,7 @@ impl HybridReader {
 
         // Flush last range
         if let Some(start) = current_start {
-            let end = current_end.unwrap();
+            let end = current_end.unwrap_or(start);
             if start > last_idx {
                 selectors.push(RowSelector::skip(start - last_idx));
             }
@@ -1791,7 +1791,7 @@ mod tests {
             count += b.num_rows();
             
             // Verify rows 10,20... are gone.
-            let ids_col = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let ids_col = b.column(0).as_any().downcast_ref::<Int32Array>().context("Invalid cast")?;
             for i in 0..ids_col.len() {
                 let id = ids_col.value(i);
                 assert!(id % 10 != 0 || id == 0, "Row {} should have been deleted", id); 
@@ -1847,8 +1847,8 @@ mod tests {
         while let Some(res) = stream.next().await {
             let b = res?;
             count += b.num_rows();
-            let ids = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
-            all_ids.extend(ids.iter().map(|v| v.unwrap()));
+            let ids = b.column(0).as_any().downcast_ref::<Int32Array>().context("Invalid cast")?;
+            all_ids.extend(ids.iter().map(|v| v.unwrap_or_default()));
         }
         
         assert_eq!(count, 5);

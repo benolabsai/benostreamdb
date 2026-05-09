@@ -120,7 +120,7 @@ impl WriteAheadLog {
                                         if batch_count >= sync_batch_size {
                                             // Use fdatasync for better performance (only syncs data, not metadata)
                                             if let Err(e) = writer.get_ref().sync_data() {
-                                                eprintln!("WAL sync_data failed: {}", e);
+                                                tracing::error!("WAL sync_data failed: {}", e);
                                                 // Fallback to sync_all if fdatasync not available
                                                 let _ = writer.get_ref().sync_all();
                                             }
@@ -143,7 +143,7 @@ impl WriteAheadLog {
                             if let Some(writer) = &mut writer_opt {
                                 // Use fdatasync for better performance
                                 if let Err(e) = writer.get_ref().sync_data() {
-                                    eprintln!("WAL sync_data failed: {}", e);
+                                    tracing::error!("WAL sync_data failed: {}", e);
                                     let _ = writer.get_ref().sync_all();
                                 }
                             }
@@ -229,7 +229,7 @@ impl WriteAheadLog {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("arrow") {
-                    paths.push(path.to_str().unwrap().to_string());
+                    paths.push(path.to_str().context("Invalid UTF-8 in path")?.to_string());
                 }
             }
         }
@@ -358,7 +358,7 @@ impl WriteAheadLog {
         // 5. Reset writer (will be recreated on next append)
         self.writer = None;
         
-        println!("WAL: Compacted {} batches into 1 batch", batches.len());
+        tracing::info!("WAL: Compacted {} batches into 1 batch", batches.len());
         Ok(())
     }
 }

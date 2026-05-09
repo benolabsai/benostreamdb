@@ -20,30 +20,30 @@ use parquet::file::statistics::Statistics as ParquetStats;
 pub struct HybridSegmentWriter {
     config: SegmentConfig,
     // Store paths of created files for upload tracking
-    generated_files: std::sync::Mutex<Vec<String>>,
+    generated_files: parking_lot::Mutex<Vec<String>>,
     // Accumulated Stats
-    stats: std::sync::Mutex<HashMap<String, crate::core::manifest::ColumnStats>>,
+    stats: parking_lot::Mutex<HashMap<String, crate::core::manifest::ColumnStats>>,
     pub record_count: std::sync::atomic::AtomicUsize,
     pub store: Option<Arc<dyn ObjectStore>>,
     pub primary_key: Vec<String>,
     pub index_configs: HashMap<String, crate::core::table::ColumnIndexConfig>,
     // Add additive buffers for multi-batch indexing
-    pub(crate) inverted_data: std::sync::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
-    pub index_metadata: std::sync::Mutex<HashMap<String, String>>,
+    pub(crate) inverted_data: parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
+    pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
 }
 
 impl HybridSegmentWriter {
     pub fn new(config: SegmentConfig) -> Self {
         Self { 
             config,
-            generated_files: std::sync::Mutex::new(Vec::new()), 
-            stats: std::sync::Mutex::new(HashMap::new()),
+            generated_files: parking_lot::Mutex::new(Vec::new()), 
+            stats: parking_lot::Mutex::new(HashMap::new()),
             record_count: std::sync::atomic::AtomicUsize::new(0),
             store: None,
             primary_key: Vec::new(),
             index_configs: HashMap::new(),
-            inverted_data: std::sync::Mutex::new(HashMap::new()),
-            index_metadata: std::sync::Mutex::new(HashMap::new()),
+            inverted_data: parking_lot::Mutex::new(HashMap::new()),
+            index_metadata: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 
@@ -58,7 +58,7 @@ impl HybridSegmentWriter {
     }
 
     pub fn with_existing_stats(self, stats: HashMap<String, ColumnStats>) -> Self {
-        *self.stats.lock().unwrap() = stats;
+        *self.stats.lock() = stats;
         self
     }
 
@@ -72,11 +72,11 @@ impl HybridSegmentWriter {
     }
 
     pub fn get_generated_files(&self) -> Vec<String> {
-        self.generated_files.lock().unwrap().clone()
+        self.generated_files.lock().clone()
     }
 
     pub fn get_stats(&self) -> HashMap<String, ColumnStats> {
-        self.stats.lock().unwrap().clone()
+        self.stats.lock().clone()
     }
 
     pub fn get_record_count(&self) -> usize {
@@ -138,7 +138,7 @@ impl HybridSegmentWriter {
                            base_path = base_path[..c_idx].to_string();
                        }
                        
-                       let algo_name = self.index_metadata.lock().unwrap().get(&base_path).cloned();
+                       let algo_name = self.index_metadata.lock().get(&base_path).cloned();
                        
                        // The manifest file_path should be the unique base for THIS variant
                        let mut manifest_path_raw = base_parts.join(".");
@@ -235,8 +235,8 @@ impl HybridSegmentWriter {
                             dim_min = Some(v.clone());
                             dim_max = Some(v.clone());
                         } else {
-                            let d_min = dim_min.as_mut().unwrap();
-                            let d_max = dim_max.as_mut().unwrap();
+                            let d_min = dim_min.as_mut().context("Missing dim_min")?;
+                            let d_max = dim_max.as_mut().context("Missing dim_max")?;
                             for (j, &val) in v.iter().enumerate() {
                                 if j < d_min.len() {
                                     d_min[j] = d_min[j].min(val);
@@ -265,7 +265,7 @@ impl HybridSegmentWriter {
     }
 
     fn merge_parquet_stats(&self, metadata: &parquet::file::metadata::ParquetMetaData, vector_stats_map: HashMap<String, VectorStats>) -> Result<()> {
-        let mut final_stats = self.stats.lock().unwrap();
+        let mut final_stats = self.stats.lock();
         
         if let Some(rg) = metadata.row_groups().first() {
             for col in rg.columns() {
@@ -345,7 +345,7 @@ impl HybridSegmentWriter {
             (std::path::PathBuf::from(p), None)
         };
         
-        let tmp_path = format!("{}.tmp", path.to_str().unwrap());
+        let tmp_path = format!("{}.tmp", path.to_str().context("Invalid UTF-8 in path")?);
 
         // Zero-Copy Stats: Calculate vector stats using Rayon
         let vec_stats = self.compute_vector_stats(batch)?;
@@ -374,8 +374,8 @@ impl HybridSegmentWriter {
         std::fs::rename(&tmp_path, &path).context("Failed to atomically rename segment file")?;
 
         {
-            let mut files = self.generated_files.lock().unwrap();
-            files.push(path.to_str().unwrap().to_string());
+            let mut files = self.generated_files.lock();
+            files.push(path.to_str().context("Invalid UTF-8 in path")?.to_string());
         }
 
         tracing::info!("Written data to {} ({} rows)", path.display(), batch.num_rows());
@@ -402,7 +402,7 @@ impl HybridSegmentWriter {
                 continue;
             }
 
-            let filename = local_path.split('/').next_back().unwrap();
+            let filename = local_path.split('/').next_back().context("Missing filename")?;
             let remote_path = if self.config.base_path.contains("://") {
                  let mut base = self.config.base_path.clone();
                  if !base.ends_with('/') { base.push('/'); }
@@ -431,7 +431,7 @@ impl HybridSegmentWriter {
 
         // Update generated_files with final paths
         {
-            let mut g_files = self.generated_files.lock().unwrap();
+            let mut g_files = self.generated_files.lock();
             *g_files = final_paths.clone();
         }
 
@@ -456,7 +456,7 @@ impl HybridSegmentWriter {
 
         // 1. Process Inverted Index Buffers - Drain the buffer into a local variable
         let inverted_data = {
-            let mut inverted_lock = self.inverted_data.lock().unwrap();
+            let mut inverted_lock = self.inverted_data.lock();
             std::mem::take(&mut *inverted_lock)
         }; // Guard is dropped here
 
@@ -506,7 +506,7 @@ impl HybridSegmentWriter {
             store.put(&target_path, buffer.into()).await?;
 
             {
-                let mut files = self.generated_files.lock().unwrap();
+                let mut files = self.generated_files.lock();
                 files.push(full_path_str.clone());
             }
             
@@ -572,7 +572,7 @@ impl HybridSegmentWriter {
         let is_vector = matches!(col_array.data_type(), arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_));
         let in_config_list = self.config.columns_to_index.as_ref().map(|cols| cols.contains(&col_name.to_string())).unwrap_or(false);
         
-        if !is_pk && !is_vector && !self.config.index_all && !in_config_list && (config.is_none() || !config.unwrap().enabled) {
+        if !is_pk && !is_vector && !self.config.index_all && !in_config_list && !config.map(|c| c.enabled).unwrap_or(false) {
             // Skip indexing for this column! (Massive speed gain for multi-column tables)
             return Ok(());
         }
@@ -597,12 +597,12 @@ impl HybridSegmentWriter {
         match col_array.data_type() {
                  arrow::datatypes::DataType::Int32 => {
                     tracing::info!("Indexing Int32 column: {}", col_name);
-                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().context("Invalid cast")?;
                     
                     // Scalar index (.idx) is removed for Int32 as we use more precise Inverted Index
 
                     // Optimized Inverted Index (Sort-based instead of HashMap)
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Int32Array>().context("Invalid cast")?;
                     
                     // 1. Get sort indices to group same values together
                     let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
@@ -660,7 +660,7 @@ impl HybridSegmentWriter {
 
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
                     let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -669,8 +669,8 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                      {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                 },
 
@@ -681,23 +681,23 @@ impl HybridSegmentWriter {
                         
                         let vectors: Vec<Vec<f32>> = match col_array.data_type() {
                             arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                                let list_array = col_array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().unwrap();
+                                let list_array = col_array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>().context("Invalid cast")?;
                                 (0..list_array.len())
                                     .into_par_iter()
                                     .map(|i| {
                                         let item = list_array.value(i);
-                                        let float_array = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                                        let Some(float_array) = item.as_any().downcast_ref::<arrow::array::Float32Array>() else { return vec![]; };
                                         float_array.values().to_vec()
                                     })
                                     .collect()
                             },
                             arrow::datatypes::DataType::List(_) => {
-                                let list_array = col_array.as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                                let list_array = col_array.as_any().downcast_ref::<arrow::array::ListArray>().context("Invalid cast")?;
                                 (0..list_array.len())
                                     .into_par_iter()
                                     .map(|i| {
                                         let item = list_array.value(i);
-                                        let float_array = item.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                                        let Some(float_array) = item.as_any().downcast_ref::<arrow::array::Float32Array>() else { return vec![]; };
                                         float_array.values().to_vec()
                                     })
                                     .collect()
@@ -740,16 +740,16 @@ impl HybridSegmentWriter {
                                 };
                                 let local_base_path = local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
                                 
-                                 let saved_files = hnsw_ivf_index.save(local_base_path.to_str().unwrap())
+                                 let saved_files = hnsw_ivf_index.save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
                                     .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
                                 
                                 {
-                                    let mut meta = self.index_metadata.lock().unwrap();
+                                    let mut meta = self.index_metadata.lock();
                                     meta.insert(format!("{}.{}", self.config.segment_id, suffix), algo.to_string());
                                 }
 
                                 {
-                                    let mut files = self.generated_files.lock().unwrap();
+                                    let mut files = self.generated_files.lock();
                                     files.extend(saved_files);
                                 }
                             }
@@ -760,12 +760,12 @@ impl HybridSegmentWriter {
                 },
                 arrow::datatypes::DataType::Int64 => {
                     tracing::info!("Indexing Int64 column: {}", col_name);
-                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().context("Invalid cast")?;
                     
                     // No mock .idx for Int64
 
                     // Optimized Inverted Index (Sort-based)
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Int64Array>().context("Invalid cast")?;
                     let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
 
                     let mut key_builder = arrow::array::Int64Builder::new();
@@ -820,7 +820,7 @@ impl HybridSegmentWriter {
                     let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
                     let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -829,19 +829,19 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                     {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                 },
 
                 arrow::datatypes::DataType::Float64 => {
                     tracing::info!("Indexing Float64 column: {}", col_name);
-                    let _array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                    let _array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().context("Invalid cast")?;
                     
                     // No mock .idx for Float64
 
                     // Optimized Inverted Index (Sort-based)
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Float64Array>().context("Invalid cast")?;
                     let sort_indices = arrow::compute::sort_to_indices(array, None, None)?;
 
                     let mut key_builder = arrow::array::Float64Builder::new();
@@ -897,7 +897,7 @@ impl HybridSegmentWriter {
                     let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
                     let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -906,14 +906,14 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                     {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                 },
 
                 arrow::datatypes::DataType::Float32 => {
                     tracing::info!("Indexing Float32 column: {}", col_name);
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Float32Array>().context("Invalid cast")?;
                     
                     // No mock .idx for Float32
 
@@ -953,7 +953,7 @@ impl HybridSegmentWriter {
                     ])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
                     let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -962,8 +962,8 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                     {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                 },
                 
@@ -974,16 +974,16 @@ impl HybridSegmentWriter {
                     // Unified handling: cast to Utf8 to reuse existing logic
                     let casted_array = arrow::compute::cast(col_array, &arrow::datatypes::DataType::Utf8)
                         .context("Failed to cast column to Utf8 for indexing")?;
-                    let array = casted_array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                    let array = casted_array.as_any().downcast_ref::<arrow::array::StringArray>().context("Invalid cast")?;
                     
                     // Fetch tokenizer if configured
                     let tokenizer_name = config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| "identity".to_string());
                     tracing::info!("  Using tokenizer: '{}' for column '{}'", tokenizer_name, col_name);
                     let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(&tokenizer_name)
-                        .unwrap_or_else(|| crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get("identity").unwrap());
+                        .ok_or_else(|| anyhow::anyhow!("Missing identity tokenizer"))?;
 
                     // Build inverted index: Token -> RowIDs (buffered in memory per segment)
-                    let mut inverted_lock = self.inverted_data.lock().unwrap();
+                    let mut inverted_lock = self.inverted_data.lock();
                     let col_inverted_map = inverted_lock.entry(col_name.to_string()).or_default();
                     
                     for (batch_i, val) in array.iter().enumerate() {
@@ -1003,7 +1003,7 @@ impl HybridSegmentWriter {
                 // Date32 = days since Unix epoch (1970-01-01)
                 arrow::datatypes::DataType::Date32 => {
                     tracing::info!("Indexing Date32 column: {}", col_name);
-                    let array = col_array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::Date32Array>().context("Invalid cast")?;
                     
                     // Build inverted index: Date -> RowIDs
                     let mut inverted_map: std::collections::HashMap<i32, Vec<u32>> = std::collections::HashMap::new();
@@ -1042,7 +1042,7 @@ impl HybridSegmentWriter {
 
                     let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name); let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -1051,11 +1051,11 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                     {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                     
-                    tracing::info!("Date32 Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Date32 Inverted Index written to {}", inv_path.to_str().context("Invalid UTF-8 in path")?);
                 },
                 
                 // Timestamp Inverted Index - truncate to day for practical indexing
@@ -1119,7 +1119,7 @@ impl HybridSegmentWriter {
 
                     let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name); let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -1128,11 +1128,11 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                     {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
                     
-                    tracing::info!("Timestamp Inverted Index (day granularity) written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Timestamp Inverted Index (day granularity) written to {}", inv_path.to_str().context("Invalid UTF-8 in path")?);
                 },
                 
                 // Keep default
@@ -1141,7 +1141,7 @@ impl HybridSegmentWriter {
                      // Build inverted index: Boolean -> RowIDs (true/false as native booleans)
                     let mut inverted_map: std::collections::HashMap<bool, Vec<u32>> = std::collections::HashMap::new();
 
-                    let array = col_array.as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap();
+                    let array = col_array.as_any().downcast_ref::<arrow::array::BooleanArray>().context("Invalid cast")?;
                     for row_i in 0..array.len() {
                         if array.is_null(row_i) {
                             continue;
@@ -1177,7 +1177,7 @@ impl HybridSegmentWriter {
 
                     let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
                     let inv_filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name); let inv_path = local_staging_dir.join(&inv_filename);
-                    let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+                    let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
                     let inv_file = File::create(&inv_tmp)?;
                     let props = parquet::file::properties::WriterProperties::builder().build();
                     let mut writer = ArrowWriter::try_new(inv_file, inv_schema, Some(props))?;
@@ -1186,10 +1186,10 @@ impl HybridSegmentWriter {
                     std::fs::rename(&inv_tmp, &inv_path)?;
 
                      {
-                        let mut files = self.generated_files.lock().unwrap();
-                        files.push(inv_path.to_str().unwrap().to_string());
+                        let mut files = self.generated_files.lock();
+                        files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
                     }
-                    tracing::info!("Boolean Inverted Index written to {}", inv_path.to_str().unwrap());
+                    tracing::info!("Boolean Inverted Index written to {}", inv_path.to_str().context("Invalid UTF-8 in path")?);
                 },
 
                 // Time32 (s/ms) -> Int32 keys
@@ -1347,7 +1347,7 @@ impl HybridSegmentWriter {
                      // Simple handling: Iterate as BinaryArray (works for large and regular if we cast, or just use generics. 
                      // arrow::compute::cast to Binary is easiest)
                      let casted = arrow::compute::cast(col_array, &arrow::datatypes::DataType::Binary)?;
-                     let array = casted.as_any().downcast_ref::<arrow::array::BinaryArray>().unwrap();
+                     let array = casted.as_any().downcast_ref::<arrow::array::BinaryArray>().context("Invalid cast")?;
                      
                      let mut inverted_map: std::collections::HashMap<Vec<u8>, Vec<u32>> = std::collections::HashMap::new();
                      for (row_i, val) in array.iter().enumerate() {
@@ -1387,7 +1387,7 @@ impl HybridSegmentWriter {
                 // Decimal128
                 arrow::datatypes::DataType::Decimal128(precision, scale) => {
                      tracing::info!("Indexing Decimal128 column: {}", col_name);
-                     let array = col_array.as_any().downcast_ref::<arrow::array::Decimal128Array>().unwrap();
+                     let array = col_array.as_any().downcast_ref::<arrow::array::Decimal128Array>().context("Invalid cast")?;
                      
                      let mut inverted_map: std::collections::HashMap<i128, Vec<u32>> = std::collections::HashMap::new();
                      for (row_i, val) in array.iter().enumerate() {
@@ -1466,7 +1466,7 @@ impl HybridSegmentWriter {
              (std::path::PathBuf::from(p), None)
         };
 
-        let inv_tmp = format!("{}.tmp", inv_path.to_str().unwrap());
+        let inv_tmp = format!("{}.tmp", inv_path.to_str().context("Invalid UTF-8 in path")?);
         
         let inv_file = File::create(&inv_tmp)?;
         let props = parquet::file::properties::WriterProperties::builder().build();
@@ -1476,8 +1476,8 @@ impl HybridSegmentWriter {
         std::fs::rename(&inv_tmp, &inv_path)?;
 
         {
-             let mut files = self.generated_files.lock().unwrap();
-             files.push(inv_path.to_str().unwrap().to_string());
+             let mut files = self.generated_files.lock();
+             files.push(inv_path.to_str().context("Invalid UTF-8 in path")?.to_string());
         }
         tracing::info!("Inverted Index written to {}", inv_path.display());
         Ok(())
@@ -1532,7 +1532,7 @@ mod tests {
 
         // 2. Write Segment
         let tmp_dir = std::env::temp_dir();
-        let config = SegmentConfig::new(tmp_dir.to_str().unwrap(), "test_segment_001")
+        let config = SegmentConfig::new(tmp_dir.to_str().context("Invalid UTF-8 in path")?, "test_segment_001")
             .with_index_all(true);
         let writer = HybridSegmentWriter::new(config.clone());
         

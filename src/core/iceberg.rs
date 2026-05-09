@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use anyhow::Result;
+use anyhow::{Result, Context};
 use apache_avro::{Reader, types::Value as AvroValue};
 use base64::Engine;
 use std::io::Read;
@@ -359,28 +359,28 @@ pub fn decode_iceberg_value(type_json: &serde_json::Value, bytes: &[u8]) -> crat
         }
         "int" | "date" => {
             if bytes.len() >= 4 {
-                ManifestValue::Int32(i32::from_le_bytes(bytes[0..4].try_into().unwrap()))
+                ManifestValue::Int32(i32::from_le_bytes(bytes[0..4].try_into().unwrap_or_default()))
             } else {
                 ManifestValue::Null
             }
         }
         "long" | "timestamp" | "timestamptz" => {
             if bytes.len() >= 8 {
-                ManifestValue::Int64(i64::from_le_bytes(bytes[0..8].try_into().unwrap()))
+                ManifestValue::Int64(i64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()))
             } else {
                 ManifestValue::Null
             }
         }
         "float" => {
             if bytes.len() >= 4 {
-                ManifestValue::Float32(f32::from_le_bytes(bytes[0..4].try_into().unwrap()))
+                ManifestValue::Float32(f32::from_le_bytes(bytes[0..4].try_into().unwrap_or_default()))
             } else {
                 ManifestValue::Null
             }
         }
         "double" => {
             if bytes.len() >= 8 {
-                ManifestValue::Float64(f64::from_le_bytes(bytes[0..8].try_into().unwrap()))
+                ManifestValue::Float64(f64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()))
             } else {
                 ManifestValue::Null
             }
@@ -413,11 +413,11 @@ pub fn parse_avro_value_bytes(bytes: &[u8]) -> crate::core::manifest::ManifestVa
     
     if bytes.len() == 4 {
         // Could be int or float
-        let val = i32::from_le_bytes(bytes.try_into().unwrap());
+        let val = i32::from_le_bytes(bytes.try_into().unwrap_or_default());
         crate::core::manifest::ManifestValue::Int64(val as i64)
     } else if bytes.len() == 8 {
         // Could be long or double
-        let val = i64::from_le_bytes(bytes.try_into().unwrap());
+        let val = i64::from_le_bytes(bytes.try_into().unwrap_or_default());
         crate::core::manifest::ManifestValue::Int64(val)
     } else {
         // String or Binary
@@ -497,14 +497,14 @@ fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<arrow:
                  let mut arrow_fields = Vec::new();
                  for f in fields {
                      let name = f.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                     let field_type = f.get("type").unwrap();
+                     let field_type = f.get("type").context("Missing type")?;
                      let required = f.get("required").and_then(|r| r.as_bool()).unwrap_or(false);
                      arrow_fields.push(arrow::datatypes::Field::new(name, convert_iceberg_type_to_arrow(field_type)?, !required));
                  }
                  Ok(DataType::Struct(arrow_fields.into()))
             },
             "list" => {
-                let element_type = obj.get("element").unwrap_or(obj.get("element-type").unwrap()); // 'element' or 'element-type'
+                let element_type = obj.get("element").or_else(|| obj.get("element-type")).context("Missing element")?; // 'element' or 'element-type'
                 let required = obj.get("element-required").and_then(|r| r.as_bool()).unwrap_or(true); // Default true?
                 let dt = convert_iceberg_type_to_arrow(element_type)?;
                 Ok(DataType::List(std::sync::Arc::new(arrow::datatypes::Field::new("item", dt, !required))))
@@ -515,8 +515,8 @@ fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<arrow:
                 Ok(DataType::Decimal128(precision, scale))
             },
             "map" => {
-                let key_type = obj.get("key").unwrap_or(obj.get("key-type").unwrap());
-                let value_type = obj.get("value").unwrap_or(obj.get("value-type").unwrap());
+                let key_type = obj.get("key").or_else(|| obj.get("key-type")).context("Missing key-type")?;
+                let value_type = obj.get("value").or_else(|| obj.get("value-type")).context("Missing value-type")?;
                 let value_required = obj.get("value-required").and_then(|r| r.as_bool()).unwrap_or(true);
                 
                 let kt = convert_iceberg_type_to_arrow(key_type)?;
@@ -842,7 +842,7 @@ impl EqualityDeleteReader {
         let mut arrow_fields = Vec::new();
 
         for (idx, name) in column_names.iter().enumerate() {
-            let field = field_map.get(&equality_ids[idx]).unwrap();
+            let field = field_map.get(&equality_ids[idx]).context("Missing equality id")?;
             let arrow_field = Field::new(name, self.map_type_to_arrow(&field.type_str), true);
             arrow_fields.push(arrow_field);
             
@@ -1074,7 +1074,7 @@ impl IcebergWriter {
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
         
         for entry in entries {
-            let mut record = apache_avro::types::Record::new(&schema).unwrap();
+            let mut record = apache_avro::types::Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
             record.put("manifest_path", entry.manifest_path.clone());
             record.put("manifest_length", entry.manifest_length);
             record.put("partition_spec_id", entry.partition_spec_id);
@@ -1111,17 +1111,17 @@ impl IcebergWriter {
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
         for entry in entries {
-            let mut record = apache_avro::types::Record::new(&schema).unwrap();
+            let mut record = apache_avro::types::Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
             record.put("status", apache_avro::types::Value::Int(1)); // 1=ADDED
             record.put("snapshot_id", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(snapshot_id))));
             record.put("sequence_number", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))));
             record.put("file_sequence_number", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))));
             
             let data_file_schema = match &schema {
-                apache_avro::Schema::Record(r) => &r.fields.iter().find(|f| f.name == "data_file").unwrap().schema,
+                apache_avro::Schema::Record(r) => &r.fields.iter().find(|f| f.name == "data_file").context("Missing data_file")?.schema,
                 _ => unreachable!(),
             };
-            let mut data_file = apache_avro::types::Record::new(data_file_schema).unwrap();
+            let mut data_file = apache_avro::types::Record::new(data_file_schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
 
             data_file.put("content", apache_avro::types::Value::Int(0)); // 0=Data
             data_file.put("file_path", apache_avro::types::Value::String(entry.file_path.clone()));
@@ -1169,17 +1169,17 @@ impl IcebergWriter {
 
             // Write associated Delete Files
             for del_file in &entry.delete_files {
-                 let mut record = apache_avro::types::Record::new(&schema).unwrap();
+                 let mut record = apache_avro::types::Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
                  record.put("status", apache_avro::types::Value::Int(1)); // 1=ADDED
                  record.put("snapshot_id", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(snapshot_id))));
                  record.put("sequence_number", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))));
                  record.put("file_sequence_number", apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))));
                   
                  let data_file_schema = match &schema {
-                     apache_avro::Schema::Record(r) => &r.fields.iter().find(|f| f.name == "data_file").unwrap().schema,
+                     apache_avro::Schema::Record(r) => &r.fields.iter().find(|f| f.name == "data_file").context("Missing data_file")?.schema,
                      _ => unreachable!(),
                  };
-                 let mut data_file = apache_avro::types::Record::new(data_file_schema).unwrap();
+                 let mut data_file = apache_avro::types::Record::new(data_file_schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
 
                  let content_id = match del_file.content {
                      crate::core::manifest::DeleteContent::Position => 1,
@@ -1358,23 +1358,23 @@ impl IcebergTransform {
                 let array = arrays[0];
                 match array.data_type() {
                     arrow::datatypes::DataType::Int32 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int32Array>() { arr } else { return serde_json::Value::Null; };
                         serde_json::json!(a.value(row_i))
                     },
                     arrow::datatypes::DataType::Int64 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int64Array>() { arr } else { return serde_json::Value::Null; };
                         serde_json::json!(a.value(row_i))
                     },
                     arrow::datatypes::DataType::Utf8 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::StringArray>() { arr } else { return serde_json::Value::Null; };
                         serde_json::json!(a.value(row_i))
                     },
                     arrow::datatypes::DataType::Date32 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Date32Array>() { arr } else { return serde_json::Value::Null; };
                         serde_json::json!(a.value(row_i))
                     },
                     arrow::datatypes::DataType::Timestamp(_, _) => {
-                         let a = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+                         let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() { arr } else { return serde_json::Value::Null; };
                          serde_json::json!(a.value(row_i))
                     },
                     _ => serde_json::Value::Null
@@ -1385,24 +1385,24 @@ impl IcebergTransform {
                 for array in arrays {
                     let field_hash = match array.data_type() {
                         arrow::datatypes::DataType::Int32 => {
-                            let a = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                            let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int32Array>() { arr } else { return serde_json::Value::Null; };
                             let val = a.value(row_i);
                             let bytes = (val as i64).to_le_bytes();
                             murmur3_32_x86(&bytes, hash_val)
                         },
                         arrow::datatypes::DataType::Int64 => {
-                            let a = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                            let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int64Array>() { arr } else { return serde_json::Value::Null; };
                             let val = a.value(row_i);
                             let bytes = val.to_le_bytes();
                             murmur3_32_x86(&bytes, hash_val)
                         },
                         arrow::datatypes::DataType::Utf8 => {
-                            let a = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                            let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::StringArray>() { arr } else { return serde_json::Value::Null; };
                             let s = a.value(row_i);
                             murmur3_32_x86(s.as_bytes(), hash_val)
                         },
                         arrow::datatypes::DataType::Date32 => {
-                            let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                            let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Date32Array>() { arr } else { return serde_json::Value::Null; };
                             let val = a.value(row_i);
                             let bytes = (val as i64).to_le_bytes();
                             murmur3_32_x86(&bytes, hash_val)
@@ -1418,18 +1418,18 @@ impl IcebergTransform {
                 let array = arrays[0];
                 match array.data_type() {
                     arrow::datatypes::DataType::Utf8 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::StringArray>() { arr } else { return serde_json::Value::Null; };
                         let s = a.value(row_i);
                         let limit = (*w as usize).min(s.len());
                         serde_json::json!(&s[..limit])
                     },
                     arrow::datatypes::DataType::Int32 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int32Array>() { arr } else { return serde_json::Value::Null; };
                         let v = a.value(row_i);
                         serde_json::json!(v - (v % (*w as i32)))
                     },
                     arrow::datatypes::DataType::Int64 => {
-                        let a = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                        let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Int64Array>() { arr } else { return serde_json::Value::Null; };
                         let v = a.value(row_i);
                         serde_json::json!(v - (v % (*w as i64)))
                     },
@@ -1440,7 +1440,7 @@ impl IcebergTransform {
                 let array = arrays[0];
                 // Years from 1970
                 if let arrow::datatypes::DataType::Date32 = array.data_type() {
-                    let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                    let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Date32Array>() { arr } else { return serde_json::Value::Null; };
                     let days = a.value(row_i);
                     // 1970-01-01 is epoch.
                     let opt_date = chrono::NaiveDate::from_num_days_from_ce_opt(days + 719163);
@@ -1448,7 +1448,7 @@ impl IcebergTransform {
                         serde_json::json!(d.year() - 1970)
                     } else { serde_json::Value::Null }
                 } else if let arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) = array.data_type() {
-                     let a = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+                     let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() { arr } else { return serde_json::Value::Null; };
                      let micros = a.value(row_i);
                      let seconds = micros / 1_000_000;
                      let opt_dt = chrono::DateTime::from_timestamp(seconds, 0);
@@ -1461,14 +1461,14 @@ impl IcebergTransform {
                 let array = arrays[0];
                 // Months from 1970-01-01
                 if let arrow::datatypes::DataType::Date32 = array.data_type() {
-                    let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                    let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Date32Array>() { arr } else { return serde_json::Value::Null; };
                     let days = a.value(row_i);
                     let opt_date = chrono::NaiveDate::from_num_days_from_ce_opt(days + 719163);
                     if let Some(d) = opt_date {
                         serde_json::json!((d.year() - 1970) * 12 + (d.month() as i32) - 1)
                     } else { serde_json::Value::Null }
                 } else if let arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) = array.data_type() {
-                     let a = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+                     let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() { arr } else { return serde_json::Value::Null; };
                      let micros = a.value(row_i);
                      let seconds = micros / 1_000_000;
                      let opt_dt = chrono::DateTime::from_timestamp(seconds, 0);
@@ -1481,10 +1481,10 @@ impl IcebergTransform {
                 let array = arrays[0];
                 // Days from 1970-01-01
                 if let arrow::datatypes::DataType::Date32 = array.data_type() {
-                    let a = array.as_any().downcast_ref::<arrow::array::Date32Array>().unwrap();
+                    let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::Date32Array>() { arr } else { return serde_json::Value::Null; };
                      serde_json::json!(a.value(row_i))
                 } else if let arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) = array.data_type() {
-                     let a = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+                     let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() { arr } else { return serde_json::Value::Null; };
                      let micros = a.value(row_i);
                      // Spec: input timestamp (micros) -> days from epoch
                      serde_json::json!(micros / (1_000_000 * 60 * 60 * 24))
@@ -1494,7 +1494,7 @@ impl IcebergTransform {
                 let array = arrays[0];
                 // Hours from 1970-01-01 00:00:00
                 if let arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, _) = array.data_type() {
-                     let a = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>().unwrap();
+                     let a = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::TimestampMicrosecondArray>() { arr } else { return serde_json::Value::Null; };
                      let micros = a.value(row_i);
                      serde_json::json!(micros / (1_000_000 * 60 * 60))
                 } else { serde_json::Value::Null }
@@ -1507,7 +1507,7 @@ impl IcebergTransform {
 /// Wrapper around murmur3 crate to ensure x86 32-bit implementation
 /// Aligned with official `iceberg-rust` implementation.
 pub fn murmur3_32_x86(data: &[u8], seed: u32) -> u32 {
-    murmur3::murmur3_32(&mut std::io::Cursor::new(data), seed).unwrap()
+    murmur3::murmur3_32(&mut std::io::Cursor::new(data), seed).unwrap_or(0)
 }
 
 pub fn json_to_avro_value(v: &serde_json::Value) -> apache_avro::types::Value {

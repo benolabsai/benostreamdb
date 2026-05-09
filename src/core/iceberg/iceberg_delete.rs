@@ -4,6 +4,7 @@
 use anyhow::Result;
 use arrow::array::Array;
 use apache_avro::types::Record;
+use anyhow::Context;
 
 /// Writer for Iceberg Delete Files (Position and Equality Deletes)
 pub struct IcebergDeleteWriter {
@@ -63,7 +64,7 @@ impl IcebergDeleteWriter {
         let mut writer = apache_avro::Writer::new(&schema, file);
         
         for i in 0..file_path_column.len() {
-             let mut record = Record::new(&schema).unwrap();
+             let mut record = Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
              record.put("file_path", apache_avro::types::Value::String(file_path_column.value(i).to_string()));
              record.put("pos", apache_avro::types::Value::Long(pos_column.value(i)));
              writer.append(record)?;
@@ -142,9 +143,9 @@ impl IcebergDeleteWriter {
         let mut writer = apache_avro::Writer::new(&schema, file);
 
         for i in 0..batch.num_rows() {
-            let mut record = Record::new(&schema).unwrap();
+            let mut record = Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
             for &id in equality_ids.iter() {
-                let field = &table_schema.fields.iter().find(|f| f.id == id).unwrap();
+                let field = table_schema.fields.iter().find(|f| f.id == id).context("Missing field")?;
                 let col = batch.column_by_name(&field.name)
                     .ok_or_else(|| anyhow::anyhow!("Column {} not found in batch", field.name))?;
                 
@@ -180,27 +181,27 @@ impl IcebergDeleteWriter {
 
         let val = match array.data_type() {
             arrow::datatypes::DataType::Int32 => {
-                let a = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                let a = array.as_any().downcast_ref::<Int32Array>().context("Invalid cast")?;
                 Value::Int(a.value(i))
             },
             arrow::datatypes::DataType::Int64 => {
-                let a = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                let a = array.as_any().downcast_ref::<Int64Array>().context("Invalid cast")?;
                 Value::Long(a.value(i))
             },
             arrow::datatypes::DataType::Float32 => {
-                let a = array.as_any().downcast_ref::<Float32Array>().unwrap();
+                let a = array.as_any().downcast_ref::<Float32Array>().context("Invalid cast")?;
                 Value::Float(a.value(i))
             },
             arrow::datatypes::DataType::Float64 => {
-                let a = array.as_any().downcast_ref::<Float64Array>().unwrap();
+                let a = array.as_any().downcast_ref::<Float64Array>().context("Invalid cast")?;
                 Value::Double(a.value(i))
             },
             arrow::datatypes::DataType::Utf8 => {
-                let a = array.as_any().downcast_ref::<StringArray>().unwrap();
+                let a = array.as_any().downcast_ref::<StringArray>().context("Invalid cast")?;
                 Value::String(a.value(i).to_string())
             },
             arrow::datatypes::DataType::Boolean => {
-                let a = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                let a = array.as_any().downcast_ref::<BooleanArray>().context("Invalid cast")?;
                 Value::Boolean(a.value(i))
             },
             _ => Value::String(format!("{:?}", array)), // Fallback
