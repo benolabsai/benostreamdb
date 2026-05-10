@@ -248,6 +248,7 @@ impl Compactor {
         let mut main_parquet_path = String::new();
         let mut main_parquet_size = 0;
         let mut index_files = Vec::new();
+        let mut file_checksum = None;
         
         for local_path in generated_files {
              let file_name = std::path::Path::new(&local_path).file_name().unwrap().to_str().unwrap();
@@ -260,6 +261,14 @@ impl Compactor {
              };
              
              let content = fs::read(&local_path).await?;
+             
+             if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
+                 use sha2::{Sha256, Digest};
+                 let mut hasher = Sha256::new();
+                 hasher.update(&content);
+                 file_checksum = Some(format!("{:x}", hasher.finalize()));
+             }
+             
              self.store.put(&remote_path, content.into()).await?;
              
              let remote_path_str = remote_path.to_string();
@@ -346,6 +355,7 @@ impl Compactor {
             file_path: main_parquet_path,
             file_size_bytes: main_parquet_size as i64,
             record_count: total_rows,
+            file_checksum,
             index_files,
             delete_files: vec![], // Compaction garbage collects deletes, so new segment has no deletes
             column_stats,

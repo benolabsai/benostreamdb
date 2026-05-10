@@ -81,10 +81,10 @@ impl Default for LabelPattern {
 #[derive(Clone)]
 pub(crate) struct TableIndexState {
     pub index_all: bool,
-    pub index_columns: Arc<std::sync::RwLock<Vec<String>>>,
-    pub index_configs: Arc<std::sync::RwLock<HashMap<String, ColumnIndexConfig>>>,
-    pub default_device: Arc<std::sync::RwLock<Option<String>>>,
-    pub memory_index: Arc<std::sync::RwLock<Option<InMemoryVectorIndex>>>,
+    pub index_columns: Arc<parking_lot::RwLock<Vec<String>>>,
+    pub index_configs: Arc<parking_lot::RwLock<HashMap<String, ColumnIndexConfig>>>,
+    pub default_device: Arc<parking_lot::RwLock<Option<String>>>,
+    pub memory_index: Arc<parking_lot::RwLock<Option<InMemoryVectorIndex>>>,
 }
 
 /// Catalog identity and synchronization state for a Table
@@ -108,20 +108,20 @@ pub struct Table {
     pub(crate) indexing: TableIndexState,
     pub(crate) catalog_state: TableCatalogState,
 
-    schema: Arc<std::sync::RwLock<SchemaRef>>,
-    write_buffer: Arc<std::sync::RwLock<Vec<RecordBatch>>>,
+    schema: Arc<parking_lot::RwLock<SchemaRef>>,
+    write_buffer: Arc<parking_lot::RwLock<Vec<RecordBatch>>>,
     wal: Arc<Mutex<WriteAheadLog>>,
     background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     
     /// Sort order to apply when writing data (Iceberg V2 spec compliance)
-    sort_order: Arc<std::sync::RwLock<Option<SortOrder>>>,
+    sort_order: Arc<parking_lot::RwLock<Option<SortOrder>>>,
     /// Column names for sort order (needed for column lookup)
-    sort_order_columns: Arc<std::sync::RwLock<Option<Vec<String>>>>,
+    sort_order_columns: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
     #[cfg(feature = "enterprise")]
     enterprise_license: Option<String>,
-    primary_key: Arc<std::sync::RwLock<Vec<String>>>,
+    primary_key: Arc<parking_lot::RwLock<Vec<String>>>,
     autocommit: Arc<std::sync::atomic::AtomicBool>,
-    recovered_wal_paths: Arc<std::sync::Mutex<Vec<String>>>,
+    recovered_wal_paths: Arc<parking_lot::Mutex<Vec<String>>>,
     pub(crate) partition_spec: Arc<PartitionSpec>,
     /// Naming pattern to use for unnamed columns
     pub(crate) label_pattern: LabelPattern,
@@ -201,7 +201,7 @@ impl Table {
     pub fn get_config(&self) -> SegmentConfig {
         SegmentConfig::new(&self.uri, "")
             .with_index_all(self.indexing.index_all)
-            .with_columns_to_index(self.indexing.index_columns.read().unwrap().clone())
+            .with_columns_to_index(self.indexing.index_columns.read().clone())
     }
 
     pub fn set_index_all(&mut self, enabled: bool) {
@@ -224,7 +224,7 @@ impl Table {
         if let Some(ref rt) = self.rt {
             let _ = rt.block_on(self.set_primary_key_async(columns));
         } else {
-            let mut pk = self.primary_key.write().unwrap();
+            let mut pk = self.primary_key.write();
             *pk = columns;
         }
     }
@@ -248,14 +248,14 @@ impl Table {
         manifest_manager.update_identifier_fields(field_ids).await?;
 
         // Update in-memory state
-        let mut pk = self.primary_key.write().unwrap();
+        let mut pk = self.primary_key.write();
         *pk = columns;
         
         // Update in-memory schema ref (it's slightly stale now, but will refresh on next use)
         // or we could force a reload.
         let (new_manifest, _) = manifest_manager.load_latest().await?;
         if let Some(s) = new_manifest.schemas.last() {
-            let mut schema_lock = self.schema.write().unwrap();
+            let mut schema_lock = self.schema.write();
             *schema_lock = Arc::new(s.to_arrow());
         }
 
@@ -263,7 +263,7 @@ impl Table {
     }
 
     pub fn set_indexed_columns(&self, columns: Vec<String>) {
-        let mut cols = self.indexing.index_columns.write().unwrap();
+        let mut cols = self.indexing.index_columns.write();
         *cols = columns;
     }
 
@@ -276,14 +276,14 @@ impl Table {
                     pk_names.push(field.name.clone());
                 }
             }
-            let mut pk = self.primary_key.write().unwrap();
+            let mut pk = self.primary_key.write();
             *pk = pk_names;
         }
         Ok(())
     }
 
     pub fn get_primary_key(&self) -> Vec<String> {
-        self.primary_key.read().unwrap().clone()
+        self.primary_key.read().clone()
     }
 
     /// Update indexing specifications for multiple columns at once.
@@ -294,8 +294,8 @@ impl Table {
 
         // Update in-memory state
         {
-            let mut index_cols = self.indexing.index_columns.write().unwrap();
-            let mut index_configs = self.indexing.index_configs.write().unwrap();
+            let mut index_cols = self.indexing.index_columns.write();
+            let mut index_configs = self.indexing.index_configs.write();
             
             for (col, algs) in &column_indexes {
                 if algs.is_empty() {
@@ -428,7 +428,7 @@ impl Table {
         manifest_manager.update_identifier_fields(next_ids).await?;
         
         // Update in-memory state
-        let mut pk = self.primary_key.write().unwrap();
+        let mut pk = self.primary_key.write();
         if !pk.contains(&column) {
             pk.push(column);
         }
@@ -454,7 +454,7 @@ impl Table {
         manifest_manager.update_identifier_fields(next_ids).await?;
 
         // Update in-memory state
-        let mut pk = self.primary_key.write().unwrap();
+        let mut pk = self.primary_key.write();
         pk.retain(|c| c != &column);
         Ok(())
     }
@@ -629,12 +629,12 @@ impl Table {
 
     /// Get the number of rows currently in the write buffer (not yet flushed)
     pub fn write_buffer_row_count(&self) -> usize {
-        self.write_buffer.read().unwrap().iter().map(|b| b.num_rows()).sum()
+        self.write_buffer.read().iter().map(|b| b.num_rows()).sum()
     }
 
     /// Check if the table currently has an active in-memory vector index
     pub fn has_memory_index(&self) -> bool {
-        self.indexing.memory_index.read().unwrap().is_some()
+        self.indexing.memory_index.read().is_some()
     }
 
     pub fn new(uri: String) -> Result<Self> {
@@ -1244,29 +1244,29 @@ impl Table {
             fields,
         };
         
-        let mut guard = self.sort_order.write().unwrap();
+        let mut guard = self.sort_order.write();
         *guard = Some(order);
         
         // Also store column names for apply_sort_order
-        self.sort_order_columns.write().unwrap().replace(columns.iter().map(|s| s.to_string()).collect());
+        self.sort_order_columns.write().replace(columns.iter().map(|s| s.to_string()).collect());
         
         Ok(())
     }
     
     /// Get the current sort order
     pub fn get_sort_order(&self) -> Option<SortOrder> {
-        self.sort_order.read().unwrap().clone()
+        self.sort_order.read().clone()
     }
 
     /// Apply sort order to a RecordBatch before writing
     fn apply_sort_order(&self, batch: &RecordBatch) -> Result<RecordBatch> {
-        let guard = self.sort_order.read().unwrap();
+        let guard = self.sort_order.read();
         let order = match guard.as_ref() {
             Some(o) if !o.fields.is_empty() => o,
             _ => return Ok(batch.clone()), // No sort order configured
         };
         
-        let columns_guard = self.sort_order_columns.read().unwrap();
+        let columns_guard = self.sort_order_columns.read();
         let column_names = match columns_guard.as_ref() {
             Some(names) => names,
             None => return Ok(batch.clone()),
@@ -1414,8 +1414,8 @@ impl Table {
 
     pub fn add_index_columns(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
         {
-            let mut index_cols = self.indexing.index_columns.write().unwrap();
-            let mut index_configs = self.indexing.index_configs.write().unwrap();
+            let mut index_cols = self.indexing.index_columns.write();
+            let mut index_configs = self.indexing.index_configs.write();
             
             for col in &columns {
                 if !index_cols.contains(col) {
@@ -1431,8 +1431,8 @@ impl Table {
 
     pub async fn add_index_columns_async(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
         {
-            let mut index_cols = self.indexing.index_columns.write().unwrap();
-            let mut index_configs = self.indexing.index_configs.write().unwrap();
+            let mut index_cols = self.indexing.index_columns.write();
+            let mut index_configs = self.indexing.index_configs.write();
             
             for col in &columns {
                 if !index_cols.contains(col) {
@@ -1447,21 +1447,21 @@ impl Table {
     }
 
     pub fn set_default_device(&mut self, device: Option<String>) {
-        let mut d = self.indexing.default_device.write().unwrap();
+        let mut d = self.indexing.default_device.write();
         *d = device;
     }
 
     pub fn get_default_device(&self) -> Option<String> {
-        self.indexing.default_device.read().unwrap().clone()
+        self.indexing.default_device.read().clone()
     }
 
     pub fn remove_index_columns(&mut self, columns: Vec<String>) {
-        let mut index_cols = self.indexing.index_columns.write().unwrap();
+        let mut index_cols = self.indexing.index_columns.write();
         index_cols.retain(|c| !columns.contains(c));
     }
 
     pub fn remove_all_index_columns(&mut self) {
-        let mut index_cols = self.indexing.index_columns.write().unwrap();
+        let mut index_cols = self.indexing.index_columns.write();
         index_cols.clear();
         self.indexing.index_all = false;
     }
@@ -1477,7 +1477,7 @@ impl Table {
     }
 
     pub fn get_index_columns(&self) -> Vec<String> {
-        self.indexing.index_columns.read().unwrap().clone()
+        self.indexing.index_columns.read().clone()
     }
 
     pub fn runtime(&self) -> Arc<Runtime> {
@@ -1485,7 +1485,7 @@ impl Table {
     }
 
     pub fn arrow_schema(&self) -> SchemaRef {
-        self.schema.read().unwrap().clone()
+        self.schema.read().clone()
     }
 
     pub async fn manifest(&self) -> Result<crate::core::manifest::Manifest> {
@@ -1523,7 +1523,7 @@ impl Table {
                 let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
                     .strip_suffix(".parquet").unwrap_or(&file_path_str);
 
-                let mut cols_to_index = self.indexing.index_columns.read().unwrap().clone();
+                let mut cols_to_index = self.indexing.index_columns.read().clone();
                 for col in target_cols {
                     if !cols_to_index.contains(&col) {
                         cols_to_index.push(col);
@@ -1538,10 +1538,10 @@ impl Table {
                 
                 let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
                 let mut writer = HybridSegmentWriter::new(config)
-                    .with_index_configs(self.indexing.index_configs.read().unwrap().clone())
+                    .with_index_configs(self.indexing.index_configs.read().clone())
                     .with_record_count(current_entry.record_count as usize)
                     .with_existing_stats(current_entry.column_stats.clone());
-                writer.primary_key = self.primary_key.read().unwrap().clone();
+                writer.primary_key = self.primary_key.read().clone();
                 writer.set_store(store.clone());
                 
                 let mut stream = reader.stream_all(None as Option<arrow::datatypes::SchemaRef>).await?;
@@ -1623,7 +1623,7 @@ impl Table {
         manifest_manager.update_schema(new_schemas, new_schema_id, Some(max_id)).await?;
         
         // Reload local schema
-        let mut local_schema = self.schema.write().unwrap();
+        let mut local_schema = self.schema.write();
         *local_schema = Arc::new(new_schema.to_arrow());
         
         Ok(())
@@ -2602,7 +2602,7 @@ impl Table {
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let mut result = Vec::new();
-        let buffer = self.write_buffer.read().unwrap();
+        let buffer = self.write_buffer.read();
         
         if buffer.is_empty() {
             return Ok(result);
@@ -2637,7 +2637,7 @@ impl Table {
 
     fn get_vector_column_for_shuffling(&self, batch: &RecordBatch) -> Option<String> {
         // Use first index column if it's a vector
-        let index_cols = self.indexing.index_columns.read().unwrap();
+        let index_cols = self.indexing.index_columns.read();
         for col_name in index_cols.iter() {
             if let Ok(idx) = batch.schema().index_of(col_name) {
                 let col = batch.column(idx);

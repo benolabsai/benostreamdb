@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::cache::CacheExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -149,6 +150,9 @@ pub struct ManifestEntry {
     pub file_path: String,
     pub file_size_bytes: i64,
     pub record_count: i64,
+    /// HyperStream Extension: File checksum (e.g. SHA256) for data integrity verification
+    #[serde(default)]
+    pub file_checksum: Option<String>,
     /// HyperStream Extension: Sidecar Index Files
     pub index_files: Vec<IndexFile>,
     /// HyperStream Extension: Merge-on-Read Delete Files (Iceberg v2 compliant)
@@ -942,7 +946,7 @@ impl ManifestManager {
         let cache_key = self.get_dir_cache_key();
 
         // 1. Check Version Cache (Fast Path)
-        if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get(&cache_key).await {
+        if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get_with_metrics(&cache_key, "latest_version").await {
             tracing::debug!("ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
             if let Ok(manifest) = self.load_version(ver).await {
                 tracing::debug!("ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
@@ -1012,7 +1016,7 @@ impl ManifestManager {
         let cache_key = self.get_cache_key(&path);
 
         // 1. Check Data Cache
-        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
             return Ok(manifest.as_ref().clone());
         }
 
@@ -1031,7 +1035,7 @@ impl ManifestManager {
         let path = Path::from(path_str);
         let cache_key = format!("{}/{}", self.root_uri, path);
 
-        if let Some(list) = crate::core::cache::MANIFEST_LIST_CACHE.get(&cache_key).await {
+        if let Some(list) = crate::core::cache::MANIFEST_LIST_CACHE.get_with_metrics(&cache_key, "manifest_list").await {
             return Ok(list.as_ref().clone());
         }
 
@@ -1148,7 +1152,7 @@ impl ManifestManager {
          let path = Path::from(path_str);
          let cache_key = format!("{}/{}", root_uri, path);
          
-         if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
+         if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
              return Ok(manifest.as_ref().clone());
          }
 
@@ -1185,7 +1189,7 @@ impl ManifestManager {
         let path = Path::from(path_str);
         let cache_key = format!("{}/{}", root_uri, path);
 
-        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get(&cache_key).await {
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
             return Ok(manifest.as_ref().clone());
         }
 

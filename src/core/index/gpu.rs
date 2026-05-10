@@ -9,7 +9,8 @@
 /// - Intel oneAPI / Level Zero
 use anyhow::Result;
 use super::VectorMetric;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 use once_cell::sync::Lazy;
 
 #[cfg(feature = "cuda")]
@@ -425,13 +426,13 @@ impl ComputeContext {
 
     pub fn auto_detect() -> Self {
         {
-            let read = GLOBAL_GPU_CONTEXT.read().unwrap();
+            let read = GLOBAL_GPU_CONTEXT.read();
             if let Some(ctx) = &*read {
                 return ctx.clone();
             }
         }
 
-        let mut write = GLOBAL_GPU_CONTEXT.write().unwrap();
+        let mut write = GLOBAL_GPU_CONTEXT.write();
         // Check again after acquiring lock
         if let Some(ctx) = &*write {
             return ctx.clone();
@@ -535,17 +536,13 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
 }
 
 pub fn set_global_gpu_context(ctx: Option<ComputeContext>) { 
-    if let Ok(mut lock) = GLOBAL_GPU_CONTEXT.write() {
-        *lock = ctx;
-    }
+    let mut lock = GLOBAL_GPU_CONTEXT.write();
+    *lock = ctx;
 }
 
 pub fn get_global_gpu_context() -> Option<ComputeContext> { 
-    if let Ok(lock) = GLOBAL_GPU_CONTEXT.read() {
-        lock.clone()
-    } else {
-        None
-    }
+    let lock = GLOBAL_GPU_CONTEXT.read();
+    lock.clone()
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::cache::CacheExt;
 use std::sync::Arc;
 // use std::collections::HashSet;
 use chrono::Utc;
@@ -263,6 +264,7 @@ impl HybridReader {
                      let path = Path::from(path_str);
                      if let Ok(ret) = self.store.get(&path).await {
                          if let Ok(bytes) = ret.bytes().await {
+                             crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(bytes.len() as u64);
                              if let Ok(bm) = RoaringBitmap::deserialize_from(&bytes[..]) {
                                  deleted_bitmap |= bm;
                              }
@@ -280,6 +282,7 @@ impl HybridReader {
                  let path = Path::from(puffin_file_path.as_str());
                  match self.store.get_range(&path, (*content_offset as u64)..((*content_offset + *content_size_in_bytes) as u64)).await {
                      Ok(bytes) => {
+                         crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(bytes.len() as u64);
                          match crate::core::puffin::read_deletion_vector_from_bytes(&bytes) {
                              Ok(dv_bitmap) => {
                                  deleted_bitmap |= dv_bitmap;
@@ -398,7 +401,7 @@ impl HybridReader {
             if let Some(offset) = col_meta.bloom_filter_offset() {
                 let cache_key = format!("{}/{}:{}", self.root_uri, pq_path_str, offset);
                 
-                let sbbf = if let Some(cached) = crate::core::cache::BLOOM_FILTER_CACHE.get(&cache_key).await {
+                let sbbf = if let Some(cached) = crate::core::cache::BLOOM_FILTER_CACHE.get_with_metrics(&cache_key, "bloom_filter").await {
                     tracing::debug!("Bloom Cache HIT for key: {}", cache_key);
                     cached
                 } else {
@@ -407,10 +410,17 @@ impl HybridReader {
                     let end = (start + 2 * 1024 * 1024).min(file_size);
                     
                     // Fetch the Bloom Filter blob from storage
-                    let data_res = self.store.get_range(&pq_path, start..end).await;
+                    let data_res = self.store.get_range(&pq_path, start..end).await.map(|b| {
+                        crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                        b
+                    });
                     let data = match data_res {
                         Ok(d) => d,
-                        Err(_) => self.store.get_range(&pq_path, start..file_size).await?,
+                        Err(_) => {
+                            let b = self.store.get_range(&pq_path, start..file_size).await?;
+                            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                            b
+                        },
                     };
                     
                     let filter_res = Sbbf::from_bytes(&data);
@@ -561,23 +571,31 @@ impl HybridReader {
                  format!("{}/{}", self.root_uri, full_inv_path_str)
             };
 
-            let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get(&cache_key).await {
+            let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get_with_metrics(&cache_key, "inverted_index").await {
                 cached.as_ref().clone()
             } else {
                 // Cache Miss - Load from Disk/Byte Cache
                 let inv_path = Path::from(full_inv_path_str.as_str());
                 
-                let inv_bytes = match crate::core::cache::BYTE_CACHE.get(&cache_key).await {
+                let inv_bytes = match crate::core::cache::BYTE_CACHE.get_with_metrics(&cache_key, "byte").await {
                     Some(cached) => cached.as_ref().clone(),
                     None => {
                         let bytes = if let (Some(offset), Some(length)) = (idx_info.offset, idx_info.length) {
                              // Puffin Blob: Byte Range Read
-                             self.store.get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64)).await?
+                             {
+                                 let b = self.store.get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64)).await?;
+                                 crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                                 b
+                             }
                                  .to_vec()
                         } else {
                              // Full File read
                              match self.store.get(&inv_path).await {
-                                 Ok(res) => res.bytes().await?.to_vec(),
+                                 Ok(res) => {
+                                     let b = res.bytes().await?;
+                                     crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                                     b.to_vec()
+                                 },
                                  Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
                                      // Missing index file - fallback to full scan
                                      return Ok(None);
@@ -769,12 +787,13 @@ impl HybridReader {
             let idx_path_str = idx_path.to_string();
             
             // Check Cache
-            if let Some(cached) = crate::core::cache::INDEX_CACHE.get(&format!("{}/{}", self.root_uri, idx_path_str)).await {
+            if let Some(cached) = crate::core::cache::INDEX_CACHE.get_with_metrics(&format!("{}/{}", self.root_uri, idx_path_str), "index").await {
                 cached.as_ref().clone()
             } else {
                  match self.store.get(&idx_path).await {
                      Ok(resp) => {
                          let index_bytes = resp.bytes().await?;
+                         crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(index_bytes.len() as u64);
                          let bitmap = RoaringBitmap::deserialize_from(&index_bytes[..])?;
                          crate::core::cache::INDEX_CACHE.insert(format!("{}/{}", self.root_uri, idx_path_str), Arc::new(bitmap.clone())).await;
                          bitmap
@@ -831,7 +850,7 @@ impl HybridReader {
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
         
-        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get(&format!("{}/{}", self.root_uri, pq_path_str)).await {
+        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get_with_metrics(&format!("{}/{}", self.root_uri, pq_path_str), "parquet_meta").await {
              // Cache Hit
              let object_meta = ObjectMeta {
                  location: pq_path.clone(),
@@ -950,7 +969,7 @@ impl HybridReader {
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
         
-        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get(&format!("{}/{}", self.root_uri, pq_path_str)).await {
+        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get_with_metrics(&format!("{}/{}", self.root_uri, pq_path_str), "parquet_meta").await {
              // Cache Hit
              let object_meta = ObjectMeta {
                  location: pq_path.clone(),
@@ -1318,13 +1337,17 @@ impl HybridReader {
              format!("{}/{}", self.root_uri, full_inv_path_str)
         };
 
-        let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get(&cache_key).await {
+        let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE.get_with_metrics(&cache_key, "inverted_index").await {
             cached.as_ref().clone()
         } else {
             // Cache Miss - Load from Disk
             let inv_path = Path::from(full_inv_path_str.as_str());
             let inv_bytes = match self.store.get(&inv_path).await {
-                 Ok(res) => res.bytes().await?.to_vec(),
+                 Ok(res) => {
+                                     let b = res.bytes().await?;
+                                     crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                                     b.to_vec()
+                                 },
                  Err(e) => return Err(e.into()),
             };
 
@@ -1478,7 +1501,7 @@ impl HybridReader {
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
 
-        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get(&format!("{}/{}", self.root_uri, pq_path_str)).await {
+        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get_with_metrics(&format!("{}/{}", self.root_uri, pq_path_str), "parquet_meta").await {
              // Cache Hit
              let object_meta = ObjectMeta {
                  location: pq_path.clone(),

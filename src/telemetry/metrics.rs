@@ -2,7 +2,7 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_histogram, register_int_counter, register_int_gauge, Histogram, IntCounter, IntGauge,
+    register_histogram, register_int_counter, register_int_counter_vec, register_int_gauge, Histogram, IntCounter, IntCounterVec, IntGauge,
 };
 
 lazy_static! {
@@ -28,8 +28,40 @@ lazy_static! {
     .unwrap();
 
     /// Number of active parquet files
-     pub static ref ACTIVE_FILES_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref ACTIVE_FILES_GAUGE: IntGauge = register_int_gauge!(
         "hyperstreamdb_active_files",
         "Number of active parquet files in the table"
+    ).unwrap();
+
+    /// Cache hits across various system caches
+    pub static ref CACHE_HITS_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "hyperstreamdb_cache_hits_total",
+        "Total number of cache hits",
+        &["cache_name"]
+    ).unwrap();
+
+    /// Cache misses across various system caches
+    pub static ref CACHE_MISSES_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "hyperstreamdb_cache_misses_total",
+        "Total number of cache misses",
+        &["cache_name"]
+    ).unwrap();
+
+    /// Total I/O bytes read
+    pub static ref IO_BYTES_READ_TOTAL: IntCounter = register_int_counter!(
+        "hyperstreamdb_io_bytes_read_total",
+        "Total number of bytes read from storage"
+    ).unwrap();
+
+    /// Total I/O bytes written
+    pub static ref IO_BYTES_WRITTEN_TOTAL: IntCounter = register_int_counter!(
+        "hyperstreamdb_io_bytes_written_total",
+        "Total number of bytes written to storage"
+    ).unwrap();
+
+    /// Search latency in seconds (for vector and keyword searches)
+    pub static ref SEARCH_LATENCY_SECONDS: Histogram = register_histogram!(
+        "hyperstreamdb_search_latency_seconds",
+        "Search operation latency in seconds"
     ).unwrap();
 }

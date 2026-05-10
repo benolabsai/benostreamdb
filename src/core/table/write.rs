@@ -33,6 +33,7 @@ impl Table {
     }
     
     /// Async commit
+    #[tracing::instrument(skip(self))]
     pub async fn commit_async(&self) -> Result<()> {
         self.flush_async().await?;
         
@@ -57,6 +58,7 @@ impl Table {
     }
 
     /// Async implementation of truncate
+    #[tracing::instrument(skip(self))]
     pub async fn truncate_async(&self) -> Result<()> {
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         
@@ -77,13 +79,13 @@ impl Table {
         
         // Step 4: Clear memory index
         {
-            let mut idx = self.indexing.memory_index.write().unwrap();
+            let mut idx = self.indexing.memory_index.write();
             *idx = None;
         }
         
         // Step 5: Clear write buffer
         {
-            let mut buffer = self.write_buffer.write().unwrap();
+            let mut buffer = self.write_buffer.write();
             buffer.clear();
         }
         
@@ -100,6 +102,7 @@ impl Table {
     // Schema evolution logic moved to schema.rs
 
     /// Async implementation of write (Buffered) with Schema Validation
+    #[tracing::instrument(skip(self, batches))]
     pub async fn write_async(&self, batches: Vec<RecordBatch>) -> Result<()> {
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         INGEST_ROWS_TOTAL.inc_by(total_rows as u64);
@@ -112,7 +115,7 @@ impl Table {
         
         let mut is_empty_schema = false;
         if let Some(first_batch) = batches.first() {
-            let mut lock = self.schema.write().unwrap();
+            let mut lock = self.schema.write();
             is_empty_schema = lock.fields().is_empty();
             if is_empty_schema {
                 let incoming_schema = first_batch.schema();
@@ -141,7 +144,7 @@ impl Table {
         }
 
         // 2. Primary Key Uniqueness Validation
-        let pk_cols = self.primary_key.read().unwrap().clone();
+        let pk_cols = self.primary_key.read().clone();
         if !pk_cols.is_empty() {
             // Accelerated path for single-column Primary Keys
             if pk_cols.len() == 1 {
@@ -149,7 +152,7 @@ impl Table {
                 let mut seen_keys = std::collections::HashSet::new();
                 
                 {
-                    let buffer = self.write_buffer.read().unwrap();
+                    let buffer = self.write_buffer.read();
                     // 1. Pre-populate seen keys from the in-memory write buffer
                     for b_batch in buffer.iter() {
                         if let Some(b_col) = b_batch.column_by_name(pk_col) {
@@ -190,7 +193,7 @@ impl Table {
                     }
                 }
             } else {
-                let buffer = self.write_buffer.read().unwrap();
+                let buffer = self.write_buffer.read();
                 // Fallback for multi-column PKs (O(N*M) check for now)
                 for batch in &batches {
                     for pk_col in &pk_cols {
@@ -273,7 +276,7 @@ impl Table {
             }
 
             if changed {
-                let mut lock = self.schema.write().unwrap();
+                let mut lock = self.schema.write();
                 *lock = Arc::new(evolved_schema);
                 drop(lock);
                 target_schema = self.arrow_schema();
@@ -330,7 +333,7 @@ impl Table {
         // 1. Write-Ahead Log (Durability) & 2. Indexing (In-Memory) in PARALLEL
         let wal = self.wal.clone();
         let memory_index = self.indexing.memory_index.clone();
-        let target_col = self.indexing.index_columns.read().unwrap().first().cloned()
+        let target_col = self.indexing.index_columns.read().first().cloned()
              .or_else(|| {
                  batches.first().and_then(|b| {
                      b.schema().fields().iter()
@@ -348,7 +351,7 @@ impl Table {
         }
 
         let buffer_len_before = { 
-            let buffer = self.write_buffer.read().unwrap();
+            let buffer = self.write_buffer.read();
             buffer.iter().map(|b| b.num_rows()).sum()
         };
 
@@ -370,7 +373,7 @@ impl Table {
             // Indexing Task
             async move {
                 if let Some(col_name) = target_col {
-                    let mut idx_lock = memory_index.write().unwrap();
+                    let mut idx_lock = memory_index.write();
                     
                     if idx_lock.is_none() {
                         if let Some(first) = batches_for_idx.first() {
@@ -413,13 +416,13 @@ impl Table {
  
         // Buffer the batches
         {
-            let mut buffer = self.write_buffer.write().unwrap();
+            let mut buffer = self.write_buffer.write();
             buffer.extend(batches);
         }
 
         // Check if we should flush (spillover)
         let should_flush = {
-            let buffer = self.write_buffer.read().unwrap();
+            let buffer = self.write_buffer.read();
             
             // Calculate size in bytes (approximate)
             let total_bytes: usize = buffer.iter()
@@ -447,12 +450,13 @@ impl Table {
 
     /// Flush buffer to disk
     /// Flush buffer to disk
+    #[tracing::instrument(skip(self))]
     pub async fn flush_async(&self) -> Result<()> {
         // Type alias for stream results to avoid complex type annotation
         type PartitionSegment = (crate::core::manifest::ManifestEntry, Vec<String>, String, RecordBatch, HashMap<String, Value>);
         // Extract batches from buffer
         let batches_to_write: Vec<RecordBatch> = {
-            let mut buffer = self.write_buffer.write().unwrap();
+            let mut buffer = self.write_buffer.write();
             if buffer.is_empty() {
                 return Ok(());
             }
@@ -461,7 +465,7 @@ impl Table {
 
         // Reset memory index
         {
-            let mut idx = self.indexing.memory_index.write().unwrap();
+            let mut idx = self.indexing.memory_index.write();
             *idx = None;
         }
 
@@ -506,13 +510,13 @@ impl Table {
         
         let mut all_new_entries = Vec::new();
         let mut all_generated_files: Vec<String> = Vec::new();
-        let index_cols = self.indexing.index_columns.read().unwrap().clone();
+        let index_cols = self.indexing.index_columns.read().clone();
         let index_all_flag = self.indexing.index_all;
 
         let index_configs_map: HashMap<String, crate::core::table::ColumnIndexConfig> = {
-            self.indexing.index_configs.read().unwrap().clone()
+            self.indexing.index_configs.read().clone()
         };
-        let default_device = self.indexing.default_device.read().unwrap().clone();
+        let default_device = self.indexing.default_device.read().clone();
         let default_device_for_stream = default_device.clone();
 
         // Parallelize partition writing using futures stream
@@ -537,7 +541,7 @@ impl Table {
                     .with_partition_values(partition_values.clone())
                     .with_default_device(default_device_inner);
                 let mut writer_write = HybridSegmentWriter::new(config_write);
-                writer_write.primary_key = self.primary_key.read().unwrap().clone();
+                writer_write.primary_key = self.primary_key.read().clone();
                 writer_write.set_store(self.store.clone());
 
                 let batch_inner = batch.clone();
@@ -571,7 +575,7 @@ impl Table {
             all_new_entries.push(entry.clone());
 
             // 2. Queue index building asynchronously (if needed)
-            let has_pks = !self.primary_key.read().unwrap().is_empty();
+            let has_pks = !self.primary_key.read().is_empty();
             if index_all_flag || !index_cols.is_empty() || has_pks {
                 let index_cols_clone = index_cols.clone();
                 let base_path_clone = base_path.to_string();
@@ -584,7 +588,7 @@ impl Table {
                 let entry_clone = entry.clone();
                 let manifest_manager_clone = manifest_manager.clone();
 
-                let pk_clone = self.primary_key.read().unwrap().clone();
+                let pk_clone = self.primary_key.read().clone();
                 let table_store = self.store.clone();
 
                 let spec_bg = spec.clone();
@@ -793,7 +797,7 @@ impl Table {
               wal.truncate().context("Failed to truncate WAL")?;
               
               // 5b. Cleanup recovered files
-              let mut recovered = self.recovered_wal_paths.lock().unwrap();
+              let mut recovered = self.recovered_wal_paths.lock();
               if !recovered.is_empty() {
                   let paths: Vec<std::path::PathBuf> = recovered.iter().map(std::path::PathBuf::from).collect();
                   wal.cleanup_files(&paths).unwrap_or_default();

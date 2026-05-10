@@ -14,6 +14,7 @@
 ///
 /// Attribution: Underlying HNSW graph logic relies on the vendored `hnsw_rs` library (MIT/Apache 2.0).
 /// Copyright Jean-Pierre Both and hnsw_rs contributors. Vendored and patched to support exact pre-filtering.
+use crate::core::cache::CacheExt;
 use anyhow::{Result, Context};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -673,7 +674,7 @@ impl HnswIvfIndex {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
         let cache_key_str = cache_key.to_string();
-        if let Some(cached) = HNSW_IVF_CACHE.get(&cache_key_str).await {
+        if let Some(cached) = HNSW_IVF_CACHE.get_with_metrics(&cache_key_str, "hnsw_ivf").await {
             return Ok(cached);
         }
 

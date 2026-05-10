@@ -44,17 +44,17 @@ impl EmbeddingRegistry {
 }
 
 lazy_static::lazy_static! {
-    pub static ref GLOBAL_REGISTRY: std::sync::RwLock<EmbeddingRegistry> = std::sync::RwLock::new(EmbeddingRegistry::new());
+    pub static ref GLOBAL_REGISTRY: parking_lot::RwLock<EmbeddingRegistry> = parking_lot::RwLock::new(EmbeddingRegistry::new());
 }
 
 pub fn register_embedded_func(name: String, func: Arc<dyn EmbeddingFunction>) {
-    if let Ok(mut registry) = GLOBAL_REGISTRY.write() {
+    let mut registry = GLOBAL_REGISTRY.write(); {
         registry.register(name, func);
     }
 }
 
 pub fn get_embedded_func(name: &str) -> Option<Arc<dyn EmbeddingFunction>> {
-    GLOBAL_REGISTRY.read().ok()?.get(name)
+    GLOBAL_REGISTRY.read().get(name)
 }
 
 

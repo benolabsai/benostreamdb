@@ -67,7 +67,7 @@ enum TableCommands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    hyperstreamdb::telemetry::tracing::init_tracing("hdb")?;
+    let _guard = hyperstreamdb::telemetry::tracing::init_tracing("hdb")?;
 
     let cli = Cli::parse();
     let session = HyperStreamSession::new(None);

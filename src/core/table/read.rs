@@ -31,6 +31,7 @@ impl Table {
         self.runtime().block_on(self.read_async(filter, vector_filter, Some(&columns_refs)))
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn sql(&self, query: &str) -> Result<Vec<RecordBatch>> {
         use datafusion::prelude::SessionContext;
         use crate::core::sql::HyperStreamTableProvider;
@@ -42,6 +43,7 @@ impl Table {
         Ok(df.collect().await?)
     }
 
+    #[tracing::instrument(skip(self), fields(columns = ?columns))]
     pub async fn read_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
         self.read_with_config_async(filter_str, vector_filter, columns, self.query_config.clone()).await
     }
@@ -268,6 +270,7 @@ impl Table {
         TableQuery::new(self).filter(expr)
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn read_with_config_async(
         &self, 
         filter_str: Option<&str>, 
@@ -434,10 +437,10 @@ impl Table {
 
              // 2. Search Memory
              let memory_hits = {
-                 let idx = self.indexing.memory_index.read().unwrap();
+                 let idx = self.indexing.memory_index.read();
                  if let Some(mem_idx) = idx.as_ref() {
                      let filter_bitmap = if let Some(ref e) = expr {
-                         let buffer = self.write_buffer.read().unwrap();
+                         let buffer = self.write_buffer.read();
                          let mut bitmap = RoaringBitmap::new();
                           let mut offset = 0;
                           let planner = QueryPlanner::new();
@@ -462,7 +465,7 @@ impl Table {
               };
 
               if !memory_hits.is_empty() {
-                  let buffer = self.write_buffer.read().unwrap();
+                  let buffer = self.write_buffer.read();
                   if let Some(first) = buffer.first() {
                       let schema = first.schema();
                       let batch_offsets: Vec<usize> = buffer.iter().scan(0, |state, b| {
@@ -568,7 +571,7 @@ impl Table {
         // --- Read from In-Memory Write Buffer ---
         let mut mem_batches = Vec::new();
         {
-            let buffer = self.write_buffer.read().unwrap();
+            let buffer = self.write_buffer.read();
             if !buffer.is_empty() {
                 if let Some(ref e) = expr_arc {
                     let planner = QueryPlanner::new();
@@ -667,7 +670,7 @@ impl Table {
             .with_index_files(entry.index_files.clone())
             .with_file_size(entry.file_size_bytes as u64)
             .with_index_all(self.indexing.index_all)
-            .with_columns_to_index(self.indexing.index_columns.read().unwrap().clone());
+            .with_columns_to_index(self.indexing.index_columns.read().clone());
 
         let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
         if let Some(s) = &iceberg_schema {
@@ -807,10 +810,12 @@ impl Table {
         Ok(entries)
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn execute_vector_search_as_scored(
         &self,
         params: VectorSearchParams,
     ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
         
@@ -850,13 +855,16 @@ impl Table {
                 });
             }
         }
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS.observe(start_time.elapsed().as_secs_f64());
         Ok(scored_results)
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn execute_keyword_search_as_scored(
         &self,
         params: KeywordSearchParams,
     ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
         let manifest = self.manifest().await?;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let all_entries = manifest_manager.load_all_entries(&manifest).await?;
@@ -887,6 +895,7 @@ impl Table {
                 });
             }
         }
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS.observe(start_time.elapsed().as_secs_f64());
         Ok(all_scored)
     }
 
@@ -931,5 +940,86 @@ impl Table {
         }
 
         Ok(final_batches)
+    }
+
+    /// Verifies the data integrity of all segments in the table by comparing
+    /// their actual file checksums against the ones stored in the manifest.
+    pub async fn verify_integrity_async(&self) -> Result<()> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _version) = manifest_manager.load_latest_full().await?;
+        
+        for entry in all_entries {
+            if let Some(expected_checksum) = &entry.file_checksum {
+                let file_path = &entry.file_path;
+                let is_remote = file_path.contains("://") && !file_path.starts_with("file://");
+                
+                let mut hasher = sha2::Sha256::new();
+                use sha2::Digest;
+                use futures::StreamExt;
+                
+                if is_remote {
+                    let path_str = if file_path.starts_with("s3://") || file_path.starts_with("gcs://") || file_path.starts_with("azure://") {
+                        let parts: Vec<&str> = file_path.split("://").collect();
+                        if parts.len() > 1 {
+                            let without_scheme = parts[1];
+                            let path_parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+                            if path_parts.len() > 1 {
+                                path_parts[1].to_string()
+                            } else {
+                                without_scheme.to_string()
+                            }
+                        } else {
+                            file_path.clone()
+                        }
+                    } else {
+                        // Relative remote path
+                        let uri_parts: Vec<&str> = self.uri.split("://").collect();
+                        if uri_parts.len() > 1 {
+                            let without_scheme = uri_parts[1];
+                            let path_parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+                            if path_parts.len() > 1 {
+                                format!("{}/{}", path_parts[1], file_path)
+                            } else {
+                                format!("{}", file_path)
+                            }
+                        } else {
+                            file_path.clone()
+                        }
+                    };
+                    
+                    let path = object_store::path::Path::parse(&path_str)?;
+                    let mut stream = self.store.get(&path).await?.into_stream();
+                    while let Some(chunk_result) = stream.next().await {
+                        let chunk = chunk_result?;
+                        hasher.update(&chunk);
+                    }
+                } else {
+                    let mut local_path = std::path::PathBuf::from(self.uri.strip_prefix("file://").unwrap_or(&self.uri));
+                    if !file_path.starts_with('/') && !file_path.starts_with("file://") {
+                        local_path.push(file_path);
+                    } else {
+                        local_path = std::path::PathBuf::from(file_path.strip_prefix("file://").unwrap_or(file_path));
+                    }
+                    
+                    tracing::debug!("verify_integrity_async: self.uri={}, file_path={}, local_path={:?}", self.uri, file_path, local_path);
+                    
+                    let mut file = std::fs::File::open(&local_path)
+                        .map_err(|e| anyhow::anyhow!("Failed to open local data file {:?} for integrity check: {}", local_path, e))?;
+                    
+                    let mut buffer = [0; 65536];
+                    use std::io::Read;
+                    while let Ok(n) = file.read(&mut buffer) {
+                        if n == 0 { break; }
+                        hasher.update(&buffer[..n]);
+                    }
+                }
+                
+                let actual_checksum = format!("{:x}", hasher.finalize());
+                if &actual_checksum != expected_checksum {
+                    anyhow::bail!("Data integrity validation failed for segment {}: expected checksum {}, but got {}", file_path, expected_checksum, actual_checksum);
+                }
+            }
+        }
+        Ok(())
     }
 }

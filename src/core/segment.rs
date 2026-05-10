@@ -174,6 +174,7 @@ impl HybridSegmentWriter {
             max_clustering_score: None,
             normalization_mins: None,
             normalization_maxs: None,
+            file_checksum: None,
         }
     }
 

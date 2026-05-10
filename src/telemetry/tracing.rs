@@ -5,7 +5,8 @@ use tracing_subscriber::{Registry, layer::Context};
 use tracing_subscriber::fmt;
 use tracing_subscriber::filter::EnvFilter;
 use tracing::{Subscriber, Metadata};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 struct ReloadableFilter {
     filter: Arc<RwLock<EnvFilter>>,
@@ -13,14 +14,26 @@ struct ReloadableFilter {
 
 impl<S: Subscriber> Layer<S> for ReloadableFilter {
     fn enabled(&self, metadata: &Metadata<'_>, ctx: Context<'_, S>) -> bool {
-        self.filter.read().unwrap().enabled(metadata, ctx)
+        self.filter.read().enabled(metadata, ctx)
     }
 }
 
 static SHARED_FILTER: once_cell::sync::OnceCell<Arc<RwLock<EnvFilter>>> = once_cell::sync::OnceCell::new();
 static INIT: std::sync::Once = std::sync::Once::new();
 
-pub fn init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub struct TelemetryGuard;
+
+impl Drop for TelemetryGuard {
+    fn drop(&mut self) {
+        shutdown_telemetry();
+    }
+}
+
+pub fn shutdown_telemetry() {
+    opentelemetry::global::shutdown_tracer_provider();
+}
+
+pub fn init_tracing(service_name: &str) -> Result<TelemetryGuard, Box<dyn std::error::Error>> {
     let mut init_err: Option<Box<dyn std::error::Error>> = None;
     
     INIT.call_once(|| {
@@ -33,7 +46,7 @@ pub fn init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>
         return Err(e);
     }
     
-    Ok(())
+    Ok(TelemetryGuard)
 }
 
 fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -87,7 +100,7 @@ fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>>
 pub fn update_log_level(level: &str) -> Result<(), String> {
     if let Some(shared) = SHARED_FILTER.get() {
         let new_filter = EnvFilter::try_new(level).map_err(|e| e.to_string())?;
-        let mut filter = shared.write().unwrap();
+        let mut filter = shared.write();
         *filter = new_filter;
         Ok(())
     } else {

@@ -176,7 +176,7 @@ impl TableProvider for HyperStreamTableProvider {
         for filter in filters {
             if let Some((col, sql)) = expr_to_sql(filter) {
                 // Check if this is a BM25 candidate: Column has BM25 index and is an equality match
-                let has_bm25 = self.table.indexing.index_configs.read().unwrap()
+                let has_bm25 = self.table.indexing.index_configs.read()
                     .get(&col)
                     .map(|cfg| cfg.tokenizer.is_some())
                     .unwrap_or(false);
@@ -221,7 +221,7 @@ impl TableProvider for HyperStreamTableProvider {
         &self,
         filters: &[&Expr],
     ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
-        let index_configs = self.table.indexing.index_configs.read().unwrap();
+        let index_configs = self.table.indexing.index_configs.read();
         
         Ok(filters.iter().map(|f| {
             if let Expr::BinaryExpr(b) = f {

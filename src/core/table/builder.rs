@@ -270,10 +270,10 @@ impl TableBuilder {
             
             indexing: crate::core::table::TableIndexState {
                 index_all: self.index_all,
-                index_columns: Arc::new(std::sync::RwLock::new(Vec::new())),
-                index_configs: Arc::new(std::sync::RwLock::new(HashMap::new())),
-                default_device: Arc::new(std::sync::RwLock::new(self.default_device)),
-                memory_index: Arc::new(std::sync::RwLock::new(initial_mem_index)),
+                index_columns: Arc::new(parking_lot::RwLock::new(Vec::new())),
+                index_configs: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+                default_device: Arc::new(parking_lot::RwLock::new(self.default_device)),
+                memory_index: Arc::new(parking_lot::RwLock::new(initial_mem_index)),
             },
 
             catalog_state: crate::core::table::TableCatalogState {
@@ -282,17 +282,17 @@ impl TableBuilder {
                 table_name: self.catalog_table_name,
             },
 
-            schema: Arc::new(std::sync::RwLock::new(schema_val)),
-            write_buffer: Arc::new(std::sync::RwLock::new(initial_buffer)),
+            schema: Arc::new(parking_lot::RwLock::new(schema_val)),
+            write_buffer: Arc::new(parking_lot::RwLock::new(initial_buffer)),
             wal: Arc::new(Mutex::new(wal)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
-            sort_order: Arc::new(std::sync::RwLock::new(None)),
-            sort_order_columns: Arc::new(std::sync::RwLock::new(None)),
+            sort_order: Arc::new(parking_lot::RwLock::new(None)),
+            sort_order_columns: Arc::new(parking_lot::RwLock::new(None)),
             #[cfg(feature = "enterprise")]
             enterprise_license: None,
-            primary_key: Arc::new(std::sync::RwLock::new(Vec::new())),
+            primary_key: Arc::new(parking_lot::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            recovered_wal_paths: Arc::new(std::sync::Mutex::new(recovered_paths)),
+            recovered_wal_paths: Arc::new(parking_lot::Mutex::new(recovered_paths)),
             partition_spec,
             label_pattern: self.label_pattern,
         };

@@ -2029,8 +2029,10 @@ pub fn load_default_catalog(py: Python<'_>) -> PyResult<Py<PyAny>> {
 pub fn init_logging(level: &str) -> PyResult<()> {
     crate::telemetry::tracing::update_log_level(level)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
-    crate::telemetry::tracing::init_tracing("hyperstreamdb")
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    let guard = crate::telemetry::tracing::init_tracing("hyperstreamdb")
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Box::leak(Box::new(guard));
+    Ok(())
 }
 
 #[pyfunction]

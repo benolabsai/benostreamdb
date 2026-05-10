@@ -16,6 +16,29 @@ use std::path::PathBuf;
 use object_store::ObjectStore;
 use anyhow::Result;
 
+#[async_trait::async_trait]
+pub trait CacheExt<K, V> {
+    async fn get_with_metrics(&self, key: &K, cache_name: &str) -> Option<V>;
+}
+
+#[async_trait::async_trait]
+impl<K, V> CacheExt<K, V> for moka::future::Cache<K, V> 
+where 
+    K: std::hash::Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static
+{
+    async fn get_with_metrics(&self, key: &K, cache_name: &str) -> Option<V> {
+        if let Some(val) = self.get(key).await {
+            crate::telemetry::metrics::CACHE_HITS_TOTAL.with_label_values(&[cache_name]).inc();
+            Some(val)
+        } else {
+            crate::telemetry::metrics::CACHE_MISSES_TOTAL.with_label_values(&[cache_name]).inc();
+            None
+        }
+    }
+}
+
+
 pub static DISK_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
     std::env::var("HYPERSTREAM_DISK_CACHE_DIR")
         .ok()

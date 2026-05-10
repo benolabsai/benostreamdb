@@ -55,7 +55,7 @@ impl Table {
         tracing::info!("Schema Evolution: Added column '{}' (Schema ID: {})", name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
-        let mut lock = self.schema.write().unwrap();
+        let mut lock = self.schema.write();
         *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
@@ -143,7 +143,7 @@ impl Table {
         tracing::info!("Schema Evolution: Dropped column '{}' (Schema ID: {})", name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
-        let mut lock = self.schema.write().unwrap();
+        let mut lock = self.schema.write();
         *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
@@ -171,7 +171,7 @@ impl Table {
         tracing::info!("Schema Evolution: Renamed '{}' -> '{}' (Schema ID: {})", old_name, new_name, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
-        let mut lock = self.schema.write().unwrap();
+        let mut lock = self.schema.write();
         *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
@@ -204,7 +204,7 @@ impl Table {
         tracing::info!("Schema Evolution: Updated column type '{}' to '{}' (Schema ID: {})", name, new_type, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
-        let mut lock = self.schema.write().unwrap();
+        let mut lock = self.schema.write();
         *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
@@ -253,7 +253,7 @@ impl Table {
         tracing::info!("Schema Evolution: Moved column '{}' to index {} (Schema ID: {})", name, new_index, new_schema_id);
         
         let new_arrow_schema = current_schema.to_arrow();
-        let mut lock = self.schema.write().unwrap();
+        let mut lock = self.schema.write();
         *lock = std::sync::Arc::new(new_arrow_schema);
         
         Ok(())
