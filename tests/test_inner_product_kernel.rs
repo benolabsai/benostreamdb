@@ -31,7 +31,7 @@ fn test_inner_product_cpu() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda() -> Result<()> {
     // Test Inner Product computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
@@ -58,7 +58,7 @@ fn test_inner_product_cuda() -> Result<()> {
 }
 
 #[test]
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda_vs_cpu_parity() -> Result<()> {
     // Test that CUDA and CPU produce the same results
     use rand::Rng;

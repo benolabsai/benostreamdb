@@ -35,13 +35,13 @@ fn distance_metric_strategy() -> impl Strategy<Value = VectorMetric> {
 fn compute_backend_strategy() -> impl Strategy<Value = ComputeBackend> {
     prop::sample::select(vec![
         ComputeBackend::Cpu,
-        #[cfg(feature = "cuda")]
+        #[cfg(not(target_os = "macos"))]
         ComputeBackend::Cuda,
-        #[cfg(feature = "mps")]
+        #[cfg(feature = "wgpu")]
         ComputeBackend::Mps,
-        #[cfg(feature = "rocm")]
+        #[cfg(feature = "wgpu")]
         ComputeBackend::Rocm,
-        #[cfg(feature = "intel")]
+        #[cfg(feature = "wgpu")]
         ComputeBackend::Intel,
     ])
 }
