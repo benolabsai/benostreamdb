@@ -15,9 +15,14 @@ use datafusion::arrow::array::{Float32Array, FixedSizeListArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use std::sync::Arc;
 
+lazy_static::lazy_static! {
+    static ref GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+}
+
 /// Test that pgvector operators route through GPU-enabled UDFs
 #[tokio::test]
 async fn test_pgvector_operators_use_gpu_context() {
+    let _lock = GPU_TEST_LOCK.lock().unwrap();
     // Create a session context
     let ctx = SessionContext::new();
     
@@ -101,6 +106,7 @@ async fn test_pgvector_operators_use_gpu_context() {
 /// Test all pgvector operators with GPU context
 #[tokio::test]
 async fn test_all_pgvector_operators_with_gpu() {
+    let _lock = GPU_TEST_LOCK.lock().unwrap();
     // Create a session context
     let ctx = SessionContext::new();
     
@@ -173,6 +179,7 @@ async fn test_all_pgvector_operators_with_gpu() {
 /// Test that GPU context is properly used across multiple queries
 #[tokio::test]
 async fn test_gpu_context_persistence_across_queries() {
+    let _lock = GPU_TEST_LOCK.lock().unwrap();
     let ctx = SessionContext::new();
     
     // Register vector UDFs
@@ -227,6 +234,7 @@ async fn test_gpu_context_persistence_across_queries() {
 /// Test GPU context with batch operations (multiple rows)
 #[tokio::test]
 async fn test_pgvector_operators_batch_with_gpu() {
+    let _lock = GPU_TEST_LOCK.lock().unwrap();
     let ctx = SessionContext::new();
     
     // Register vector UDFs
