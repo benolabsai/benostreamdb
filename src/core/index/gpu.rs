@@ -13,7 +13,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use once_cell::sync::Lazy;
 
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 
 static GLOBAL_GPU_CONTEXT: Lazy<RwLock<Option<ComputeContext>>> = Lazy::new(|| RwLock::new(None));
@@ -54,44 +54,44 @@ impl Default for ComputeContext {
 // Resource Imports (Kernels)
 // ============================================================================
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_KMEANS: &str = include_str!("mps/kmeans_assignment.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_L2: &str = include_str!("mps/l2_distance.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_COSINE: &str = include_str!("mps/cosine_distance.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_INNER_PRODUCT: &str = include_str!("mps/inner_product.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_L1: &str = include_str!("mps/l1_distance.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 static MSL_JACCARD: &str = include_str!("mps/jaccard_distance.metal");
 
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static CUDA_KMEANS: &str = include_str!(concat!(env!("OUT_DIR"), "/kmeans_assignment.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_L2: &str = include_str!(concat!(env!("OUT_DIR"), "/l2_distance.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_COSINE: &str = include_str!(concat!(env!("OUT_DIR"), "/cosine_distance.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_INNER_PRODUCT: &str = include_str!(concat!(env!("OUT_DIR"), "/inner_product.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_L1: &str = include_str!(concat!(env!("OUT_DIR"), "/l1_distance.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_HAMMING: &str = include_str!(concat!(env!("OUT_DIR"), "/hamming_distance.ptx"));
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 static PTX_JACCARD: &str = include_str!(concat!(env!("OUT_DIR"), "/jaccard_distance.ptx"));
 
 // Backend Implementations
 // ============================================================================
 
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 #[derive(Debug)]
 pub struct CudaBackend { device: Arc<cudarc::driver::CudaDevice> }
 
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 impl CudaBackend {
     pub fn is_available() -> bool { true }
     pub fn new(id: usize) -> Result<Self> {
@@ -107,7 +107,7 @@ impl CudaBackend {
     }
 }
 
-#[cfg(feature = "cuda")]
+#[cfg(not(target_os = "macos"))]
 impl GpuBackend for CudaBackend {
     fn name(&self) -> &str { "CUDA" }
     fn compute_distance(&self, query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
@@ -141,11 +141,11 @@ impl GpuBackend for CudaBackend {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 #[derive(Debug)]
 pub struct MetalBackend { device: metal::Device, command_queue: metal::CommandQueue }
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 impl MetalBackend {
     pub fn new() -> Result<Self> {
         let device = metal::Device::system_default().ok_or_else(|| anyhow::anyhow!("No Metal device"))?;
@@ -154,7 +154,7 @@ impl MetalBackend {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "mps"))]
+#[cfg(target_os = "macos")]
 impl GpuBackend for MetalBackend {
     fn name(&self) -> &str { "Metal (MPS)" }
     fn compute_distance(&self, query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
@@ -397,15 +397,15 @@ impl ComputeContext {
         let imp: Option<std::sync::Arc<dyn GpuBackend>> = match backend {
             ComputeBackend::Cpu => Some(std::sync::Arc::new(CpuBackend)),
             ComputeBackend::Cuda => {
-                #[cfg(feature = "cuda")]
+                #[cfg(not(target_os = "macos"))]
                 { Some(std::sync::Arc::new(CudaBackend::new(0)?)) }
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(target_os = "macos")]
                 { anyhow::bail!("CUDA not enabled") }
             },
             ComputeBackend::Mps => {
-                #[cfg(all(target_os = "macos", feature = "mps"))]
+                #[cfg(target_os = "macos")]
                 { Some(std::sync::Arc::new(MetalBackend::new()?)) }
-                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                #[cfg(not(target_os = "macos"))]
                 { anyhow::bail!("MPS not enabled") }
             },
             ComputeBackend::Rocm => {
@@ -444,9 +444,9 @@ impl ComputeContext {
     }
 
     fn do_auto_detect() -> Self {
-        #[cfg(feature = "cuda")]
+        #[cfg(not(target_os = "macos"))]
         if let Ok(b) = CudaBackend::new(0) { return Self { backend: ComputeBackend::Cuda, device_id: 0, implementation: Some(Arc::new(b)) }; }
-        #[cfg(all(target_os = "macos", feature = "mps"))]
+        #[cfg(target_os = "macos")]
         if let Ok(b) = MetalBackend::new() { return Self { backend: ComputeBackend::Mps, device_id: 0, implementation: Some(Arc::new(b)) }; }
         #[cfg(all(target_os = "linux", feature = "wgpu"))]
         if let Ok(b) = WgpuBackend::new("WGPU_ROCm", Some(0x1002)) { return Self { backend: ComputeBackend::Rocm, device_id: 0, implementation: Some(Arc::new(b)) }; }
@@ -467,15 +467,15 @@ impl ComputeContext {
         match self.backend {
             ComputeBackend::Cpu => true,
             ComputeBackend::Cuda => {
-                #[cfg(feature = "cuda")]
+                #[cfg(not(target_os = "macos"))]
                 { CudaBackend::new(self.device_id as usize).is_ok() }
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(target_os = "macos")]
                 { false }
             }
             ComputeBackend::Mps => {
-                #[cfg(all(target_os = "macos", feature = "mps"))]
+                #[cfg(target_os = "macos")]
                 { MetalBackend::new().is_ok() }
-                #[cfg(not(all(target_os = "macos", feature = "mps")))]
+                #[cfg(not(target_os = "macos"))]
                 { false }
             }
             ComputeBackend::Rocm => {

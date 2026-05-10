@@ -1,3 +1,4 @@
+#![allow(unused)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use crate::core::cache::CacheExt;

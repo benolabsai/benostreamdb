@@ -784,10 +784,45 @@ impl Table {
         self.read_segment_multi(entry, &filters, manifest_version, columns).await
     }
 
+    pub async fn stream_segment_multi(
+        &self,
+        entry: &ManifestEntry,
+        filters: &[QueryFilter],
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+        let batches = self.read_segment_multi(entry, filters, manifest_version, columns).await?;
+        Ok(futures::stream::iter(batches.into_iter().map(Ok)).boxed())
+    }
+
+    pub async fn stream_segment(
+        &self,
+        entry: &ManifestEntry,
+        query_filter_opt: Option<&QueryFilter>,
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+        let filters = match query_filter_opt {
+            Some(f) => vec![f.clone()],
+            None => vec![],
+        };
+        self.stream_segment_multi(entry, &filters, manifest_version, columns).await
+    }
+
     pub async fn stream_all(&self, columns: Option<&[&str]>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
         use futures::StreamExt;
-        let batches = self.read_async(None, None, columns).await?;
-        Ok(futures::stream::iter(batches.into_iter().map(Ok)).boxed())
+        let manifest = self.manifest().await.unwrap_or_default();
+        let all_entries = self.get_snapshot_segments().await?;
+        
+        let mut streams = Vec::new();
+        for entry in all_entries {
+            let stream = self.stream_segment(&entry, None, manifest.version, columns).await?;
+            streams.push(stream);
+        }
+        
+        // Chain all streams
+        let combined_stream = futures::stream::iter(streams).flatten();
+        Ok(combined_stream.boxed())
     }
 
     async fn list_segments_from_store(&self) -> Result<Vec<ManifestEntry>> {

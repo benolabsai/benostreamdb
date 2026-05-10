@@ -1545,7 +1545,8 @@ impl Table {
                 writer.primary_key = self.primary_key.read().clone();
                 writer.set_store(store.clone());
                 
-                let mut stream = reader.stream_all(None as Option<arrow::datatypes::SchemaRef>).await?;
+                let stream = reader.stream_row_groups(None, None).await?;
+                let mut stream = stream.boxed();
                 let mut current_offset = 0;
                 while let Some(batch) = stream.next().await {
                     let batch = batch?;
@@ -2274,8 +2275,7 @@ impl Table {
     }
 
     /// Read a specific data file (with index acceleration)
-    pub fn read_file(&self, file_path: &str, columns: Option<Vec<String>>, filter: Option<&str>) -> Result<Vec<RecordBatch>> {
-        self.runtime().block_on(async {
+    pub async fn read_file_async(&self, file_path: &str, columns: Option<Vec<String>>, filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
              // Use HybridReader
              // We need to construct SegmentConfig.
              // Assuming file_path ends with segment_id.parquet
@@ -2381,35 +2381,41 @@ impl Table {
 
              // 2. Fallback to Full Scan
              if !index_used {
-                 let mut stream = reader.stream_all(target_schema).await?;
-                 while let Some(batch) = stream.next().await {
-                     batches.push(batch?);
-                 }
+                 let stream = reader.stream_all(target_schema).await?;
+                 return Ok(stream.boxed());
              }
 
              // 3. Apply post-filtering if filter is present
              if let Some(filter_str) = filter {
-                 let planner = crate::core::planner::QueryPlanner::new();
-                 let filter_expr = crate::core::planner::FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?;
+                 let filter_expr_owned = Arc::new(crate::core::planner::FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
                  
-                 let mut filtered_batches = Vec::new();
-                 for batch in batches {
-                     let filtered = planner.filter_expr(&batch, &filter_expr)?;
-                     if filtered.num_rows() > 0 {
-                         filtered_batches.push(filtered);
+                 let stream = futures::stream::iter(batches.into_iter().map(Ok)).filter_map(move |batch_res: Result<RecordBatch>| {
+                     let filter_expr_cloned = filter_expr_owned.clone();
+                     async move {
+                         let planner = crate::core::planner::QueryPlanner::new();
+                         match batch_res {
+                             Ok(b) => {
+                                 match planner.filter_expr(&b, &filter_expr_cloned) {
+                                     Ok(filtered) => if filtered.num_rows() > 0 { Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(filtered)) } else { None },
+                                     Err(e) => {
+                                         tracing::error!("Error evaluating filter: {}", e);
+                                         Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b)) // fallback to returning the batch on error
+                                     }
+                                 }
+                             }
+                             Err(e) => Some(Err(e))
+                         }
                      }
-                 }
-                 Ok(filtered_batches)
+                 });
+                 Ok(stream.boxed())
              } else {
-                 Ok(batches)
+                 let stream = futures::stream::iter(batches.into_iter().map(Ok::<_, anyhow::Error>));
+                 Ok(stream.boxed())
              }
-
-        })
     }
 
     /// Read a specific split (with index acceleration)
-    pub fn read_split(&self, split: &Split, columns: Vec<String>, _filter: Option<&str>) -> Result<Vec<RecordBatch>> {
-        self.runtime().block_on(async {
+    pub async fn read_split_async(&self, split: &Split, columns: Vec<String>, _filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
             // New Implementation: Use stream_row_groups with column pushdown
             
             // 1. Setup Reader (Duplicated logic from read_file - should refactor helper)
@@ -2486,14 +2492,8 @@ impl Table {
              // For now, let's stick to stream_row_groups which applies deletes.
              // TODO: Index filtering on Split level needs combining RowGroups + Index Bitmap.
              
-             let mut stream = reader.stream_row_groups(Some(&split.row_group_ids), target_schema).await?;
-             
-             let mut batches = Vec::new();
-             while let Some(batch) = stream.next().await {
-                 batches.push(batch?);
-             }
-             Ok(batches)
-        })
+             let stream = reader.stream_row_groups(Some(&split.row_group_ids), target_schema).await?;
+             Ok(stream.boxed())
     }
 
     /// Get table-level statistics (with index info)

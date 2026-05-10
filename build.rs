@@ -19,10 +19,10 @@ fn main() {
     
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     
-    // CUDA kernel compilation - only when the cuda feature is explicitly enabled
+    // CUDA kernel compilation - unconditionally on non-macos platforms
     // (MPS is handled by #[cfg(target_os = "macos")] in source code)
     // (Intel/ROCm are handled natively via WGPU)
-    if env::var("CARGO_FEATURE_CUDA").is_ok() && target_os != "macos" {
+    if target_os != "macos" {
         let has_nvcc = Command::new("nvcc").arg("--version").output().is_ok();
         
         if has_nvcc {
@@ -51,7 +51,7 @@ fn main() {
                 }
             }
         } else {
-            println!("cargo:warning=CUDA feature enabled but nvcc not found. Creating dummy PTX files to allow CI to pass Cargo Check/Docs.");
+            println!("cargo:warning=nvcc not found. Creating dummy PTX files to allow CI to pass Cargo Check/Docs.");
             let out_dir = env::var("OUT_DIR").unwrap();
             let kernels = vec![
                 "l2_distance",

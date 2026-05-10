@@ -1,3 +1,4 @@
+#![allow(unused)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use std::any::Any;
@@ -187,40 +188,30 @@ impl ExecutionPlan for HyperStreamExec {
                 // read_segment handles parsing if we pass QueryFilter.
                 // But here we have string filter.
                 // Better to parse once? 
-                // Table::read_segment takes `query_filter_opt: Option<&QueryFilter>`
-                
-                let filter_expr = if let Some(ref f) = filter {
-                     let filters = QueryFilter::parse_multi(f);
-                     FilterExpr::from_filters(filters)
-                } else {
-                    None
-                };
-                
                 // Standard scan
                 let version = 1; 
                 let query_filter = if let Some(ref f) = filter {
                      QueryFilter::parse_multi(f).into_iter().next()
-                } else { None };
+                } else {
+                     None
+                };
                 
-                match table.read_segment(&entry, query_filter.as_ref(), version, col_slice).await {
-                    Ok(batches) => {
-                        for batch in batches {
-                            let mut b = batch;
-                            if b.schema().fields().len() == expected_schema_inner.fields().len() {
-                                // Soft-replace schema to ignore metadata mismatches
-                                let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
-                                options.row_count = Some(b.num_rows());
-                                let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
-                                    .map_err(|e| DataFusionError::Execution(format!("Type mismatch in standard scan: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
-                                b = b_new;
-                            } else {
-                                yield Err(DataFusionError::Execution(format!("Field count mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
-                                return;
+                let stream = table.stream_segment(&entry, query_filter.as_ref(), version, col_slice).await;
+                match stream {
+                    Ok(mut st) => {
+                        use futures::StreamExt;
+                        while let Some(batch) = st.next().await {
+                            match batch {
+                                Ok(b) => yield Ok(b),
+                                Err(e) => {
+                                    tracing::error!("Error reading segment: {}", e);
+                                }
                             }
-                            yield Ok(b);
                         }
-                    },
-                    Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open segment stream: {}", e);
+                    }
                 }
             }
 

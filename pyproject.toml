@@ -41,11 +41,7 @@ dev = [
     "maturin>=1.7",
 ]
 # Hardware acceleration extras
-mps = []   # Apple Silicon (Metal)
-cuda = []  # NVIDIA (CUDA)
-rocm = []  # AMD (via OpenCL/ROCm)
-intel = [] # Intel (OpenCL)
-all_gpu = ["mps", "cuda", "rocm", "intel"]
+all_gpu = []
 src = ["maturin>=1.7"]
 
 [project.urls]
@@ -54,9 +50,7 @@ Repository = "https://github.com/rla3rd/hyperstreamdb"
 
 [tool.maturin]
 features = ["python"]
-# Map pip extras to Cargo features for source builds
-# e.g. pip install hyperstreamdb[cuda] --no-binary :all:
-extra-features = { cuda = ["python", "cuda"], mps = ["python", "mps"], rocm = ["python", "rocm"], intel = ["python", "intel"] }
+# Build both the Rust library and Python bindings (multi-version compatible)
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings (multi-version compatible)

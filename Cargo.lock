@@ -1325,17 +1325,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cl3"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b823f24e72fa0c68aa14a250ae1c0848e68d4ae188b71c3972343e45b46f8644"
-dependencies = [
- "libc",
- "opencl-sys",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "clap"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3364,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3410,7 +3399,6 @@ dependencies = [
  "numpy",
  "object_store",
  "once_cell",
- "opencl3",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -4549,25 +4537,6 @@ name = "oorandom"
 version = "11.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
-
-[[package]]
-name = "opencl-sys"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de15dd01496ae90c5799f5266184ab020082b4065800ff0b732f489371d0e5cf"
-dependencies = [
- "libc",
-]
-
-[[package]]
-name = "opencl3"
-version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26ab4a90cb496f787d3934deb0c54fa9d65e7bed710c10071234aab0196fba04"
-dependencies = [
- "cl3",
- "libc",
-]
 
 [[package]]
 name = "openssl-probe"

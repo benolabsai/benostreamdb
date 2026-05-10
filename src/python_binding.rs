@@ -1387,8 +1387,15 @@ impl PyTable {
             table_schema
         };
         
-        let batches = self.table.read_file(&file_path, columns, filter.as_deref())
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+        let batches = self.table.runtime().block_on(async {
+            use futures::StreamExt;
+            let mut stream = self.table.read_file_async(&file_path, columns, filter.as_deref()).await?;
+            let mut result = Vec::new();
+            while let Some(batch) = stream.next().await {
+                result.push(batch?);
+            }
+            Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(result)
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
             
         arrow_batches_to_pyarrow(py, batches, projected_schema)
     }
@@ -1434,8 +1441,15 @@ impl PyTable {
             can_use_indexes: split.can_use_indexes,
         };
         
-        let batches = self.table.read_split(&rust_split, columns, None)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
+        let batches = self.table.runtime().block_on(async {
+            use futures::StreamExt;
+            let mut stream = self.table.read_split_async(&rust_split, columns, None).await?;
+            let mut result = Vec::new();
+            while let Some(batch) = stream.next().await {
+                result.push(batch?);
+            }
+            Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(result)
+        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
             
         arrow_batches_to_pyarrow(py, batches, projected_schema)
     }

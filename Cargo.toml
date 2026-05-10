@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -36,7 +36,7 @@ required-features = ["java"]
 [features]
 default = []
 enterprise = []
-python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "opencl3"]
+python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster"]
 java = ["dep:jni"]
 simdeez_f = []
 stdsimd = []
@@ -46,12 +46,6 @@ simd = ["intel_cpu"]
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
 pollster = ["dep:pollster"]
-opencl3 = ["dep:opencl3"]
-
-cuda = ["dep:cudarc"]
-mps = []
-rocm = ["wgpu", "pollster"]
-intel = ["wgpu", "pollster", "opencl3"]
 
 [dependencies]
 # core columnar memory format
@@ -149,19 +143,10 @@ wgpu = { version = "0.20.0", optional = true }
 pollster = { version = "0.4.0", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
-opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-metal = { version = "0.27.0" } # MPS
-opencl3 = { version = "0.9", optional = true } # Intel / OpenCL
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# rocm-smi = { version = "0.4.0", optional = true } # ROCm monitoring
-# Note: rocm-rs is not on crates.io, we will use git or a local path if needed.
-# For now, we will use opencl3 as a fallback/stub for ROCm or assume system libraries.
-# If rocm-rs is required, we can add:
-# rocm-rs = { git = "https://github.com/RadeonOpenCompute/rocm-rs", optional = true } 
+metal = { version = "0.27.0" } # MPS 
 
 [dependencies.jni]
 version = "0.21"

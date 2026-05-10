@@ -473,21 +473,23 @@ impl Table {
             return Ok(());
         }
 
-        // --- NEW: Coalesce Batches for larger segments ---
-        let schema = batches_to_write[0].schema();
-        let mut coalesced_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
-        
-        // --- NEW: Vector Shuffling (Optimization inspired by LanceDB)
-        // Attribution: Adapted from Lance partition/shuffle logic (Apache 2.0)
-        // Copyright The Lance Authors. Modified for HyperStreamDB Parquet layout.
-        // MODIFIED by Richard Albright / HyperStreamDB on 2026-03-29 to integrate with Iceberg V2/V3 manifests and sidecar indexing.
-        if let Some(vector_col) = self.get_vector_column_for_shuffling(&coalesced_batch) {
+        // --- NEW: Conditionally Coalesce Batches ---
+        // We only need to concatenate into a single contiguous block if we're doing vector shuffling
+        let vector_col = batches_to_write.first()
+            .and_then(|b| self.get_vector_column_for_shuffling(b));
+
+        let coalesced_batch = if let Some(ref v_col) = vector_col {
+            let schema = batches_to_write[0].schema();
             tracing::info!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
-            coalesced_batch = self.shuffle_batch_by_centroids(&coalesced_batch, &vector_col).await?;
-        }
-        
-        // Apply sort order if configured (Iceberg V2 spec compliance)
-        let sorted_batch = self.apply_sort_order(&coalesced_batch)?;
+            let c_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
+            self.shuffle_batch_by_centroids(&c_batch, v_col).await?
+        } else {
+            // Check if we need sorting (which also requires coalescing)
+            let schema = batches_to_write[0].schema();
+            let c_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
+            // Apply sort order if configured (Iceberg V2 spec compliance)
+            self.apply_sort_order(&c_batch)?
+        };
         
         let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -496,9 +498,9 @@ impl Table {
         let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
         let batch_with_metadata = if manifest.format_version >= 3 {
             let sequence_number = manifest.version as i64;
-            self.add_v3_metadata_columns(&sorted_batch, sequence_number)?
+            self.add_v3_metadata_columns(&coalesced_batch, sequence_number)?
         } else {
-            sorted_batch.clone()
+            coalesced_batch.clone()
         };
 
         // Split batches by partition
@@ -782,9 +784,22 @@ impl Table {
              let handle = tokio::spawn(async move {
                  for file_path in files_to_upload {
                       let local_path = std::path::Path::new(file_path.as_str());
-                      if let Ok(data) = tokio::fs::read(&local_path).await {
+                      if let Ok(mut file) = tokio::fs::File::open(&local_path).await {
                            let remote_path = object_store::path::Path::from(file_path.as_str());
-                           let _ = store_clone.put(&remote_path, data.into()).await;
+                           // Stream file to object store directly (Fixes OOM issue)
+                           if let Ok(mut upload) = store_clone.put_multipart(&remote_path).await {
+                               use tokio::io::AsyncReadExt;
+                               let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
+                               loop {
+                                   if let Ok(n) = file.read(&mut buf).await {
+                                       if n == 0 { break; }
+                                       let _ = upload.put_part(buf[..n].to_vec().into()).await;
+                                   } else {
+                                       break;
+                                   }
+                               }
+                               let _ = upload.complete().await;
+                           }
                       }
                  }
              });

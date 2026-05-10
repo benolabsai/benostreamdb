@@ -42,11 +42,11 @@ impl PyDevice {
         let backend_enum = match backend_str.to_lowercase().as_str() {
             "cpu" => ComputeBackend::Cpu,
             "cuda" => {
-                #[cfg(feature = "cuda")]
+                #[cfg(not(target_os = "macos"))]
                 { ComputeBackend::Cuda }
-                #[cfg(not(feature = "cuda"))]
+                #[cfg(target_os = "macos")]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "CUDA backend not available in this build. Ensure NVIDIA drivers are installed and try 'pip install hyperstreamdb'. See GPU_SETUP_GUIDE.md for detailed troubleshooting."
+                    "CUDA backend not available on macOS."
                 )); }
             }
             "mps" | "metal" => {
