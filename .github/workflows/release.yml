@@ -33,37 +33,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      - name: Create OpenCL stub (for Zig cross-compilation)
-        run: |
-          mkdir -p /tmp/opencl-stub
-          echo "void clGetPlatformIDs() {}" > /tmp/opencl-stub/stub.c
-          echo "void clGetDeviceIDs() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clCreateContext() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clCreateCommandQueueWithProperties() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clCreateBuffer() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clEnqueueWriteBuffer() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clEnqueueReadBuffer() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clCreateProgramWithSource() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clBuildProgram() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clCreateKernel() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clSetKernelArg() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clEnqueueNDRangeKernel() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clFinish() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clReleaseKernel() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clReleaseProgram() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clReleaseCommandQueue() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clReleaseContext() {}" >> /tmp/opencl-stub/stub.c
-          echo "void clReleaseMemObject() {}" >> /tmp/opencl-stub/stub.c
-          gcc -shared -o /tmp/opencl-stub/libOpenCL.so /tmp/opencl-stub/stub.c
-
-          # Create pkg-config file so cargo can find the stub independently of Zig search paths
-          mkdir -p /tmp/pkgconfig
-          cat <<PC > /tmp/pkgconfig/OpenCL.pc
-          Name: OpenCL
-          Description: OpenCL ICD Loader Stub
-          Version: 3.0
-          Libs: -L/tmp/opencl-stub -lOpenCL
-          PC
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
@@ -118,6 +87,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Install Vulkan
+        if: steps.filter.outputs.code == 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1 vulkan-utils
 
       - name: Install maturin and build
         if: steps.filter.outputs.code == 'true'
