@@ -70,6 +70,8 @@ jobs:
 
       - name: Run Cargo Tests (CPU)
         if: steps.filter.outputs.code == 'true'
+        env:
+          SKIP_GPU_TESTS: "1"
         run: cargo test --lib --tests
 
       - name: Run Cargo Tests (Features)
@@ -79,6 +81,7 @@ jobs:
         timeout-minutes: 20
         env:
           # Point to CUDA stubs so binaries can load even without a GPU
+          SKIP_GPU_TESTS: "1"
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
         run: cargo test --features python --lib --tests -- --skip gpu_execution --nocapture
 

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+mod gpu_test_helpers;
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{compute_distance, ComputeContext, set_global_gpu_context};
 use hyperstreamdb::core::index::VectorMetric;
@@ -33,6 +34,7 @@ fn test_inner_product_cpu() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Inner Product computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
     let vectors = vec![
@@ -60,6 +62,7 @@ fn test_inner_product_cuda() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda_vs_cpu_parity() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that CUDA and CPU produce the same results
     use rand::Rng;
     

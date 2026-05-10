@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+mod gpu_test_helpers;
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{compute_distance, ComputeContext, set_global_gpu_context};
 use hyperstreamdb::core::index::VectorMetric;
