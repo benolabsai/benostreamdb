@@ -501,44 +501,51 @@ impl ManifestManager {
             let new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
             
             // 2. Decide if we need a ManifestList (Scalability)
-            let (final_entries, manifest_list_path) = if new_entries.len() > MAX_ENTRIES_PER_MANIFEST {
-                // Split entries into multiple manifests
+            // HyperStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
+            // chunked by 8MB to ensure 100% Iceberg Spec compatibility.
+            let (final_entries, manifest_list_path) = if !new_entries.is_empty() {
                 let mut manifest_files = Vec::new();
                 let mut futures = futures::stream::FuturesUnordered::new();
-                let chunks = new_entries.chunks(MAX_ENTRIES_PER_MANIFEST);
                 
-                for (chunk_idx, chunk) in chunks.enumerate() {
+                let writer = crate::core::iceberg::IcebergWriter::new();
+                let default_schema = crate::core::manifest::Schema::default();
+                let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema).clone();
+                let table_spec = current_manifest.partition_spec.clone();
+                let new_ver_i64 = new_ver as i64;
+                let store = self.store.clone();
+                
+                let chunks = writer.write_manifest_chunks(
+                    &new_entries, 
+                    &table_spec, 
+                    &table_schema, 
+                    new_ver_i64, 
+                    new_ver_i64, 
+                    crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES
+                )?;
+                
+                for (chunk_idx, (bytes, file_count, row_count)) in chunks.into_iter().enumerate() {
                     let uuid = uuid::Uuid::new_v4();
                     let filename = format!("{}-m{}.avro", uuid, chunk_idx);
                     let path = self.manifest_dir.child(filename);
-                    
-                    let writer = crate::core::iceberg::IcebergWriter::new();
-                    let default_schema = crate::core::manifest::Schema::default();
-                    let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema).clone();
-                    let table_spec = current_manifest.partition_spec.clone();
-                    let new_ver_i64 = new_ver as i64;
-                    let store = self.store.clone();
-                    let chunk_owned: Vec<ManifestEntry> = chunk.to_vec();
+                    let store = store.clone();
+                    let partition_spec_id = table_spec.spec_id;
 
                     futures.push(async move {
-                        let bytes = writer.write_manifest_file(&chunk_owned, &table_spec, &table_schema, new_ver_i64, new_ver_i64)?;
                         let manifest_length = bytes.len() as i64;
-                        let rows_count: i64 = chunk_owned.iter().map(|e| e.record_count).sum();
-                        
                         store.put(&path, bytes.into()).await?;
                         
                         Result::<ManifestListEntry>::Ok(ManifestListEntry {
                             manifest_path: path.to_string(),
                             manifest_length,
-                            partition_spec_id: table_spec.spec_id,
+                            partition_spec_id,
                             content: 0, // Data
                             sequence_number: new_ver_i64,
                             min_sequence_number: new_ver_i64,
                             added_snapshot_id: new_ver_i64,
-                            added_files_count: chunk_owned.len() as i32,
+                            added_files_count: file_count as i32,
                             existing_files_count: 0,
                             deleted_files_count: 0,
-                            added_rows_count: rows_count,
+                            added_rows_count: row_count,
                             existing_rows_count: 0,
                             deleted_rows_count: 0,
                             partition_stats: HashMap::new(), 
@@ -560,7 +567,7 @@ impl ManifestManager {
                 
                 (Vec::new(), Some(list_path_loc.to_string()))
             } else {
-                (new_entries, None)
+                (Vec::new(), None)
             };
             
             // 3. Create new Manifest

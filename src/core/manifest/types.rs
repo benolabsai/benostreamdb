@@ -840,8 +840,8 @@ impl Manifest {
         }
     }
 }
-
-pub(crate) const MAX_ENTRIES_PER_MANIFEST: usize = 1000;
+// Iceberg Target Manifest Size = 8MB
+pub(crate) const MANIFEST_TARGET_SIZE_BYTES: usize = 8 * 1024 * 1024;
 
 lazy_static::lazy_static! {
     /// Global registry of commit locks to serialize manifest updates per directory.

@@ -62,8 +62,8 @@ async fn test_chaos_missing_index_files() -> Result<()> {
     
     // 2. Locate Data files and delete them (Chaos!)
     let mut deleted_something = false;
-    let manifests = table.manifest().await?;
-    for entry in manifests.entries {
+    let entries = table.get_snapshot_segments().await?;
+    for entry in entries {
         let p = entry.file_path;
         let local_path = p.replace("file://", "").replace("file:", "");
         let full_path = format!("{}/{}", uri_path, local_path);
