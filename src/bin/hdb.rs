@@ -112,32 +112,19 @@ async fn inspect_table(uri: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn compact_table(uri: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Compacting table: {}", uri);
-    // In a real implementation, we would call table.compact().
-    // Assuming Table has a compact method or we trigger it via compaction module.
-    // Ideally: let stats = table.compact().await?;
-    let _table = Table::new_async(uri.to_string()).await?;
-    
-    // Placeholder until Table exposes compact() directly or we use Compactor struct
-    // Re-using the compaction logic from tests?
-    // Let's assume standard compaction is auto-triggered or we call a method.
-    // For Phase 5 CLI, let's look for existing compact method capability.
-    
-    // Since Table struct hasn't exposed explicit manual compact() publicly in previous phases (checked via view_file previously?),
-    // I will check if Table has it. If not, I'll print "Not implemented yet via CLI".
-    // Wait, the roadmap said "Parallel Compaction" was implemented.
-    // Let's assume table.compact() exists or similar. I'll invoke it if it does.
-    // If not, I'll just print placeholder for this step and fix it.
-    
-    // Scanning recent memory: "Implement HyperStream Compaction" was Conversation 10b0...
-    // Let's double check Table API in next step if this fails compiling.
-    // For now, I'll wrap it in a try-block or just print.
-    println!("(Compaction triggered - functionality pending CLI wiring)");
+    let table = Table::new_async(uri.to_string()).await?;
+    let start = Instant::now();
+    table.rewrite_data_files_async(None).await?;
+    println!("Compaction completed in {:.2?}", start.elapsed());
     Ok(())
 }
 
 async fn vacuum_table(uri: &str, days: u64) -> Result<(), Box<dyn std::error::Error>> {
     println!("Vacuuming table: {} (older than {} days)", uri, days);
-    // Placeholder
+    let table = Table::new_async(uri.to_string()).await?;
+    let start = Instant::now();
+    let deleted_count = table.vacuum_async(days as usize).await?;
+    println!("Vacuum completed in {:.2?}. Deleted {} files.", start.elapsed(), deleted_count);
     Ok(())
 }
 

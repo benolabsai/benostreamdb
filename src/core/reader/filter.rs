@@ -195,6 +195,7 @@ impl HybridReader {
         Ok(false)
     }
 
+    #[tracing::instrument(skip(self, filter))]
     pub async fn get_scalar_filter_bitmap(&self, filter: &crate::core::planner::QueryFilter) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
         
@@ -482,6 +483,7 @@ impl HybridReader {
         Ok(Some(final_bitmap))
     }
 
+    #[tracing::instrument(skip(self, filter, target_schema))]
     pub async fn query_index_first(&self, filter: &crate::core::planner::QueryFilter, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<Vec<arrow::record_batch::RecordBatch>> {
         let matching_bitmap = match self.get_scalar_filter_bitmap(filter).await? {
             Some(bm) => bm,

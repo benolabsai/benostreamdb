@@ -175,7 +175,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
 ) -> jstring {
     let uri: String = match env.get_string(&table_uri) {
         Ok(s) => s.into(),
-        Err(_) => return env.new_string("[]").unwrap().into_raw(),
+        Err(_) => return std::ptr::null_mut(),
     };
     
     // Default 64MB if invalid
@@ -201,7 +201,10 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
         }
     };
     
-    env.new_string(splits_json).unwrap().into_raw()
+    match env.new_string(splits_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Spark Integration: List Data Files with Index Metadata
@@ -213,7 +216,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
 ) -> jstring {
     let uri: String = match env.get_string(&table_uri) {
         Ok(s) => s.into(),
-        Err(_) => return env.new_string("[]").unwrap().into_raw(),
+        Err(_) => return std::ptr::null_mut(),
     };
 
     tracing::info!("FFI: Listing data files for {}", uri);
@@ -239,7 +242,10 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
         }
     };
 
-    env.new_string(files_json).unwrap().into_raw()
+    match env.new_string(files_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Spark Integration: Get Splits (Legacy/Fallback)
@@ -251,7 +257,10 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_getSp
 ) -> jstring {
     // Deprecated in favor of listDataFiles for V2 connector
     let splits_json = "[]";
-    env.new_string(splits_json).unwrap().into_raw()
+    match env.new_string(splits_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 // -----------------------------------------------------------------------------

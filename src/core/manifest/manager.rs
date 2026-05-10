@@ -451,6 +451,7 @@ impl ManifestManager {
     /// Commit a change to the timeline.
     /// Uses optimistic concurrency control with retries and PutMode::Create
     /// to ensure atomicity under high concurrency.
+    #[tracing::instrument(skip(self, add_entries, remove_paths, metadata))]
     pub async fn commit(
         &self, 
         add_entries: &[ManifestEntry], 
@@ -463,6 +464,10 @@ impl ManifestManager {
             .value().clone();
             
         let _guard = lock.lock().await;
+        
+        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
+        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        dist_lock.acquire().await?;
 
         let max_retries = 100;
         for attempt in 0..max_retries {
@@ -562,25 +567,7 @@ impl ManifestManager {
             let final_schemas = metadata.updated_schemas.as_ref().cloned().unwrap_or_else(|| current_manifest.schemas.clone());
             let final_schema_id = metadata.updated_schema_id.unwrap_or(current_manifest.current_schema_id);
 
-            // Apply Partition Spec Updates
-
-            // But Manifest struct currently only has `partition_spec`. 
-            // Iceberg Manifest File implies spec is per manifest, but Table Metadata has list.
-            // Here we are creating Table Metadata essentially? No, this is Manifest (vN.json is Table Metadata in our hybrid model).
-            // Yes, vN.json IS Table Metadata. So we should update fields like partition_specs, properties etc.
-            
-            // Wait, Manifest struct has:
-            // pub partition_spec: PartitionSpec,
-            // pub sort_orders: Vec<SortOrder>,
-            
-            // It seems we need to update Manifest struct to hold list of specs if we want to be fully compliant, 
-            // or we just switch the current `partition_spec`.
-            // The `Manifest` struct in `manifest.rs` (vN.json) roughly maps to Iceberg Table Metadata.
-            
             let final_partition_spec = if let Some(specs) = &metadata.updated_partition_specs {
-                 // If specs provided, pick the one matching default_spec_id or just use the last one?
-                 // Usually we add a spec and set it as default.
-                 // For now, let's assume if specs are updated, we use the last one as current.
                  specs.last().cloned().unwrap_or(current_manifest.partition_spec.clone()) 
             } else {
                  current_manifest.partition_spec.clone()
@@ -588,15 +575,6 @@ impl ManifestManager {
             
             let final_sort_orders = metadata.updated_sort_orders.as_ref().cloned().unwrap_or_else(|| current_manifest.sort_orders.clone());
             let final_default_sort_order_id = metadata.updated_default_sort_order_id.unwrap_or(current_manifest.default_sort_order_id);
-            
-            // Properties
-            // Not in Manifest struct? Checking definition...
-            // Manifest struct line 297 doesn't show `properties`.
-            // I need to add `properties` to Manifest struct if I want to support them!
-            // Line 128 shows `pub properties: HashMap<String, String>` in IcebergTableMetadata, but Manifest is our internal representation.
-            // Let's assume for now I will add it to Manifest struct in a separate edit if missing.
-            // Looking at `view_file` output from earlier (step 335), Manifest struct ends at line 320.
-            // It DOES NOT have properties.
             
             let mut new_manifest = Manifest::new_with_spec(
                 new_ver, 
@@ -610,7 +588,6 @@ impl ManifestManager {
             new_manifest.sort_orders = final_sort_orders;
             new_manifest.default_sort_order_id = final_default_sort_order_id;
             
-            // Apply final properties
             new_manifest.properties = current_manifest.properties.clone();
             if let Some(props) = &metadata.updated_properties {
                 tracing::debug!("Applying property updates: {:?}", props);
@@ -630,7 +607,6 @@ impl ManifestManager {
             new_manifest.default_spec_id = metadata.updated_default_spec_id.unwrap_or(current_manifest.default_spec_id);
             new_manifest.last_column_id = metadata.updated_last_column_id.unwrap_or(current_manifest.last_column_id);
 
-            // Manifest Metadata Updates logic (partial)
             new_manifest.manifest_list_path = manifest_list_path;
             
             // 4. Write v{N+1}.json with PutMode::Create (Atomic)
@@ -657,10 +633,10 @@ impl ManifestManager {
                     let file_key = format!("{}/{}", self.root_uri, path);
                     crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
 
+                    let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    // Conflict logic...
                     if attempt % 10 == 0 || attempt > 90 {
                         tracing::debug!("Conflict committing Manifest v{} (attempt {}), retrying...", new_ver, attempt + 1);
                     }
@@ -669,15 +645,23 @@ impl ManifestManager {
                     tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    let _ = dist_lock.release().await;
+                    return Err(e.into());
+                }
             }
         }
         
+        let _ = dist_lock.release().await;
         Err(anyhow::anyhow!("Failed to commit manifest after {} attempts due to concurrent updates", max_retries))
     }
 
     /// Commit a set of imported entries (merges with current state)
     pub async fn commit_imported_entries(&self, entries: Vec<ManifestEntry>) -> Result<Manifest> {
+        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
+        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        dist_lock.acquire().await?;
+
         let max_retries = 10;
         let mut attempt = 0;
         loop {
@@ -730,6 +714,7 @@ impl ManifestManager {
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = self.get_cache_key(&path);
                     crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
@@ -739,13 +724,21 @@ impl ManifestManager {
                     tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
                     continue;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    let _ = dist_lock.release().await;
+                    return Err(e.into());
+                }
             }
         }
+        let _ = dist_lock.release().await;
         Err(anyhow::anyhow!("Failed to commit imported entries after {} attempts", max_retries))
     }
 
     pub async fn update_schema(&self, new_schemas: Vec<Schema>, new_schema_id: i32, last_column_id: Option<i32>) -> Result<Manifest> {
+        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
+        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        dist_lock.acquire().await?;
+
         let max_retries = 10;
         let mut attempt = 0;
         
@@ -785,6 +778,7 @@ impl ManifestManager {
                     crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
                     let file_key = format!("{}/{}", self.root_uri, path);
                     crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
@@ -798,14 +792,19 @@ impl ManifestManager {
                      tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
                      continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => {
+                    let _ = dist_lock.release().await;
+                    return Err(e.into());
+                }
             }
         }
+        let _ = dist_lock.release().await;
         Err(anyhow::anyhow!("Failed to commit schema update after {} attempts", max_retries))
     }
 
     /// Update the primary key (identifier fields) for the table.
     /// This creates a new schema version with the updated field IDs.
+    #[tracing::instrument(skip(self, new_ids))]
     pub async fn update_identifier_fields(&self, new_ids: Vec<i32>) -> Result<Manifest> {
         let (current_manifest, _) = self.load_latest().await?;
         let mut schemas = current_manifest.schemas.clone();

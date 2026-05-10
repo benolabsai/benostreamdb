@@ -189,6 +189,7 @@ impl Drop for Table {
                 );
             }
         }
+        crate::telemetry::tracing::flush_telemetry();
     }
 }
 

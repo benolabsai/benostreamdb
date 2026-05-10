@@ -33,6 +33,16 @@ pub fn shutdown_telemetry() {
     opentelemetry::global::shutdown_tracer_provider();
 }
 
+static TRACER_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::trace::TracerProvider> = once_cell::sync::OnceCell::new();
+
+pub fn flush_telemetry() {
+    if let Some(provider) = TRACER_PROVIDER.get() {
+        for p in provider.force_flush() {
+            tracing::debug!("Telemetry flush result: {:?}", p);
+        }
+    }
+}
+
 pub fn init_tracing(service_name: &str) -> Result<TelemetryGuard, Box<dyn std::error::Error>> {
     let mut init_err: Option<Box<dyn std::error::Error>> = None;
     
@@ -64,20 +74,23 @@ fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>>
     let enable_jaeger = std::env::var("JAEGER_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true";
 
     if enable_jaeger {
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_exporter(
-                opentelemetry_otlp::new_exporter()
-                    .tonic()
+        let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+            .with_batch_exporter(
+                opentelemetry_otlp::new_exporter().tonic().build_span_exporter()?,
+                opentelemetry_sdk::runtime::Tokio
             )
-            .with_trace_config(
+            .with_config(
                 opentelemetry_sdk::trace::config().with_resource(
                     opentelemetry_sdk::Resource::new(vec![
                         opentelemetry::KeyValue::new("service.name", service_name.to_string()),
                     ]),
-                ),
+                )
             )
-            .install_batch(opentelemetry_sdk::runtime::Tokio)?;
+            .build();
+
+        let tracer = opentelemetry::trace::TracerProvider::tracer(&provider, "hyperstreamdb");
+        let _ = TRACER_PROVIDER.set(provider.clone());
+        opentelemetry::global::set_tracer_provider(provider);
 
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
         

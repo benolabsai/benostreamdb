@@ -28,6 +28,7 @@ use futures::stream::BoxStream;
 use super::*;
 
 impl HybridReader {
+    #[tracing::instrument(skip(self, target_schema))]
     pub async fn stream_all(&self, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
         self.stream_row_groups(None, target_schema).await
     }
@@ -263,6 +264,7 @@ impl HybridReader {
         Ok(matches)
     }
 
+    #[tracing::instrument(skip(self, query, filter, target_schema))]
     pub async fn vector_search_index(&self, column: &str, query: &crate::core::index::VectorValue, k: usize, filter: Option<&FilterExpr>, metric: VectorMetric, ef_search: Option<usize>, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);

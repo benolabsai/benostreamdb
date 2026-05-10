@@ -25,3 +25,4 @@ pub mod puffin;
 // pub mod parquet_filter;
 pub mod embeddings;
 pub mod search;
+pub mod lock;

@@ -43,7 +43,7 @@ impl Table {
         Ok(df.collect().await?)
     }
 
-    #[tracing::instrument(skip(self), fields(columns = ?columns))]
+    #[tracing::instrument(skip(self, filter_str, vector_filter, columns))]
     pub async fn read_async(&self, filter_str: Option<&str>, vector_filter: Option<VectorSearchParams>, columns: Option<&[&str]>) -> Result<Vec<RecordBatch>> {
         self.read_with_config_async(filter_str, vector_filter, columns, self.query_config.clone()).await
     }
