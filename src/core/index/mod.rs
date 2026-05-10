@@ -132,3 +132,6 @@ pub enum VectorValue {
 pub trait VectorIndex {
     fn search(&self, query: &VectorValue, k: usize, filter: Option<&RoaringBitmap>) -> Result<Vec<(u32, f32)>>;
 }
+
+pub mod build_vector;
+pub mod build_inverted;
