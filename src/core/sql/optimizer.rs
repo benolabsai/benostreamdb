@@ -397,13 +397,23 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                 }
                             
                             // Construct optimized scan
-                            let new_hs = HyperStreamExec::new(
+                            use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
+                            use crate::core::sql::physical_plan::vector_merge::VectorMergeExec;
+
+                            let scan_exec = VectorScanExec::new(
                                 hs_exec.table.clone(),
                                 hs_exec.partitions.clone(),
                                 hs_exec.projection().cloned(),
                                 hs_exec.filter_str().map(|s| s.to_string()),
-                                Some(vp),
+                                vp,
                                 Some(k_with_offset),
+                                hs_exec.schema().clone(),
+                            )?;
+                            
+                            let merge_exec = VectorMergeExec::new(
+                                std::sync::Arc::new(scan_exec),
+                                limit,
+                                offset,
                                 hs_exec.schema().clone(),
                             )?;
                             
@@ -413,7 +423,7 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                             );
                             
                             // If there was a filter, wrap it
-                            let mut result: Arc<dyn ExecutionPlan> = Arc::new(new_hs);
+                            let mut result: Arc<dyn ExecutionPlan> = Arc::new(merge_exec);
                             if let Some(f) = filter {
                                  result = Arc::new(datafusion::physical_plan::filter::FilterExec::try_new(f, result)?);
                                  tracing::debug!("VectorSearchOptimizer: Added filter predicate to optimized plan");

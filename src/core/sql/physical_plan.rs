@@ -3,7 +3,8 @@
 use std::any::Any;
 use std::sync::Arc;
 pub mod index_join;
-
+pub mod vector_scan;
+pub mod vector_merge;
 use datafusion::physical_plan::{
     ExecutionPlan, 
     SendableRecordBatchStream, 
@@ -28,7 +29,6 @@ pub struct HyperStreamExec {
     pub partitions: Vec<Vec<ManifestEntry>>,
     projection: Option<Vec<usize>>,
     filter: Option<String>,
-    pub vector_params: Option<VectorSearchParams>,
     limit: Option<usize>,
     base_schema: SchemaRef,  // Original table schema for projection
     schema: SchemaRef,        // Projected schema
@@ -41,7 +41,6 @@ impl HyperStreamExec {
         partitions: Vec<Vec<ManifestEntry>>,
         projection: Option<Vec<usize>>,
         filter: Option<String>,
-        vector_params: Option<VectorSearchParams>,
         limit: Option<usize>,
         base_schema: SchemaRef,
     ) -> Result<Self> {
@@ -73,7 +72,6 @@ impl HyperStreamExec {
             partitions,
             projection,
             filter,
-            vector_params,
             limit,
             base_schema,
             schema: projected_schema,
@@ -134,7 +132,6 @@ impl ExecutionPlan for HyperStreamExec {
             self.partitions.clone(),
             self.projection.clone(),
             self.filter.clone(),
-            self.vector_params.clone(),
             self.limit,
             self.base_schema.clone(),  // Use base schema for reprojection
         )?))
@@ -154,7 +151,6 @@ impl ExecutionPlan for HyperStreamExec {
 
         let table = self.table.clone();
         let filter = self.filter.clone();
-        let vector_params = self.vector_params.clone();
         
         // If no partitions (empty table), return empty stream
         let entries = if self.partitions.is_empty() {
@@ -200,89 +196,31 @@ impl ExecutionPlan for HyperStreamExec {
                     None
                 };
                 
-                // Read Segment
-                if let Some(ref vp) = vector_params {
-                    // Hybrid Search: Vector + Scalar
-                    use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
-                    
-                    let mut request = VectorSearchRequest::new(
-                        vp.column.clone(),
-                        vp.query.clone(),
-                        vp.k,
-                        vp.metric,
-                    )
-                    .with_filter(filter_expr)
-                    .with_config(table.query_config().clone())
-                    .with_ef_search(vp.ef_search);
-
-                    // Pass projected columns if available
-                    if let Some(ref proj_names) = col_names_owned {
-                        request = request.with_columns(Some(proj_names.clone()));
-                    }
-                    
-                    match execute_vector_search_with_config(
-                        vec![entry.clone()],
-                        table.object_store(),
-                        None, // data_store
-                        &table.table_uri(),
-                        request,
-                    ).await {
-                        Ok(batches) => {
-                            for batch in batches {
-                                let mut b = batch;
-                                
-                                // If batch has one extra column (distance) that isn't in expected schema, drop it
-                                if b.num_columns() == expected_schema_inner.fields().len() + 1 && b.schema().fields().last().unwrap().name() == "distance" {
-                                    let mut cols = b.columns().to_vec();
-                                    cols.pop();
-                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
-                                    options.row_count = Some(b.num_rows());
-                                    b = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), cols, &options)
-                                        .map_err(|e| DataFusionError::Execution(format!("Schema mismatch in Hybrid Search: {}", e)))?;
-                                } else if b.num_columns() == expected_schema_inner.fields().len() {
-                                    // Soft-replace schema to ignore metadata mismatches
-                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
-                                    options.row_count = Some(b.num_rows());
-                                    let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
-                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in Hybrid Search: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
-                                    b = b_new;
-                                } else {
-                                    tracing::error!("Field count mismatch: Expected {:?}, Got {:?}", expected_schema_inner.fields().iter().map(|f| f.name()).collect::<Vec<_>>(), b.schema().fields().iter().map(|f| f.name()).collect::<Vec<_>>());
-                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in Hybrid Search: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
-                                    return;
-                                }
-                                yield Ok(b);
+                // Standard scan
+                let version = 1; 
+                let query_filter = if let Some(ref f) = filter {
+                     QueryFilter::parse_multi(f).into_iter().next()
+                } else { None };
+                
+                match table.read_segment(&entry, query_filter.as_ref(), version, col_slice).await {
+                    Ok(batches) => {
+                        for batch in batches {
+                            let mut b = batch;
+                            if b.schema().fields().len() == expected_schema_inner.fields().len() {
+                                // Soft-replace schema to ignore metadata mismatches
+                                let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
+                                options.row_count = Some(b.num_rows());
+                                let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
+                                    .map_err(|e| DataFusionError::Execution(format!("Type mismatch in standard scan: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
+                                b = b_new;
+                            } else {
+                                yield Err(DataFusionError::Execution(format!("Field count mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
+                                return;
                             }
-                        },
-                        Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
-                    }
-                } else {
-                    // Standard scan
-                    let version = 1; 
-                    let query_filter = if let Some(ref f) = filter {
-                         QueryFilter::parse_multi(f).into_iter().next()
-                    } else { None };
-                    
-                    match table.read_segment(&entry, query_filter.as_ref(), version, col_slice).await {
-                        Ok(batches) => {
-                            for batch in batches {
-                                let mut b = batch;
-                                if b.schema().fields().len() == expected_schema_inner.fields().len() {
-                                    // Soft-replace schema to ignore metadata mismatches
-                                    let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
-                                    options.row_count = Some(b.num_rows());
-                                    let b_new = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), b.columns().to_vec(), &options)
-                                        .map_err(|e| DataFusionError::Execution(format!("Type mismatch in standard scan: {}. Expected {:?} got {:?}", e, expected_schema_inner, b.schema())))?;
-                                    b = b_new;
-                                } else {
-                                    yield Err(DataFusionError::Execution(format!("Field count mismatch in standard scan: Expected {} fields, got {}", expected_schema_inner.fields().len(), b.schema().fields().len())));
-                                    return;
-                                }
-                                yield Ok(b);
-                            }
-                        },
-                        Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
-                    }
+                            yield Ok(b);
+                        }
+                    },
+                    Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
                 }
             }
 

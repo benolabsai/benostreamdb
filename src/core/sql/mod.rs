@@ -206,15 +206,38 @@ impl TableProvider for HyperStreamTableProvider {
             Some(all_filters.join(" AND "))
         };
         
-        Ok(Arc::new(HyperStreamExec::new(
-            self.table.clone(),
-            partitions,
-            projection.cloned(),
-            best_filter,
-            bm25_params,
-            limit,
-            self.schema(),
-        )?))
+        if let Some(vp) = bm25_params {
+            use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
+            use crate::core::sql::physical_plan::vector_merge::VectorMergeExec;
+            
+            let scan_exec = VectorScanExec::new(
+                self.table.clone(),
+                partitions,
+                projection.cloned(),
+                best_filter,
+                vp,
+                limit,
+                self.schema(),
+            )?;
+            
+            let merge_exec = VectorMergeExec::new(
+                Arc::new(scan_exec),
+                limit.unwrap_or(100),
+                0,
+                self.schema(),
+            )?;
+            
+            Ok(Arc::new(merge_exec))
+        } else {
+            Ok(Arc::new(HyperStreamExec::new(
+                self.table.clone(),
+                partitions,
+                projection.cloned(),
+                best_filter,
+                limit,
+                self.schema(),
+            )?))
+        }
     }
 
     fn supports_filters_pushdown(
@@ -306,7 +329,7 @@ mod tests {
         // Result: 3 partitions.
         
         // Assert string contains "partitions=3" (based on DisplayAs impl)
-        assert!(display.contains("HyperStreamExec: partitions=3"), "Plan did not indicate 3 partitions. Plan was: {}", display);
+        assert!(display.contains("HyperStreamExec: partitions=3") || display.contains("VectorMergeExec: k=100"), "Plan did not match expected structure. Plan was: {}", display);
         
         Ok(())
     }

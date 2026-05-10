@@ -29,6 +29,7 @@ pub struct HybridSegmentWriter {
     // Add additive buffers for multi-batch indexing
     pub(crate) inverted_data: parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
+    pub(crate) file_checksum: parking_lot::Mutex<Option<String>>,
 }
 
 impl HybridSegmentWriter {
@@ -43,6 +44,7 @@ impl HybridSegmentWriter {
             index_configs: HashMap::new(),
             inverted_data: parking_lot::Mutex::new(HashMap::new()),
             index_metadata: parking_lot::Mutex::new(HashMap::new()),
+            file_checksum: parking_lot::Mutex::new(None),
         }
     }
 
@@ -173,7 +175,7 @@ impl HybridSegmentWriter {
             max_clustering_score: None,
             normalization_mins: None,
             normalization_maxs: None,
-            file_checksum: None,
+            file_checksum: self.file_checksum.lock().clone(),
         }
     }
 
@@ -372,6 +374,18 @@ impl HybridSegmentWriter {
 
         // Atomic rename
         std::fs::rename(&tmp_path, &path).context("Failed to atomically rename segment file")?;
+
+        // Compute File Checksum
+        let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
+        use std::io::Read;
+        let mut f = File::open(&path)?;
+        let mut buffer = [0; 65536];
+        while let Ok(n) = f.read(&mut buffer) {
+            if n == 0 { break; }
+            hasher.update(&buffer[..n]);
+        }
+        *self.file_checksum.lock() = Some(format!("{:x}", hasher.finalize()));
 
         {
             let mut files = self.generated_files.lock();
