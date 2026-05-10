@@ -221,7 +221,7 @@ impl GpuBackend for MetalBackend {
 // WGPU Backend
 // ============================================================================
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
 #[derive(Debug)]
 pub struct WgpuBackend {
     device: wgpu::Device,
@@ -230,7 +230,7 @@ pub struct WgpuBackend {
     name: String,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
 impl WgpuBackend {
     pub fn new(display_name: &str, vendor_id: Option<u32>) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -283,7 +283,7 @@ impl WgpuBackend {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "wgpu"))]
 impl GpuBackend for WgpuBackend {
     fn name(&self) -> &str {
         &self.name
@@ -409,15 +409,15 @@ impl ComputeContext {
                 { anyhow::bail!("MPS not enabled") }
             },
             ComputeBackend::Rocm => {
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 { Some(std::sync::Arc::new(WgpuBackend::new("WGPU_ROCm", Some(0x1002))?)) }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 { anyhow::bail!("ROCm not enabled on this platform") }
             },
             ComputeBackend::Intel => {
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 { Some(std::sync::Arc::new(WgpuBackend::new("WGPU_Intel_XPU", Some(0x8086))?)) }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 { anyhow::bail!("Intel not enabled on this platform") }
             }
         };
@@ -448,9 +448,9 @@ impl ComputeContext {
         if let Ok(b) = CudaBackend::new(0) { return Self { backend: ComputeBackend::Cuda, device_id: 0, implementation: Some(Arc::new(b)) }; }
         #[cfg(all(target_os = "macos", feature = "mps"))]
         if let Ok(b) = MetalBackend::new() { return Self { backend: ComputeBackend::Mps, device_id: 0, implementation: Some(Arc::new(b)) }; }
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "wgpu"))]
         if let Ok(b) = WgpuBackend::new("WGPU_ROCm", Some(0x1002)) { return Self { backend: ComputeBackend::Rocm, device_id: 0, implementation: Some(Arc::new(b)) }; }
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "wgpu"))]
         if let Ok(b) = WgpuBackend::new("WGPU_Intel_XPU", Some(0x8086)) { return Self { backend: ComputeBackend::Intel, device_id: 0, implementation: Some(Arc::new(b)) }; }
         Self { backend: ComputeBackend::Cpu, device_id: -1, implementation: Some(Arc::new(CpuBackend)) }
     }
@@ -479,15 +479,15 @@ impl ComputeContext {
                 { false }
             }
             ComputeBackend::Rocm => {
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 { WgpuBackend::new("Test", Some(0x1002)).is_ok() }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 { false }
             }
             ComputeBackend::Intel => {
-                #[cfg(target_os = "linux")]
+                #[cfg(all(target_os = "linux", feature = "wgpu"))]
                 { WgpuBackend::new("Test", Some(0x8086)).is_ok() }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 { false }
             }
         }
