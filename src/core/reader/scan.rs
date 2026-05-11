@@ -12,6 +12,7 @@ use crate::core::index::hnsw_ivf::HnswIvfIndex;
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::async_reader::{ParquetRecordBatchStreamBuilder, ParquetObjectReader};
 use parquet::arrow::ProjectionMask;
+use parquet::file::statistics::Statistics as ParquetStats;
 use crate::SegmentConfig;
 use crate::core::planner::FilterExpr;
 use crate::core::index::VectorMetric;
@@ -31,6 +32,362 @@ impl HybridReader {
     #[tracing::instrument(skip(self, target_schema))]
     pub async fn stream_all(&self, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
         self.stream_row_groups(None, target_schema).await
+    }
+
+    /// Prune row groups using Parquet column statistics (min/max/null_count).
+    ///
+    /// This is the "Parquet Internal Pruning" stage of the Iceberg metadata pipeline:
+    /// after manifest-level pruning, we use per-row-group stats to skip entire row groups
+    /// before any vector computation. This can eliminate 90-99% of I/O when data is
+    /// clustered by the filter columns.
+    ///
+    /// Returns a list of row group indices that might match the filter. If the filter
+    /// references no columns with available stats, all row groups are returned.
+    fn prune_row_groups(&self, metadata: &parquet::file::metadata::ParquetMetaData, filter: &FilterExpr) -> Vec<usize> {
+        let schema = metadata.file_metadata().schema_descr();
+        let num_rgs = metadata.num_row_groups();
+
+        let conditions = filter.extract_and_conditions();
+        if conditions.is_empty() {
+            return (0..num_rgs).collect();
+        }
+
+        let mut surviving = Vec::with_capacity(num_rgs);
+
+        for rg_idx in 0..num_rgs {
+            let rg = metadata.row_group(rg_idx);
+            let mut might_match = true;
+
+            for cond in &conditions {
+                let col_name = &cond.column;
+                let col_pos = schema.columns().iter().position(|c| c.name() == col_name.as_str());
+
+                if let Some(pos) = col_pos {
+                    let col_meta = rg.column(pos);
+                    let stats = col_meta.statistics();
+
+                    if let Some(ref s) = stats {
+                        // If all rows are null, skip this row group
+                        let null_count = s.null_count_opt().unwrap_or(0);
+                        if null_count >= rg.num_rows() as u64 {
+                            might_match = false;
+                            break;
+                        }
+
+                        // Only prune if stats are available
+                        if Self::has_stats(s) {
+                            if !Self::row_group_might_match_condition(s, cond) {
+                                might_match = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if might_match {
+                surviving.push(rg_idx);
+            }
+        }
+
+        surviving
+    }
+
+    /// Check whether a Statistics enum has usable min/max data.
+    fn has_stats(stats: &ParquetStats) -> bool {
+        match stats {
+            ParquetStats::Int32(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            ParquetStats::Int64(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            ParquetStats::Float(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            ParquetStats::Double(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            ParquetStats::ByteArray(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            ParquetStats::Boolean(s) => s.min_opt().is_some() || s.max_opt().is_some(),
+            _ => false,
+        }
+    }
+
+    /// Extract min/max as f64 from numeric statistics variants.
+    fn extract_min_max_as_f64(stats: &ParquetStats) -> Option<(f64, f64)> {
+        match stats {
+            ParquetStats::Int32(s) => {
+                if let (Some(&min), Some(&max)) = (s.min_opt(), s.max_opt()) {
+                    Some((min as f64, max as f64))
+                } else { None }
+            },
+            ParquetStats::Int64(s) => {
+                if let (Some(&min), Some(&max)) = (s.min_opt(), s.max_opt()) {
+                    Some((min as f64, max as f64))
+                } else { None }
+            },
+            ParquetStats::Float(s) => {
+                if let (Some(&min), Some(&max)) = (s.min_opt(), s.max_opt()) {
+                    Some((min as f64, max as f64))
+                } else { None }
+            },
+            ParquetStats::Double(s) => {
+                if let (Some(&min), Some(&max)) = (s.min_opt(), s.max_opt()) {
+                    Some((min, max))
+                } else { None }
+            },
+            ParquetStats::ByteArray(s) => {
+                // Try to parse byte array as numeric string
+                if let (Some(min_bytes), Some(max_bytes)) = (s.min_opt(), s.max_opt()) {
+                    if let (Ok(min_f), Ok(max_f)) = (
+                        std::str::from_utf8(min_bytes.as_ref()).ok()?.parse::<f64>(),
+                        std::str::from_utf8(max_bytes.as_ref()).ok()?.parse::<f64>(),
+                    ) {
+                        return Some((min_f, max_f));
+                    }
+                }
+                None
+            },
+            _ => None,
+        }
+    }
+
+    /// Extract min/max as strings from ByteArray statistics.
+    fn extract_min_max_as_str(stats: &ParquetStats) -> Option<(String, String)> {
+        if let ParquetStats::ByteArray(s) = stats {
+            if let (Some(min_bytes), Some(max_bytes)) = (s.min_opt(), s.max_opt()) {
+                let min_str = std::str::from_utf8(min_bytes.as_ref()).ok()?.to_string();
+                let max_str = std::str::from_utf8(max_bytes.as_ref()).ok()?.to_string();
+                return Some((min_str, max_str));
+            }
+        }
+        None
+    }
+
+    /// Check if a row group's column statistics might overlap with a filter condition.
+    fn row_group_might_match_condition(
+        stats: &ParquetStats,
+        filter: &crate::core::planner::QueryFilter,
+    ) -> bool {
+        // Try numeric comparison first
+        if let Some((rg_min, rg_max)) = Self::extract_min_max_as_f64(stats) {
+            // Check min bound: if row group's max < filter's min, prune
+            if let Some(filter_min) = &filter.min {
+                if let Some(fmin) = filter_min.as_f64() {
+                    let too_small = if filter.min_inclusive {
+                        rg_max < fmin
+                    } else {
+                        rg_max <= fmin
+                    };
+                    if too_small {
+                        return false;
+                    }
+                }
+            }
+
+            // Check max bound: if row group's min > filter's max, prune
+            if let Some(filter_max) = &filter.max {
+                if let Some(fmax) = filter_max.as_f64() {
+                    let too_large = if filter.max_inclusive {
+                        rg_min > fmax
+                    } else {
+                        rg_min >= fmax
+                    };
+                    if too_large {
+                        return false;
+                    }
+                }
+            }
+
+            // Check IN list
+            if let Some(values) = &filter.values {
+                let mut possible = false;
+                for v in values {
+                    if let Some(vf) = v.as_f64() {
+                        let in_range = !(vf < rg_min || vf > rg_max);
+                        if in_range {
+                            possible = true;
+                            break;
+                        }
+                    }
+                }
+                if !possible {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // Fall back to string comparison
+        if let Some((rg_min_str, rg_max_str)) = Self::extract_min_max_as_str(stats) {
+            // Check min bound
+            if let Some(filter_min) = &filter.min {
+                if let Some(fmin) = filter_min.as_str() {
+                    let cmp = rg_max_str.as_str().cmp(fmin);
+                    let too_small = if filter.min_inclusive {
+                        cmp == std::cmp::Ordering::Less
+                    } else {
+                        cmp != std::cmp::Ordering::Greater
+                    };
+                    if too_small {
+                        return false;
+                    }
+                }
+            }
+
+            // Check max bound
+            if let Some(filter_max) = &filter.max {
+                if let Some(fmax) = filter_max.as_str() {
+                    let cmp = rg_min_str.as_str().cmp(fmax);
+                    let too_large = if filter.max_inclusive {
+                        cmp == std::cmp::Ordering::Greater
+                    } else {
+                        cmp != std::cmp::Ordering::Less
+                    };
+                    if too_large {
+                        return false;
+                    }
+                }
+            }
+
+            // Check IN list
+            if let Some(values) = &filter.values {
+                let mut possible = false;
+                for v in values {
+                    if let Some(vs) = v.as_str() {
+                        let in_range = !(vs < rg_min_str.as_str() || vs > rg_max_str.as_str());
+                        if in_range {
+                            possible = true;
+                            break;
+                        }
+                    }
+                }
+                if !possible {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        // No usable stats — cannot prune
+        true
+    }
+
+
+    /// Vector search using flat scan with row-group pruning.
+    async fn vector_search_flat_with_row_group_pruning(
+        &self,
+        column: &str,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        filter: &FilterExpr,
+        metric: VectorMetric,
+    ) -> Result<Vec<(usize, f32)>> {
+        let metadata = self.get_parquet_metadata().await?;
+        let num_rgs = metadata.num_row_groups();
+
+        let surviving_rgs = self.prune_row_groups(&metadata, filter);
+
+        let pruned = num_rgs - surviving_rgs.len();
+        if pruned > 0 {
+            tracing::info!(
+                "Row-group pruning: skipped {}/{} row groups ({:.0}% reduction)",
+                pruned, num_rgs,
+                (pruned as f64 / num_rgs as f64 * 100.0)
+            );
+        }
+
+        if surviving_rgs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut rg_matches: Vec<(usize, f32)> = Vec::new();
+
+        let q_vec = match query {
+            crate::core::index::VectorValue::Float32(v) => v,
+            _ => anyhow::bail!("Flat search with row-group pruning only supports Float32 vectors"),
+        };
+
+        for rg_idx in &surviving_rgs {
+            let mut offset = 0usize;
+            for i in 0..*rg_idx {
+                offset += metadata.row_group(i).num_rows() as usize;
+            }
+
+            let single_rg_stream = self.stream_row_groups(Some(&[*rg_idx]), None).await?;
+            use futures::StreamExt;
+
+            let mut local_offset = offset;
+            let mut batches: Vec<RecordBatch> = Vec::new();
+            let mut rg_stream = Box::pin(single_rg_stream);
+            while let Some(batch_res) = rg_stream.next().await {
+                match batch_res {
+                    Ok(batch) => batches.push(batch),
+                    Err(e) => return Err(e),
+                }
+            }
+
+            for batch in batches {
+                let rows = batch.num_rows();
+
+                if let Some(col) = batch.column_by_name(column) {
+                    let vectors: Vec<Vec<f32>> = match col.data_type() {
+                        arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                            let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>()
+                                .context("Invalid cast to FixedSizeListArray")?;
+                            (0..list.len()).map(|i| {
+                                let item = list.value(i);
+                                if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                    floats.values().to_vec()
+                                } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                    doubles.values().iter().map(|&d| d as f32).collect()
+                                } else {
+                                    vec![0.0; item.len()]
+                                }
+                            }).collect()
+                        },
+                        arrow::datatypes::DataType::List(_) => {
+                            let list = col.as_any().downcast_ref::<arrow::array::ListArray>()
+                                .context("Invalid cast to ListArray")?;
+                            (0..list.len()).map(|i| {
+                                let item = list.value(i);
+                                if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                    floats.values().to_vec()
+                                } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                    doubles.values().iter().map(|&d| d as f32).collect()
+                                } else {
+                                    vec![0.0; item.len()]
+                                }
+                            }).collect()
+                        },
+                        _ => vec![],
+                    };
+
+                    for (i, v) in vectors.iter().enumerate() {
+                        let row_id = local_offset + i;
+                        let dist = match metric {
+                            VectorMetric::L2 => {
+                                v.iter().zip(q_vec.iter()).map(|(a,b)| (a-b)*(a-b)).sum::<f32>()
+                            },
+                            VectorMetric::Cosine => {
+                                let dot: f32 = v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum();
+                                let mag_v: f32 = v.iter().map(|x| x*x).sum::<f32>().sqrt();
+                                let mag_q: f32 = q_vec.iter().map(|x| x*x).sum::<f32>().sqrt();
+                                1.0 - (dot / (mag_v * mag_q + 1e-10))
+                            },
+                            VectorMetric::InnerProduct => {
+                                -v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum::<f32>()
+                            },
+                            _ => 1e10,
+                        };
+                        rg_matches.push((row_id, dist));
+                    }
+                }
+                local_offset += rows;
+            }
+        }
+
+        rg_matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        if rg_matches.len() > k {
+            rg_matches.truncate(k);
+        }
+
+        Ok(rg_matches)
     }
 
     pub async fn stream_row_groups(&self, row_groups: Option<&[usize]>, target_schema: Option<arrow::datatypes::SchemaRef>) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
@@ -305,58 +662,73 @@ impl HybridReader {
             return Ok(vec![(batch, scores)]);
         }
 
-        // --- TWO-STEP APPROACH when filter is present ---
-        // Step 1: Apply scalar filters as hard filters
+        // --- TWO-STEP APPROACH when filter is present and resolvable ---
+        // Step 1: Apply scalar filters as hard filters (Parquet row selection)
         // Step 2: Run vector search on the filtered resultset
-        // This guarantees correct results: scalar filters are applied first,
-        // then vector similarity is computed only on surviving rows.
+        // If filter exists but bitmap is None (no scalar index), fall through
+        // to index search + post-filtering for correctness.
         if let Some(ref bitmap) = allowed_bitmap {
             return self.vector_search_on_filtered(column, query, k, bitmap, metric, target_schema).await;
         }
 
+        // --- FILTER PRESENT but no scalar index bitmap ---
+        // Use row-group pruning to skip entire row groups based on Parquet column stats
+        // before computing any vector distances. This avoids the O(N) vector computation
+        // on pruned row groups, which is the key optimization when no scalar index exists.
+        if let Some(filter_expr) = filter {
+            let rg_matches = self.vector_search_flat_with_row_group_pruning(
+                column, query, k,
+                filter_expr,
+                metric,
+            ).await?;
+            return self.fetch_rows_with_distances(rg_matches, target_schema, filter).await;
+        }
+
         // --- FAST PATH: no filter, use HNSW-IVF index ---
-        let vector_indices: Vec<_> = self.config.index_files.iter()
-            .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
-            .collect();
+        {
+            let vector_indices: Vec<_> = self.config.index_files.iter()
+                .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+                .collect();
 
-        let vector_idx_info = if vector_indices.is_empty() {
-            None
-        } else {
-            let mut sorted = vector_indices.clone();
-            sorted.sort_by_key(|f| {
-                match f.blob_type.as_deref() {
-                    Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
-                    Some("hnsw_pq") => 1,
-                    Some("hnsw_ivf") => 2,
-                    _ => 3,
-                }
-            });
-            Some(sorted[0])
-        };
+            let vector_idx_info = if vector_indices.is_empty() {
+                None
+            } else {
+                let mut sorted = vector_indices.clone();
+                sorted.sort_by_key(|f| {
+                    match f.blob_type.as_deref() {
+                        Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
+                        Some("hnsw_pq") => 1,
+                        Some("hnsw_ivf") => 2,
+                        _ => 3,
+                    }
+                });
+                Some(sorted[0])
+            };
 
-        let matches = if let Some(idx_info) = vector_idx_info {
-             match self.search_hnsw_ivf(idx_info, query, k, &None, metric, ef_search).await {
-                 Ok(m) => m,
-                 Err(e) => {
-                     tracing::error!("Vector index listed in manifest failed, falling back to flat scan: {}", e);
-                     self.vector_search_flat(column, query, k, &None, metric).await?
+            let idx_matches = if let Some(idx_info) = vector_idx_info {
+                 match self.search_hnsw_ivf(idx_info, query, k, &None, metric, ef_search).await {
+                     Ok(m) => m,
+                     Err(e) => {
+                         tracing::error!("Vector index listed in manifest failed, falling back to flat scan: {}", e);
+                         self.vector_search_flat(column, query, k, &None, metric).await?
+                     }
                  }
-             }
-        } else {
-             let idx_path = self.resolve_object_path(column).to_string();
-             let idx_info = crate::core::manifest::IndexFile {
-                 file_path: idx_path,
-                 index_type: "vector".to_string(),
-                 column_name: Some(column.to_string()),
-                 ..Default::default()
-             };
-             match self.search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search).await {
-                 Ok(m) => m,
-                 Err(_) => self.vector_search_flat(column, query, k, &None, metric).await?
-             }
-        };
+            } else {
+                 let idx_path = self.resolve_object_path(column).to_string();
+                 let idx_info = crate::core::manifest::IndexFile {
+                     file_path: idx_path,
+                     index_type: "vector".to_string(),
+                     column_name: Some(column.to_string()),
+                     ..Default::default()
+                 };
+                 match self.search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search).await {
+                     Ok(m) => m,
+                     Err(_) => self.vector_search_flat(column, query, k, &None, metric).await?
+                 }
+            };
 
-        self.fetch_rows_with_distances(matches, target_schema, None).await
+            self.fetch_rows_with_distances(idx_matches, target_schema, filter).await
+        }
     }
 
     pub async fn keyword_search_index(
