@@ -72,6 +72,7 @@ jobs:
         if: steps.filter.outputs.code == 'true'
         env:
           SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
         run: cargo test --lib --tests
 
       - name: Run Cargo Tests (Features)
@@ -82,6 +83,7 @@ jobs:
         env:
           # Point to CUDA stubs so binaries can load even without a GPU
           SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
           LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
         run: cargo test --features python --lib --tests -- --skip gpu_execution --nocapture
 
@@ -100,7 +102,8 @@ jobs:
         if: steps.filter.outputs.code == 'true'
         run: |
           pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis
-          maturin develop --features python
+          maturin build --features python
+          pip install target/wheels/hyperstreamdb-*.whl
 
       - name: Run Python Tests (pytest)
         if: steps.filter.outputs.code == 'true'
