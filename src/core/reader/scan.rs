@@ -271,7 +271,7 @@ impl HybridReader {
         let allowed_bitmap = if let Some(expr) = filter {
              let sub_filters = expr.extract_and_conditions();
              let mut combined_bitmap: Option<RoaringBitmap> = None;
-             
+
              for sub_f in sub_filters {
                  let res = self.get_scalar_filter_bitmap(&sub_f).await;
                  if let Ok(Some(bm)) = res {
@@ -279,7 +279,7 @@ impl HybridReader {
                          Some(ref mut existing) => { *existing &= bm; },
                          None => { combined_bitmap = Some(bm); }
                      }
-                     
+
                      // Optimization: short-circuit if bitmap is empty
                      if let Some(ref bm) = combined_bitmap {
                          if bm.is_empty() {
@@ -292,12 +292,29 @@ impl HybridReader {
         } else {
              None
         };
-        
-        // Determine Index Path
-        // If base_path is remote (s3://), we first check if we have the index locally in CWD (common for writers/benchmarks)
-        // This bypasses the need for full download logic in this iteration.
-        
-        // Determine Best Available Vector Index
+
+        // Handle keyword search regardless of filter path
+        if let crate::core::index::VectorValue::Keyword(ref q) = query {
+            let results = self.keyword_search_index(column, q, k, filter).await?;
+            if results.is_empty() { return Ok(vec![]); }
+
+            let matches: Vec<(u32, f32)> = results.iter().map(|(id, s)| (*id as u32, *s)).collect();
+            let batch = self.read_rows_by_id_with_schema(matches, target_schema).await?;
+
+            let scores: Vec<f32> = results.into_iter().map(|(_, s)| s).collect();
+            return Ok(vec![(batch, scores)]);
+        }
+
+        // --- TWO-STEP APPROACH when filter is present ---
+        // Step 1: Apply scalar filters as hard filters
+        // Step 2: Run vector search on the filtered resultset
+        // This guarantees correct results: scalar filters are applied first,
+        // then vector similarity is computed only on surviving rows.
+        if let Some(ref bitmap) = allowed_bitmap {
+            return self.vector_search_on_filtered(column, query, k, bitmap, metric, target_schema).await;
+        }
+
+        // --- FAST PATH: no filter, use HNSW-IVF index ---
         let vector_indices: Vec<_> = self.config.index_files.iter()
             .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
             .collect();
@@ -305,7 +322,6 @@ impl HybridReader {
         let vector_idx_info = if vector_indices.is_empty() {
             None
         } else {
-            // Priority: hnsw_tq8 or hnsw_tq4 > hnsw_pq > hnsw_ivf > others
             let mut sorted = vector_indices.clone();
             sorted.sort_by_key(|f| {
                 match f.blob_type.as_deref() {
@@ -318,29 +334,15 @@ impl HybridReader {
             Some(sorted[0])
         };
 
-        if let crate::core::index::VectorValue::Keyword(ref q) = query {
-            // BM25 Keyword Search path
-            let results = self.keyword_search_index(column, q, k, filter).await?;
-            if results.is_empty() { return Ok(vec![]); }
-            
-            let matches: Vec<(u32, f32)> = results.iter().map(|(id, s)| (*id as u32, *s)).collect();
-            let batch = self.read_rows_by_id_with_schema(matches, target_schema).await?;
-            
-            let scores: Vec<f32> = results.into_iter().map(|(_, s)| s).collect();
-            return Ok(vec![(batch, scores)]);
-        }
-
         let matches = if let Some(idx_info) = vector_idx_info {
-             match self.search_hnsw_ivf(idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
+             match self.search_hnsw_ivf(idx_info, query, k, &None, metric, ef_search).await {
                  Ok(m) => m,
                  Err(e) => {
-                     // Fallback to flat scan on index error
                      tracing::error!("Vector index listed in manifest failed, falling back to flat scan: {}", e);
-                     self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
+                     self.vector_search_flat(column, query, k, &None, metric).await?
                  }
              }
         } else {
-             // No index entry found, try convention path first, then flat scan fallback
              let idx_path = self.resolve_object_path(column).to_string();
              let idx_info = crate::core::manifest::IndexFile {
                  file_path: idx_path,
@@ -348,13 +350,13 @@ impl HybridReader {
                  column_name: Some(column.to_string()),
                  ..Default::default()
              };
-             match self.search_hnsw_ivf(&idx_info, query, k, &allowed_bitmap, metric, ef_search).await {
+             match self.search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search).await {
                  Ok(m) => m,
-                 Err(_) => self.vector_search_flat(column, query, k, &allowed_bitmap, metric).await?
+                 Err(_) => self.vector_search_flat(column, query, k, &None, metric).await?
              }
         };
 
-        self.fetch_rows_with_distances(matches, target_schema, filter).await
+        self.fetch_rows_with_distances(matches, target_schema, None).await
     }
 
     pub async fn keyword_search_index(
@@ -695,6 +697,133 @@ impl HybridReader {
         }
         
         Ok(results)
+    }
+
+    /// Two-step filtered vector search: apply scalar filters first (hard),
+    /// then compute vector distances on the surviving rows and return top-k.
+    async fn vector_search_on_filtered(
+        &self,
+        column: &str,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        bitmap: &RoaringBitmap,
+        metric: VectorMetric,
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+    ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
+        use futures::StreamExt;
+
+        let q_vec = match query {
+            crate::core::index::VectorValue::Float32(v) => v.clone(),
+            _ => anyhow::bail!("Filtered vector search only supports Float32 vectors currently"),
+        };
+
+        // Step 1: Fetch only the rows that match the scalar filter bitmap
+        let pq_path = self.resolve_object_path("parquet");
+        let pq_path_str = pq_path.to_string();
+
+        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE.get_with_metrics(&format!("{}/{}", self.root_uri, pq_path_str), "parquet_meta").await {
+            let object_meta = ObjectMeta {
+                location: pq_path.clone(),
+                last_modified: Utc::now(),
+                size: size as u64,
+                e_tag: None,
+                version: None,
+            };
+            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            let options = ArrowReaderOptions::default();
+            let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
+            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
+        } else {
+            let object_meta = self.store.head(&pq_path).await.context("Failed to get segment metadata")?;
+            let size = object_meta.size;
+            let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
+            let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            crate::core::cache::PARQUET_META_CACHE.insert(format!("{}/{}", self.root_uri, pq_path_str), (b.metadata().clone(), size as usize)).await;
+            b
+        };
+
+        // Apply row selection to read only filtered rows
+        let num_rows = builder.metadata().file_metadata().num_rows() as usize;
+        let selection = self.bitmap_to_row_selection(bitmap, num_rows);
+        builder = builder.with_row_selection(selection);
+
+        // Apply deletes
+        let deleted = self.load_merged_deletes().await?;
+        if !deleted.is_empty() {
+            let full_range = RoaringBitmap::from_iter(0..num_rows as u32);
+            let valid = full_range - deleted;
+            let merged = &valid & bitmap;
+            let merged_selection = self.bitmap_to_row_selection(&merged, num_rows);
+            builder = builder.with_row_selection(merged_selection);
+        }
+
+        let mut stream = builder.build()?;
+        let mut all_scored: Vec<(usize, f32)> = Vec::new();
+        let mut row_offset = 0usize;
+
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result?;
+            let num_rows_in_batch = batch.num_rows();
+
+            // Extract vectors and compute distances
+            if let Some(col) = batch.column_by_name(column) {
+                let vectors: Vec<Vec<f32>> = match col.data_type() {
+                    arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                        let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>()
+                            .context("Invalid cast to FixedSizeListArray")?;
+                        (0..list.len()).map(|i| {
+                            let item = list.value(i);
+                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                floats.values().to_vec()
+                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                doubles.values().iter().map(|&d| d as f32).collect()
+                            } else {
+                                vec![0.0; item.len()]
+                            }
+                        }).collect()
+                    },
+                    arrow::datatypes::DataType::List(_) => {
+                        let list = col.as_any().downcast_ref::<arrow::array::ListArray>()
+                            .context("Invalid cast to ListArray")?;
+                        (0..list.len()).map(|i| {
+                            let item = list.value(i);
+                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                                floats.values().to_vec()
+                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                doubles.values().iter().map(|&d| d as f32).collect()
+                            } else {
+                                vec![0.0; item.len()]
+                            }
+                        }).collect()
+                    },
+                    _ => vec![],
+                };
+
+                for (i, v) in vectors.iter().enumerate() {
+                    let dist = match metric {
+                        VectorMetric::L2 => crate::core::index::distance::l2_distance(&q_vec, v),
+                        VectorMetric::Cosine => crate::core::index::distance::cosine_similarity(&q_vec, v),
+                        VectorMetric::InnerProduct => crate::core::index::distance::dot_product(&q_vec, v),
+                        VectorMetric::L1 => crate::core::index::distance::l1_distance(&q_vec, v),
+                        _ => f32::MAX,
+                    };
+                    all_scored.push((row_offset + i, dist));
+                }
+            }
+            row_offset += num_rows_in_batch;
+        }
+
+        // Step 2: Sort by distance and take top-k
+        all_scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        all_scored.truncate(k);
+
+        // Step 3: Fetch the top-k rows as RecordBatches with distances
+        if all_scored.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Convert to (usize, f32) matches and use existing fetch_rows_with_distances
+        self.fetch_rows_with_distances(all_scored, target_schema, None).await
     }
 
     async fn search_hnsw_ivf(
