@@ -34,6 +34,8 @@ fn test_l1_distance_cpu() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_l1_distance_cuda() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test L1 (Manhattan) distance computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
     let vectors = vec![
@@ -61,6 +63,7 @@ fn test_l1_distance_cuda() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_l1_distance_cuda_vs_cpu_parity() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that CUDA and CPU produce the same results
     use rand::Rng;
     
@@ -126,6 +129,7 @@ fn test_l1_distance_various_dimensions() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_l1_distance_cuda_large_batch() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test L1 distance with a large batch to verify chunking works
     use rand::Rng;
     

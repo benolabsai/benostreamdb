@@ -35,6 +35,8 @@ fn test_inner_product_cpu() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Inner Product computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
     let vectors = vec![
@@ -62,6 +64,7 @@ fn test_inner_product_cuda() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_inner_product_cuda_vs_cpu_parity() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that CUDA and CPU produce the same results
     use rand::Rng;

@@ -35,6 +35,7 @@ fn test_hamming_distance_cpu() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_hamming_distance_cuda() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Hamming distance computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
     let vectors = vec![
@@ -62,6 +63,7 @@ fn test_hamming_distance_cuda() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_hamming_distance_cuda_vs_cpu_parity() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that CUDA and CPU produce the same results
     use rand::Rng;
@@ -129,6 +131,7 @@ fn test_hamming_distance_various_dimensions() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_hamming_distance_cuda_large_batch() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Hamming distance with a large batch to verify chunking works
     use rand::Rng;
     
@@ -193,6 +196,7 @@ fn test_hamming_distance_binary_vectors() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_hamming_distance_cuda_binary_vectors() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Hamming distance with binary vectors on CUDA
     let query = vec![1.0, 0.0, 1.0, 1.0, 0.0];
