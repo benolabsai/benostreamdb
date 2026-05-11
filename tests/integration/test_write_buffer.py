@@ -1,11 +1,9 @@
 import pytest
 import hyperstreamdb as hdb
 import pyarrow as pa
-import numpy as np
 import uuid
 import os
 import shutil
-import time
 
 def test_write_buffer_and_index():
     # Setup
@@ -24,12 +22,14 @@ def test_write_buffer_and_index():
     dim = 128
     rows = 1000
     
-    # Vectors: [1.0, 1.0, ...]
+    # Vectors: distinct vectors per row to avoid HNSW graph collapse
     vectors = []
-    vector = [1.0] * dim
-    for _ in range(rows):
-        vectors.append(vector)
-        
+    for i in range(rows):
+        vec = [1.0 + i * 0.01] * dim  # Slightly different base per row
+        for j in range(dim):
+            vec[j] += (i + j) * 0.001  # Unique perturbation per dimension
+        vectors.append(vec)
+
     ids = range(rows)
     
     schema = pa.schema([
@@ -59,15 +59,15 @@ def test_write_buffer_and_index():
     
     # 4. Verify Vector Search in Buffer
     print("Executing Vector Search on Buffer...")
-    # Query with exact match
-    query_vec = vector 
+    # Query with first vector (exact match)
+    query_vec = vectors[0]
     search_results = table.to_pandas(
         vector_filter={"column": "embedding", "query": query_vec, "k": 10}
     )
-    
+
     assert len(search_results) > 0
     print(f"Buffer Vector Search returned {len(search_results)} rows.")
-    # Verify ID is correct (should be 0..9)
+    # Verify ID is correct (should contain 0, as it matches the first vector)
     res_ids = search_results["id"].tolist()
     print("Result IDs:", res_ids)
     assert 0 in res_ids

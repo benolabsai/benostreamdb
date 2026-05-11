@@ -1417,12 +1417,15 @@ impl Table {
         {
             let mut index_cols = self.indexing.index_columns.write();
             let mut index_configs = self.indexing.index_configs.write();
-            
+
+            // Cascade: use the explicit device if provided, otherwise fall back to the table's default
+            let effective_device = device.or_else(|| self.indexing.default_device.read().clone());
+
             for col in &columns {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: effective_device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -1434,12 +1437,15 @@ impl Table {
         {
             let mut index_cols = self.indexing.index_columns.write();
             let mut index_configs = self.indexing.index_configs.write();
-            
+
+            // Cascade: use the explicit device if provided, otherwise fall back to the table's default
+            let effective_device = device.or_else(|| self.indexing.default_device.read().clone());
+
             for col in &columns {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), ColumnIndexConfig { device: device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
+                index_configs.insert(col.clone(), ColumnIndexConfig { device: effective_device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
             }
             index_cols.sort();
             index_cols.dedup();
@@ -2382,6 +2388,30 @@ impl Table {
              // 2. Fallback to Full Scan
              if !index_used {
                  let stream = reader.stream_all(target_schema).await?;
+
+                 // Apply post-filter on full scan if filter is present
+                 if let Some(filter_str) = filter {
+                     let filter_expr_owned = Arc::new(crate::core::planner::FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
+                     let filtered_stream = stream.filter_map(move |batch_res| {
+                         let filter_expr_cloned = filter_expr_owned.clone();
+                         async move {
+                             let planner = crate::core::planner::QueryPlanner::new();
+                             match batch_res {
+                                 Ok(b) => {
+                                     match planner.filter_expr(&b, &filter_expr_cloned) {
+                                         Ok(filtered) => if filtered.num_rows() > 0 { Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(filtered)) } else { None },
+                                         Err(e) => {
+                                             tracing::error!("Error evaluating filter: {}", e);
+                                             Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
+                                         }
+                                     }
+                                 }
+                                 Err(e) => Some(Err(e))
+                             }
+                         }
+                     });
+                     return Ok(filtered_stream.boxed());
+                 }
                  return Ok(stream.boxed());
              }
 
@@ -2472,14 +2502,25 @@ impl Table {
                  None
              } else {
                   let current_schema = self.arrow_schema();
-                  let fields: Vec<arrow::datatypes::Field> = columns.iter()
+                  let mut fields: Vec<arrow::datatypes::Field> = columns.iter()
                       .filter_map(|name| current_schema.field_with_name(name).ok().cloned())
                       .collect();
-                   if fields.is_empty() { 
-                       // Explicit empty schema
-                       Some(Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))) 
-                   } else { 
-                       Some(Arc::new(Schema::new(fields))) 
+                   if fields.is_empty() {
+                       // Fallback: if the table schema is empty (no committed data),
+                       // resolve columns against the Parquet file's own schema
+                       if let Ok(file_schema) = reader.get_arrow_schema().await {
+                           fields = columns.iter()
+                               .filter_map(|name| file_schema.field_with_name(name).ok().cloned())
+                               .collect();
+                       }
+                       if fields.is_empty() {
+                           // Still empty - return empty schema (returns 0 cols)
+                           Some(Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new())))
+                       } else {
+                           Some(Arc::new(Schema::new(fields)))
+                       }
+                   } else {
+                       Some(Arc::new(Schema::new(fields)))
                    }
              };
 

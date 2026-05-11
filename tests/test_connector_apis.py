@@ -47,7 +47,10 @@ def test_connector_apis():
     print(f"  Scalar Indexes: {file_info.has_scalar_indexes}")
     print(f"  Indexed Columns: {file_info.indexed_columns}")
     
-    assert file_info.row_count == 1000
+    # Verify total rows across all files
+    total_row_count = sum(f.row_count for f in files)
+    assert total_row_count == 1000, f"Expected 1000 total rows, got {total_row_count}"
+    assert file_info.row_count > 0
     assert "age" in file_info.indexed_columns
     assert "category" in file_info.indexed_columns
     assert file_info.has_scalar_indexes
