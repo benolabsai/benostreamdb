@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+mod gpu_test_helpers;
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext, set_global_gpu_context};
 use rand::Rng;
@@ -54,6 +55,7 @@ fn assert_parity(
 
 #[test]
 fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     let dim = 128;
     let n_vectors = 100;
     let _query = generate_random_vectors(1, dim);
@@ -90,6 +92,7 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
 
 #[test]
 fn test_l2_parity_different_dimensions() -> Result<()> {
+    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that the kernels handle non-power-of-two dimensions correctly
     let dims = vec![3, 64, 127, 1024]; // Reduced 1536 to 1024 for speed in parity tests
     let n_vectors = 10;
