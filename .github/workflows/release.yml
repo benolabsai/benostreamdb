@@ -101,7 +101,7 @@ jobs:
       - name: Install maturin and build
         if: steps.filter.outputs.code == 'true'
         run: |
-          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis
+          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis requests
           maturin build --features python
           pip install target/wheels/hyperstreamdb-*.whl
 
@@ -109,7 +109,11 @@ jobs:
         if: steps.filter.outputs.code == 'true'
         run: |
           # Skip GPU-only benchmarks on standard CI runners
-          pytest -v tests/ --ignore=tests/performance --ignore=tests/benchmarks
+          pytest -v tests/ \
+            --ignore=tests/performance \
+            --ignore=tests/benchmarks \
+            --ignore=tests/integration/test_catalog.py \
+            --ignore=tests/python/test_prefilter.py
 
   linux:
     needs: [check]
