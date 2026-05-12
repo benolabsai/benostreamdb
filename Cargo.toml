@@ -36,7 +36,7 @@ required-features = ["java"]
 [features]
 default = ["simd"]
 enterprise = []
-python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster"]
+python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
 stdsimd = []
 simd = []
@@ -44,6 +44,7 @@ simd = []
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
 pollster = ["dep:pollster"]
+cuda = ["dep:cudarc"]
 
 [dependencies]
 # core columnar memory format
@@ -136,7 +137,7 @@ wgpu = { version = "0.20.0", optional = true }
 pollster = { version = "0.4.0", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"] }
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.27.0" } # MPS 
@@ -183,3 +184,16 @@ harness = false
 [[bench]]
 name = "bench_table"
 harness = false
+
+# ─── Release profiles ──────────────────────────────────────────────────────
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16          # Balance compile speed vs runtime perf (1 = fastest binary, 256 = fastest compile)
+strip = "debuginfo"         # Keep symbols for crash backtraces, strip DWARF from binary size
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"                 # Cross-crate LTO for max performance (slower builds)
+codegen-units = 1           # Single unit for LTO effectiveness

@@ -1,73 +1,20 @@
-use std::process::Command;
 use std::env;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/core/index/cuda/");
     println!("cargo:rerun-if-changed=.git/HEAD");
-    
+
     // Get git tag version for version injection
     let version = get_git_version();
     println!("cargo:rustc-env=HYPERSTREAMDB_VERSION={}", version);
-    
+
     // Write version constant to version.rs for use in code
     let out_dir = env::var("OUT_DIR").unwrap();
     let version_file = Path::new(&out_dir).join("version.rs");
     fs::write(&version_file, format!(r#"pub const VERSION: &str = "{}";"#, version))
         .expect("Failed to write version.rs");
-    
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    
-    // CUDA kernel compilation - unconditionally on non-macos platforms
-    // (MPS is handled by #[cfg(target_os = "macos")] in source code)
-    // (Intel/ROCm are handled natively via WGPU)
-    if target_os != "macos" {
-        let has_nvcc = Command::new("nvcc").arg("--version").output().is_ok();
-        
-        if has_nvcc {
-            let out_dir = env::var("OUT_DIR").unwrap();
-            let kernels = vec![
-                "l2_distance",
-                "cosine_distance",
-                "inner_product",
-                "l1_distance",
-                "hamming_distance",
-                "jaccard_distance",
-                "kmeans_assignment",
-            ];
-
-            for kernel_name in kernels {
-                let kernel_src = format!("src/core/index/cuda/{}.cu", kernel_name);
-                let kernel_ptx = format!("{}/{}.ptx", out_dir, kernel_name);
-
-                let status = Command::new("nvcc")
-                    .args(&["-ptx", &kernel_src, "-o", &kernel_ptx])
-                    .status()
-                    .expect(&format!("Failed to execute nvcc for {}", kernel_name));
-
-                if !status.success() {
-                    panic!("nvcc failed for {}", kernel_name);
-                }
-            }
-        } else {
-            println!("cargo:warning=nvcc not found. Creating dummy PTX files to allow CI to pass Cargo Check/Docs.");
-            let out_dir = env::var("OUT_DIR").unwrap();
-            let kernels = vec![
-                "l2_distance",
-                "cosine_distance",
-                "inner_product",
-                "l1_distance",
-                "hamming_distance",
-                "jaccard_distance",
-                "kmeans_assignment",
-            ];
-            for kernel_name in kernels {
-                let kernel_ptx = format!("{}/{}.ptx", out_dir, kernel_name);
-                std::fs::write(&kernel_ptx, b"").expect("Failed to write dummy PTX");
-            }
-        }
-    }
 }
 
 fn get_git_version() -> String {

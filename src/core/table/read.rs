@@ -523,7 +523,7 @@ impl Table {
         let expr_arc = expr.map(Arc::new);
         let concurrency = config.max_parallel_readers.unwrap_or_else(|| {
             std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
-        });
+        }).min(64); // Cap to prevent resource exhaustion
 
         struct ReadCtx {
             table: Table,

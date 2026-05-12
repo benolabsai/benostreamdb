@@ -5,15 +5,18 @@
 git clone https://github.com/rla3rd/hyperstreamdb
 cd hyperstreamdb
 
-# Build Python bindings
+# Build Python bindings (CPU + AMD/Intel/Apple GPU backends)
 pip install maturin
 maturin develop
+
+# Build with NVIDIA CUDA support (requires NVIDIA driver)
+maturin develop --features cuda
 
 # Or install from PyPI (coming soon)
 pip install hyperstreamdb
 
 # Windows Users
-# HyperStreamDB is optimized for Linux/POSIX environments. 
+# HyperStreamDB is optimized for Linux/POSIX environments.
 # Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
 

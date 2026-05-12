@@ -184,6 +184,11 @@ pub enum HyperstreamError {
         reason: String,
     },
 
+    /// Merge/upsert operation failed.
+    MergeFailed {
+        reason: String,
+    },
+
     // ─── WAL errors ─────────────────────────────────────────────────
 
     /// WAL file could not be opened.
@@ -367,6 +372,8 @@ impl fmt::Display for HyperstreamError {
                 write!(f, "Primary key violation: duplicate key '{key}'")
             }
             Self::WriteFailed { reason } => write!(f, "Write failed: {reason}"),
+
+            Self::MergeFailed { reason } => write!(f, "Merge/upsert failed: {reason}"),
 
             Self::WalOpenError { path, source } => {
                 write!(f, "WAL open error at '{path}': {source}")

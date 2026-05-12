@@ -10,22 +10,30 @@
 use anyhow::Result;
 use super::VectorMetric;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use once_cell::sync::Lazy;
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use cudarc::driver::{LaunchAsync, LaunchConfig};
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+use cudarc::nvrtc::compile_ptx;
 
-static GLOBAL_GPU_CONTEXT: Lazy<RwLock<Option<ComputeContext>>> = Lazy::new(|| RwLock::new(None));
+// Thread-local GPU context to ensure CUDA contexts are not shared across threads.
+// CUDA contexts are inherently thread-local; sharing them can cause silent corruption.
+thread_local! {
+    static GPU_THREAD_CONTEXT: std::cell::RefCell<Option<ComputeContext>> = const { std::cell::RefCell::new(None) };
+}
+
+// Keep a global fallback for legacy code paths that don't support thread-local contexts
+static GLOBAL_GPU_CONTEXT: Lazy<parking_lot::RwLock<Option<ComputeContext>>> = Lazy::new(|| parking_lot::RwLock::new(None));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComputeBackend {
     #[default]
-    Cpu,   
-    Cuda,  
-    Rocm,  
-    Mps,   
-    Intel, 
+    Cpu,
+    Cuda,
+    Rocm,
+    Mps,
+    Intel,
 }
 
 pub trait GpuBackend: Send + Sync + std::fmt::Debug {
@@ -69,45 +77,58 @@ static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
 #[cfg(target_os = "macos")]
 static MSL_JACCARD: &str = include_str!("mps/jaccard_distance.metal");
 
-#[cfg(not(target_os = "macos"))]
-static CUDA_KMEANS: &str = include_str!(concat!(env!("OUT_DIR"), "/kmeans_assignment.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_L2: &str = include_str!(concat!(env!("OUT_DIR"), "/l2_distance.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_COSINE: &str = include_str!(concat!(env!("OUT_DIR"), "/cosine_distance.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_INNER_PRODUCT: &str = include_str!(concat!(env!("OUT_DIR"), "/inner_product.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_L1: &str = include_str!(concat!(env!("OUT_DIR"), "/l1_distance.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_HAMMING: &str = include_str!(concat!(env!("OUT_DIR"), "/hamming_distance.ptx"));
-#[cfg(not(target_os = "macos"))]
-static PTX_JACCARD: &str = include_str!(concat!(env!("OUT_DIR"), "/jaccard_distance.ptx"));
+// CUDA kernels: embed .cu source at compile-time, JIT-compile at runtime via nvrtc.
+// This eliminates the need for nvcc at build time — only libcuda.so is required at runtime.
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_KMEANS: &str = include_str!("cuda/kmeans_assignment.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_L2: &str = include_str!("cuda/l2_distance.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_COSINE: &str = include_str!("cuda/cosine_distance.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_INNER_PRODUCT: &str = include_str!("cuda/inner_product.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_L1: &str = include_str!("cuda/l1_distance.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_HAMMING: &str = include_str!("cuda/hamming_distance.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_JACCARD: &str = include_str!("cuda/jaccard_distance.cu");
 
 // Backend Implementations
 // ============================================================================
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 #[derive(Debug)]
 pub struct CudaBackend { device: Arc<cudarc::driver::CudaDevice> }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 impl CudaBackend {
     pub fn is_available() -> bool { true }
     pub fn new(id: usize) -> Result<Self> {
         let device = cudarc::driver::CudaDevice::new(id)?;
-        device.load_ptx(PTX_L2.into(), "l2_distance", &["l2_distance_kernel"])?;
-        device.load_ptx(PTX_COSINE.into(), "cosine_distance", &["cosine_distance_kernel"])?;
-        device.load_ptx(PTX_INNER_PRODUCT.into(), "inner_product", &["inner_product_kernel"])?;
-        device.load_ptx(PTX_L1.into(), "l1_distance", &["l1_distance_kernel"])?;
-        device.load_ptx(PTX_HAMMING.into(), "hamming_distance", &["hamming_distance_kernel"])?;
-        device.load_ptx(PTX_JACCARD.into(), "jaccard_distance", &["jaccard_distance_kernel"])?;
-        device.load_ptx(CUDA_KMEANS.into(), "kmeans", &["kmeans_assignment"])?;
+
+        // JIT-compile .cu source to PTX at runtime via nvrtc (no nvcc needed at build time)
+        macro_rules! compile_and_load {
+            ($device:expr, $src:expr, $mod_name:expr, $kernel_name:expr) => {
+                let ptx = compile_ptx($src)
+                    .map_err(|e| anyhow::anyhow!("nvrtc compile failed for {}: {:?}", $mod_name, e))?;
+                $device.load_ptx(ptx, $mod_name, &[$kernel_name])?;
+            };
+        }
+
+        compile_and_load!(device, CUDA_SRC_L2,       "l2_distance",       "l2_distance_kernel");
+        compile_and_load!(device, CUDA_SRC_COSINE,   "cosine_distance",   "cosine_distance_kernel");
+        compile_and_load!(device, CUDA_SRC_INNER_PRODUCT, "inner_product", "inner_product_kernel");
+        compile_and_load!(device, CUDA_SRC_L1,       "l1_distance",       "l1_distance_kernel");
+        compile_and_load!(device, CUDA_SRC_HAMMING,  "hamming_distance",  "hamming_distance_kernel");
+        compile_and_load!(device, CUDA_SRC_JACCARD,  "jaccard_distance",  "jaccard_distance_kernel");
+        compile_and_load!(device, CUDA_SRC_KMEANS,   "kmeans",            "kmeans_assignment");
+
         Ok(Self { device })
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 impl GpuBackend for CudaBackend {
     fn name(&self) -> &str { "CUDA" }
     fn compute_distance(&self, query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
@@ -397,10 +418,10 @@ impl ComputeContext {
         let imp: Option<std::sync::Arc<dyn GpuBackend>> = match backend {
             ComputeBackend::Cpu => Some(std::sync::Arc::new(CpuBackend)),
             ComputeBackend::Cuda => {
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
                 { Some(std::sync::Arc::new(CudaBackend::new(0)?)) }
-                #[cfg(target_os = "macos")]
-                { anyhow::bail!("CUDA not enabled") }
+                #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
+                { anyhow::bail!("CUDA not enabled (enable the 'cuda' feature)") }
             },
             ComputeBackend::Mps => {
                 #[cfg(target_os = "macos")]
@@ -425,6 +446,15 @@ impl ComputeContext {
     }
 
     pub fn auto_detect() -> Self {
+        // First, check the thread-local context
+        let ctx = GPU_THREAD_CONTEXT.with(|f| {
+            f.borrow().clone()
+        });
+        if let Some(ctx) = ctx {
+            return ctx;
+        }
+
+        // Fall back to global context if thread-local is not set
         {
             let read = GLOBAL_GPU_CONTEXT.read();
             if let Some(ctx) = &*read {
@@ -439,12 +469,16 @@ impl ComputeContext {
         }
 
         let ctx = Self::do_auto_detect();
+        // Set both thread-local and global contexts
+        GPU_THREAD_CONTEXT.with(|f| {
+            *f.borrow_mut() = Some(ctx.clone());
+        });
         *write = Some(ctx.clone());
         ctx
     }
 
     fn do_auto_detect() -> Self {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
         if let Ok(b) = CudaBackend::new(0) { return Self { backend: ComputeBackend::Cuda, device_id: 0, implementation: Some(Arc::new(b)) }; }
         #[cfg(target_os = "macos")]
         if let Ok(b) = MetalBackend::new() { return Self { backend: ComputeBackend::Mps, device_id: 0, implementation: Some(Arc::new(b)) }; }
@@ -467,12 +501,12 @@ impl ComputeContext {
         match self.backend {
             ComputeBackend::Cpu => true,
             ComputeBackend::Cuda => {
-                #[cfg(not(target_os = "macos"))]
-                { 
-                    CudaBackend::new(self.device_id as usize).is_ok() 
+                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                {
+                    CudaBackend::new(self.device_id as usize).is_ok()
                     && cudarc::driver::CudaDevice::count().map(|c| c > 0).unwrap_or(false)
                 }
-                #[cfg(target_os = "macos")]
+                #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
                 { false }
             }
             ComputeBackend::Mps => {
@@ -538,12 +572,24 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
-pub fn set_global_gpu_context(ctx: Option<ComputeContext>) { 
+pub fn set_global_gpu_context(ctx: Option<ComputeContext>) {
+    // Set both thread-local and global contexts
+    GPU_THREAD_CONTEXT.with(|f| {
+        *f.borrow_mut() = ctx.clone();
+    });
     let mut lock = GLOBAL_GPU_CONTEXT.write();
     *lock = ctx;
 }
 
-pub fn get_global_gpu_context() -> Option<ComputeContext> { 
+pub fn get_global_gpu_context() -> Option<ComputeContext> {
+    // Check thread-local first
+    let ctx = GPU_THREAD_CONTEXT.with(|f| {
+        f.borrow().clone()
+    });
+    if ctx.is_some() {
+        return ctx;
+    }
+    // Fall back to global context
     let lock = GLOBAL_GPU_CONTEXT.read();
     lock.clone()
 }

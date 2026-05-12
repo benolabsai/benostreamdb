@@ -19,15 +19,36 @@ use futures::StreamExt;
 
 static SQL_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").unwrap());
 
+/// Sanitize SQL query by replacing Python-side helper function `dist_l2` with the
+/// native DataFusion UDF `l2_distance`. Additionally, validate the query for
+/// common injection patterns and reject any SQL containing `;` (statement
+/// termination) or `--` (line comment) that would indicate multi-statement
+/// or comment injection.
+fn sanitize_sql(query: &str) -> PyResult<String> {
+    // Reject queries with statement terminators or comment markers
+    if query.contains(';') || query.contains("--") {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "SQL query contains disallowed characters (';' or '--'). \
+             Use parameterized queries or filter expressions instead."
+        ));
+    }
+
+    // Reject queries with embedded NULL bytes (common in FFI injection)
+    if query.contains('\0') {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "SQL query contains NULL bytes"
+        ));
+    }
+
+    Ok(SQL_REGEX.replace_all(query, "l2_distance($1, $2)").to_string())
+}
+
 /// Module-level global Tokio runtime for all Python-bound operations.
 /// Sharing a single runtime prevents 'Cannot drop a runtime in a context where blocking is not allowed' panics.
 static TOKIO_RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
     Arc::new(Runtime::new().expect("Failed to create unified Tokio runtime for HyperStreamDB"))
 });
 
-fn sanitize_sql(query: &str) -> String {
-    SQL_REGEX.replace_all(query, "l2_distance($1, $2)").to_string()
-}
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use crate::python_gpu_context::PyDevice;
@@ -1292,7 +1313,7 @@ impl PyTable {
     /// Example:
     ///     table.sql("SELECT * FROM t WHERE id > 10")
     fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
-        let query = sanitize_sql(&query);
+        let query = sanitize_sql(&query)?;
         let rt = self.table.runtime();
         
         let batch_result: Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> = rt.block_on(async {
@@ -1892,7 +1913,7 @@ impl PySession {
     }
 
     pub fn sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
-        let query = sanitize_sql(&query);
+        let query = sanitize_sql(&query)?;
         let (batches, schema) = TOKIO_RUNTIME.block_on(self.inner.sql(&query))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
         

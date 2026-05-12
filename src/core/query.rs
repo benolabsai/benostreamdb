@@ -37,6 +37,12 @@ pub struct QueryConfig {
 
     /// Constant for Reciprocal Rank Fusion (RRF). Defaults to 60.0.
     pub rrf_k: Option<f32>,
+
+    /// Query execution timeout in seconds. If None, queries run indefinitely.
+    pub query_timeout_secs: Option<u64>,
+
+    /// Maximum number of rows to return in a result set. If None, no limit is enforced.
+    pub max_result_rows: Option<usize>,
 }
 
 
@@ -66,6 +72,18 @@ impl QueryConfig {
     /// Set max parallelism for HNSW index loading
     pub fn with_hnsw_max_load_parallelism(mut self, max: usize) -> Self {
         self.hnsw_max_load_parallelism = Some(max.max(1));
+        self
+    }
+
+    /// Set query execution timeout in seconds
+    pub fn with_query_timeout_secs(mut self, secs: u64) -> Self {
+        self.query_timeout_secs = Some(secs);
+        self
+    }
+
+    /// Set maximum number of rows to return in a result set
+    pub fn with_max_result_rows(mut self, max: usize) -> Self {
+        self.max_result_rows = Some(max);
         self
     }
 

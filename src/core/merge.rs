@@ -2,6 +2,7 @@
 
 
 use crate::core::manifest::SegmentId;
+use crate::core::error::HyperstreamError;
 use std::collections::HashMap;
 use arrow::array::Array;
 use anyhow::Result;
@@ -151,21 +152,30 @@ impl MergePlanner {
                  
                  for batch_res in reader {
                      let batch = batch_res?;
-                     let lists = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>().unwrap();
+                     let lists = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>()
+                         .ok_or_else(|| HyperstreamError::MergeFailed {
+                             reason: format!("Inverted index segment {} has unexpected column type at index 1 (expected ListArray)", seg_id)
+                         })?;
                      let col0 = batch.column(0);
-                     
+
                      if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int32Array>() {
                          for i in 0..batch.num_rows() {
                              let k = keys.value(i) as i64;
                              let list = lists.value(i);
-                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap();
+                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                                 .ok_or_else(|| HyperstreamError::MergeFailed {
+                                     reason: format!("Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)", seg_id, i)
+                                 })?;
                              map.insert(k, u32_list.values().to_vec());
                          }
                      } else if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int64Array>() {
                          for i in 0..batch.num_rows() {
                              let k = keys.value(i);
                              let list = lists.value(i);
-                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap();
+                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                                 .ok_or_else(|| HyperstreamError::MergeFailed {
+                                     reason: format!("Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)", seg_id, i)
+                                 })?;
                              map.insert(k, u32_list.values().to_vec());
                          }
                      }
@@ -226,7 +236,10 @@ impl MergePlanner {
             // Build Lookup Map for Source Updates: Key -> RowIndex in SourceBatch
             let mut source_update_map: HashMap<i32, usize> = HashMap::new();
             for &src_idx in &source_row_indices {
-                 let key = source_keys[src_idx].as_i64().unwrap() as i32;
+                 let key = source_keys[src_idx].as_i64()
+                     .ok_or_else(|| HyperstreamError::MergeFailed {
+                         reason: format!("Source key at row {} is not an integer", src_idx)
+                     })? as i32;
                  source_update_map.insert(key, src_idx);
             }
             
@@ -240,7 +253,10 @@ impl MergePlanner {
             // "Delete" old matching rows -> "Append" new source rows.
             
             let id_col_idx = schema.index_of(key_column)?;
-            let id_arr = original_batch.column(id_col_idx).as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+            let id_arr = original_batch.column(id_col_idx).as_any().downcast_ref::<arrow::array::Int32Array>()
+                .ok_or_else(|| HyperstreamError::MergeFailed {
+                    reason: format!("Key column '{}' in segment {} has unexpected type (expected Int32)", key_column, seg_id)
+                })?;
             
             let mut keep_indices_builder = arrow::array::BooleanBuilder::new();
             for i in 0..original_batch.num_rows() {
@@ -296,7 +312,7 @@ impl MergePlanner {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap()
+            .expect("Failed to create Tokio runtime for merge operation")
             .block_on(future)
     }
 }

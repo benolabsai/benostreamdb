@@ -56,7 +56,9 @@ print(hdb.Device.is_available("xpu"))   # True if Intel hardware present
   - Pascal (GTX 10 series) or newer
   - Recommended: RTX 20/30/40 series, A100, H100
 - **Driver**: NVIDIA driver 450.80.02 or later
-- **CUDA Toolkit**: Version 11.0 or later (12.x recommended)
+- **CUDA Runtime**: `libcuda.so` (provided by NVIDIA driver — no Toolkit/nvcc required)
+
+> **Note:** HyperStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
 
 ### Supported GPUs
 
@@ -74,22 +76,29 @@ print(hdb.Device.is_available("xpu"))   # True if Intel hardware present
 ### Installation on Linux (Ubuntu/Debian)
 
 ```bash
-# Add NVIDIA package repository
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-sudo dpkg -i cuda-keyring_1.1-1_all.deb
+# Install NVIDIA driver (provides libcuda.so at runtime)
 sudo apt-get update
+sudo apt-get install nvidia-driver-535
 
-# Install CUDA Toolkit
-sudo apt-get install cuda-toolkit-12-3
-
-# Add to PATH (add to ~/.bashrc for persistence)
-export PATH=/usr/local/cuda-12.3/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-12.3/lib64:$LD_LIBRARY_PATH
-
-# Verify installation
+# Verify driver installation
 nvidia-smi
-nvcc --version
 ```
+
+> **No CUDA Toolkit installation required.** The NVIDIA driver supplies `libcuda.so` at runtime; kernels are JIT-compiled via NVRTC.
+
+### Building from Source with CUDA Support
+
+CUDA is an optional compile-time feature. Enable it when building:
+
+```bash
+# Rust library
+cargo build --release --features cuda
+
+# Python bindings
+maturin develop --features cuda
+```
+
+Without `--features cuda`, the CUDA backend will be unavailable at runtime (other backends like ROCm, Metal, and XPU remain functional).
 
 ### Installation on Windows (via WSL2)
 

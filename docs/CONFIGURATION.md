@@ -49,3 +49,43 @@ HyperStreamDB uses the standard `object-store` crate, which automatically picks 
 - **AWS**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, or IAM Roles.
 - **GCP**: `GOOGLE_APPLICATION_CREDENTIALS` (JSON key file path).
 - **Azure**: `AZURE_STORAGE_ACCOUNT`, `AZURE_STORAGE_KEY`.
+
+## Query Configuration (QueryConfig)
+
+Query-level options can be set via the `QueryConfig` struct (Rust) or passed as keyword arguments in Python.
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `query_timeout_secs` | Maximum duration before a query is cancelled. Set to `0` for no timeout. | `0` (no timeout) |
+| `max_result_rows` | Hard cap on rows returned. Prevents unbounded result sets from exhausting memory. | `10,000,000` |
+| `max_concurrency` | Maximum parallel segment readers. Capped at **64** to prevent oversubscription on high-core-count machines. | Auto-detected (`available_parallelism()`, max 64) |
+
+### Python Example
+
+```python
+import hyperstreamdb as hdb
+
+table = hdb.Table("s3://bucket/my-table")
+
+# Apply query-level limits
+results = table.sql(
+    "SELECT * FROM documents WHERE embedding <-> '[0.1, 0.2]'::vector",
+    query_timeout_secs=30,
+    max_result_rows=100_000,
+)
+```
+
+### Rust Example
+
+```rust
+use hyperstreamdb::{Table, QueryConfig};
+
+let table = Table::new("s3://bucket/my-table")?;
+let config = QueryConfig::default()
+    .query_timeout_secs(30)
+    .max_result_rows(100_000);
+
+let batches = table.query_with_config("SELECT * FROM documents", config).await?;
+```
+
+> **Note:** `max_concurrency` is automatically derived from `std::thread::available_parallelism()` and capped at 64. It is not intended to be manually overridden in most workloads.

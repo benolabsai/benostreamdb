@@ -100,9 +100,20 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
         Ok(s) => s.into(),
         Err(_) => return 0,
     };
-    
+
+    // Bounds check: reject empty paths and paths exceeding 4KB (reasonable limit for a URI)
+    if path_str.is_empty() || path_str.len() > 4096 {
+        tracing::warn!("FFI: Path validation failed (empty or exceeds 4KB limit)");
+        return 0;
+    }
+    // Reject paths with NULL bytes (common FFI injection)
+    if path_str.contains('\0') {
+        tracing::warn!("FFI: Path contains NULL bytes");
+        return 0;
+    }
+
     tracing::info!("FFI: Opening Session to {}", path_str);
-    
+
     match HyperStreamSession::new(&path_str) {
         Ok(session) => {
             Box::into_raw(Box::new(session)) as jlong
@@ -119,7 +130,7 @@ use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
 use arrow::array::Array; // Fix E0599
 
 /// Native method implementation for `com.hyperstreamdb.trino.HyperStreamDBPageSource.readBatch`
-/// 
+///
 /// Expected Java Signature:
 /// long readBatch(long handle, long outArrayPtr, long outSchemaPtr)
 #[no_mangle]
@@ -130,8 +141,12 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
     out_array_ptr: jlong,
     out_schema_ptr: jlong,
 ) -> jlong {
-    if handle == 0 { return 0; }
-    
+    // Bounds check: reject null handles and null output pointers
+    if handle == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::warn!("FFI: readBatch called with null handle or output pointers");
+        return 0;
+    }
+
     let session = unsafe { &mut *(handle as *mut HyperStreamSession) };
     
     match session.next_batch() {
@@ -177,9 +192,25 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
         Ok(s) => s.into(),
         Err(_) => return std::ptr::null_mut(),
     };
-    
+
+    // Bounds check: reject empty URIs and URIs exceeding 4KB
+    if uri.is_empty() || uri.len() > 4096 {
+        tracing::warn!("FFI: getSplits URI validation failed");
+        return std::ptr::null_mut();
+    }
+    // Reject URIs with NULL bytes
+    if uri.contains('\0') {
+        tracing::warn!("FFI: getSplits URI contains NULL bytes");
+        return std::ptr::null_mut();
+    }
+
     // Default 64MB if invalid
     let split_size = if max_split_size <= 0 { 64 * 1024 * 1024 } else { max_split_size as usize };
+
+    // Bounds check: reject absurdly large split sizes (>1GB)
+    if split_size > 1_073_741_824 {
+        tracing::warn!("FFI: getSplits split size exceeds 1GB limit, capping at 256MB");
+    }
 
     tracing::info!("FFI: Getting splits for {} (max size: {})", uri, split_size);
 
@@ -218,6 +249,16 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
         Ok(s) => s.into(),
         Err(_) => return std::ptr::null_mut(),
     };
+
+    // Bounds check: reject empty URIs and URIs exceeding 4KB
+    if uri.is_empty() || uri.len() > 4096 {
+        tracing::warn!("FFI: listDataFiles URI validation failed");
+        return std::ptr::null_mut();
+    }
+    if uri.contains('\0') {
+        tracing::warn!("FFI: listDataFiles URI contains NULL bytes");
+        return std::ptr::null_mut();
+    }
 
     tracing::info!("FFI: Listing data files for {}", uri);
 
@@ -272,6 +313,15 @@ fn open_session_helper(mut env: JNIEnv, path: JString) -> jlong {
         Ok(s) => s.into(),
         Err(_) => return 0,
     };
+    // Bounds check: reject empty paths and paths exceeding 4KB
+    if path_str.is_empty() || path_str.len() > 4096 {
+        tracing::warn!("FFI(Spark): Path validation failed");
+        return 0;
+    }
+    if path_str.contains('\0') {
+        tracing::warn!("FFI(Spark): Path contains NULL bytes");
+        return 0;
+    }
     tracing::info!("FFI(Spark): Opening Session to {}", path_str);
     match HyperStreamSession::new(&path_str) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
@@ -304,7 +354,11 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
     // The previous implementation utilized 'unsafe' and pointer casting, mostly ignoring Env.
     // So we can extract the body to a safe Rust function.
 
-    if handle == 0 { return 0; }
+    // Bounds check: reject null handles and null output pointers
+    if handle == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::warn!("FFI(Spark): readBatch called with null handle or output pointers");
+        return 0;
+    }
     let session = unsafe { &mut *(handle as *mut HyperStreamSession) };
 
     match session.next_batch() {

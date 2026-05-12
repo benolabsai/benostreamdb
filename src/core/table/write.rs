@@ -524,7 +524,8 @@ impl Table {
         // Parallelize partition writing using futures stream
         let concurrency = self.query_config.max_parallel_segments
             .unwrap_or_else(|| std::thread::available_parallelism()
-                .map(|p| p.get()).unwrap_or(16));
+                .map(|p| p.get()).unwrap_or(16))
+            .min(64); // Cap to prevent resource exhaustion
         let stream = futures::stream::iter(partitioned_batches.into_iter().map(|(partition_values, batch)| {
             let base_path = base_path.to_string();
             let spec = spec.clone();
