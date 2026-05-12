@@ -39,8 +39,7 @@ enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster"]
 java = ["dep:jni"]
 stdsimd = []
-intel_cpu = []
-simd = ["intel_cpu"]
+simd = []
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
@@ -80,7 +79,6 @@ aws-sdk-glue = "1.0"
 
 # Thrift for Hive Metastore
 volo-thrift = "0.10"
-pilota = "0.11"
 
 # Hardware Acceleration (moved to bottom of file)
 # indexing
@@ -92,10 +90,8 @@ cpu-time = "1.0"
 env_logger = "0.10"
 log = "0.4"
 hashbrown = "0.14"
-num-traits = "0.2"
 num_cpus = "1.16"
 parking_lot = "0.12"
-skiplist = "0.3"
 # lance removed due to missing protoc
 
 # error handling
@@ -118,9 +114,7 @@ datafusion-functions = "52.0.0"
 datafusion-functions-aggregate = "52.0.0"
 datafusion-functions-aggregate-common = "52.0.0"
 async-stream = "0.3.6"
-smartcore = "0.3"  # For k-means clustering (IVF index)
-rand = "0.8"  # For k-means initialization
-hyperloglogplus = "0.4"  # For NDV (distinct count) estimation
+rand = "0.8"
 clap = { version = "4.5.54", features = ["derive"] }
 rustyline = "17.0.2"
 hive_metastore = "0.2.0"
@@ -172,6 +166,7 @@ rand_distr = "0.4"
 # hnsw_rs removed and internalized
 tempfile = "3.10"
 proptest = "1.4"
+skiplist = "0.3"
 
 [[bin]]
 name = "generate_iceberg_manifests"
@@ -188,4 +183,3 @@ harness = false
 [[bench]]
 name = "bench_table"
 harness = false
-
