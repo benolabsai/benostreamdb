@@ -97,6 +97,7 @@ macro_rules! mapdist_t(
     ("DistLevenshtein") => (crate::core::index::hnsw_rs::dist::DistLevenshtein);
     ("DistJensenShannon") => (crate::core::index::hnsw_rs::dist::DistJensenShannon);
     ("DistHellinger") => (crate::core::index::hnsw_rs::dist::DistHellinger);
+    ("DistJeffreys") => (crate::core::index::hnsw_rs::dist::DistJeffreys);
 );
 
 

@@ -8,6 +8,7 @@ use lazy_static::lazy_static;
 
 pub mod hnsw;
 pub mod dist;
+pub use dist::*;
 pub mod hnswio;
 pub mod prelude;
 pub mod api;

@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+#![cfg_attr(feature = "stdsimd", feature(portable_simd))]
 
 use std::sync::Arc;
 extern crate log;

@@ -34,13 +34,12 @@ name = "test_connector_ffi"
 required-features = ["java"]
 
 [features]
-default = []
+default = ["simd"]
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster"]
 java = ["dep:jni"]
-simdeez_f = []
 stdsimd = []
-intel_cpu = ["simdeez_f", "stdsimd"]
+intel_cpu = []
 simd = ["intel_cpu"]
 
 # GPU Acceleration Features
