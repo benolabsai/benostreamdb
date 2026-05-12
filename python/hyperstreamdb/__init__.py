@@ -1,3 +1,5 @@
+from typing import List, Optional, Union, Dict, Any
+import os
 from .hyperstreamdb import Device as _Device
 from .hyperstreamdb import Table as _RustTable
 from .hyperstreamdb import Session as _RustSession
@@ -15,7 +17,7 @@ class Device:
     HyperStreamDB Compute Device (CPU, CUDA, MPS, ROCm, Intel).
     - **Torch Alignment** - Automatically aliases `cuda` to `rocm` on AMD hardware if `torch.version.hip` is detected.
     """
-    def __new__(cls, device: str = "cpu", index: int = 0):
+    def __new__(cls, device: str = "cpu", index: Optional[int] = None):
         device = device.lower()
         # 1. Handle Torch-style alignment
         if device.startswith("cuda"):
@@ -93,8 +95,6 @@ try:
     import polars as pl
 except ImportError:
     pl = None
-from typing import List, Optional, Union, Dict, Any
-import os
 
 class IndexType:
     """

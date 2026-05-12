@@ -1152,16 +1152,20 @@ impl HybridReader {
             let batch = batch_result?;
             
             if let Some(col) = batch.column_by_name(column) {
-                let vectors = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>()
-                    .context("Invalid vector column type (expected FixedSizeListArray)")?;
-
                 for i in 0..batch.num_rows() {
                     let row_id = bitmap_iter.next()
                         .ok_or_else(|| anyhow::anyhow!("Bitmap iterator exhausted before reader batches (schema mismatch?)"))?;
                     
-                    let vec_row = vectors.value(i);
+                    let vec_row = if let Some(fs) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+                        fs.value(i)
+                    } else if let Some(l) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
+                        l.value(i)
+                    } else {
+                        return Err(anyhow::anyhow!("Invalid vector column type (expected FixedSizeListArray or ListArray) for column '{}'", column));
+                    };
+                    
                     let floats = vec_row.as_any().downcast_ref::<arrow::array::Float32Array>()
-                        .ok_or_else(|| anyhow::anyhow!("Expected Float32Array in vector value"))?;
+                        .ok_or_else(|| anyhow::anyhow!("Expected Float32Array in vector value for column '{}'", column))?;
                     
                     let dist = match metric {
                         VectorMetric::L2 => crate::core::index::distance::l2_distance(&q_vec, floats.values()),

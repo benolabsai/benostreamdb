@@ -15,7 +15,7 @@ def test_imports():
         print("✓ hyperstreamdb module imported successfully")
     except ImportError as e:
         print(f"✗ Failed to import hyperstreamdb: {e}")
-        return False
+        raise Exception(f"Failed to import hyperstreamdb: {e}")
     
     # Test GPU Context API
     print("\nTesting GPU Context API...")
@@ -30,7 +30,7 @@ def test_imports():
         print(f"✓ ComputeContext('cpu') works: backend={cpu_ctx.backend}")
     except Exception as e:
         print(f"✗ GPU Context API failed: {e}")
-        return False
+        raise Exception(f"Failed to import hyperstreamdb: {e}")
     
     # Test Distance API - Single-pair functions
     print("\nTesting Distance API - Single-pair functions...")
@@ -52,7 +52,7 @@ def test_imports():
             print(f"✓ {name}(a, b) = {result}")
         except Exception as e:
             print(f"✗ {name} failed: {e}")
-            return False
+            raise Exception(f"Failed to import hyperstreamdb: {e}")
     
     # Test Distance API - Batch functions
     print("\nTesting Distance API - Batch functions...")
@@ -78,7 +78,7 @@ def test_imports():
             print(f"✓ {name}(query, vectors) shape = {result.shape}, values = {result}")
         except Exception as e:
             print(f"✗ {name} failed: {e}")
-            return False
+            raise Exception(f"Failed to import hyperstreamdb: {e}")
     
     # Test Sparse Vector API
     print("\nTesting Sparse Vector API...")
@@ -104,7 +104,7 @@ def test_imports():
         print(f"✓ sparse_a.to_dense() shape = {dense.shape}")
     except Exception as e:
         print(f"✗ Sparse Vector API failed: {e}")
-        return False
+        raise Exception(f"Failed to import hyperstreamdb: {e}")
     
     # Test Binary Vector API
     print("\nTesting Binary Vector API...")
@@ -130,13 +130,12 @@ def test_imports():
         print(f"✓ jaccard_auto(a_unpacked, b_unpacked) = {jaccard_auto}")
     except Exception as e:
         print(f"✗ Binary Vector API failed: {e}")
-        return False
+        raise Exception(f"Failed to import hyperstreamdb: {e}")
     
+    # Test with auto_detect
     print("\n" + "="*60)
     print("✓ All exports verified successfully!")
     print("="*60)
-    return True
 
 if __name__ == "__main__":
-    success = test_imports()
-    sys.exit(0 if success else 1)
+    test_imports()

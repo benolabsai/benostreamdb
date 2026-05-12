@@ -36,7 +36,8 @@ impl PyDevice {
              let i = parts[1].parse::<i32>().map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid device index"))?;
              (b, i)
         } else {
-             (device, index.unwrap_or(if device == "cpu" { -1 } else { 0 }))
+             let lower = device.to_lowercase();
+             (device, index.unwrap_or(if lower == "cpu" { -1 } else { 0 }))
         };
 
         let backend_enum = match backend_str.to_lowercase().as_str() {
