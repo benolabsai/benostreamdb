@@ -522,6 +522,9 @@ impl Table {
         let default_device_for_stream = default_device.clone();
 
         // Parallelize partition writing using futures stream
+        let concurrency = self.query_config.max_parallel_segments
+            .unwrap_or_else(|| std::thread::available_parallelism()
+                .map(|p| p.get()).unwrap_or(16));
         let stream = futures::stream::iter(partitioned_batches.into_iter().map(|(partition_values, batch)| {
             let base_path = base_path.to_string();
             let spec = spec.clone();
@@ -556,7 +559,7 @@ impl Table {
                 
                 Ok::<PartitionSegment, anyhow::Error>((entry, generated_files, segment_id, batch, partition_values))
             }
-        })).buffer_unordered(16); // High concurrency for IO
+        })).buffer_unordered(concurrency);
 
         let results: Vec<Result<PartitionSegment>> = stream.collect().await;
         

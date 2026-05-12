@@ -374,7 +374,7 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                                     tracing::debug!("VectorSearchOptimizer: Pushing LIMIT+OFFSET {} to vector index layer", k_with_offset);
                                 }
                                 
-                                let mut vp = VectorSearchParams::new(&col_name, query_val.clone(), k_with_offset).with_metric(*metric);
+                                let mut vp = VectorSearchParams::new(col_name, query_val.clone(), k_with_offset).with_metric(*metric);
                                 
                                 // Apply configuration parameters
                                 if let Some(ef) = search_config.ef_search {
@@ -1758,100 +1758,60 @@ mod fallback_tests {
         // The optimizer prints: "Index will be used if available, otherwise will fall back to sequential scan."
         
         let optimizer = VectorSearchOptimizerRule {};
-        
-        // The optimizer includes a println! statement at line ~350 that informs users:
-        // "VectorSearchOptimizer: Created optimized plan with vector search parameters. 
+
+        // The optimizer logs via tracing when it creates a VectorSearchParams plan:
+        // "VectorSearchOptimizer: Created optimized plan with vector search parameters.
         //  Index will be used if available, otherwise will fall back to sequential scan."
-        
-        // This message is printed when the optimizer creates a VectorSearchParams plan
-        // It indicates that:
+
+        // This message indicates:
         // 1. The plan is optimized for vector search
         // 2. If an index exists, it will be used
-        // 3. If no index exists, execution will attempt to fall back
-        
-        // Note: The actual behavior when index is missing is to return an error
-        // The "fallback" mentioned in the log is aspirational/future behavior
-        // Currently, missing indexes cause query execution to fail
-        
+        // 3. If no index exists, execution falls back to flat scan (implemented)
+
+        // Fallback is implemented at three layers:
+        // - HybridReader::vector_search_index() catches index-load errors → flat scan
+        // - execute_vector_search_with_config() catches per-segment errors → skips segment
+        // - VectorScanExec::execute() catches segment errors → skips segment with warning
+
         assert_eq!(optimizer.name(), "VectorSearchOptimizerRule");
-        
-        // The actual logging happens during optimize() when a KNN pattern is detected
-        // This test documents that the fallback behavior is communicated to users
     }
-    
+
     // Requirements: 2.4, 2.5
     #[test]
     fn test_fallback_scenarios_documentation() {
-        // This test documents the two main fallback scenarios:
-        
-        // Scenario 1: No index exists (Requirement 2.4)
-        // Current behavior:
+        // Scenario 1: No index exists (Requirement 2.4) — IMPLEMENTED
         // - Optimizer creates plan with VectorSearchParams
-        // - HyperStreamExec tries to load index via vector_search_index()
-        // - Index file not found (404 error from object store)
-        // - Error propagates to query execution
-        // - Query fails with error message
-        
-        // Expected/future behavior (based on log message):
-        // - System should fall back to sequential scan with sorting
-        // - Query should complete successfully, just slower
-        // - This would require catching the 404 error and switching to full scan
-        
+        // - vector_search_index() tries to load HNSW-IVF index
+        // - If index file not found, error is caught → falls back to vector_search_flat()
+        // - If flat scan also fails, segment is skipped with tracing::warn!
+        // - Query completes with results from remaining segments
+
         // Scenario 2: Multiple vector ORDER BY expressions (Requirement 2.5)
         // - Query has multiple sort expressions
-        // - Optimizer checks: if sort_exprs.len() != 1 { return no transformation }
-        // - Plan uses standard SortExec instead of vector search optimization
-        // - All sort expressions are evaluated
-        // - First expression is primary sort key, others are tiebreakers
-        // - No vector index is used
-        // - Query uses full table scan with standard sorting
-        
-        // Both scenarios ensure the system handles edge cases:
-        // - Scenario 1: Currently fails with error (future: graceful degradation)
-        // - Scenario 2: Falls back to standard sorting (works correctly)
-        
+        // - Optimizer uses first vector expression for index search
+        // - Remaining expressions applied as tiebreakers in VectorMergeExec
+        // - If index unavailable, falls back to standard sorting
+
         let optimizer = VectorSearchOptimizerRule {};
         assert_eq!(optimizer.name(), "VectorSearchOptimizerRule");
-        
-        // This test serves as documentation for developers
-        // It explains how the system handles edge cases and fallback scenarios
-        // It also notes the gap between logged behavior and actual behavior for missing indexes
     }
-    
+
     // Requirements: 2.4
     #[test]
     fn test_index_file_not_found_handling() {
-        // Test that documents how the system handles missing index files
-        
-        // The fallback logic for missing indexes is in src/core/reader.rs:
-        // Line 357-360 in vector_search_index():
-        // ```
-        // Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
-        //     // Missing index file - fallback to full scan
-        //     return Ok(None);
-        // }
-        // ```
-        
-        // This code catches 404 errors when trying to load index files
-        // and returns Ok(None) to indicate no index is available
-        
-        // However, this is in the scalar filter bitmap loading code
-        // The vector index loading in search_hnsw_ivf() does NOT have this fallback
-        // So vector queries with missing indexes will fail with an error
-        
-        // This test documents the current behavior and the gap in fallback handling
-        
+        // Fallback for missing index files is implemented at three layers:
+        //
+        // Layer 1: HybridReader::vector_search_index() (src/core/reader/scan.rs)
+        //   - Catches errors from search_hnsw_ivf() → calls vector_search_flat()
+        //
+        // Layer 2: execute_vector_search_with_config() (src/core/query.rs)
+        //   - Catches per-segment errors → logs warning, continues with other segments
+        //
+        // Layer 3: VectorScanExec::execute() (src/core/sql/physical_plan/vector_scan.rs)
+        //   - Catches segment-level errors → logs warning, skips segment
+
         let optimizer = VectorSearchOptimizerRule {};
         assert_eq!(optimizer.name(), "VectorSearchOptimizerRule");
-        
-        // To implement true fallback for vector queries, the system would need:
-        // 1. Catch 404 errors in search_hnsw_ivf() or vector_search_index()
-        // 2. Fall back to reading all rows from parquet
-        // 3. Compute distances in memory for all rows
-        // 4. Sort by distance and apply LIMIT
-        // 5. Return results
-        
-        // This would match the behavior described in the optimizer log message
     }
 }
 

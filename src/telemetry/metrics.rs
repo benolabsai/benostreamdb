@@ -64,4 +64,28 @@ lazy_static! {
         "hyperstreamdb_search_latency_seconds",
         "Search operation latency in seconds"
     ).unwrap();
+
+    /// Commit duration in seconds (manifest flush)
+    pub static ref COMMIT_DURATION_SECONDS: Histogram = register_histogram!(
+        "hyperstreamdb_commit_duration_seconds",
+        "Commit (manifest flush) duration in seconds"
+    ).unwrap();
+
+    /// Index build duration in seconds (HNSW-IVF construction)
+    pub static ref INDEX_BUILD_DURATION_SECONDS: Histogram = register_histogram!(
+        "hyperstreamdb_index_build_duration_seconds",
+        "Index build (HNSW-IVF) duration in seconds"
+    ).unwrap();
+
+    /// Number of active segments (distinct from active parquet files)
+    pub static ref ACTIVE_SEGMENTS_GAUGE: IntGauge = register_int_gauge!(
+        "hyperstreamdb_active_segments",
+        "Number of active segments in the table"
+    ).unwrap();
+
+    /// Number of manifest commit conflicts (concurrent writers)
+    pub static ref MANIFEST_CONFLICTS_TOTAL: IntCounter = register_int_counter!(
+        "hyperstreamdb_manifest_conflicts_total",
+        "Number of manifest commit conflicts detected"
+    ).unwrap();
 }

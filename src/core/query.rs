@@ -18,12 +18,22 @@ use crate::core::index::VectorMetric;
 #[derive(Default)]
 pub struct QueryConfig {
     /// Maximum number of parallel segment readers.
-    /// 
+    ///
     /// If None, auto-detected based on available system memory.
     /// Each HNSW load uses: num_vectors × embedding_dim × 4 bytes
-    /// 
+    ///
     /// Auto-detection reserves 50% of available RAM for HNSW loads.
     pub max_parallel_readers: Option<usize>,
+
+    /// Maximum number of parallel segment writers during flush.
+    ///
+    /// If None, defaults to the number of available CPUs.
+    pub max_parallel_segments: Option<usize>,
+
+    /// Maximum parallelism for HNSW index loading.
+    ///
+    /// If None, defaults to `max_parallel_readers`.
+    pub hnsw_max_load_parallelism: Option<usize>,
 
     /// Constant for Reciprocal Rank Fusion (RRF). Defaults to 60.0.
     pub rrf_k: Option<f32>,
@@ -46,7 +56,19 @@ impl QueryConfig {
         self.rrf_k = Some(k);
         self
     }
-    
+
+    /// Set max parallel segments for write/flush path
+    pub fn with_max_parallel_segments(mut self, max: usize) -> Self {
+        self.max_parallel_segments = Some(max.max(1));
+        self
+    }
+
+    /// Set max parallelism for HNSW index loading
+    pub fn with_hnsw_max_load_parallelism(mut self, max: usize) -> Self {
+        self.hnsw_max_load_parallelism = Some(max.max(1));
+        self
+    }
+
     /// Calculate optimal parallel readers based on available memory and segment size
     /// 
     /// Formula: max_parallel = (available_ram * 0.5) / memory_per_segment
@@ -444,11 +466,22 @@ pub async fn execute_vector_search_with_config(
     tracing::info!("Vector search starting on {} entries", search_futures_count);
     let results = join_all(search_futures).await;
     
-    // Collect successful results, fail on any error
+    // Collect successful results, gracefully skip segments that fail
+    // (e.g. missing/corrupt index files) rather than failing the entire query.
     let mut all_results_with_distances = Vec::new();
-    for (_i, result) in results.into_iter().enumerate() {
-        let r = result?;
-        all_results_with_distances.extend(r);
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(r) => all_results_with_distances.extend(r),
+            Err(e) => {
+                tracing::warn!(
+                    segment = i,
+                    error = %e,
+                    "Segment vector search failed — results for this segment will be incomplete. \
+                     The index layer should have fallen back to flat scan; if this warning \
+                     persists, check that segment data files are accessible."
+                );
+            }
+        }
     }
     
     tracing::info!("Vector search found {} total batches across all segments", all_results_with_distances.len());

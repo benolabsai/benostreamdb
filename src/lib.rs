@@ -25,6 +25,7 @@ pub mod python_distance;
 pub use crate::core::table::{Table, VectorSearchParams};
 pub use crate::core::index::VectorMetric;
 pub use crate::core::catalog::{CatalogType, create_catalog, create_catalog_async, Catalog};
+pub use crate::core::error::{HyperstreamError, Result};
 
 
 

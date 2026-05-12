@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod error;
 pub mod table;
 pub mod segment;
 pub mod reader;

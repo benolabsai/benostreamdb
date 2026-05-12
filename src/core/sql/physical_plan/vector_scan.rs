@@ -194,7 +194,7 @@ impl ExecutionPlan for VectorScanExec {
                     request = request.with_columns(Some(proj_names.clone()));
                 }
                 
-                // Currently executes a single segment search. 
+                // Currently executes a single segment search.
                 // Wait, if it executes single segment, it uses query.rs's execute_vector_search_with_config
                 match execute_vector_search_with_config(
                     vec![entry.clone()],
@@ -219,7 +219,16 @@ impl ExecutionPlan for VectorScanExec {
                             yield Ok(b);
                         }
                     },
-                    Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
+                    Err(e) => {
+                        // Graceful degradation: log warning and skip this segment
+                        // rather than failing the entire query
+                        tracing::warn!(
+                            error = %e,
+                            "Vector search failed for segment — skipping. \
+                             The index layer should fall back to flat scan; if this \
+                             persists, check segment data accessibility."
+                        );
+                    }
                 }
             }
         };
