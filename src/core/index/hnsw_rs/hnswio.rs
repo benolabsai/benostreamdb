@@ -106,9 +106,9 @@ impl Description {
         // dump of max_nb_connection as u8!!
         out.write(&self.max_nb_connection.to_ne_bytes()).unwrap();
         out.write(&self.nb_layer.to_ne_bytes()).unwrap();
-        if self.nb_layer != NB_LAYER_MAX {
-            println!("dump of Description, nb_layer != NB_MAX_LAYER");
-            return Err(String::from("dump of Description, nb_layer != NB_MAX_LAYER"));
+        if self.nb_layer > NB_LAYER_MAX {
+            println!("dump of Description, nb_layer > NB_MAX_LAYER");
+            return Err(String::from("dump of Description, nb_layer > NB_MAX_LAYER"));
         }
         //
         log::info!("dumping ef {:?}", self.ef);

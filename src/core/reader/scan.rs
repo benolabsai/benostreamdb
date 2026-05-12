@@ -668,7 +668,7 @@ impl HybridReader {
         // If filter exists but bitmap is None (no scalar index), fall through
         // to index search + post-filtering for correctness.
         if let Some(ref bitmap) = allowed_bitmap {
-            return self.vector_search_on_filtered(column, query, k, bitmap, metric, target_schema).await;
+            return self.vector_search_on_filtered(column, query, k, bitmap, metric, target_schema, filter).await;
         }
 
         // --- FILTER PRESENT but no scalar index bitmap ---
@@ -967,8 +967,19 @@ impl HybridReader {
         if let Some(schema) = &target_schema_ref {
             let parquet_schema = builder.metadata().file_metadata().schema_descr();
             let file_arrow_schema = builder.schema();
-            let column_indices: Vec<usize> = schema.fields().iter()
-                .filter_map(|field| file_arrow_schema.index_of(field.name()).ok())
+            
+            // --- BUG FIX: Ensure columns required by filter are included in projection ---
+            let mut required_cols: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+            if let Some(expr) = filter {
+                for col in expr.required_columns() {
+                    if !required_cols.contains(&col) {
+                        required_cols.push(col);
+                    }
+                }
+            }
+            
+            let column_indices: Vec<usize> = required_cols.iter()
+                .filter_map(|name| file_arrow_schema.index_of(name).ok())
                 .collect();
             
             let projection = ProjectionMask::roots(parquet_schema, column_indices);
@@ -1081,6 +1092,7 @@ impl HybridReader {
         bitmap: &RoaringBitmap,
         metric: VectorMetric,
         target_schema: Option<arrow::datatypes::SchemaRef>,
+        filter: Option<&FilterExpr>,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         use futures::StreamExt;
 
@@ -1116,73 +1128,51 @@ impl HybridReader {
 
         // Apply row selection to read only filtered rows
         let num_rows = builder.metadata().file_metadata().num_rows() as usize;
-        let selection = self.bitmap_to_row_selection(bitmap, num_rows);
-        builder = builder.with_row_selection(selection);
-
-        // Apply deletes
+        
+        // Handle deletes as well
         let deleted = self.load_merged_deletes().await?;
-        if !deleted.is_empty() {
+        let merged = if !deleted.is_empty() {
             let full_range = RoaringBitmap::from_iter(0..num_rows as u32);
             let valid = full_range - deleted;
-            let merged = &valid & bitmap;
-            let merged_selection = self.bitmap_to_row_selection(&merged, num_rows);
-            builder = builder.with_row_selection(merged_selection);
-        }
+            &valid & bitmap
+        } else {
+            bitmap.clone()
+        };
+
+        let selection = self.bitmap_to_row_selection(&merged, num_rows);
+        builder = builder.with_row_selection(selection);
 
         let mut stream = builder.build()?;
         let mut all_scored: Vec<(usize, f32)> = Vec::new();
-        let mut row_offset = 0usize;
+        
+        // We use an iterator over the merged bitmap to get the CORRECT global row IDs for each row returned by the reader.
+        let mut bitmap_iter = merged.iter();
 
         while let Some(batch_result) = stream.next().await {
             let batch = batch_result?;
-            let num_rows_in_batch = batch.num_rows();
-
-            // Extract vectors and compute distances
+            
             if let Some(col) = batch.column_by_name(column) {
-                let vectors: Vec<Vec<f32>> = match col.data_type() {
-                    arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                        let list = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>()
-                            .context("Invalid cast to FixedSizeListArray")?;
-                        (0..list.len()).map(|i| {
-                            let item = list.value(i);
-                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
-                                floats.values().to_vec()
-                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
-                                doubles.values().iter().map(|&d| d as f32).collect()
-                            } else {
-                                vec![0.0; item.len()]
-                            }
-                        }).collect()
-                    },
-                    arrow::datatypes::DataType::List(_) => {
-                        let list = col.as_any().downcast_ref::<arrow::array::ListArray>()
-                            .context("Invalid cast to ListArray")?;
-                        (0..list.len()).map(|i| {
-                            let item = list.value(i);
-                            if let Some(floats) = item.as_any().downcast_ref::<arrow::array::Float32Array>() {
-                                floats.values().to_vec()
-                            } else if let Some(doubles) = item.as_any().downcast_ref::<arrow::array::Float64Array>() {
-                                doubles.values().iter().map(|&d| d as f32).collect()
-                            } else {
-                                vec![0.0; item.len()]
-                            }
-                        }).collect()
-                    },
-                    _ => vec![],
-                };
+                let vectors = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>()
+                    .context("Invalid vector column type (expected FixedSizeListArray)")?;
 
-                for (i, v) in vectors.iter().enumerate() {
+                for i in 0..batch.num_rows() {
+                    let row_id = bitmap_iter.next()
+                        .ok_or_else(|| anyhow::anyhow!("Bitmap iterator exhausted before reader batches (schema mismatch?)"))?;
+                    
+                    let vec_row = vectors.value(i);
+                    let floats = vec_row.as_any().downcast_ref::<arrow::array::Float32Array>()
+                        .ok_or_else(|| anyhow::anyhow!("Expected Float32Array in vector value"))?;
+                    
                     let dist = match metric {
-                        VectorMetric::L2 => crate::core::index::distance::l2_distance(&q_vec, v),
-                        VectorMetric::Cosine => crate::core::index::distance::cosine_similarity(&q_vec, v),
-                        VectorMetric::InnerProduct => crate::core::index::distance::dot_product(&q_vec, v),
-                        VectorMetric::L1 => crate::core::index::distance::l1_distance(&q_vec, v),
+                        VectorMetric::L2 => crate::core::index::distance::l2_distance(&q_vec, floats.values()),
+                        VectorMetric::Cosine => crate::core::index::distance::cosine_similarity(&q_vec, floats.values()),
+                        VectorMetric::InnerProduct => crate::core::index::distance::dot_product(&q_vec, floats.values()),
+                        VectorMetric::L1 => crate::core::index::distance::l1_distance(&q_vec, floats.values()),
                         _ => f32::MAX,
                     };
-                    all_scored.push((row_offset + i, dist));
+                    all_scored.push((row_id as usize, dist));
                 }
             }
-            row_offset += num_rows_in_batch;
         }
 
         // Step 2: Sort by distance and take top-k
@@ -1195,7 +1185,7 @@ impl HybridReader {
         }
 
         // Convert to (usize, f32) matches and use existing fetch_rows_with_distances
-        self.fetch_rows_with_distances(all_scored, target_schema, None).await
+        self.fetch_rows_with_distances(all_scored, target_schema, filter).await
     }
 
     async fn search_hnsw_ivf(

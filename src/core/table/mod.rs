@@ -351,11 +351,27 @@ impl Table {
         Ok(())
     }
 
-    /// Add an indexing strategy to a column.
-    /// This is an atomic operation that commits a new manifest version.
     pub async fn add_index(&self, column: String, algorithm: IndexAlgorithm) -> Result<()> {
         let manifest = self.manifest().await?;
-        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        let latest_schema = match manifest.schemas.last() {
+            Some(s) => s,
+            None => {
+                // Update in-memory state if no manifest/schema exists yet.
+                // This allows pre-configuring indexes before the first write.
+                let mut index_configs = self.indexing.index_configs.write();
+                let config = index_configs.entry(column.clone()).or_insert_with(|| ColumnIndexConfig {
+                    enabled: true,
+                    ..Default::default()
+                });
+                config.algorithms.push(algorithm);
+                
+                let mut index_cols = self.indexing.index_columns.write();
+                if !index_cols.contains(&column) {
+                    index_cols.push(column);
+                }
+                return Ok(());
+            }
+        };
         
         let field = latest_schema.fields.iter()
             .find(|f| f.name == column)

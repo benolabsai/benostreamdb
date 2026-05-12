@@ -110,6 +110,10 @@ def _resolve_uri(uri: str) -> str:
     if not uri.startswith(("s3://", "file://", "az://", "gs://", "http://", "https://")):
         return f"file://{os.abspath(uri)}" if hasattr(os, "abspath") else uri
     return uri
+
+def open_table(uri: str, **kwargs) -> Table:
+    """Open an existing HyperStreamDB table."""
+    return Table(uri, **kwargs)
 class Query:
     """
     Fluent Query interface for HyperStreamDB.
@@ -619,10 +623,19 @@ class Table:
         """
         return self._inner.set_index_columns(config)
 
-    def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw"):
+    def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
         """
         Add an indexing strategy to a column.
         """
+        if isinstance(algorithm, str):
+            algorithm = {"type": algorithm}
+        
+        if kwargs:
+            # Map 'device' to 'build_device' for consistency with set_index_config
+            if 'device' in kwargs:
+                kwargs['build_device'] = kwargs.pop('device')
+            algorithm.update(kwargs)
+            
         return self._inner.add_index(column, algorithm)
 
     def drop_index(self, column: str):

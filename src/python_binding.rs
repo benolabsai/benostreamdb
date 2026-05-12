@@ -604,22 +604,25 @@ impl PyTable {
         let rust_alg = if let Some(algo_obj) = algorithm {
             parse_index_algorithm(algo_obj)?
         } else {
-            // Smart Default based on Column Type
+            // Smart Default based on Column Type (if available)
             let schema = self.table.arrow_schema();
-            let field = schema.field_with_name(&column)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            
-            match field.data_type() {
-                arrow::datatypes::DataType::List(_) | arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                    IndexAlgorithm::Hnsw {
-                        metric: "l2".into(),
-                        complexity: 16,
-                        quality: 200,
-                        build_device: None,
-                        search_device: None
-                    }
-                },
-                _ => IndexAlgorithm::Bitmap,
+            if let Ok(field) = schema.field_with_name(&column) {
+                match field.data_type() {
+                    arrow::datatypes::DataType::List(_) | arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                        IndexAlgorithm::Hnsw {
+                            metric: "l2".into(),
+                            complexity: 16,
+                            quality: 200,
+                            build_device: None,
+                            search_device: None
+                        }
+                    },
+                    _ => IndexAlgorithm::Bitmap,
+                }
+            } else {
+                // Fallback for empty schema or unknown column: default to Bitmap
+                // The actual type check will happen during index build.
+                IndexAlgorithm::Bitmap
             }
         };
 
@@ -1807,7 +1810,12 @@ fn arrow_schema_to_pyarrow(py: Python<'_>, schema: arrow::datatypes::SchemaRef) 
 
 fn arrow_batches_to_pyarrow(py: Python<'_>, batches: Vec<RecordBatch>, schema: arrow::datatypes::SchemaRef) -> PyResult<Py<PyAny>> {
     // Use Arrow C Stream Interface for efficient transfer
-    let batch_iter = RecordBatchIterator::new(batches.into_iter().map(Ok), schema);
+    let actual_schema = if let Some(first) = batches.first() {
+        first.schema()
+    } else {
+        schema
+    };
+    let batch_iter = RecordBatchIterator::new(batches.into_iter().map(Ok), actual_schema);
     
     // Export to C Stream
     let stream = FFI_ArrowArrayStream::new(Box::new(batch_iter));

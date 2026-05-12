@@ -123,6 +123,38 @@ impl FilterExpr {
 
         Err(anyhow::anyhow!("Failed to parse filter expression: '{}'", filter))
     }
+    
+    /// Extract all columns referenced in the expression
+    pub fn required_columns(&self) -> Vec<String> {
+        match self {
+            FilterExpr::DataFusion(expr) => {
+                let mut cols = Vec::new();
+                fn extract(expr: &datafusion::logical_expr::Expr, cols: &mut Vec<String>) {
+                    match expr {
+                        datafusion::logical_expr::Expr::Column(c) => {
+                            if !cols.contains(&c.name) {
+                                cols.push(c.name.clone());
+                            }
+                        }
+                        datafusion::logical_expr::Expr::BinaryExpr(b) => {
+                            extract(&b.left, cols);
+                            extract(&b.right, cols);
+                        }
+                        datafusion::logical_expr::Expr::Not(e) => extract(e, cols),
+                        datafusion::logical_expr::Expr::IsNotNull(e) => extract(e, cols),
+                        datafusion::logical_expr::Expr::IsNull(e) => extract(e, cols),
+                        datafusion::logical_expr::Expr::InList(l) => {
+                            extract(&l.expr, cols);
+                        }
+                        // Add more as needed
+                        _ => {}
+                    }
+                }
+                extract(expr, &mut cols);
+                cols
+            }
+        }
+    }
 
     /// Convert legacy Vec<QueryFilter> to FilterExpr
     pub fn from_filters(filters: Vec<QueryFilter>) -> Option<Self> {

@@ -468,7 +468,10 @@ impl ComputeContext {
             ComputeBackend::Cpu => true,
             ComputeBackend::Cuda => {
                 #[cfg(not(target_os = "macos"))]
-                { CudaBackend::new(self.device_id as usize).is_ok() }
+                { 
+                    CudaBackend::new(self.device_id as usize).is_ok() 
+                    && cudarc::driver::CudaDevice::count().map(|c| c > 0).unwrap_or(false)
+                }
                 #[cfg(target_os = "macos")]
                 { false }
             }

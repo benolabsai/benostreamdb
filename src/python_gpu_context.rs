@@ -43,7 +43,13 @@ impl PyDevice {
             "cpu" => ComputeBackend::Cpu,
             "cuda" => {
                 #[cfg(not(target_os = "macos"))]
-                { ComputeBackend::Cuda }
+                { 
+                    let b = ComputeBackend::Cuda;
+                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("CUDA device {} not available", device_id)));
+                    }
+                    b
+                }
                 #[cfg(target_os = "macos")]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err(
                     "CUDA backend not available on macOS."
@@ -51,19 +57,37 @@ impl PyDevice {
             }
             "mps" | "metal" => {
                 #[cfg(target_os = "macos")]
-                { ComputeBackend::Mps }
+                { 
+                    let b = ComputeBackend::Mps;
+                    if !(ComputeContext { backend: b, device_id: 0, implementation: None }).is_available() {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err("MPS device not available"));
+                    }
+                    b
+                }
                 #[cfg(not(target_os = "macos"))]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'mps' is only available on macOS.")); }
             }
             "intel" | "graphics" => {
                 #[cfg(target_os = "linux")]
-                { ComputeBackend::Intel }
+                { 
+                    let b = ComputeBackend::Intel;
+                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("Intel GPU device {} not available", device_id)));
+                    }
+                    b
+                }
                 #[cfg(not(target_os = "linux"))]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'intel' (XPU) is only supported on Linux.")); }
             }
             "rocm" => {
                 #[cfg(target_os = "linux")]
-                { ComputeBackend::Rocm }
+                { 
+                    let b = ComputeBackend::Rocm;
+                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("ROCm device {} not available", device_id)));
+                    }
+                    b
+                }
                 #[cfg(not(target_os = "linux"))]
                 { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'rocm' is only supported on Linux.")); }
             }

@@ -306,7 +306,7 @@ impl HybridReader {
                                 let min_i = min_i as i32;
                                 if filter.min_inclusive { ok &= val >= min_i; } else { ok &= val > min_i; }
                                 if ok {
-                                    println!("DEBUG inverted_index_match: col={}, val={}, row_ids={:?}", filter.column, val, row_ids_list.value(i).as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap().values());
+                                    tracing::debug!("inverted_index_match: col={}, val={}, row_ids={:?}", filter.column, val, row_ids_list.value(i).as_any().downcast_ref::<arrow::array::UInt32Array>().unwrap().values());
                                 }
                             }
                             if let Some(max_v) = &filter.max {
