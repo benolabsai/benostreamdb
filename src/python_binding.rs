@@ -2096,7 +2096,8 @@ fn validate_record_batch(obj: &Bound<'_, PyAny>) -> PyResult<()> {
             format!("Cannot determine type of object passed to table.write(): {}", e)
         ))?;
     // PyArrow RecordBatch reports its type as "RecordBatch" or "pyarrow.lib.RecordBatch"
-    if !type_name.ends_with("RecordBatch") {
+    let type_name_str = type_name.to_string_lossy(py);
+    if !type_name_str.ends_with("RecordBatch") {
         return Err(pyo3::exceptions::PyTypeError::new_err(
             format!("Expected pyarrow.RecordBatch, got '{}'. \
                      Pass a RecordBatch, a list of RecordBatches, a PyArrow Table, or a Pandas DataFrame.", type_name)

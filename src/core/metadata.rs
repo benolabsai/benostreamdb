@@ -152,7 +152,7 @@ impl TableMetadata {
         self.partition_specs.push(spec);
     }
 
-    /// Save metadata to ObjectStore as a new version v<X>.metadata.json
+    /// Save metadata to ObjectStore as a new version `v<X>.metadata.json`
     pub async fn save_to_store(&mut self, storage: &dyn object_store::ObjectStore, version: i32) -> anyhow::Result<String> {
         let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
         let json = serde_json::to_vec(self)?;
