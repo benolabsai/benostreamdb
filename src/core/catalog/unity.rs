@@ -53,7 +53,7 @@ impl UnityCatalogClient {
     /// Create a new Unity Catalog client
     /// 
     /// # Arguments
-    /// * `base_url` - Databricks workspace URL (e.g., "https://my-workspace.cloud.databricks.com")
+    /// * `base_url` - Databricks workspace URL (e.g., `<https://my-workspace.cloud.databricks.com>`)
     /// * `token` - Databricks personal access token
     pub fn new(base_url: String, token: String) -> Self {
         Self {

@@ -205,7 +205,7 @@ impl VectorLiteralParser {
     /// Parse a vector literal string into a DataFusion ScalarValue
     /// 
     /// # Arguments
-    /// * `input` - The vector literal string, e.g., "[1,2,3]" or "[1.0, 2.0, 3.0]"
+    /// * `input` - The vector literal string, e.g., ``[1,2,3]`` or ``[1.0, 2.0, 3.0]``
     /// 
     /// # Returns
     /// * `Result<ScalarValue>` - A FixedSizeList ScalarValue containing Float32 elements

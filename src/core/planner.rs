@@ -166,7 +166,7 @@ impl FilterExpr {
         }
     }
 
-    /// Convert legacy Vec<QueryFilter> to FilterExpr.
+    /// Convert legacy `Vec<QueryFilter>` to FilterExpr.
     ///
     /// Combines multiple filters with AND logic. Returns `None` if the input is empty.
     pub fn from_filters(filters: Vec<QueryFilter>) -> Option<Self> {
@@ -782,7 +782,7 @@ impl QueryPlanner {
     /// Uses scalar stats (min/max) from manifest entries to eliminate segments
     /// before loading their data. Vector params are used to check vector column stats.
     ///
-    /// Returns a list of (Entry, Option<IndexFile>) tuples for surviving candidates.
+    /// Returns a list of (Entry, `Option<IndexFile>`) tuples for surviving candidates.
     pub fn prune_entries(&self, entries: &[ManifestEntry], expr: Option<&FilterExpr>, vector_params: Option<&VectorSearchParams>) -> Vec<(ManifestEntry, Option<IndexFile>)> {
         let pruning_start = std::time::Instant::now();
         let mut candidates = Vec::new();
