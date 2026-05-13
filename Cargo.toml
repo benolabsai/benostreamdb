@@ -102,6 +102,7 @@ anyhow = "1.0"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.23"
 url = "2.5"
 uuid = { version = "1.10", features = ["v4", "fast-rng", "macro-diagnostics"] }
 chrono = "0.4"

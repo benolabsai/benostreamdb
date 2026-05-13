@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use crate::core::manifest::{ColumnStats, ManifestEntry, VectorStats, ManifestValue};
 use object_store::ObjectStore;
-use crate::core::index::gpu::{ComputeContext, set_global_gpu_context};
+use crate::core::index::gpu::{ComputeContext, set_thread_gpu_context};
 use parquet::file::statistics::Statistics as ParquetStats;
 
 pub struct HybridSegmentWriter {
@@ -566,7 +566,7 @@ impl HybridSegmentWriter {
             tracing::info!("Applying device override for column {}: {}", col_name, device_str);
             if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
                 tracing::info!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
-                set_global_gpu_context(Some(ctx));
+                set_thread_gpu_context(Some(ctx));
             } else {
                 tracing::warn!("Failed to parse device string: {}", device_str);
             }
@@ -574,7 +574,7 @@ impl HybridSegmentWriter {
             tracing::info!("Applying default device for column {}: {}", col_name, device_str);
             if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
                 tracing::info!("Successfully set global GPU context to {:?} for column {}", ctx.backend, col_name);
-                set_global_gpu_context(Some(ctx));
+                set_thread_gpu_context(Some(ctx));
             } else {
                 tracing::warn!("Failed to parse default device string: {}", device_str);
             }

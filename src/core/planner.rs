@@ -37,6 +37,7 @@ pub struct VectorSearchParams {
 }
 
 impl VectorSearchParams {
+    /// Create new vector search parameters with default L2 metric.
     pub fn new(column: &str, query: crate::core::index::VectorValue, k: usize) -> Self {
         Self {
             column: column.to_string(),
@@ -49,16 +50,19 @@ impl VectorSearchParams {
         }
     }
 
+    /// Set the distance metric for vector search.
     pub fn with_metric(mut self, metric: crate::core::index::VectorMetric) -> Self {
         self.metric = metric;
         self
     }
 
+    /// Override the HNSW `ef_search` parameter (higher = more accurate, slower).
     pub fn with_ef_search(mut self, ef_search: usize) -> Self {
         self.ef_search = Some(ef_search);
         self
     }
 
+    /// Override the IVF `probes` parameter (higher = more partitions searched, slower).
     pub fn with_probes(mut self, probes: usize) -> Self {
         self.probes = Some(probes);
         self
@@ -71,6 +75,12 @@ pub enum FilterExpr {
 }
 
 impl FilterExpr {
+    /// Parse a SQL WHERE clause into a filter expression.
+    ///
+    /// Uses DataFusion's SQL parser and analyzer to handle type coercion.
+    ///
+    /// # Errors
+    /// Returns an error if the SQL is malformed or type coercion fails.
     pub async fn parse_sql(filter: &str, schema: SchemaRef) -> anyhow::Result<Self> {
         use datafusion::sql::TableReference;
 
@@ -156,7 +166,9 @@ impl FilterExpr {
         }
     }
 
-    /// Convert legacy Vec<QueryFilter> to FilterExpr
+    /// Convert legacy Vec<QueryFilter> to FilterExpr.
+    ///
+    /// Combines multiple filters with AND logic. Returns `None` if the input is empty.
     pub fn from_filters(filters: Vec<QueryFilter>) -> Option<Self> {
         if filters.is_empty() { return None; }
         
@@ -215,6 +227,15 @@ fn find_column_names(expr: &Expr, cols: &mut std::collections::HashSet<String>) 
 }
 
 impl QueryFilter {
+    /// Parse a simple filter string into a QueryFilter.
+    ///
+    /// Expected format: `"column op value"` where `op` is one of `=`, `==`, `>`, `>=`, `<`, `<=`.
+    /// Returns `None` if the format is invalid.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let filter = QueryFilter::parse("temperature > 100").unwrap();
+    /// ```
     pub fn parse(filter: &str) -> Option<Self> {
         // Very simple/naive parser for legacy support where needed.
         // Format expected: "column op value"
@@ -370,8 +391,8 @@ fn json_to_scalar(v: &Value) -> Expr {
     use datafusion::prelude::lit;
     match v {
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() { 
-                lit(i as i64)
+            if let Some(i) = n.as_i64() {
+                lit(i)
             }
             else { lit(n.as_f64().unwrap_or(0.0)) }
         }
@@ -585,24 +606,42 @@ impl Default for QueryPlanner {
 }
 
 impl QueryPlanner {
+    /// Create a new QueryPlanner instance.
     pub fn new() -> Self {
         Self {}
     }
 
-    /// Evaluate filter on a RecordBatch and return resulting RecordBatch
+    /// Evaluate a single filter condition on a RecordBatch and return the filtered batch.
+    ///
+    /// # Errors
+    /// Returns an error if the filter column is not found in the batch schema
+    /// or if type coercion fails during evaluation.
     pub fn filter_batch(&self, batch: &arrow::record_batch::RecordBatch, filter: &QueryFilter) -> anyhow::Result<arrow::record_batch::RecordBatch> {
         let mask = self.evaluate_condition(batch, filter)?;
         let filtered = arrow::compute::filter_record_batch(batch, &mask)?;
         Ok(filtered)
     }
 
-    /// Evaluate filter expression on a RecordBatch and return the resulting filtered RecordBatch
+    /// Evaluate a DataFusion filter expression on a RecordBatch.
+    ///
+    /// Handles automatic type coercion (LargeUtf8 → Utf8, LargeBinary → Binary)
+    /// to ensure the expression evaluates correctly.
+    ///
+    /// # Errors
+    /// Returns an error if the expression references unknown columns or types.
     pub fn filter_expr(&self, batch: &arrow::record_batch::RecordBatch, expr: &FilterExpr) -> anyhow::Result<arrow::record_batch::RecordBatch> {
         let mask = self.evaluate_expr(batch, expr)?;
         let filtered = arrow::compute::filter_record_batch(batch, &mask)?;
         Ok(filtered)
     }
 
+    /// Evaluate a DataFusion filter expression, returning a boolean mask.
+    ///
+    /// Performs type coercion on the input batch (LargeUtf8 → Utf8, LargeBinary → Binary)
+    /// before evaluation to avoid type mismatches.
+    ///
+    /// # Errors
+    /// Returns an error if the expression cannot be compiled or evaluated.
     pub fn evaluate_expr(&self, batch: &arrow::record_batch::RecordBatch, expr: &FilterExpr) -> anyhow::Result<arrow::array::BooleanArray> {
         let FilterExpr::DataFusion(df_expr) = expr;
 
@@ -719,7 +758,12 @@ impl QueryPlanner {
     }
 
 
-    /// Evaluate multiple filters on a RecordBatch and return a BooleanArray mask
+    /// Evaluate multiple filters on a RecordBatch, returning a combined boolean mask.
+    ///
+    /// Filters are combined with AND logic. Returns an all-true mask if the filter list is empty.
+    ///
+    /// # Errors
+    /// Returns an error if any individual filter evaluation fails.
     pub fn evaluate_filters(&self, batch: &arrow::record_batch::RecordBatch, filters: &[QueryFilter]) -> anyhow::Result<arrow::array::BooleanArray> {
         use arrow::compute::kernels::boolean;
         
@@ -733,9 +777,14 @@ impl QueryPlanner {
         
         Ok(mask)
     }
-    /// Prune manifest entries based on the filters.
-    /// Returns a list of (Entry, Option<IndexFile>) tuples.
+    /// Prune manifest entries that cannot match the given filters.
+    ///
+    /// Uses scalar stats (min/max) from manifest entries to eliminate segments
+    /// before loading their data. Vector params are used to check vector column stats.
+    ///
+    /// Returns a list of (Entry, Option<IndexFile>) tuples for surviving candidates.
     pub fn prune_entries(&self, entries: &[ManifestEntry], expr: Option<&FilterExpr>, vector_params: Option<&VectorSearchParams>) -> Vec<(ManifestEntry, Option<IndexFile>)> {
+        let pruning_start = std::time::Instant::now();
         let mut candidates = Vec::new();
         
         for entry in entries {
@@ -772,10 +821,16 @@ impl QueryPlanner {
                 candidates.push((entry.clone(), selected_index));
             }
         }
-        
+
+        metrics::histogram!("hyperstreamdb.query.segment_pruning_duration").record(pruning_start.elapsed().as_secs_f64());
         candidates
     }
 
+    /// Check if a manifest entry might contain vectors matching the query.
+    ///
+    /// Uses vector stats (norm bounds, per-dimension min/max) to prune segments
+    /// that are unlikely to contain relevant results. Returns `true` if no stats
+    /// are available (conservative: must scan).
     pub fn might_match_vector(&self, entry: &ManifestEntry, params: &VectorSearchParams) -> bool {
         let stats = if let Some(s) = entry.column_stats.get(&params.column) {
             s
@@ -821,6 +876,11 @@ impl QueryPlanner {
         true
     }
 
+    /// Check if a manifest entry might match a DataFusion filter expression.
+    ///
+    /// Recursively evaluates the expression tree against column stats (min/max)
+    /// to determine if the entry can be safely pruned. Returns `true` (must scan)
+    /// if stats are insufficient to prove a mismatch.
     pub fn might_match_expr(&self, entry: &ManifestEntry, expr: &FilterExpr) -> bool {
         let FilterExpr::DataFusion(df_expr) = expr;
         self.might_match_df_expr(entry, df_expr)

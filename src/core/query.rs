@@ -391,8 +391,12 @@ pub async fn execute_vector_search_with_config(
     request: VectorSearchRequest,
 ) -> Result<Vec<RecordBatch>> {
     use futures::future::join_all;
-    
+
+    let total_start = std::time::Instant::now();
     let num_segments = entries.len();
+
+    // Planning phase: auto-detect parallelism
+    let planning_start = std::time::Instant::now();
     
     // Auto-detect parallelism from query vector dimension and segment row counts
     let embedding_dim = match &request.query {
@@ -410,9 +414,12 @@ pub async fn execute_vector_search_with_config(
     
     let max_parallel = request.config.auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
     
-    tracing::debug!("Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)", 
-             num_segments, avg_rows_per_segment / 1000, embedding_dim, max_parallel); 
-    
+    tracing::debug!("Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)",
+             num_segments, avg_rows_per_segment / 1000, embedding_dim, max_parallel);
+
+    // Record planning duration
+    metrics::histogram!("hyperstreamdb.query.planning_duration").record(planning_start.elapsed().as_secs_f64());
+
     // Semaphore to limit concurrent HNSW loads
     let semaphore = Arc::new(Semaphore::new(max_parallel));
     
@@ -482,7 +489,9 @@ pub async fn execute_vector_search_with_config(
     // Execute all searches (bounded by semaphore)
     let search_futures_count = search_futures.len();
     tracing::info!("Vector search starting on {} entries", search_futures_count);
+    let search_start = std::time::Instant::now();
     let results = join_all(search_futures).await;
+    metrics::histogram!("hyperstreamdb.query.segment_search_duration").record(search_start.elapsed().as_secs_f64());
     
     // Collect successful results, gracefully skip segments that fail
     // (e.g. missing/corrupt index files) rather than failing the entire query.
@@ -503,6 +512,7 @@ pub async fn execute_vector_search_with_config(
     }
     
     tracing::info!("Vector search found {} total batches across all segments", all_results_with_distances.len());
+    metrics::histogram!("hyperstreamdb.query.execution_duration").record(total_start.elapsed().as_secs_f64());
     merge_and_rerank_vector_results(all_results_with_distances, request.k, 0)
 }
 

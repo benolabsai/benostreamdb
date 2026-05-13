@@ -3,7 +3,7 @@
 use anyhow::Result;
 use arrow::record_batch::RecordBatch;
 use crate::core::planner::VectorSearchParams;
-use crate::core::index::gpu::{set_global_gpu_context, ComputeContext};
+use crate::core::index::gpu::{set_thread_gpu_context, ComputeContext};
 
 use super::Table;
 
@@ -63,7 +63,7 @@ impl<'a> TableQuery<'a> {
         
         // Inject context if provided
         if let Some(ctx) = self.context {
-            set_global_gpu_context(Some(ctx));
+            set_thread_gpu_context(Some(ctx));
         }
         
         let mut config = self.table.query_config().clone();

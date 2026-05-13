@@ -161,12 +161,12 @@ impl PyDevice {
     }
 
     fn activate(&self) {
-        crate::core::index::gpu::set_global_gpu_context(Some(self.context.clone()));
+        crate::core::index::gpu::set_thread_gpu_context(Some(self.context.clone()));
     }
 
     #[staticmethod]
     fn deactivate() {
-        crate::core::index::gpu::set_global_gpu_context(None);
+        crate::core::index::gpu::set_thread_gpu_context(None);
     }
 
     fn __repr__(&self) -> String {

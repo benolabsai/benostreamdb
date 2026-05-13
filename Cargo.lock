@@ -3373,6 +3373,7 @@ dependencies = [
  "lazy_static",
  "log",
  "metal 0.27.0",
+ "metrics",
  "moka",
  "murmur3",
  "num_cpus",
@@ -4095,6 +4096,16 @@ dependencies = [
  "log",
  "objc",
  "paste",
+]
+
+[[package]]
+name = "metrics"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3045b4193fbdc5b5681f32f11070da9be3609f189a79f3390706d42587f46bb5"
+dependencies = [
+ "ahash",
+ "portable-atomic",
 ]
 
 [[package]]

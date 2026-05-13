@@ -549,7 +549,7 @@ impl Table {
                     let ctx = read_ctx.clone();
                     async move {
                         if let Some(c) = ctx.gpu.clone() {
-                            crate::core::index::gpu::set_global_gpu_context(Some(c));
+                            crate::core::index::gpu::set_thread_gpu_context(Some(c));
                         }
                         let cols_refs: Option<Vec<&str>> = ctx.columns.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
                         ctx.table.read_segment_expr(

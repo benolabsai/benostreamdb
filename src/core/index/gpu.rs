@@ -541,6 +541,24 @@ impl GpuBackend for CpuBackend {
 
 pub const GPU_DISPATCH_THRESHOLD: usize = 50_000;
 
+/// Compute pairwise distances between a query vector and a batch of vectors.
+///
+/// Automatically dispatches to the GPU backend (CUDA, ROCm, MPS) if the number
+/// of vectors exceeds [`GPU_DISPATCH_THRESHOLD`] and a GPU context is available.
+/// Otherwise falls back to CPU computation.
+///
+/// # Arguments
+/// * `query` - The query vector
+/// * `vectors` - Flat buffer of vectors to compare against (concatenated)
+/// * `dim` - Dimensionality of each vector
+/// * `metric` - Distance metric (L2, Cosine, InnerProduct, etc.)
+///
+/// # Errors
+/// Returns an error if the GPU backend fails to execute or if buffer sizes are
+/// inconsistent (i.e., `vectors.len()` is not a multiple of `dim`).
+///
+/// # Panics
+/// Panics if `dim == 0` and `vectors` is non-empty.
 pub fn compute_distance(query: &[f32], vectors: &[f32], dim: usize, metric: VectorMetric) -> Result<Vec<f32>> {
     let context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
     let n = if dim > 0 { vectors.len() / dim } else { 0 };
@@ -549,6 +567,18 @@ pub fn compute_distance(query: &[f32], vectors: &[f32], dim: usize, metric: Vect
     compute_cpu(query, vectors, dim, metric)
 }
 
+/// Assign each vector to its nearest centroid using k-means.
+///
+/// Dispatches to the GPU backend if available and the vector count is large
+/// enough. Otherwise falls back to a simple CPU implementation.
+///
+/// # Arguments
+/// * `vectors` - Flat buffer of vectors
+/// * `centroids` - Flat buffer of centroid vectors
+/// * `dim` - Dimensionality of each vector
+///
+/// # Errors
+/// Returns an error if the GPU backend fails or if buffer sizes are inconsistent.
 pub fn compute_kmeans_assignment(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
     let context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
     if let Some(imp) = &context.implementation { return imp.compute_kmeans_assignment(vectors, centroids, dim); }
@@ -572,6 +602,20 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
+/// Set the global GPU context (deprecated).
+///
+/// # Deprecation
+/// This function sets a process-wide GPU context that is shared across all threads.
+/// CUDA contexts are inherently thread-local; sharing them can cause silent corruption.
+///
+/// **Migration:** Use `set_thread_gpu_context()` instead, which sets a thread-local
+/// context that is safe for concurrent use. The global fallback is retained for
+/// backward compatibility but will be removed in a future major version.
+///
+/// # Safety
+/// Calling this from multiple threads simultaneously creates a data race on the
+/// global context. Prefer `set_thread_gpu_context` for thread-safe configuration.
+#[deprecated(since = "0.5.0", note = "Use set_thread_gpu_context() instead. Global GPU contexts are unsafe for concurrent use.")]
 pub fn set_global_gpu_context(ctx: Option<ComputeContext>) {
     // Set both thread-local and global contexts
     GPU_THREAD_CONTEXT.with(|f| {
@@ -581,6 +625,24 @@ pub fn set_global_gpu_context(ctx: Option<ComputeContext>) {
     *lock = ctx;
 }
 
+/// Set the thread-local GPU context (preferred over `set_global_gpu_context`).
+///
+/// This sets a GPU context that is isolated to the current thread, preventing
+/// CUDA context corruption when multiple threads use different GPU configurations.
+pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
+    GPU_THREAD_CONTEXT.with(|f| {
+        *f.borrow_mut() = ctx;
+    });
+}
+
+/// Retrieve the current GPU context for this thread.
+///
+/// Checks the thread-local context first, then falls back to the global context.
+/// Returns `None` if no context has been set on either scope.
+///
+/// # Thread Safety
+/// This function is safe to call from any thread. Each thread maintains its own
+/// context via thread-local storage, with the global context as a last resort.
 pub fn get_global_gpu_context() -> Option<ComputeContext> {
     // Check thread-local first
     let ctx = GPU_THREAD_CONTEXT.with(|f| {
@@ -589,7 +651,7 @@ pub fn get_global_gpu_context() -> Option<ComputeContext> {
     if ctx.is_some() {
         return ctx;
     }
-    // Fall back to global context
+    // Fall back to global context (deprecated path)
     let lock = GLOBAL_GPU_CONTEXT.read();
     lock.clone()
 }

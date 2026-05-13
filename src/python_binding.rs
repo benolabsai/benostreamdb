@@ -873,7 +873,7 @@ impl PyTable {
 
         let stream_res = py.allow_threads(move || {
             if let Some(c) = rust_context {
-                crate::core::index::gpu::set_global_gpu_context(Some(c));
+                crate::core::index::gpu::set_thread_gpu_context(Some(c));
             }
             
             let mut config = self.table.query_config().clone();
@@ -916,6 +916,9 @@ impl PyTable {
         if let Ok(list) = data.downcast::<pyo3::types::PyList>() {
              let mut batches = Vec::new();
              for item in list {
+                 // Validate type before FFI export - prevents silent failures
+                 validate_record_batch(&item)?;
+
                  // Export PyArrow RecordBatch to C Interface
                  let mut array = FFI_ArrowArray::empty();
                  let mut schema = FFI_ArrowSchema::empty();
@@ -936,7 +939,7 @@ impl PyTable {
              // Call core Table API, releasing the GIL
              py.allow_threads(move || {
                 if let Some(c) = rust_context {
-                    crate::core::index::gpu::set_global_gpu_context(Some(c));
+                    crate::core::index::gpu::set_thread_gpu_context(Some(c));
                 }
                 self.table.write(batches)
              }).map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
@@ -1119,7 +1122,7 @@ impl PyTable {
         // Call core Table API, releasing the GIL
         py.allow_threads(move || {
             if let Some(c) = rust_context {
-                crate::core::index::gpu::set_global_gpu_context(Some(c));
+                crate::core::index::gpu::set_thread_gpu_context(Some(c));
             }
             self.table.write(batches)
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
@@ -1244,7 +1247,7 @@ impl PyTable {
         let merge_mode = mode.unwrap_or(PyMergeMode::MergeOnRead).into();
         py.allow_threads(move || {
             if let Some(c) = rust_context {
-                crate::core::index::gpu::set_global_gpu_context(Some(c));
+                crate::core::index::gpu::set_thread_gpu_context(Some(c));
             }
             self.table.merge(batches, &key_column, merge_mode)
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
@@ -2085,7 +2088,23 @@ pub fn open_table(_py: Python<'_>, uri: &str) -> PyResult<PyTable> {
 
 // Helper to import RecordBatch from C Interface
 
-// Helper to import RecordBatch from C Interface
+// Helper to validate that a Python object is a PyArrow RecordBatch before FFI export.
+// Returns a clear TypeError if the object does not conform to the expected type.
+fn validate_record_batch(obj: &Bound<'_, PyAny>) -> PyResult<()> {
+    let type_name = obj.get_type().name()
+        .map_err(|e| pyo3::exceptions::PyTypeError::new_err(
+            format!("Cannot determine type of object passed to table.write(): {}", e)
+        ))?;
+    // PyArrow RecordBatch reports its type as "RecordBatch" or "pyarrow.lib.RecordBatch"
+    if !type_name.ends_with("RecordBatch") {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            format!("Expected pyarrow.RecordBatch, got '{}'. \
+                     Pass a RecordBatch, a list of RecordBatches, a PyArrow Table, or a Pandas DataFrame.", type_name)
+        ));
+    }
+    Ok(())
+}
+
 unsafe fn import_record_batch_from_c(array: FFI_ArrowArray, schema: &FFI_ArrowSchema) -> Result<RecordBatch, arrow::error::ArrowError> {
     let array_data = arrow::ffi::from_ffi(array, schema)?;
     let struct_array = arrow::array::StructArray::from(array_data);
