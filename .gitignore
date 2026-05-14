@@ -84,6 +84,8 @@ design_*.md
 docs/MONETIZATION_ARCHITECTURE.md
 docs/IN_MEMORY_COMPONENT_ANALYSIS.md
 docs/SUMMARY.md
+docs/DORIS_OPTIMIZATION_PATTERNS.md
+docs/task_status.md
 benchmarks/competitive/*.md
 benchmarks/competitive/benchmark_results/*.md
 
