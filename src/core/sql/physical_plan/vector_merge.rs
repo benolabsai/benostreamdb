@@ -146,44 +146,46 @@ impl ExecutionPlan for VectorMergeExec {
 
             let mut all_results = Vec::new();
             while let Some(res) = futures.next().await {
-                let (_, batches) = res.map_err(|e| DataFusionError::Execution(e.to_string()))?;
+                let (part_idx, batches) = res.map_err(|e| DataFusionError::Execution(e.to_string()))?;
                 for batch in batches {
                     if batch.num_rows() == 0 {
                         continue;
                     }
-                    
+
                     // Extract distance column
                     let dist_idx = batch.schema().index_of("distance")
                         .map_err(|e| DataFusionError::Execution(format!("Missing distance column: {}", e)))?;
-                    
+
                     let dist_col = batch.column(dist_idx).as_any().downcast_ref::<Float32Array>()
                         .ok_or_else(|| DataFusionError::Execution("distance column is not Float32".to_string()))?;
-                    
+
                     let mut distances = Vec::with_capacity(batch.num_rows());
                     for i in 0..batch.num_rows() {
                         distances.push(dist_col.value(i));
                     }
-                    
+
                     // Drop distance column to match merge_and_rerank input shape
                     let mut cols = batch.columns().to_vec();
                     cols.remove(dist_idx);
                     let mut fields = batch.schema().fields().to_vec();
                     fields.remove(dist_idx);
                     let base_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields));
-                    
+
                     let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();
                     options.row_count = Some(batch.num_rows());
                     let clean_batch = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(base_schema, cols, &options)
                         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-                        
-                    all_results.push((clean_batch, distances));
+
+                    // Use partition index as segment ID (vector scan partitions correspond to segments)
+                    let segment_id = format!("segment_{}", part_idx);
+                    all_results.push((segment_id, clean_batch, distances));
                 }
             }
 
             // Perform global merge and rerank
             match merge_and_rerank_vector_results(all_results, k, offset) {
                 Ok(merged_batches) => {
-                    for mut batch in merged_batches {
+                    for (_, mut batch) in merged_batches {
                         // Project to final schema
                         // merge_and_rerank_vector_results ALWAYS adds the distance column back.
                         // If final schema doesn't have it, drop it.

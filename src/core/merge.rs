@@ -90,23 +90,105 @@ impl MergePlanner {
         Ok(candidates)
     }
 
+    /// Load the inverted index for a segment from its .inv.parquet file.
+    /// Returns a HashMap mapping key values (as i64) to vectors of local row IDs.
+    fn load_inverted_index_map(
+        base_path: &str,
+        seg_id: &SegmentId,
+        key_column: &str,
+    ) -> Result<std::collections::HashMap<i64, Vec<u32>>> {
+        let path = format!(
+            "{}/{}.{}.inv.parquet",
+            base_path.replace("file://", ""),
+            seg_id,
+            key_column
+        );
+        let inv_path = std::path::Path::new(&path);
+        if !inv_path.exists() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let file = std::fs::File::open(inv_path)?;
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+        let reader = builder.build()?;
+
+        let mut map: std::collections::HashMap<i64, Vec<u32>> = std::collections::HashMap::new();
+
+        for batch_res in reader {
+            let batch = batch_res?;
+            let lists = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| HyperstreamError::MergeFailed {
+                    reason: format!(
+                        "Inverted index segment {} has unexpected column type at index 1 (expected ListArray)",
+                        seg_id
+                    )
+                })?;
+            let col0 = batch.column(0);
+
+            if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                for i in 0..batch.num_rows() {
+                    let k = keys.value(i) as i64;
+                    let list = lists.value(i);
+                    let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                        .ok_or_else(|| HyperstreamError::MergeFailed {
+                            reason: format!(
+                                "Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)",
+                                seg_id, i
+                            )
+                        })?;
+                    map.insert(k, u32_list.values().to_vec());
+                }
+            } else if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int64Array>() {
+                for i in 0..batch.num_rows() {
+                    let k = keys.value(i);
+                    let list = lists.value(i);
+                    let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                        .ok_or_else(|| HyperstreamError::MergeFailed {
+                            reason: format!(
+                                "Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)",
+                                seg_id, i
+                            )
+                        })?;
+                    map.insert(k, u32_list.values().to_vec());
+                }
+            }
+        }
+        Ok(map)
+    }
+
     /// For a candidate segment, identifies exactly which Row IDs match the source keys.
-    /// 
+    ///
+    /// Loads the inverted index (.inv.parquet) for the segment and looks up each
+    /// source key, unioning the resulting row ID bitmaps.
+    ///
+    /// # Arguments
+    /// * `base_path` - Base storage path where segment files reside.
+    /// * `segment_id` - The segment to search.
+    /// * `key_column` - The merge key column name.
+    /// * `source_keys` - Keys from the upsert batch.
+    ///
     /// # Returns
     /// A RoaringBitmap of local Row IDs to be updated/deleted.
     pub fn find_row_ids(
         &self,
-        _segment_id: &SegmentId,
-        _source_keys: &[Value],
-        // index: &InvertedIndex // We need the actual index structure here
+        base_path: &str,
+        segment_id: &SegmentId,
+        key_column: &str,
+        source_keys: &[Value],
     ) -> Result<RoaringBitmap> {
-        let matches = RoaringBitmap::new();
-        
-        // Placeholder logic
-        // for key in source_keys:
-        //    if let Some(bitmap) = index.get(key):
-        //        matches |= bitmap;
-        
+        let index_map = Self::load_inverted_index_map(base_path, segment_id, key_column)?;
+        let mut matches = RoaringBitmap::new();
+
+        for key_val in source_keys {
+            if let Some(i_val) = key_val.as_i64() {
+                if let Some(row_ids) = index_map.get(&i_val) {
+                    for &rid in row_ids {
+                        matches.insert(rid);
+                    }
+                }
+            }
+        }
+
         Ok(matches)
     }
     /// Execute the Merge Operation
@@ -137,51 +219,11 @@ impl MergePlanner {
         // Optimization: Inverted Index check.
         // Naive MVP: Iterate source keys, check all candidate indexes.
         
-        // Load all bitmaps for candidates first?
-        // Load all bitmaps for candidates first
+        // Load inverted index maps for all candidate segments
         let mut segment_bitmaps: HashMap<SegmentId, std::collections::HashMap<i64, Vec<u32>>> = HashMap::new();
-        // Read .inv.parquet
         for seg_id in candidate_segments {
-             let path = format!("{}/{}.{}.inv.parquet", base_path.replace("file://", ""), seg_id, key_column);
-             if std::path::Path::new(&path).exists() {
-                 let file = std::fs::File::open(&path)?;
-                 let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-                 let reader = builder.build()?;
-                 
-                 let mut map: std::collections::HashMap<i64, Vec<u32>> = std::collections::HashMap::new();
-                 
-                 for batch_res in reader {
-                     let batch = batch_res?;
-                     let lists = batch.column(1).as_any().downcast_ref::<arrow::array::ListArray>()
-                         .ok_or_else(|| HyperstreamError::MergeFailed {
-                             reason: format!("Inverted index segment {} has unexpected column type at index 1 (expected ListArray)", seg_id)
-                         })?;
-                     let col0 = batch.column(0);
-
-                     if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int32Array>() {
-                         for i in 0..batch.num_rows() {
-                             let k = keys.value(i) as i64;
-                             let list = lists.value(i);
-                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
-                                 .ok_or_else(|| HyperstreamError::MergeFailed {
-                                     reason: format!("Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)", seg_id, i)
-                                 })?;
-                             map.insert(k, u32_list.values().to_vec());
-                         }
-                     } else if let Some(keys) = col0.as_any().downcast_ref::<arrow::array::Int64Array>() {
-                         for i in 0..batch.num_rows() {
-                             let k = keys.value(i);
-                             let list = lists.value(i);
-                             let u32_list = list.as_any().downcast_ref::<arrow::array::UInt32Array>()
-                                 .ok_or_else(|| HyperstreamError::MergeFailed {
-                                     reason: format!("Inverted index segment {} row {} has unexpected inner type (expected UInt32Array)", seg_id, i)
-                                 })?;
-                             map.insert(k, u32_list.values().to_vec());
-                         }
-                     }
-                 }
-                 segment_bitmaps.insert(seg_id.clone(), map);
-             }
+            let map = Self::load_inverted_index_map(base_path, seg_id, key_column)?;
+            segment_bitmaps.insert(seg_id.clone(), map);
         }
         
         for (row_idx, key_val) in source_keys.iter().enumerate() {
@@ -371,19 +413,77 @@ mod tests {
     }
 
     #[test]
-    fn test_find_row_ids_basic() {
+    fn test_find_row_ids_no_index_returns_empty() {
         let planner = MergePlanner::new();
         let segment_id = "test_seg".to_string();
         let source_keys = vec![
             Value::Number(1.into()),
             Value::Number(2.into()),
         ];
-        
-        // This is a placeholder test since find_row_ids is not fully implemented
-        let result = planner.find_row_ids(&segment_id, &source_keys);
+
+        // Non-existent base path → no index file → empty bitmap (no panic)
+        let result = planner.find_row_ids("/tmp/nonexistent", &segment_id, "id", &source_keys);
         assert!(result.is_ok());
         let bitmap = result.unwrap();
-        assert!(bitmap.is_empty()); // Current implementation returns empty
+        assert!(bitmap.is_empty());
+    }
+
+    #[test]
+    fn test_find_row_ids_with_inverted_index() {
+        use arrow::datatypes::{Schema as ArrowSchema, Field as ArrowField, DataType as ArrowDataType};
+        use arrow::array::{Int32Builder, UInt32Builder, ListBuilder};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::fs;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().to_str().unwrap();
+
+        // Create an inverted index file: key 1 → row IDs [10, 20], key 2 → row IDs [30]
+        let inv_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("key", ArrowDataType::Int32, false),
+            ArrowField::new("row_ids", ArrowDataType::List(
+                Arc::new(ArrowField::new("item", ArrowDataType::UInt32, true))
+            ), false),
+        ]));
+
+        let mut key_builder = Int32Builder::new();
+        key_builder.append_value(1);
+        key_builder.append_value(2);
+        let key_array = key_builder.finish();
+        let mut list_builder: ListBuilder<UInt32Builder> = ListBuilder::new(UInt32Builder::new());
+        list_builder.values().append_value(10);
+        list_builder.values().append_value(20);
+        list_builder.append(true);
+        list_builder.values().append_value(30);
+        list_builder.append(true);
+
+        let inv_batch = RecordBatch::try_new(
+            inv_schema.clone(),
+            vec![Arc::new(key_array), Arc::new(list_builder.finish())],
+        ).unwrap();
+
+        let inv_path = tmp.path().join("test_seg.id.inv.parquet");
+        {
+            let file = fs::File::create(&inv_path).unwrap();
+            let mut writer = ArrowWriter::try_new(file, inv_schema, None).unwrap();
+            writer.write(&inv_batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        let planner = MergePlanner::new();
+        let source_keys = vec![
+            Value::Number(1.into()), // should match rows 10, 20
+            Value::Number(2.into()), // should match row 30
+            Value::Number(99.into()), // should NOT match anything
+        ];
+
+        let bitmap = planner.find_row_ids(base, &"test_seg".to_string(), "id", &source_keys).unwrap();
+        assert!(bitmap.contains(10));
+        assert!(bitmap.contains(20));
+        assert!(bitmap.contains(30));
+        assert_eq!(bitmap.len(), 3);
+        assert!(!bitmap.contains(99));
     }
 
     #[test]

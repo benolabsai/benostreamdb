@@ -473,7 +473,7 @@ impl Table {
                           *state += b.num_rows();
                           Some(start)
                       }).collect();
-                      
+
                       let mut result_rows = Vec::new();
                       for (id, _dist) in &memory_hits {
                           for (i, offset) in batch_offsets.iter().enumerate().rev() {
@@ -486,27 +486,27 @@ impl Table {
                               }
                           }
                       }
-                      
+
                       if !result_rows.is_empty() {
                           let mem_batch = arrow::compute::concat_batches(&schema, result_rows.iter().collect::<Vec<&RecordBatch>>())?;
-                          
+
                           // Append _distance column to match disk search schema
                           let mut new_fields = schema.fields().to_vec();
                           new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false)));
                           let new_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
-                          
+
                           let mut new_columns = mem_batch.columns().to_vec();
                           let distance_array = arrow::array::Float32Array::from(memory_hits.iter().map(|(_, dist)| *dist).collect::<Vec<f32>>());
                           new_columns.push(std::sync::Arc::new(distance_array));
-                          
+
                           if let Ok(dist_batch) = RecordBatch::try_new(new_schema, new_columns) {
-                              results.push(dist_batch);
+                              results.push(("write_buffer".to_string(), dist_batch));
                           }
                       }
                   }
               }
 
-              return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
+              return Ok(futures::stream::iter(results.into_iter().map(|(_, batch)| Ok(batch))).boxed());
         }
 
         // Extract Iceberg schema from the already-loaded manifest to avoid
@@ -872,19 +872,16 @@ impl Table {
         ).await?;
 
         let mut scored_results = Vec::new();
-        for batch in batches {
+        for (segment_id, batch) in batches {
             // RecordBatch results from vector search include a "distance" column
             let dist_col = batch.column(batch.num_columns() - 1)
                 .as_any()
                 .downcast_ref::<arrow::array::Float32Array>()
                 .ok_or_else(|| anyhow::anyhow!("Missing distance column in vector search result"))?;
-            
-            // Note: Parallel vector search currently doesn't preserve segment/row IDs in the final RecordBatch
-            // We'll need to add those to the schema in Phase 3. 
-            // For Phase 2, we use a synthetic segment ID "vector_path"
+
             for i in 0..batch.num_rows() {
                 scored_results.push(ScoredResult {
-                    segment_id: "vector_path".to_string(),
+                    segment_id: segment_id.clone(),
                     row_id: i as u32,
                     score: dist_col.value(i),
                 });

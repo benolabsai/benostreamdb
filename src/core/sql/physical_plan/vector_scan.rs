@@ -204,7 +204,7 @@ impl ExecutionPlan for VectorScanExec {
                     request,
                 ).await {
                     Ok(batches) => {
-                        for batch in batches {
+                        for (_segment_id, batch) in batches {
                             let mut b = batch;
                             // Check if distance column exists (which it should from vector search)
                             if b.num_columns() == expected_schema_inner.fields().len() {
