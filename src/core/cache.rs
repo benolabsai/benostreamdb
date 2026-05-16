@@ -76,8 +76,8 @@ impl DiskCache {
             let hash = format!("{:x}", hasher.finalize());
             let cache_path = cache_dir.join(&hash);
             
-            if cache_path.exists() {
-                if let Ok(b) = std::fs::read(&cache_path) {
+            if tokio::fs::metadata(&cache_path).await.is_ok() {
+                if let Ok(b) = tokio::fs::read(&cache_path).await {
                     return Ok(bytes::Bytes::from(b));
                 }
             }
@@ -86,16 +86,16 @@ impl DiskCache {
             
             // Atomic write: write to unique temp file then rename
             let thread_id = format!("{:?}", std::thread::current().id());
-            let temp_name = format!("{}.{}.{}.tmp", hash, std::process::id(), thread_id);
+            let temp_name = format!("{}.{}.{:?}.tmp", hash, std::process::id(), thread_id);
             let temp_path = cache_dir.join(temp_name);
             
-            if let Ok(mut f) = std::fs::File::create(&temp_path) {
-                use std::io::Write;
-                if f.write_all(&b).is_ok() {
+            use tokio::io::AsyncWriteExt;
+            if let Ok(mut f) = tokio::fs::File::create(&temp_path).await {
+                if f.write_all(&b).await.is_ok() {
                     // rename is atomic on POSIX
-                    let _ = std::fs::rename(&temp_path, &cache_path);
+                    let _ = tokio::fs::rename(&temp_path, &cache_path).await;
                 } else {
-                    let _ = std::fs::remove_file(&temp_path);
+                    let _ = tokio::fs::remove_file(&temp_path).await;
                 }
             }
 
@@ -122,7 +122,7 @@ impl DiskCache {
 pub static MANIFEST_CACHE: Lazy<Cache<String, Arc<Manifest>>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(1000)
-        .time_to_live(Duration::from_millis(0)) // Disabled for consistency
+        .time_to_live(Duration::from_secs(5)) // Short TTL; commit() explicitly invalidates
         .build()
 });
 
@@ -136,7 +136,7 @@ pub static MANIFEST_LIST_CACHE: Lazy<Cache<String, Arc<ManifestList>>> = Lazy::n
 pub static LATEST_VERSION_CACHE: Lazy<Cache<String, u64>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(500)
-        .time_to_live(Duration::from_millis(0)) // Disabled for consistency
+        .time_to_live(Duration::from_secs(2)) // Short TTL; commit() explicitly invalidates
         .build()
 });
 

@@ -27,3 +27,4 @@ pub mod puffin;
 pub mod embeddings;
 pub mod search;
 pub mod lock;
+pub mod license;

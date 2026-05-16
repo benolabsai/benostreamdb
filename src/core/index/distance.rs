@@ -186,7 +186,12 @@ pub fn hamming_distance(a: &[f32], b: &[f32]) -> f32 {
     count as f32
 }
 
-#[inline(always)]
+/// Jaccard distance for sets.
+///
+/// NOTE: This implementation expects vectors of binary indicators (0.0 or 1.0).
+/// While it handles non-binary floats, the semantics of intersection/union 
+/// implemented here are tailored for set membership. For general float 
+/// similarity, consider Cosine or L2 distance.
 pub fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len();
     assert_eq!(n, b.len(), "Vectors must have the same length");
@@ -279,7 +284,19 @@ pub fn sparse_l2_distance_squared(
 #[inline(always)]
 pub fn l2_distance_u8(a: &[u8], b: &[u8]) -> f32 {
     let mut sum = 0;
-    for (&x, &y) in a.iter().zip(b.iter()) {
+    let chunks_a = a.chunks_exact(16);
+    let chunks_b = b.chunks_exact(16);
+    let rem_a = chunks_a.remainder();
+    let rem_b = chunks_b.remainder();
+
+    for (ca, cb) in chunks_a.zip(chunks_b) {
+        for i in 0..16 {
+            let diff = (ca[i] as i32) - (cb[i] as i32);
+            sum += diff * diff;
+        }
+    }
+
+    for (&x, &y) in rem_a.iter().zip(rem_b.iter()) {
         let diff = (x as i32) - (y as i32);
         sum += diff * diff;
     }
@@ -319,13 +336,28 @@ pub fn l2_distance_adc(query: &[f32], encoded: &[u8], offset: f32, scale: f32) -
 #[inline(always)]
 pub fn l2_distance_u4(a: &[u8], b: &[u8]) -> f32 {
     let mut sum = 0;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        // Low nibbles
+    let chunks_a = a.chunks_exact(16);
+    let chunks_b = b.chunks_exact(16);
+    let rem_a = chunks_a.remainder();
+    let rem_b = chunks_b.remainder();
+
+    for (ca, cb) in chunks_a.zip(chunks_b) {
+        for i in 0..16 {
+            let x = ca[i];
+            let y = cb[i];
+            // Low nibbles
+            let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
+            sum += diff_low * diff_low;
+            // High nibbles
+            let diff_high = ((x >> 4) as i32) - ((y >> 4) as i32);
+            sum += diff_high * diff_high;
+        }
+    }
+
+    for (&x, &y) in rem_a.iter().zip(rem_b.iter()) {
         let diff_low = ((x & 0x0F) as i32) - ((y & 0x0F) as i32);
         sum += diff_low * diff_low;
-        
-        // High nibbles
-        let diff_high = (((x >> 4) & 0x0F) as i32) - (((y >> 4) & 0x0F) as i32);
+        let diff_high = ((x >> 4) as i32) - ((y >> 4) as i32);
         sum += diff_high * diff_high;
     }
     sum as f32

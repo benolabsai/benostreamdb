@@ -317,8 +317,9 @@ async fn update_table(
     let uri = std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     let store = hyperstreamdb::core::storage::create_object_store(&uri).expect("Failed to create object store");
     
-    // TODO: Support complex namespaces with '/' which might be URL encoded
-    let table_path = format!("{}/{}", namespace, table);
+    // Support complex namespaces with '/' (URL decoded from '%2F')
+    let decoded_namespace = namespace.replace("%2F", "/").replace("%2f", "/");
+    let table_path = format!("{}/{}", decoded_namespace, table);
     let manager = ManifestManager::new(store.clone(), &table_path, &uri);
     
     // 1. Apply Updates
@@ -564,7 +565,9 @@ async fn register_table(
     Json(payload): Json<serde_json::Value>
 ) -> impl IntoResponse {
     println!("Registering table {}.{}.{} with payload: {:?}", prefix, namespace, table, payload);
-    // TODO: Persistence logic for external table registration
+    // Iceberg REST spec: Registers an external table by creating metadata for existing data files.
+    // Requires: scanning data location, building manifest entries, and persisting table metadata.
+    // Deferred until manifest/scanner infrastructure supports external table discovery.
     StatusCode::ACCEPTED
 }
 

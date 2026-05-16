@@ -8,6 +8,7 @@ use datafusion::physical_plan::execution_plan::ExecutionPlan;
 use datafusion::physical_plan::joins::HashJoinExec;
 use datafusion::logical_expr::JoinType;
 use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::config::{ConfigExtension, ConfigEntry, ExtensionOptions};
 
 use crate::core::sql::physical_plan::HyperStreamExec;
 use crate::core::sql::physical_plan::index_join::HyperStreamIndexJoinExec;
@@ -40,6 +41,110 @@ pub struct VectorSearchConfig {
     pub fast_path: bool,
 }
 
+impl ExtensionOptions for VectorSearchConfig {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
+    fn cloned(&self) -> Box<dyn ExtensionOptions> {
+        Box::new(self.clone())
+    }
+
+    fn set(&mut self, key: &str, value: &str) -> datafusion::common::Result<()> {
+        match key {
+            "ef_search" => {
+                self.ef_search = Some(value.parse::<usize>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid ef_search value: {}", e))
+                })?);
+            }
+            "probes" => {
+                self.probes = Some(value.parse::<usize>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid probes value: {}", e))
+                })?);
+            }
+            "use_index" => {
+                self.use_index = value.parse::<bool>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid use_index value: {}", e))
+                })?;
+            }
+            "limit_pushdown" => {
+                self.limit_pushdown = value.parse::<bool>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid limit_pushdown value: {}", e))
+                })?;
+            }
+            "skip_row_groups" => {
+                self.skip_row_groups = value.parse::<bool>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid skip_row_groups value: {}", e))
+                })?;
+            }
+            "cache_manifests" => {
+                self.cache_manifests = value.parse::<bool>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid cache_manifests value: {}", e))
+                })?;
+            }
+            "fast_path" => {
+                self.fast_path = value.parse::<bool>().map_err(|e| {
+                    datafusion::common::DataFusionError::Configuration(format!("Invalid fast_path value: {}", e))
+                })?;
+            }
+            _ => {
+                return Err(datafusion::common::DataFusionError::Configuration(format!(
+                    "Unknown configuration key: {}", key
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn entries(&self) -> Vec<ConfigEntry> {
+        vec![
+            ConfigEntry {
+                key: "ef_search".to_string(),
+                value: self.ef_search.map(|v| v.to_string()),
+                description: "HNSW search beam width",
+            },
+            ConfigEntry {
+                key: "probes".to_string(),
+                value: self.probes.map(|v| v.to_string()),
+                description: "Number of IVF clusters to search",
+            },
+            ConfigEntry {
+                key: "use_index".to_string(),
+                value: Some(self.use_index.to_string()),
+                description: "Whether to use vector indexes",
+            },
+            ConfigEntry {
+                key: "limit_pushdown".to_string(),
+                value: Some(self.limit_pushdown.to_string()),
+                description: "Enable LIMIT pushdown optimization",
+            },
+            ConfigEntry {
+                key: "skip_row_groups".to_string(),
+                value: Some(self.skip_row_groups.to_string()),
+                description: "Enable row group skipping based on statistics",
+            },
+            ConfigEntry {
+                key: "cache_manifests".to_string(),
+                value: Some(self.cache_manifests.to_string()),
+                description: "Cache manifest metadata for repeated queries",
+            },
+            ConfigEntry {
+                key: "fast_path".to_string(),
+                value: Some(self.fast_path.to_string()),
+                description: "Enable single-threaded fast path for small result sets",
+            },
+        ]
+    }
+}
+
+impl ConfigExtension for VectorSearchConfig {
+    const PREFIX: &'static str = "hyperstreamdb";
+}
+
 impl VectorSearchConfig {
     /// Create a new VectorSearchConfig with default values
     pub fn new() -> Self {
@@ -55,16 +160,16 @@ impl VectorSearchConfig {
     }
 
     /// Read configuration from DataFusion session config
-    pub fn from_session_config(_config: &ConfigOptions) -> Self {
-        
+    pub fn from_session_config(config: &ConfigOptions) -> Self {
+        // Try to read from registered extensions first
+        if let Some(ext_config) = config.extensions.get::<VectorSearchConfig>() {
+            return ext_config.clone();
+        }
 
-        // DataFusion 52 ConfigOptions doesn't have a simple get_string method
-        // We'll use the options() method to access the underlying HashMap
-        // For now, we'll return defaults and let users set via SQL hints
-        // In a production system, we'd use SessionState extensions or custom config
-        
-        // TODO: Implement proper config reading via SessionState extensions
-        // For now, return defaults
+        // Fallback: return defaults
+        // Users can register via:
+        //   config.options.extensions.insert(VectorSearchConfig::new());
+        //   session.config_options().set("hyperstreamdb.ef_search", "128").unwrap();
         Self::new()
     }
 
@@ -2099,210 +2204,6 @@ mod sparse_vector_table_tests {
         };
         
         assert_eq!(sparse.indices.len(), sparse.values.len());
-    }
-}
-
-
-// Unit tests for empty aggregation input - Task 15.6
-// Requirements: 6.4
-#[cfg(test)]
-mod empty_aggregation_tests {
-    // Removed unused super::* to satisfy compiler
-    
-    #[test]
-    fn test_empty_input_returns_null_concept() {
-        // Test that the concept of empty aggregation returning NULL is understood
-        // When vector_sum or vector_avg receives no input rows, it should return NULL
-        
-        // This is the expected SQL behavior:
-        // SELECT vector_sum(embedding) FROM table WHERE 1=0
-        // Result: NULL (not an error, not an empty vector)
-        
-        // The accumulator starts with sum = None
-        // If no rows are processed, evaluate() returns NULL
-        
-        // This test documents the expected behavior
-        // Placeholder for concept test
-    }
-    
-    #[test]
-    fn test_empty_batch_handling() {
-        // Test that empty batches (0 rows) are handled correctly
-        // An empty batch should not change the accumulator state
-        
-        // When update_batch receives an array with 0 elements:
-        // - The loop doesn't execute
-        // - sum remains unchanged
-        // - No error is raised
-        
-        // This is different from NULL input, which is also valid
-        // Placeholder for concept test
-    }
-    
-    #[test]
-    fn test_null_vs_empty_distinction() {
-        // Test the distinction between NULL values and empty results
-        
-        // Case 1: Empty input (no rows)
-        // SELECT vector_sum(embedding) FROM table WHERE 1=0
-        // Result: NULL (sum = None)
-        
-        // Case 2: NULL values in input
-        // SELECT vector_sum(embedding) FROM table WHERE embedding IS NULL
-        // Result: NULL (NULLs are skipped, sum = None)
-        
-        // Case 3: Mix of NULL and valid values
-        // SELECT vector_sum(embedding) FROM table
-        // Result: Sum of non-NULL vectors (NULLs are skipped)
-        
-        // assert!(true, "NULL and empty should be handled differently");
-    }
-    
-    #[test]
-    fn test_empty_aggregation_with_group_by() {
-        // Test empty aggregation in GROUP BY context
-        
-        // Query: SELECT category, vector_sum(embedding) FROM table GROUP BY category
-        // If a group has no rows, that group doesn't appear in results
-        // If a group has only NULL embeddings, vector_sum returns NULL for that group
-        
-        // Example:
-        // category='A': 3 vectors -> returns sum
-        // category='B': 0 vectors -> no row in result
-        // category='C': 2 NULL vectors -> returns NULL
-        
-        // assert!(true, "Empty groups should not appear in GROUP BY results");
-    }
-    
-    #[test]
-    fn test_vector_sum_empty_input_behavior() {
-        // Test that VectorSumAccumulator handles empty input correctly
-        // The accumulator should:
-        // 1. Start with sum = None
-        // 2. If no rows are processed, sum remains None
-        // 3. evaluate() returns NULL when sum is None
-        
-        // This matches SQL aggregate behavior:
-        // SELECT SUM(x) FROM table WHERE 1=0 -> NULL
-        // SELECT vector_sum(embedding) FROM table WHERE 1=0 -> NULL
-        
-        // assert!(true, "VectorSumAccumulator should return NULL for empty input");
-    }
-    
-    #[test]
-    fn test_vector_avg_empty_input_behavior() {
-        // Test that VectorAvgAccumulator handles empty input correctly
-        // The accumulator should:
-        // 1. Start with sum = None, count = 0
-        // 2. If no rows are processed, sum remains None, count remains 0
-        // 3. evaluate() returns NULL when count is 0
-        
-        // This matches SQL aggregate behavior:
-        // SELECT AVG(x) FROM table WHERE 1=0 -> NULL
-        // SELECT vector_avg(embedding) FROM table WHERE 1=0 -> NULL
-        
-        // assert!(true, "VectorAvgAccumulator should return NULL for empty input");
-    }
-    
-    #[test]
-    fn test_empty_input_not_an_error() {
-        // Test that empty input is not treated as an error
-        // Empty aggregation is a valid SQL operation that returns NULL
-        
-        // Invalid: Raising an error for empty input
-        // Valid: Returning NULL for empty input
-        
-        // This is important for queries like:
-        // SELECT vector_sum(embedding) FROM table WHERE category = 'nonexistent'
-        // Should return NULL, not an error
-        
-        // assert!(true, "Empty input should return NULL, not error");
-    }
-    
-    #[test]
-    fn test_empty_vs_zero_vector() {
-        // Test the distinction between empty input and zero vector
-        
-        // Empty input (no rows):
-        // SELECT vector_sum(embedding) FROM table WHERE 1=0
-        // Result: NULL
-        
-        // Zero vector input:
-        // SELECT vector_sum(embedding) FROM table WHERE embedding = '[0,0,0]'::vector
-        // Result: [0,0,0] (not NULL)
-        
-        // These are different:
-        // - NULL means "no data"
-        // - [0,0,0] means "sum of vectors is zero"
-        
-        // assert!(true, "Empty input (NULL) is different from zero vector");
-    }
-    
-    #[test]
-    fn test_merge_batch_with_empty_partitions() {
-        // Test that merge_batch handles empty partitions correctly
-        
-        // In distributed aggregation:
-        // - Partition 1: 100 vectors -> partial sum
-        // - Partition 2: 0 vectors -> NULL
-        // - Partition 3: 50 vectors -> partial sum
-        
-        // merge_batch should:
-        // 1. Skip NULL partitions (partition 2)
-        // 2. Merge non-NULL partitions (1 and 3)
-        // 3. Return combined sum
-        
-        // assert!(true, "merge_batch should skip empty partitions");
-    }
-    
-    #[test]
-    fn test_all_partitions_empty() {
-        // Test when all partitions have empty input
-        
-        // In distributed aggregation:
-        // - Partition 1: 0 vectors -> NULL
-        // - Partition 2: 0 vectors -> NULL
-        // - Partition 3: 0 vectors -> NULL
-        
-        // merge_batch should:
-        // 1. Skip all NULL partitions
-        // 2. sum remains None
-        // 3. evaluate() returns NULL
-        
-        // assert!(true, "All empty partitions should result in NULL");
-    }
-    
-    #[test]
-    fn test_empty_input_dimension_agnostic() {
-        // Test that empty input doesn't require dimension information
-        
-        // When sum = None (empty input):
-        // - No dimension is stored
-        // - evaluate() returns NULL (no dimension needed)
-        // - This is correct because NULL has no dimension
-        
-        // When first vector is processed:
-        // - Dimension is inferred from first vector
-        // - Subsequent vectors must match this dimension
-        
-        // assert!(true, "Empty input doesn't need dimension information");
-    }
-    
-    #[test]
-    fn test_empty_input_type_safety() {
-        // Test that empty input maintains type safety
-        
-        // Even with empty input:
-        // - The accumulator type is known (VectorSumAccumulator or VectorAvgAccumulator)
-        // - The return type is known (List<Float32> or NULL)
-        // - Type checking happens at query planning time
-        
-        // This ensures:
-        // SELECT vector_sum(embedding) FROM table WHERE 1=0
-        // Returns: NULL of type List<Float32>
-        // Not: NULL of unknown type
-        
-        // assert!(true, "Empty input should maintain type information");
     }
 }
 

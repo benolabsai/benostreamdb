@@ -373,7 +373,25 @@ impl HybridReader {
                             VectorMetric::InnerProduct => {
                                 -v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum::<f32>()
                             },
-                            _ => 1e10,
+                            VectorMetric::L1 => {
+                                v.iter().zip(q_vec.iter()).map(|(a,b)| (a-b).abs()).sum::<f32>()
+                            },
+                            VectorMetric::Hamming => {
+                                v.iter().zip(q_vec.iter()).filter(|(a,b)| a != b).count() as f32
+                            },
+                            VectorMetric::Jaccard => {
+                                let mut intersection = 0.0;
+                                let mut union = 0.0;
+                                for (x, y) in v.iter().zip(q_vec.iter()) {
+                                    if *x > 0.0 || *y > 0.0 {
+                                        if *x == *y && *x > 0.0 {
+                                            intersection += 1.0;
+                                        }
+                                        union += 1.0;
+                                    }
+                                }
+                                if union == 0.0 { 0.0 } else { 1.0 - intersection / union }
+                            },
                         };
                         rg_matches.push((row_id, dist));
                     }
@@ -604,7 +622,25 @@ impl HybridReader {
                         VectorMetric::InnerProduct => {
                             -v.iter().zip(q_vec.iter()).map(|(a,b)| a*b).sum::<f32>()
                         },
-                        _ => 1e10, // Not implemented for flat search yet
+                        VectorMetric::L1 => {
+                            v.iter().zip(q_vec.iter()).map(|(a,b)| (a-b).abs()).sum::<f32>()
+                        },
+                        VectorMetric::Hamming => {
+                            v.iter().zip(q_vec.iter()).filter(|(a,b)| a != b).count() as f32
+                        },
+                        VectorMetric::Jaccard => {
+                            let mut intersection = 0.0;
+                            let mut union = 0.0;
+                            for (x, y) in v.iter().zip(q_vec.iter()) {
+                                if *x > 0.0 || *y > 0.0 {
+                                    if *x == *y && *x > 0.0 {
+                                        intersection += 1.0;
+                                    }
+                                    union += 1.0;
+                                }
+                            }
+                            if union == 0.0 { 0.0 } else { 1.0 - intersection / union }
+                        },
                     };
                     matches.push((row_id, dist));
                 }
@@ -800,7 +836,7 @@ impl HybridReader {
         // Use the tokenizer defined in the index metadata, fallback to standard
         let tokenizer_name = "default";
         
-        let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(tokenizer_name)
+        let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.read().get(tokenizer_name)
             .ok_or_else(|| anyhow::anyhow!("Missing standard tokenizer"))?;
         
         let query_tokens = tokenizer.tokenize(query);

@@ -205,19 +205,23 @@ pub fn rewrite_sql_string(query: &str) -> String {
 mod tests {
     use super::*;
     use datafusion::common::tree_node::TreeNode;
-    use datafusion::arrow::datatypes::DataType;
-    
+    use datafusion::arrow::datatypes::{DataType, Field, Fields};
+
     #[test]
     fn test_cast_vector_literal() {
         let literal = Expr::Literal(ScalarValue::Utf8(Some("[1,2,3]".to_string())), None);
+        let vector_type = DataType::FixedSizeList(
+            Arc::new(Field::new("item", DataType::Float32, true)),
+            3,
+        );
         let cast_expr = Expr::Cast(datafusion::logical_expr::Cast {
             expr: Box::new(literal),
-            data_type: DataType::Utf8, // Placeholder
+            data_type: vector_type,
         });
-        
+
         let mut rewriter = PgVectorRewriter;
         let result = cast_expr.rewrite(&mut rewriter);
-        
+
         assert!(result.is_ok());
     }
 }

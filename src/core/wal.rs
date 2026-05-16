@@ -21,6 +21,43 @@ pub struct WriteAheadLog {
     writer: Option<StreamWriter<File>>,
     schema: Option<SchemaRef>,
     tx: Option<mpsc::Sender<LogOp>>,
+    config: WalConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct WalConfig {
+    pub compact_threshold_mb: u64,
+    pub sync_batch_size: usize,
+    pub sync_interval_ms: u64,
+}
+
+impl Default for WalConfig {
+    fn default() -> Self {
+        Self {
+            compact_threshold_mb: 1024,
+            sync_batch_size: 10,
+            sync_interval_ms: 100,
+        }
+    }
+}
+
+impl WalConfig {
+    pub fn from_env() -> Self {
+        Self {
+            compact_threshold_mb: std::env::var("HYPERSTREAM_WAL_COMPACT_MB")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1024),
+            sync_batch_size: std::env::var("HYPERSTREAM_WAL_SYNC_BATCH_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+            sync_interval_ms: std::env::var("HYPERSTREAM_WAL_SYNC_INTERVAL_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(100),
+        }
+    }
 }
 
 enum LogOp {
@@ -51,7 +88,13 @@ impl WriteAheadLog {
             writer: None,
             schema: None,
             tx: None,
+            config: WalConfig::default(),
         }
+    }
+
+    pub fn with_config(mut self, config: WalConfig) -> Self {
+        self.config = config;
+        self
     }
 
     /// Start a background worker for asynchronous writes.
@@ -66,19 +109,15 @@ impl WriteAheadLog {
         // Move state into worker
         let path = self.path.clone();
         let mut writer_opt: Option<StreamWriter<File>> = self.writer.take();
+        let config = self.config.clone();
         
         tokio::spawn(async move {
             let mut pending_syncs = Vec::new();
             let mut batch_count = 0;
             
             // Configurable sync batching: sync every N batches or every T milliseconds
-            let sync_batch_size = std::env::var("HYPERSTREAM_WAL_SYNC_BATCH_SIZE")
-            .unwrap_or_else(|_| "10".to_string())
-            .parse::<usize>().unwrap_or(10);
-            let sync_interval_ms: u64 = std::env::var("HYPERSTREAM_WAL_SYNC_INTERVAL_MS")
-                .unwrap_or_else(|_| "100".to_string())
-                .parse()
-                .unwrap_or(100);
+            let sync_batch_size = config.sync_batch_size;
+            let sync_interval_ms = config.sync_interval_ms;
             
             loop {
                 // Wait for a message or a wait timeout to sync
@@ -153,6 +192,14 @@ impl WriteAheadLog {
                             batch_count = 0;
                         }
                     }
+                }
+            }
+            
+            // Final cleanup when channel closes
+            if let Some(mut writer) = writer_opt {
+                let _ = writer.finish();
+                if let Err(e) = writer.get_ref().sync_all() {
+                    tracing::error!("Final WAL sync failed: {}", e);
                 }
             }
         });
@@ -310,21 +357,25 @@ impl WriteAheadLog {
         Ok(())
     }
 
-    /// Check if WAL should be compacted based on file size
+    /// Check if WAL should be compacted based on total size of all log files in the directory.
+    /// Previous implementation only checked the current instance's file, missing stale logs
+    /// from earlier instances that accumulate after crashes.
     pub fn should_compact(&self) -> Result<bool> {
-        if !self.path.exists() {
+        if !self.dir.exists() {
             return Ok(false);
         }
 
-        let metadata = std::fs::metadata(&self.path)?;
-        let size_mb = metadata.len() / (1024 * 1024);
+        let mut total_bytes: u64 = 0;
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("arrow") {
+                total_bytes += entry.metadata()?.len();
+            }
+        }
         
-        let threshold_mb: u64 = std::env::var("HYPERSTREAM_WAL_COMPACT_MB")
-            .unwrap_or_else(|_| "1024".to_string())
-            .parse()
-            .unwrap_or(1024);
-            
-        Ok(size_mb > threshold_mb)
+        let threshold_bytes = self.config.compact_threshold_mb * 1024 * 1024;
+        Ok(total_bytes > threshold_bytes)
     }
 
     /// Compact WAL by consolidating all batches into one
@@ -355,7 +406,22 @@ impl WriteAheadLog {
         std::fs::rename(&temp_path, &self.path)
             .context("Failed to replace WAL file")?;
 
-        // 5. Reset writer (will be recreated on next append)
+        // 5. Delete stale .arrow files from previous WAL instances.
+        // Without this step, replay() would re-read the compacted data PLUS the old files,
+        // causing data duplication.
+        for entry in std::fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let stale_path = entry.path();
+            if stale_path.is_file()
+                && stale_path.extension().and_then(|s| s.to_str()) == Some("arrow")
+                && stale_path != self.path
+            {
+                tracing::debug!("WAL: Removing stale log file: {:?}", stale_path);
+                std::fs::remove_file(&stale_path)?;
+            }
+        }
+
+        // 6. Reset writer (will be recreated on next append)
         self.writer = None;
         
         tracing::info!("WAL: Compacted {} batches into 1 batch", batches.len());
@@ -521,8 +587,11 @@ mod tests {
         let wal_dir = temp_dir.path().join("should_compact_wal");
         std::fs::create_dir_all(&wal_dir)?;
         
-        let mut wal = WriteAheadLog::new(&wal_dir);
-        std::env::set_var("HYPERSTREAM_WAL_COMPACT_MB", "100");
+        let config = WalConfig {
+            compact_threshold_mb: 100,
+            ..Default::default()
+        };
+        let mut wal = WriteAheadLog::new(&wal_dir).with_config(config);
         
         // Initially should not need compaction
         assert!(!wal.should_compact()?);
@@ -612,5 +681,20 @@ mod tests {
         assert_eq!(actual_values, expected_values);
         
         Ok(())
+    }
+}
+
+impl Drop for WriteAheadLog {
+    fn drop(&mut self) {
+        // Only finish if we have a direct writer (synchronous mode)
+        // If tx is Some, the worker handles the finish.
+        if self.tx.is_none() {
+            if let Some(mut writer) = self.writer.take() {
+                let _ = writer.finish();
+                if let Ok(file) = writer.into_inner() {
+                    let _ = file.sync_all();
+                }
+            }
+        }
     }
 }

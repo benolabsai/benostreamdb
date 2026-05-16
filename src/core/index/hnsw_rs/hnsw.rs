@@ -30,8 +30,8 @@ use log::trace;
 pub use crate::core::index::hnsw_rs::dist::Distance;
 
 
-// TODO
-// Profiling.
+// Future work: Add profiling hooks for graph construction and search phases.
+// Key metrics: entry point selection time, layer traversal count, candidate set growth.
 
 
 
@@ -1126,24 +1126,18 @@ impl <T:Clone+Send+Sync, D: Distance<T>+Send+Sync > Hnsw<T,D>  {
                         continue;
                     }
                     q_point_neighbours[l_n].push(Arc::new(n_to_add));
-                    let nbn_at_l = q_point_neighbours[l_n].len();                    
                     //
                     // if l < level, update upward chaining, insert does a sort! t_q has a neighbour not yet in global table of points!
-                    let threshold_shrinking;  // TODO optimize threshold
+                    let threshold_shrinking: usize;
                     if l_n > 0 {
                         threshold_shrinking = self.max_nb_connection;
                     }
                     else {
                         threshold_shrinking = 2 * self.max_nb_connection;
                     }
-                    let shrink = if nbn_at_l > threshold_shrinking {
-                        true
-                    } else {
-                        false 
-                    };
-                    { // sort and shring if necessary
+                    { // sort and shrink if necessary
                         q_point_neighbours[l_n as usize].sort_unstable();
-                        if shrink {
+                        while q_point_neighbours[l_n as usize].len() > threshold_shrinking {
                             q_point_neighbours[l_n as usize].pop();
                         }
                     }

@@ -1690,9 +1690,9 @@ impl PyGlueCatalog {
 }
 
 /// Python wrapper for Hive Metastore Catalog
-/// 
-/// Note: This is a placeholder implementation. Full Hive Metastore support
-/// requires Thrift RPC integration. For production use, consider:
+///
+/// Delegates to `HiveMetastoreClient` for table lifecycle operations.
+/// For production use, consider:
 /// - AWS Glue (Hive-compatible)
 /// - Iceberg REST Catalog
 /// - Nessie Catalog
@@ -1720,7 +1720,7 @@ impl PyHiveCatalog {
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
     
-    /// Load a table (placeholder - returns informative error)
+    /// Load a table
     fn load_table(&self, database: String, table_name: String) -> PyResult<PyTable> {
         let metadata = TOKIO_RUNTIME.block_on(async {
             self.client.load_table(&database, &table_name).await

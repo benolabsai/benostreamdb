@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
 use rayon::prelude::*;
 use crate::core::index::distance::l2_distance_squared;
-use crate::core::index::gpu::{get_global_gpu_context, ComputeContext};
 
 /// IVF Index Implementation
 #[derive(Debug, Clone)]
@@ -271,13 +270,13 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
         }
         
         if !changed && iter > 0 {
-            println!("  [K-Means] Converged early at iteration {}", iter + 1);
+            tracing::debug!("K-Means converged early at iteration {}", iter + 1);
             break;
         }
     }
 
-    // Step 3: Final assignment for ALL vectors using SIMD (Parallel)
-    let _ = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    // Final assignment uses CPU parallel iteration.
+    // GPU dispatch is handled at a higher level by the caller if needed.
     
     // We already have nested Vec<Vec<f32>>, so we'll do direct assignment
     let labels: Vec<usize> = vectors.par_iter().map(|v| {

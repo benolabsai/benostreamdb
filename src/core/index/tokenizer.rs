@@ -69,7 +69,7 @@ impl TokenizerRegistry {
 }
 
 lazy_static::lazy_static! {
-    pub static ref GLOBAL_TOKENIZER_REGISTRY: TokenizerRegistry = TokenizerRegistry::new();
+    pub static ref GLOBAL_TOKENIZER_REGISTRY: parking_lot::RwLock<TokenizerRegistry> = parking_lot::RwLock::new(TokenizerRegistry::new());
 }
 
 /// Configuration for indexing a specific column

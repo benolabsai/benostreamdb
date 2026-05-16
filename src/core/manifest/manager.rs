@@ -52,6 +52,11 @@ impl ManifestManager {
         }
     }
 
+    /// Construct a full object store path for a file within the manifest directory.
+    pub fn manifest_path(&self, filename: &str) -> Path {
+        self.manifest_dir.child(filename)
+    }
+
     fn get_cache_key(&self, path: &Path) -> String {
         format!("{}/{}", self.root_uri, path)
     }

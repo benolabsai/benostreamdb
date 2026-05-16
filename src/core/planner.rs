@@ -1117,13 +1117,13 @@ impl QueryPlanner {
         let query_min_score = if strategy == "zorder" {
             crate::core::clustering::compute_zorder_score(bits_per_col, &query_mins)
         } else {
-            crate::core::clustering::hilbert_index(n_cols, bits_per_col, &query_mins)
+            crate::core::clustering::gray_code_interleave_index(n_cols, bits_per_col, &query_mins)
         };
         
         let query_max_score = if strategy == "zorder" {
             crate::core::clustering::compute_zorder_score(bits_per_col, &query_maxs)
         } else {
-            crate::core::clustering::hilbert_index(n_cols, bits_per_col, &query_maxs)
+            crate::core::clustering::gray_code_interleave_index(n_cols, bits_per_col, &query_maxs)
         };
 
         if query_min_score > max_s || query_max_score < min_s {

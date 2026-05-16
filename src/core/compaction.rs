@@ -193,7 +193,9 @@ impl Compactor {
         let temp_id = uuid::Uuid::new_v4();
         let temp_dir_path = std::env::temp_dir().join(format!("hyperstream_compact_{}", temp_id));
         fs::create_dir_all(&temp_dir_path).await?;
-        let temp_dir_str = temp_dir_path.to_str().unwrap().to_string();
+        let temp_dir_str = temp_dir_path.to_str()
+            .ok_or_else(|| anyhow::anyhow!("Temp directory path is not valid UTF-8: {:?}", temp_dir_path))?
+            .to_string();
 
         let new_segment_id = format!("compacted_{}_{}", chrono::Utc::now().format("%Y%m%d%H%M%S"), temp_id);
         
@@ -205,7 +207,9 @@ impl Compactor {
         
         for entry in &bin {
              let path = std::path::Path::new(&entry.file_path);
-             let segment_id = path.file_stem().unwrap().to_str().unwrap();
+             let segment_id = path.file_stem()
+                 .and_then(|s| s.to_str())
+                 .ok_or_else(|| anyhow::anyhow!("Invalid segment file path: {:?}", path))?;
              let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
              
              let config = SegmentConfig::new(rel_parent, segment_id); 
@@ -251,7 +255,9 @@ impl Compactor {
         let mut file_checksum = None;
         
         for local_path in generated_files {
-             let file_name = std::path::Path::new(&local_path).file_name().unwrap().to_str().unwrap();
+             let file_name = std::path::Path::new(&local_path).file_name()
+                 .and_then(|n| n.to_str())
+                 .ok_or_else(|| anyhow::anyhow!("Invalid generated file path: {}", local_path))?;
              let file_size = fs::metadata(&local_path).await?.len();
              
              let remote_path = if self.base_path.is_empty() {

@@ -34,12 +34,10 @@ name = "test_connector_ffi"
 required-features = ["java"]
 
 [features]
-default = ["simd"]
+default = []
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
-stdsimd = []
-simd = []
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
@@ -60,6 +58,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 apache-avro = "0.17"
+zstd = "0.13"
+hex = "0.4"
+ed25519-dalek = "2.1"
 
 # async runtime
 tokio = { version = "1.36", features = ["full"] }

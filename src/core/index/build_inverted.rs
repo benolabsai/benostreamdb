@@ -310,7 +310,7 @@ impl crate::core::segment::HybridSegmentWriter {
                     // Fetch tokenizer if configured
                     let tokenizer_name = config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| "identity".to_string());
                     tracing::info!("  Using tokenizer: '{}' for column '{}'", tokenizer_name, col_name);
-                    let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.get(&tokenizer_name)
+                    let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY.read().get(&tokenizer_name)
                         .ok_or_else(|| anyhow::anyhow!("Missing identity tokenizer"))?;
 
                     // Build inverted index: Token -> RowIDs (buffered in memory per segment)

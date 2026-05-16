@@ -117,14 +117,15 @@ pub fn compute_hilbert_scores(batch: &RecordBatch, columns: &[String]) -> Result
         for col in &normalized_cols {
             coords.push(col.value(i));
         }
-        scores.push(hilbert_index(n_cols, bits_per_col, &coords));
+        scores.push(gray_code_interleave_index(n_cols, bits_per_col, &coords));
     }
 
     Ok((UInt64Array::from(scores), mins, maxs))
 }
 
-/// N-dimensional Hilbert Curve indexing
-pub fn hilbert_index(n: usize, bits: usize, x: &[u64]) -> u64 {
+/// N-dimensional Z-order curve with Gray-code interleaving.
+/// This is a common approximation of a Hilbert curve.
+pub fn gray_code_interleave_index(n: usize, bits: usize, x: &[u64]) -> u64 {
     let x_vec = x.to_vec();
     let mut m: u64 = 1 << (bits - 1);
     let mut q: u64;
@@ -150,119 +151,42 @@ pub fn hilbert_index(n: usize, bits: usize, x: &[u64]) -> u64 {
 fn normalize_to_u64(array: &Arc<dyn Array>, bits: usize) -> Result<(UInt64Array, Value, Value)> {
     let max_val = (1u64 << bits) - 1;
     
+    macro_rules! normalize_primitive {
+        ($array_type:ty, $native_type:ty) => {{
+            let arr = array.as_any().downcast_ref::<$array_type>().unwrap();
+            let mut min = <$native_type>::MAX;
+            let mut max = <$native_type>::MIN;
+            for i in 0..arr.len() {
+                if arr.is_valid(i) {
+                    let v = arr.value(i);
+                    if v < min { min = v; }
+                    if v > max { max = v; }
+                }
+            }
+            let range = (max as f64 - min as f64);
+            let mut normalized = Vec::with_capacity(arr.len());
+            for i in 0..arr.len() {
+                if arr.is_valid(i) {
+                    let v = arr.value(i);
+                    let norm = if range > 0.0 {
+                        (((v as f64 - min as f64) / range) * max_val as f64) as u64
+                    } else {
+                        0
+                    };
+                    normalized.push(norm);
+                } else {
+                    normalized.push(0);
+                }
+            }
+            Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
+        }};
+    }
+
     match array.data_type() {
-        arrow::datatypes::DataType::Int32 => {
-            let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            let mut min = i32::MAX;
-            let mut max = i32::MIN;
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    if v < min { min = v; }
-                    if v > max { max = v; }
-                }
-            }
-            let range = (max as i64 - min as i64) as f64;
-            let mut normalized = Vec::with_capacity(arr.len());
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    let norm = if range > 0.0 {
-                        ((v as i64 - min as i64) as f64 / range * max_val as f64) as u64
-                    } else {
-                        0
-                    };
-                    normalized.push(norm);
-                } else {
-                    normalized.push(0);
-                }
-            }
-            Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
-        }
-        arrow::datatypes::DataType::Float32 => {
-            let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
-            let mut min = f32::MAX;
-            let mut max = f32::MIN;
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    if v < min { min = v; }
-                    if v > max { max = v; }
-                }
-            }
-            let range = max - min;
-            let mut normalized = Vec::with_capacity(arr.len());
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    let norm = if range > 0.0 {
-                        ((v - min) / range * max_val as f32) as u64
-                    } else {
-                        0
-                    };
-                    normalized.push(norm);
-                } else {
-                    normalized.push(0);
-                }
-            }
-            Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
-        }
-        arrow::datatypes::DataType::Int64 => {
-             let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
-             let mut min = i64::MAX;
-             let mut max = i64::MIN;
-             for i in 0..arr.len() {
-                 if arr.is_valid(i) {
-                     let v = arr.value(i);
-                     if v < min { min = v; }
-                     if v > max { max = v; }
-                 }
-             }
-             let range = max as f64 - min as f64;
-             let mut normalized = Vec::with_capacity(arr.len());
-             for i in 0..arr.len() {
-                 if arr.is_valid(i) {
-                     let v = arr.value(i);
-                     let norm = if range > 0.0 {
-                         ((v - min) as f64 / range * max_val as f64) as u64
-                     } else {
-                         0
-                     };
-                     normalized.push(norm);
-                 } else {
-                     normalized.push(0);
-                 }
-             }
-             Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
-        }
-        arrow::datatypes::DataType::Float64 => {
-            let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            let mut min = f64::MAX;
-            let mut max = f64::MIN;
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    if v < min { min = v; }
-                    if v > max { max = v; }
-                }
-            }
-            let range = max - min;
-            let mut normalized = Vec::with_capacity(arr.len());
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                    let v = arr.value(i);
-                    let norm = if range > 0.0 {
-                        ((v - min) / range * max_val as f64) as u64
-                    } else {
-                        0
-                    };
-                    normalized.push(norm);
-                } else {
-                    normalized.push(0);
-                }
-            }
-            Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
-        }
+        arrow::datatypes::DataType::Int32 => normalize_primitive!(Int32Array, i32),
+        arrow::datatypes::DataType::Float32 => normalize_primitive!(Float32Array, f32),
+        arrow::datatypes::DataType::Int64 => normalize_primitive!(Int64Array, i64),
+        arrow::datatypes::DataType::Float64 => normalize_primitive!(Float64Array, f64),
         _ => Err(anyhow::anyhow!("Unsupported type for clustering: {:?}", array.data_type())),
     }
 }

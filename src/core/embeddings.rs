@@ -72,7 +72,13 @@ pub struct PythonCallbackFunction {
 #[async_trait]
 impl EmbeddingFunction for PythonCallbackFunction {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        (self.callback)(texts)
+        // Use spawn_blocking to avoid blocking the Tokio executor thread,
+        // which is critical when the Python callback holds the GIL.
+        let callback_ref = &self.callback;
+        let result = tokio::task::block_in_place(|| {
+            (callback_ref)(texts)
+        });
+        result
     }
 
     fn dimension(&self) -> usize { self.dim }
@@ -97,11 +103,21 @@ pub struct RemoteFunction {
     client: reqwest::Client,
 }
 
+impl RemoteFunction {
+    pub fn new(name: String, endpoint: String, api_key: String, dim: usize) -> Self {
+        Self {
+            name,
+            endpoint,
+            api_key,
+            dim,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
 #[async_trait]
 impl EmbeddingFunction for RemoteFunction {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
-        // Implementation for different cloud providers
-        // For now, a generic OpenAI-compatible implementation
         let response = self.client.post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({
@@ -110,22 +126,44 @@ impl EmbeddingFunction for RemoteFunction {
             }))
             .send()
             .await?;
-            
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Embedding API returned error status {}: {}", status, body);
+        }
+
         let res_body: serde_json::Value = response.json().await?;
-        // Parse OpenAI-style response
-        let embeddings = res_body["data"].as_array()
-            .ok_or_else(|| anyhow::anyhow!("Invalid response from embedding API"))?
+
+        let data_array = res_body["data"].as_array()
+            .ok_or_else(|| anyhow::anyhow!(
+                "Invalid response from embedding API: missing 'data' array. Response: {}",
+                serde_json::to_string(&res_body).unwrap_or_default()
+            ))?;
+
+        let embeddings: Result<Vec<Vec<f32>>> = data_array
             .iter()
-            .map(|d| {
-                d["embedding"].as_array()
-                    .unwrap()
+            .enumerate()
+            .map(|(i, d)| {
+                let embedding = d["embedding"].as_array()
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "Missing 'embedding' array in data[{}]", i
+                    ))?;
+                embedding
                     .iter()
-                    .map(|v| v.as_f64().unwrap() as f32)
+                    .enumerate()
+                    .map(|(j, v)| {
+                        v.as_f64()
+                            .map(|f| f as f32)
+                            .ok_or_else(|| anyhow::anyhow!(
+                                "Non-numeric value at data[{}].embedding[{}]", i, j
+                            ))
+                    })
                     .collect()
             })
             .collect();
-            
-        Ok(embeddings)
+
+        embeddings
     }
 
     fn dimension(&self) -> usize { self.dim }

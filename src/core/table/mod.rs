@@ -1210,7 +1210,7 @@ impl Table {
 
     #[cfg(feature = "enterprise")]
     pub fn enable_enterprise(&mut self, license_key: String) -> Result<()> {
-        crate::enterprise::license::validate_license(&license_key)?;
+        crate::core::license::verify_license(&license_key)?;
         self.enterprise_license = Some(license_key);
         Ok(())
     }
@@ -1520,7 +1520,7 @@ impl Table {
         Ok(manifest)
     }
 
-    fn backfill_indexes(&self, target_columns: Vec<String>) -> Result<()> {
+    pub(crate) fn backfill_indexes(&self, target_columns: Vec<String>) -> Result<()> {
         self.runtime().block_on(self.backfill_indexes_async(target_columns))
     }
 
@@ -2461,13 +2461,13 @@ impl Table {
     }
 
     /// Read a specific split (with index acceleration)
-    pub async fn read_split_async(&self, split: &Split, columns: Vec<String>, _filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+    pub async fn read_split_async(&self, split: &Split, columns: Vec<String>, filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
             // New Implementation: Use stream_row_groups with column pushdown
-            
+
             // 1. Setup Reader (Duplicated logic from read_file - should refactor helper)
             let file_path = &split.file_path;
-            
-             let (store, config) = if file_path.contains("://") {
+
+             let (store, mut config) = if file_path.contains("://") {
                  match url::Url::parse(file_path) {
                      Ok(url) => {
                          let scheme = url.scheme();
@@ -2480,7 +2480,7 @@ impl Table {
                          } else {
                              create_object_store(file_path)?
                          };
-                         
+
                          let relative_path = if scheme == "file" {
                              let path = std::path::Path::new(url.path());
                              path.file_name().and_then(|s| s.to_str()).unwrap_or("wrapper").to_string()
@@ -2510,9 +2510,20 @@ impl Table {
                  (self.store.clone(), config)
              };
 
+             // Enrich config from manifest (index files, delete files, file size)
+             let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+             if let Ok((_, all_entries, _)) = manager.load_latest_full().await {
+                 if let Some(entry) = all_entries.iter().find(|e| e.file_path == *file_path || e.file_path.ends_with(file_path)) {
+                     config = config.with_parquet_path(entry.file_path.clone())
+                         .with_delete_files(entry.delete_files.clone())
+                         .with_index_files(entry.index_files.clone())
+                         .with_file_size(entry.file_size_bytes as u64);
+                 }
+             }
+
               let reader = HybridReader::new(config, store, &self.uri);
              use futures::StreamExt;
-             
+
              // Resolve Target Schema (Projection)
              let target_schema = if columns.is_empty() {
                  None
@@ -2540,15 +2551,20 @@ impl Table {
                    }
              };
 
-             // If filter is simple/indexed, we MIGHT try index read. 
-             // BUT: index read (query_index_first) aims for whole file or needs row mapping.
-             // If we are reading a split (subset), index reading whole file then filtering might be wrong?
-             // Actually index returns row selection.
-             // If we intersect index selection with row group selection it works.
-             // But existing query_index_first() effectively does global selection.
-             // For now, let's stick to stream_row_groups which applies deletes.
-             // TODO: Index filtering on Split level needs combining RowGroups + Index Bitmap.
-             
+             // Index acceleration path:
+             // When a filter is provided and indexes exist, query the index for a bitmap
+             // of matching rows, then stream the filtered row groups.
+             if let Some(filter_str) = filter {
+                 if let Some(qf) = crate::core::planner::QueryFilter::parse(filter_str) {
+                     if let Ok(indexed_batches) = reader.query_index_first(&qf, target_schema.clone()).await {
+                         if !indexed_batches.is_empty() {
+                             let owned_batches: Vec<Result<RecordBatch>> = indexed_batches.into_iter().map(Ok).collect();
+                             return Ok(futures::stream::iter(owned_batches).boxed());
+                         }
+                     }
+                 }
+             }
+
              let stream = reader.stream_row_groups(Some(&split.row_group_ids), target_schema).await?;
              Ok(stream.boxed())
     }

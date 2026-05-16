@@ -14,17 +14,25 @@ pub struct HyperStreamSession {
 
 use datafusion::prelude::{SessionConfig, SessionContext};
 // use datafusion::execution::context::SessionState; // Unused
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 use crate::core::sql::optimizer::IndexJoinOptimizerRule;
 use crate::core::sql::vector_udf;
 
 impl HyperStreamSession {
-    pub fn new(_memory_limit_bytes: Option<usize>) -> Self {
+    pub fn new(memory_limit_bytes: Option<usize>) -> Self {
         let mut config = SessionConfig::new();
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
-        
-        let runtime = Arc::new(RuntimeEnv::default());
+
+        let runtime = Arc::new({
+            let builder = RuntimeEnvBuilder::new();
+            let builder = if let Some(limit) = memory_limit_bytes {
+                builder.with_memory_limit(limit, 1.0)
+            } else {
+                builder
+            };
+            builder.build().expect("Failed to build RuntimeEnv")
+        });
         
         let state_builder = SessionStateBuilder::new()
             .with_config(config)

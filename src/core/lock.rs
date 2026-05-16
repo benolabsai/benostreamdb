@@ -63,7 +63,13 @@ impl FileBasedLock {
                                 match self.store.put_opts(&self.path, bytes.clone().into(), update_opts).await {
                                     Ok(_) => return Ok(true),
                                     Err(object_store::Error::NotImplemented) | Err(object_store::Error::NotSupported { .. }) => {
-                                        // Fallback for LocalFileSystem or stores that don't support conditional updates
+                                        // SAFETY NOTE: This fallback path has a TOCTOU (time-of-check-time-of-use)
+                                        // race condition. The delete → sleep → create_exclusive sequence is NOT atomic.
+                                        // Two concurrent callers can both delete the expired lock and race to re-create it.
+                                        // The random jitter reduces but does not eliminate this risk.
+                                        // This is inherent to stores without conditional-update (CAS) support (e.g., LocalFileSystem).
+                                        // For production distributed locking, use S3/GCS/Azure which support PutMode::Update.
+                                        tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
                                         let _ = self.store.delete(&self.path).await;
                                         let jitter = rand::random::<u64>() % 50;
                                         tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
@@ -105,11 +111,21 @@ impl FileBasedLock {
                 let bytes = res.bytes().await?;
                 if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
                     if payload.owner == self.owner {
-                        let _ = self.store.delete(&self.path).await;
+                        self.store.delete(&self.path).await
+                            .map_err(|e| anyhow::anyhow!("Failed to delete lock file during release: {}", e))?;
+                    } else {
+                        // Lock was stolen by another owner — caller should know
+                        tracing::warn!(
+                            "Lock release skipped: lock is now owned by '{}', not '{}'. Lock may have been stolen.",
+                            payload.owner, self.owner
+                        );
                     }
                 }
             }
-            Err(_) => {}
+            Err(_) => {
+                // Lock file already gone — idempotent release is fine
+                tracing::debug!("Lock file already removed during release (idempotent).");
+            }
         }
         Ok(())
     }

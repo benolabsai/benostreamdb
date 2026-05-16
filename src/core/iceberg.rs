@@ -414,19 +414,29 @@ pub fn decode_iceberg_value(type_json: &serde_json::Value, bytes: &[u8]) -> crat
 
 pub fn parse_avro_value_bytes(bytes: &[u8]) -> crate::core::manifest::ManifestValue {
     // Iceberg stores min/max bounds as the serialized binary of the type.
-    // Without strict type info passed down, we might struggle.
-    // For now, let's attempt to guess or store as stringified bytes?
-    // Actually, `ManifestValue` is a wrapper around serde_json::Value.
-    // If it's a string, it's just bytes. If it's an int, it's little endian bytes (usually).
-    // Let's implement a best-effort simple one or just wrap bytes.
-    // TODO: Pass type context for better parsing.
-    
+    // Without strict type info, we attempt best-effort inference from byte length.
+    parse_avro_value_bytes_with_type(bytes, None)
+}
+
+/// Parse Avro serialized bytes with an optional type hint for accurate decoding.
+/// When `type_hint` is provided, uses typed decoding; otherwise falls back to length-based inference.
+pub fn parse_avro_value_bytes_with_type(
+    bytes: &[u8],
+    type_hint: Option<&str>,
+) -> crate::core::manifest::ManifestValue {
+    // If a type hint is available, use the typed decoder for correctness
+    if let Some(type_name) = type_hint {
+        let type_json = serde_json::json!(type_name);
+        return decode_iceberg_value(&type_json, bytes);
+    }
+
+    // Best-effort inference from byte length (legacy fallback)
     if bytes.len() == 4 {
-        // Could be int or float
+        // Could be int or float — prefer int as it's more common in partition bounds
         let val = i32::from_le_bytes(bytes.try_into().unwrap_or_default());
         crate::core::manifest::ManifestValue::Int64(val as i64)
     } else if bytes.len() == 8 {
-        // Could be long or double
+        // Could be long or double — prefer long for consistency
         let val = i64::from_le_bytes(bytes.try_into().unwrap_or_default());
         crate::core::manifest::ManifestValue::Int64(val)
     } else {
@@ -434,7 +444,6 @@ pub fn parse_avro_value_bytes(bytes: &[u8]) -> crate::core::manifest::ManifestVa
         if let Ok(s) = std::str::from_utf8(bytes) {
             crate::core::manifest::ManifestValue::String(s.to_string())
         } else {
-             // Fallback
              crate::core::manifest::ManifestValue::String(base64::engine::general_purpose::STANDARD.encode(bytes))
         }
     }
@@ -1083,27 +1092,53 @@ impl IcebergWriter {
     pub fn write_manifest_list(&self, entries: &[crate::core::manifest::ManifestListEntry]) -> Result<Vec<u8>> {
         let schema = apache_avro::Schema::parse_str(MANIFEST_LIST_SCHEMA_V2)?;
         let mut writer = apache_avro::Writer::new(&schema, Vec::new());
-        
+
         for entry in entries {
             let mut record = apache_avro::types::Record::new(&schema).ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
             record.put("manifest_path", entry.manifest_path.clone());
             record.put("manifest_length", entry.manifest_length);
             record.put("partition_spec_id", entry.partition_spec_id);
-            record.put("content", entry.content); 
+            record.put("content", entry.content);
             record.put("sequence_number", entry.sequence_number);
-            record.put("min_sequence_number", entry.min_sequence_number); 
+            record.put("min_sequence_number", entry.min_sequence_number);
             record.put("added_snapshot_id", entry.added_snapshot_id);
             record.put("added_data_files_count", entry.added_files_count);
             record.put("existing_data_files_count", entry.existing_files_count);
             record.put("deleted_data_files_count", entry.deleted_files_count);
-            record.put("added_rows_count", entry.added_rows_count); 
+            record.put("added_rows_count", entry.added_rows_count);
             record.put("existing_rows_count", entry.existing_rows_count);
             record.put("deleted_rows_count", entry.deleted_rows_count);
-            record.put("partitions", apache_avro::types::Value::Null); // TODO: Summaries
+
+            // Build partition field summaries from partition_stats
+            let partition_summaries: Vec<apache_avro::types::Value> = entry.partition_stats.iter()
+                .map(|(_field_name, stats)| {
+                    use crate::core::manifest::ManifestValue;
+                    let lower_bound = match &stats.min {
+                        None | Some(ManifestValue::Null) => apache_avro::types::Value::Null,
+                        Some(val) => apache_avro::types::Value::Bytes(format!("{}", val).into_bytes()),
+                    };
+                    let upper_bound = match &stats.max {
+                        None | Some(ManifestValue::Null) => apache_avro::types::Value::Null,
+                        Some(val) => apache_avro::types::Value::Bytes(format!("{}", val).into_bytes()),
+                    };
+                    apache_avro::types::Value::Record(vec![
+                        ("contains_null".to_string(), apache_avro::types::Value::Boolean(stats.null_count > 0)),
+                        ("contains_nan".to_string(), apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null))),
+                        ("lower_bound".to_string(), apache_avro::types::Value::Union(1, Box::new(lower_bound))),
+                        ("upper_bound".to_string(), apache_avro::types::Value::Union(1, Box::new(upper_bound))),
+                    ])
+                })
+                .collect();
+
+            if partition_summaries.is_empty() {
+                record.put("partitions", apache_avro::types::Value::Null);
+            } else {
+                record.put("partitions", apache_avro::types::Value::Array(partition_summaries));
+            }
 
             writer.append(record)?;
         }
-        
+
         Ok(writer.into_inner()?)
     }
 

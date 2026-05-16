@@ -859,7 +859,8 @@ impl Table {
             params.query.clone(),
             params.k,
             params.metric,
-        ).with_ef_search(params.ef_search);
+        ).with_ef_search(params.ef_search)
+         .with_config(self.query_config.clone());
 
         // For now, we reuse the existing vector search and convert RecordBatches to ScoredResults
         // In a future optimization, we'll return ScoredResults directly from the reader to avoid Parquet I/O if possible

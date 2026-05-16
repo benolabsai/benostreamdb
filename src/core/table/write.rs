@@ -710,7 +710,12 @@ impl Table {
             updated_last_column_id: None,
             is_fast_append: false,
         };
-        
+
+        // Calculate total rows being added from all new manifest entries
+        let added_rows_total: i64 = all_new_entries.iter()
+            .map(|e| e.record_count)
+            .sum();
+
         let new_manifest = manifest_manager.commit(&all_new_entries, &[], commit_metadata).await?;
 
         // 4. Update Table Metadata (Iceberg v2 Spec)
@@ -755,7 +760,7 @@ impl Table {
             manifest_list: new_manifest.manifest_list_path.clone().unwrap_or_default(),
             schema_id: Some(new_manifest.current_schema_id),
             first_row_id: table_meta.next_row_id,
-            added_rows: None, // TODO: Calculate from manifest
+            added_rows: Some(added_rows_total),
         };
         table_meta.add_snapshot(snapshot);
         

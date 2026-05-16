@@ -18,9 +18,6 @@ mod tests {
 
         let uri = format!("file://{}", test_dir);
         
-        // Force flush on write by setting cache size to 0
-        unsafe { std::env::set_var("HYPERSTREAM_CACHE_GB", "0"); }
-
         // 1. Create Table
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),

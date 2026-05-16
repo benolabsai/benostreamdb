@@ -103,18 +103,18 @@ impl Maintenance {
         tracing::info!("Expired {} data/index files.", deletions);
 
         // 6. Delete Expired Manifest Files
+        let mut manifest_deletions = 0;
         for m in expired {
             let filename = format!("v{}.json", m.version);
-            let _p = Path::from("_manifest").child(filename); // Assuming _manifest is fixed
-             // Wait, BasePath logic in ManifestManager handles _manifest prefix.
-             // But we don't expose path construction easily.
-             // Re-derive or add method.
-             // Let's rely on standard structure:
-             // manifest_dir is usually {base}/_manifest
-             // We can use list/delete on manifest dir.
-             // Actually, ManifestManager encapsulates the dir.
-             // Let's just construct it manually for now or add delete_version to Manager.
+            let manifest_path = self.manifest_manager.manifest_path(&filename);
+            if let Err(e) = self.store.delete(&manifest_path).await {
+                tracing::warn!("Failed to delete expired manifest v{}: {}", m.version, e);
+            } else {
+                manifest_deletions += 1;
+                tracing::debug!("Deleted expired manifest: v{}.json", m.version);
+            }
         }
+        tracing::info!("Expired {} manifest files.", manifest_deletions);
         
         Ok(())
     }
@@ -162,8 +162,11 @@ impl Maintenance {
                 let age = now - meta.last_modified.timestamp_millis();
                 if age > older_than_ms {
                     tracing::info!("Found Orphan: {} (Age: {}ms)", path_str, age);
-                    self.store.delete(&meta.location).await?;
-                    deletions += 1;
+                    if let Err(e) = self.store.delete(&meta.location).await {
+                        tracing::warn!("Failed to delete orphan file {}: {}", path_str, e);
+                    } else {
+                        deletions += 1;
+                    }
                 }
             }
         }

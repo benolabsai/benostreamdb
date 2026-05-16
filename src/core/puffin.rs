@@ -110,28 +110,35 @@ impl<R: Read + Seek> PuffinReader<R> {
     pub fn new(mut reader: R) -> Result<Self> {
         // Read footer size and magic from end
         reader.seek(SeekFrom::End(-12))?; // 12 bytes = Size(4) + Flags(4) + Magic(4)
-        
+
         let mut size_buf = [0u8; 4];
         reader.read_exact(&mut size_buf)?;
         let footer_size = u32::from_le_bytes(size_buf);
-        
+
         let mut flags_buf = [0u8; 4];
         reader.read_exact(&mut flags_buf)?;
-        // let flags = u32::from_le_bytes(flags_buf);
-        
+        let flags = u32::from_le_bytes(flags_buf);
+
         let mut magic_buf = [0u8; 4];
         reader.read_exact(&mut magic_buf)?;
         if magic_buf != PUFFIN_MAGIC {
             anyhow::bail!("Invalid Puffin magic at end of file");
         }
-        
+
         // Seek to start of footer payload
         reader.seek(SeekFrom::End(-12 - footer_size as i64))?;
         let mut footer_payload = vec![0u8; footer_size as usize];
         reader.read_exact(&mut footer_payload)?;
-        
-        // TODO: Handle compression flag if bit 0 is set
-        
+
+        // Handle footer-level compression flag (bit 0)
+        // When set, the footer payload is zstd-compressed
+        let footer_payload = if flags & 0x01 != 0 {
+            zstd::decode_all(&footer_payload[..])
+                .context("Failed to decompress Puffin footer with Zstd")?
+        } else {
+            footer_payload
+        };
+
         let footer: PuffinFooter = serde_json::from_slice(&footer_payload)
             .context("Failed to parse Puffin footer JSON")?;
             
@@ -148,11 +155,25 @@ impl<R: Read + Seek> PuffinReader<R> {
     pub fn read_blob(&mut self, blob_idx: usize) -> Result<Vec<u8>> {
         let meta = self.header.blobs.get(blob_idx)
             .context("Blob index out of range")?;
-            
+
         self.reader.seek(SeekFrom::Start(meta.offset as u64))?;
         let mut data = vec![0u8; meta.length as usize];
         self.reader.read_exact(&mut data)?;
-        
+
+        // Check per-blob compression codec
+        if let Some(ref codec) = meta.compression_codec {
+            if codec == "zstd" {
+                data = zstd::decode_all(&data[..])
+                    .context(format!("Failed to decompress blob {} with Zstd", blob_idx))?;
+            } else {
+                anyhow::bail!(
+                    "Blob {} uses compression codec '{}' which is not yet supported",
+                    blob_idx,
+                    codec
+                );
+            }
+        }
+
         Ok(data)
     }
 }

@@ -22,10 +22,6 @@ impl ReciprocalRankFusion {
         Self { k }
     }
 
-    pub fn default() -> Self {
-        Self::new(60.0)
-    }
-
     /// Set the k parameter for RRF fusion.
     pub fn with_k(mut self, k: f32) -> Self {
         self.k = k;
@@ -62,5 +58,11 @@ impl ReciprocalRankFusion {
         }
         
         results
+    }
+}
+
+impl Default for ReciprocalRankFusion {
+    fn default() -> Self {
+        Self::new(60.0)
     }
 }

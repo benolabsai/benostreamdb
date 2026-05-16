@@ -369,9 +369,10 @@ fn load_point<T:'static+DeserializeOwned+Clone+Sized+Send+Sync>(graph_in: &mut d
     data_in.read_exact(&mut it_slice)?;
     let serialized_len = u64::from_ne_bytes(it_slice);
 //    log::debug!("serialized len to reload {:?}", serialized_len);
-    let mut v_serialized = Vec::<u8>::new();
-    // TODO avoid initialization
-    v_serialized.resize(serialized_len as usize, 0);
+    let mut v_serialized = Vec::<u8>::with_capacity(serialized_len as usize);
+    unsafe {
+        v_serialized.set_len(serialized_len as usize);
+    }
     data_in.read_exact(&mut v_serialized)?;
     let v : Vec<T>;
     if std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>() {
