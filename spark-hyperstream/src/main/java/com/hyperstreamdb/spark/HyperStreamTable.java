@@ -1,4 +1,3 @@
-```java
 package com.hyperstreamdb.spark;
 
 import org.apache.spark.sql.connector.catalog.SupportsRead;

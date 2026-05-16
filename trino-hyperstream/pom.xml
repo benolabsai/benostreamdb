@@ -21,7 +21,7 @@
     <properties>
         <trino.version>435</trino.version>
         <java.release>17</java.release>
-        <skipTests>true</skipTests>
+        <skipTests>false</skipTests>
     </properties>
 
     <profiles>
@@ -51,6 +51,11 @@
             <version>2.15.2</version>
             <scope>provided</scope>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
+        </dependency>
         <!-- For JNI -->
         <dependency>
             <groupId>net.java.dev.jna</groupId>
@@ -74,10 +79,22 @@
             <artifactId>arrow-c-data</artifactId>
             <version>14.0.2</version>
         </dependency>
+        <!-- Testing -->
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
-    
+
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
