@@ -1,0 +1,75 @@
+# Production Docker Compose for HyperStreamDB
+# Requires .env file with secrets (see .env.example)
+
+version: "3.8"
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hyperstreamdb:latest
+    container_name: hdb-gateway
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-3000}:3000"
+    environment:
+      - HYPERSTREAM_STORAGE_URI=s3://${AWS_BUCKET:-warehouse}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - RUST_LOG=${RUST_LOG:-info}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+    volumes:
+      - hdb-cache:/tmp/hyperstream_cache
+    networks:
+      - hyperstream_net
+
+  iceberg-rest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: hyperstreamdb:latest
+    container_name: hdb-iceberg-rest
+    restart: unless-stopped
+    entrypoint: ["iceberg_rest"]
+    ports:
+      - "${ICEBERG_REST_PORT:-8181}:8181"
+    environment:
+      - HYPERSTREAM_STORAGE_URI=s3://${AWS_BUCKET:-warehouse}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - RUST_LOG=${RUST_LOG:-info}
+      - PORT=8181
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+    volumes:
+      - hdb-cache:/tmp/hyperstream_cache
+    networks:
+      - hyperstream_net
+
+volumes:
+  hdb-cache:
+    driver: local
+
+networks:
+  hyperstream_net:
+    driver: bridge

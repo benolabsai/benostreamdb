@@ -1,0 +1,52 @@
+# cargo-deny configuration for HyperStreamDB
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = true
+no-dev-dependencies = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Notify about yanked crates in Cargo.lock
+yanked = "deny"
+
+# Ignore specific advisories that have been reviewed and deemed low-risk
+# ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[licenses]
+version = 2
+private = { ignore = true }
+confidence-threshold = 0.9
+
+# Licenses that are automatically approved
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "OpenSSL",
+    "Zlib",
+    "Unicode-DFS-2016",
+]
+
+# Skim the license text for keywords to approve unclear licenses
+[[licenses.clarify]]
+name = "webpki"
+expression = "ISC"
+license-files = [{ path = "LICENSE", hash = 0xe106d6a3 }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

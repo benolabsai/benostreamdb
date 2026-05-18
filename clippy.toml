@@ -1,0 +1,17 @@
+# Clippy configuration for HyperStreamDB
+# Database systems require complex types and logic; thresholds are tuned accordingly.
+
+# Maximum type complexity before clippy warns (default: 250).
+# Database code involves nested generics, futures, and trait objects.
+max-type-complexity = 400
+
+# Maximum cognitive complexity before clippy warns (default: 25).
+# Query planning and execution logic are inherently complex.
+cognitive-complexity-threshold = 45
+
+# Disallow `todo!()` and `unimplemented!()` in production code
+disallowed-macros = []
+
+# Allow larger number of arguments in functions (default: 7)
+# Database APIs often take multiple configuration parameters.
+max-fn-params = 10

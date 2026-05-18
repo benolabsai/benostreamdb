@@ -38,6 +38,7 @@ default = []
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
+proptest = []
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]

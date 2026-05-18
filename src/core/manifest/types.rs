@@ -849,3 +849,48 @@ lazy_static::lazy_static! {
     pub(crate) static ref COMMIT_LOCKS: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>> = dashmap::DashMap::new();
 }
 
+impl PartitionSpec {
+    /// Convert partition values to a Hive-style path string
+    pub fn partition_to_path(&self, values: &HashMap<String, serde_json::Value>) -> String {
+        let mut parts = Vec::new();
+        for field in &self.fields {
+            if let Some(val) = values.get(&field.name) {
+                let val_str = match val {
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => val.to_string(),
+                };
+                
+                // Percent-encode special characters to be safe for filenames and match object_store Paths
+                let mut encoded = String::new();
+                for b in val_str.bytes() {
+                    match b {
+                        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+                            encoded.push(b as char);
+                        }
+                        _ => {
+                            encoded.push_str(&format!("%{:02X}", b));
+                        }
+                    }
+                }
+                parts.push(format!("{}={}", field.name, encoded));
+            }
+        }
+        parts.join("/")
+    }
+}
+
+impl ManifestValue {
+    /// Convert to a serde_json::Value
+    pub fn to_json_value(&self) -> serde_json::Value {
+        match self {
+            ManifestValue::String(s) => serde_json::json!(s),
+            ManifestValue::Int32(i) => serde_json::json!(i),
+            ManifestValue::Int64(i) => serde_json::json!(i),
+            ManifestValue::Float32(f) => serde_json::json!(f),
+            ManifestValue::Float64(f) => serde_json::json!(f),
+            ManifestValue::Boolean(b) => serde_json::json!(b),
+            ManifestValue::Null => serde_json::Value::Null,
+        }
+    }
+}
+

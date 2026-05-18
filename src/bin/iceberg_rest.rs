@@ -8,6 +8,7 @@ use ax_lib::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::time::SystemTime;
 use futures::StreamExt;
 use object_store::ObjectStore;
 use hyperstreamdb::core::manifest::ManifestManager;
@@ -21,23 +22,106 @@ pub struct CatalogConfig {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    // Task 8: Global panic handler
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!(panic = ?info, "Iceberg REST server panicked");
+    }));
+
+    // Task 3: Use proper telemetry init
+    let _telemetry_guard = hyperstreamdb::telemetry::tracing::init_tracing("iceberg_rest")
+        .expect("Failed to initialize tracing");
+
+    // Task 6: Track start time for uptime
+    let start_time = SystemTime::now();
 
     let app = Router::new()
+        .route("/v1/health", get(health_check))
+        .route("/v1/metrics", get(metrics_handler))
         .route("/v1/config", get(get_config))
         .route("/v1/:prefix/namespaces", get(list_namespaces))
         .route("/v1/:prefix/namespaces/:namespace/tables", get(list_tables).post(create_table))
         .route("/v1/:prefix/namespaces/:namespace/tables/:table", get(get_table).post(update_table))
-        .route("/v1/:prefix/namespaces/:namespace/tables/:table/register", post(register_table));
+        .route("/v1/:prefix/namespaces/:namespace/tables/:table/register", post(register_table))
+        .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let port = std::env::var("PORT")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8181);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("Iceberg REST Server listening on {}", addr);
+    tracing::info!(%addr, "Iceberg REST Server listening");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    ax_lib::serve(listener, app).await.unwrap();
+
+    let app_with_state = app.with_state(StartState { start_time });
+    let server = ax_lib::serve(listener, app_with_state);
+
+    // Task 4: Graceful shutdown on SIGINT/SIGTERM
+    let graceful = server.with_graceful_shutdown(shutdown_signal());
+    graceful.await.unwrap();
+}
+
+struct StartState {
+    start_time: SystemTime,
+}
+
+impl Clone for StartState {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for StartState {}
+
+async fn health_check(state: ax_lib::extract::State<StartState>) -> impl IntoResponse {
+    let uptime = state
+        .start_time
+        .elapsed()
+        .unwrap_or_default()
+        .as_secs();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": uptime
+    }))
+}
+
+async fn metrics_handler() -> impl IntoResponse {
+    use prometheus::{gather, TextEncoder};
+    let encoder = TextEncoder::new();
+    let metric_families = gather();
+    let mut result = String::new();
+    encoder.encode_utf8(&metric_families, &mut result).unwrap_or_default();
+    ax_lib::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; version=0.0.4")
+        .body(ax_lib::body::Body::from(result))
+        .unwrap()
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        sigterm.recv().await;
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+        sigint.recv().await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("Shutdown signal received, starting graceful shutdown");
 }
 
 async fn get_config() -> impl IntoResponse {

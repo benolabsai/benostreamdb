@@ -215,7 +215,7 @@ impl HybridReader {
             rel.push_str(&filename);
         }
 
-        Path::from(rel)
+        Path::parse(&rel).unwrap_or_else(|_| Path::from(rel))
     }
 
 

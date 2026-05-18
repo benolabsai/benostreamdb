@@ -74,7 +74,6 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
         ]
     };
     let mut table = Table::create_partitioned_async(uri.clone(), schema, spec).await?;
-    table.index_all_columns_async().await?;
 
     // 2. Write data across 3 partitions
     table.write_async(vec![create_complex_batch(1, 10, "A", 2022, dim).await]).await?;
@@ -83,7 +82,12 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
     table.commit_async().await?;
     table.wait_for_background_tasks_async().await?;
 
-    // 3. Complex Query: year=2022 AND category='A' AND id > 5 + Vector Search
+    // 3. Index all columns (must be after data is written for backfill to work)
+    // index_all_columns_async() now also infers index metadata from physical files
+    table.index_all_columns_async().await?;
+    table.wait_for_background_tasks_async().await?;
+
+    // 4. Complex Query: year=2022 AND category='A' AND id > 5 + Vector Search
     let query_vec = vec![0.1; dim];
     let vs_params = VectorSearchParams::new("embedding", hyperstreamdb::core::index::VectorValue::Float32(query_vec), 5);
     
@@ -162,7 +166,6 @@ async fn test_cosine_similarity_search() -> Result<()> {
     let dim = 4;
     let schema = get_complex_schema(dim).await;
     let mut table = Table::new_async(uri.clone()).await?;
-    table.index_all_columns_async().await?;
 
     // Create vectors with specific directions
     // Vec1: [1, 0, 0, 0]
@@ -190,7 +193,8 @@ async fn test_cosine_similarity_search() -> Result<()> {
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
 
-    // Wait for background indexing task to finish
+    // Index all columns now that the table schema has been established
+    table.index_all_columns_async().await?;
     table.wait_for_background_tasks_async().await?;
 
     let query_vec = vec![1.0, 0.1, 0.0, 0.0];

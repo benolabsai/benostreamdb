@@ -47,8 +47,6 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     
     let mut table = Table::new_async(uri.clone()).await?;
     let dim = 8;
-    table.index_all_columns_async().await?;
-
     // 1. Write multiple segments to ensure parallel execution is possible
     for i in 0..5 {
         let batch = create_vector_batch(i * 100, 100, dim, i as f32 * 0.1).await;
@@ -56,6 +54,8 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
         table.commit_async().await?;
     }
     
+    // Index all columns now that the table schema has been established
+    table.index_all_columns_async().await?;
     // Wait for all background indexing tasks to complete
     table.wait_for_background_tasks_async().await?;
 

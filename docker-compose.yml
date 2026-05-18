@@ -8,8 +8,8 @@ services:
     image: minio/minio:latest
     container_name: minio
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
       # Performance settings from template
       - MINIO_CACHE_DRIVES=/tmp/cache
       - MINIO_CACHE_QUOTA=80
@@ -39,7 +39,7 @@ services:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set minio http://minio:9000 minioadmin minioadmin;
+      mc alias set minio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
       mc mb minio/warehouse --ignore-existing;
       mc mb minio/hyperstream --ignore-existing;
       mc policy set public minio/warehouse;
@@ -59,7 +59,7 @@ services:
       - QUARKUS_HTTP_PORT=19120
       - QUARKUS_DATASOURCE_POSTGRESQL_JDBC_URL=jdbc:postgresql://nessie-postgres:5432/nessie
       - QUARKUS_DATASOURCE_POSTGRESQL_USERNAME=nessie
-      - QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD=nessie
+      - QUARKUS_DATASOURCE_POSTGRESQL_PASSWORD=${NESSIE_POSTGRES_PASSWORD}
       - NESSIE_VERSION_STORE_TYPE=JDBC
       - NESSIE_VERSION_STORE_PERSIST_JDBC_DATASOURCE=postgresql
       # Iceberg REST
@@ -67,8 +67,8 @@ services:
       - nessie.catalog.default-warehouse=warehouse
       - nessie.catalog.warehouses.warehouse.location=s3://warehouse/
       - nessie.catalog.s3.endpoint=http://minio:9000/
-      - nessie.catalog.s3.access-key=minioadmin
-      - nessie.catalog.s3.secret-key=minioadmin
+      - nessie.catalog.s3.access-key=${S3_ACCESS_KEY}
+      - nessie.catalog.s3.secret-key=${S3_SECRET_KEY}
       - nessie.catalog.s3.path-style-access=true
       - nessie.server.authentication.enabled=false
     networks:
@@ -90,7 +90,7 @@ services:
     environment:
       - POSTGRES_DB=nessie
       - POSTGRES_USER=nessie
-      - POSTGRES_PASSWORD=nessie
+      - POSTGRES_PASSWORD=${NESSIE_POSTGRES_PASSWORD}
     volumes:
       - ./docker/data/postgres:/var/lib/postgresql/data
     networks:

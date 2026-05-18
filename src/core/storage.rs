@@ -208,4 +208,55 @@ mod tests {
         
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_object_store_quotes() -> Result<()> {
+        use crate::core::manifest::types::{PartitionSpec, PartitionField};
+        use std::collections::HashMap;
+
+        let temp_dir = tempfile::tempdir()?;
+        let path = temp_dir.path().to_str().unwrap();
+        let store = create_object_store(path)?;
+
+        let spec = PartitionSpec {
+            spec_id: 0,
+            fields: vec![
+                PartitionField {
+                    source_ids: vec![1],
+                    source_id: Some(1),
+                    field_id: None,
+                    name: "category".to_string(),
+                    transform: "identity".to_string(),
+                }
+            ]
+        };
+
+        // Test normal string
+        let mut values1 = HashMap::new();
+        values1.insert("category".to_string(), serde_json::json!("A"));
+        let path1 = spec.partition_to_path(&values1);
+        assert_eq!(path1, "category=A");
+
+        // Test string with space and special characters
+        let mut values2 = HashMap::new();
+        values2.insert("category".to_string(), serde_json::json!("A B/C"));
+        let path2 = spec.partition_to_path(&values2);
+        assert_eq!(path2, "category=A%20B%2FC");
+
+        // Create the directory on disk using the generated path
+        let dir_on_disk = temp_dir.path().join(&path2);
+        std::fs::create_dir_all(&dir_on_disk)?;
+        let file_path = dir_on_disk.join("test.parquet");
+        std::fs::File::create(&file_path)?;
+
+        // Try to access it via object store
+        let relative_path_str = format!("{}/test.parquet", path2);
+        let pq_path = object_store::path::Path::parse(&relative_path_str).unwrap();
+        
+        let res = store.head(&pq_path).await;
+        println!("store.head result for encoded path: {:?}", res);
+        assert!(res.is_ok());
+
+        Ok(())
+    }
 }

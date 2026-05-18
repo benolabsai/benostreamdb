@@ -59,10 +59,12 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
             ]
         )?;
 
-        // 4. Write & Index
-        table.index_all_columns_async().await?; // Enable indexing for everything
         table.write_async(vec![batch]).await?;
         table.commit_async().await?;
+
+        // Index all columns now that the table schema has been established
+        table.index_all_columns_async().await?;
+        table.wait_for_background_tasks_async().await?;
 
         // 5. Verification Queries
 

@@ -205,7 +205,7 @@ pub fn rewrite_sql_string(query: &str) -> String {
 mod tests {
     use super::*;
     use datafusion::common::tree_node::TreeNode;
-    use datafusion::arrow::datatypes::{DataType, Field, Fields};
+    use datafusion::arrow::datatypes::{DataType, Field};
 
     #[test]
     fn test_cast_vector_literal() {

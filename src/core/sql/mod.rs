@@ -4,9 +4,13 @@ pub mod physical_plan;
 pub mod session;
 pub mod optimizer;
 pub mod vector_operators;
-pub mod vector_udf;
+pub mod literal;
 pub mod vector_literal;
 pub mod pgvector_rewriter;
+pub mod udf;
+
+// Alias `udf` as `vector_udf` for backward compatibility with existing import paths
+pub use udf as vector_udf;
 
 use std::any::Any;
 use std::sync::Arc;

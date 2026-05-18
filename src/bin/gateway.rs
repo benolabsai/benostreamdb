@@ -8,26 +8,104 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
+use std::time::SystemTime;
 use hyperstreamdb::SegmentConfig;
 
 #[tokio::main]
 async fn main() {
-    // initialize tracing
-    tracing_subscriber::fmt::init();
+    // Task 8: Global panic handler
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!(panic = ?info, "Gateway panicked");
+    }));
+
+    // Task 3: Use proper telemetry init
+    let _telemetry_guard = hyperstreamdb::telemetry::tracing::init_tracing("gateway")
+        .expect("Failed to initialize tracing");
+
+    // Task 5: Track start time for uptime
+    let start_time = SystemTime::now();
 
     let app = Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(metrics_handler))
         .route("/query", post(query_handler))
-        .route("/ingest", post(ingest_handler));
+        .route("/ingest", post(ingest_handler))
+        .layer(tower_http::trace::TraceLayer::new_for_http());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-    println!("listening on {}", addr);
+    tracing::info!(%addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    let app_with_state = app.with_state(StartState { start_time });
+    let server = axum::serve(listener, app_with_state);
+
+    // Task 4: Graceful shutdown on SIGINT/SIGTERM
+    let graceful = server.with_graceful_shutdown(shutdown_signal());
+    graceful.await.unwrap();
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+struct StartState {
+    start_time: SystemTime,
+}
+
+impl Clone for StartState {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for StartState {}
+
+async fn health_check(state: axum::extract::State<StartState>) -> impl IntoResponse {
+    let uptime = state
+        .start_time
+        .elapsed()
+        .unwrap_or_default()
+        .as_secs();
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_seconds": uptime
+    }))
+}
+
+async fn metrics_handler() -> impl IntoResponse {
+    use prometheus::{gather, TextEncoder};
+    let encoder = TextEncoder::new();
+    let metric_families = gather();
+    let mut result = String::new();
+    encoder.encode_utf8(&metric_families, &mut result).unwrap_or_default();
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain; version=0.0.4")
+        .body(axum::body::Body::from(result))
+        .unwrap()
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        sigterm.recv().await;
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("failed to install SIGINT handler");
+        sigint.recv().await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("Shutdown signal received, starting graceful shutdown");
 }
 
 #[derive(Deserialize)]
