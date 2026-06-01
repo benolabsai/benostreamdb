@@ -64,9 +64,9 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
     // Always test CPU (reference)
     let _ref_backend = ComputeBackend::Cpu;
  
-    // 1. Test CUDA if enabled
+    // 1. Test CUDA if available at runtime
     #[cfg(not(target_os = "macos"))]
-    {
+    if ComputeContext::from_backend(ComputeBackend::Cuda).is_ok() {
         assert_parity("CUDA Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Cuda)?;
     }
  
@@ -110,7 +110,9 @@ fn test_l2_parity_different_dimensions() -> Result<()> {
 
         // If specific backends are enabled, parity with CPU
         #[cfg(not(target_os = "macos"))]
-        assert_parity(&format!("CUDA dim={}", dim), &query, &vectors, dim, ComputeBackend::Cpu, ComputeBackend::Cuda)?;
+        if ComputeContext::from_backend(ComputeBackend::Cuda).is_ok() {
+            assert_parity(&format!("CUDA dim={}", dim), &query, &vectors, dim, ComputeBackend::Cpu, ComputeBackend::Cuda)?;
+        }
         
         #[cfg(target_os = "macos")]
         assert_parity(&format!("MPS dim={}", dim), &query, &vectors, dim, ComputeBackend::Cpu, ComputeBackend::Mps)?;

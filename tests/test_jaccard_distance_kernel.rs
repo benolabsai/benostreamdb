@@ -35,7 +35,6 @@ fn test_jaccard_distance_cpu() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_jaccard_distance_cuda() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Jaccard distance computation on CUDA
     let query = vec![1.0, 2.0, 0.0, 3.0];
     let vectors = vec![
@@ -63,7 +62,6 @@ fn test_jaccard_distance_cuda() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_jaccard_distance_cuda_vs_cpu_parity() -> Result<()> {
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test that CUDA and CPU produce the same results
     use rand::Rng;
@@ -132,7 +130,6 @@ fn test_jaccard_distance_various_dimensions() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_jaccard_distance_cuda_large_batch() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Jaccard distance with a large batch to verify chunking works
     use rand::Rng;
     
@@ -198,7 +195,6 @@ fn test_jaccard_distance_binary_sets() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_jaccard_distance_cuda_binary_sets() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test Jaccard distance with binary vectors on CUDA
     let query = vec![1.0, 0.0, 1.0, 1.0, 0.0];
     let vectors = vec![
@@ -239,7 +235,6 @@ fn test_jaccard_distance_edge_cases() -> Result<()> {
 #[test]
 #[cfg(not(target_os = "macos"))]
 fn test_jaccard_distance_cuda_edge_cases() -> Result<()> {
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test edge cases for Jaccard distance on CUDA
     let query = vec![0.0, 0.0, 0.0];

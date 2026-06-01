@@ -449,7 +449,6 @@ impl Table {
     }
 
     /// Flush buffer to disk
-    /// Flush buffer to disk
     #[tracing::instrument(skip(self))]
     pub async fn flush_async(&self) -> Result<()> {
         // Type alias for stream results to avoid complex type annotation

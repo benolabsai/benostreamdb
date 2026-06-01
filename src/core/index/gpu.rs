@@ -103,7 +103,6 @@ pub struct CudaBackend { device: Arc<cudarc::driver::CudaDevice> }
 
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 impl CudaBackend {
-    pub fn is_available() -> bool { true }
     pub fn new(id: usize) -> Result<Self> {
         let device = cudarc::driver::CudaDevice::new(id)?;
 
@@ -490,9 +489,22 @@ impl ComputeContext {
     }
 
     pub fn from_device_str(device: &str) -> Result<Self> {
-        match device.to_lowercase().as_str() {
+        let lower = device.to_lowercase();
+        match lower.as_str() {
             "cpu" => Ok(Self { backend: ComputeBackend::Cpu, device_id: -1, implementation: Some(Arc::new(CpuBackend)) }),
             "gpu" | "auto" => Ok(Self::auto_detect()),
+            _ if lower.starts_with("cuda:") => {
+                Self::from_backend(ComputeBackend::Cuda)
+            },
+            _ if lower.starts_with("mps:") => {
+                Self::from_backend(ComputeBackend::Mps)
+            },
+            _ if lower.starts_with("rocm:") => {
+                Self::from_backend(ComputeBackend::Rocm)
+            },
+            _ if lower.starts_with("intel:") => {
+                Self::from_backend(ComputeBackend::Intel)
+            },
             _ => anyhow::bail!("Unsupported device: {}", device),
         }
     }

@@ -35,7 +35,6 @@ fn test_l1_distance_cpu() -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 fn test_l1_distance_cuda() -> Result<()> {
     if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
     // Test L1 (Manhattan) distance computation on CUDA
     let query = vec![1.0, 2.0, 3.0];
     let vectors = vec![

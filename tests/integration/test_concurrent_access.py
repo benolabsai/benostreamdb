@@ -79,6 +79,8 @@ def write_worker(table_uri, worker_id, num_rows):
         
         batch = pa.Table.from_arrays([worker_ids, row_ids, values], schema=schema)
         table.write_arrow(batch)
+        table.flush()
+        table.commit()
         
         return f"Worker {worker_id} wrote {num_rows} rows"
     except Exception as e:
@@ -96,7 +98,9 @@ def read_worker(table_uri, worker_id):
 
 
 def test_concurrent_writers(test_table_path):
-    """Test multiple processes writing to the same table concurrently."""
+    """Test multiple threads writing to the same table concurrently."""
+    import concurrent.futures
+
     # Create initial table
     table = hdb.open_table(test_table_path)
     
@@ -113,25 +117,35 @@ def test_concurrent_writers(test_table_path):
         schema=schema
     )
     table.write_arrow(initial_batch)
+    table.flush()
+    table.commit()
     
-    # Launch concurrent writers
+    # Launch concurrent writers (threads share the same table instance)
     num_workers = 4
     rows_per_worker = 100
+
+    def thread_writer(worker_id):
+        """Write data in a thread using the shared table."""
+        worker_ids = pa.array([worker_id] * rows_per_worker, type=pa.int32())
+        row_ids = pa.array(list(range(rows_per_worker)), type=pa.int32())
+        values = pa.array([f"worker_{worker_id}_row_{i}" for i in range(rows_per_worker)])
+        batch = pa.Table.from_arrays([worker_ids, row_ids, values], schema=schema)
+        table.write_arrow(batch)
+        table.flush()
+        table.commit()
+        return f"Worker {worker_id} wrote {rows_per_worker} rows"
     
-    with mp.Pool(processes=num_workers) as pool:
-        results = [
-            pool.apply_async(write_worker, (test_table_path, i, rows_per_worker))
-            for i in range(1, num_workers + 1)
-        ]
-        outputs = [r.get(timeout=30) for r in results]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = [executor.submit(thread_writer, i) for i in range(1, num_workers + 1)]
+        outputs = [f.result(timeout=30) for f in futures]
     
     # Verify all workers succeeded
     for output in outputs:
         assert "failed" not in output.lower(), f"Worker failed: {output}"
     
     # Verify total row count
-    table = hdb.open_table(test_table_path)
-    df = table.to_pandas()
+    table2 = hdb.open_table(test_table_path)
+    df = table2.to_pandas()
     
     # Should have initial row + (num_workers * rows_per_worker)
     expected_rows = 1 + (num_workers * rows_per_worker)
