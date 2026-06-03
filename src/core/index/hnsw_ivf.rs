@@ -88,6 +88,7 @@ pub enum HnswGraph {
     TurboQuant8(Hnsw<u8, crate::core::index::distance::DistL2u8>),
     TurboQuant4(Hnsw<u8, crate::core::index::distance::DistL2u4>),
     SparseDot(Hnsw<crate::core::index::SparseVector, DistSparseDot>),
+    Pq(Hnsw<u8, crate::core::index::pq::DistPqSdc>),
 }
 
 impl HnswGraph {
@@ -103,6 +104,7 @@ impl HnswGraph {
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant8(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::Pq(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(q)) => h.search(std::slice::from_ref(q), k, ef, filter),
             
             // Casting paths
@@ -128,6 +130,7 @@ impl HnswGraph {
             (HnswGraph::BinaryHamming(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::TurboQuant8(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
+            (HnswGraph::Pq(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&vec![v], local_id)),
             
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
@@ -167,6 +170,7 @@ impl HnswGraph {
             HnswGraph::BinaryHamming(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::TurboQuant8(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::TurboQuant4(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
+            HnswGraph::Pq(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
             HnswGraph::SparseDot(h) => h.file_dump(&path_string).map(|_| ()).map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
         }
     }
@@ -285,10 +289,18 @@ impl HnswIvfIndex {
                 
                 // Determine HNSW node type and distance metric
                 let hnsw = if let Some(q) = quantizer.as_ref() {
-                    if q.bits() == 4 {
-                        HnswGraph::TurboQuant4(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u4))
-                    } else {
-                        HnswGraph::TurboQuant8(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u8))
+                    match q {
+                        QuantizerImpl::TurboQuant(tq) => {
+                            if tq.bits() == 4 {
+                                HnswGraph::TurboQuant4(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u4))
+                            } else {
+                                HnswGraph::TurboQuant8(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, crate::core::index::distance::DistL2u8))
+                            }
+                        },
+                        QuantizerImpl::Pq(pq) => {
+                            let dist = crate::core::index::pq::DistPqSdc { pq: std::sync::Arc::new(pq.clone()) };
+                            HnswGraph::Pq(Hnsw::new(hnsw_m, vecs.len(), max_layers, ef_construction, dist))
+                        }
                     }
                 } else {
                     match metric {
@@ -342,10 +354,10 @@ impl HnswIvfIndex {
         };
 
         // Pre-quantize query if needed for faster graph traversal (SDC)
-        let effective_query = if let Some(QuantizerImpl::TurboQuant(ref q)) = self.quantizer {
-            VectorValue::Binary(q.encode(query_f32))
-        } else {
-            query.clone()
+        let effective_query = match self.quantizer {
+            Some(QuantizerImpl::TurboQuant(ref q)) => VectorValue::Binary(q.encode(query_f32)),
+            Some(QuantizerImpl::Pq(ref q)) => VectorValue::Binary(q.encode(query_f32)),
+            _ => query.clone()
         };
 
         // Step 1: Find n_probe nearest clusters (coarse search)
@@ -745,7 +757,12 @@ impl HnswIvfIndex {
                         }
                     } else if kv.key == "quantizer_config" {
                         if let Some(ref val) = kv.value {
-                            loaded_quantizer = serde_json::from_str::<QuantizerImpl>(val).ok();
+                            if let Some(mut q) = serde_json::from_str::<QuantizerImpl>(val).ok() {
+                                if let QuantizerImpl::Pq(ref mut pq) = q {
+                                    pq.init_lut();
+                                }
+                                loaded_quantizer = Some(q);
+                            }
                         }
                     }
                 }
@@ -805,13 +822,22 @@ impl HnswIvfIndex {
                     // For now we assume L2 if not specified or derive from path?
                     // Better: HnswIvfIndex should save metric in centroids parquet metadata.
                     
-                    let hnsw = if let Some(QuantizerImpl::TurboQuant(q)) = q_inner {
-                        if q.bits == 4 {
-                            HnswGraph::TurboQuant4(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u4, &mut data_reader)
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
-                        } else {
-                            HnswGraph::TurboQuant8(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u8, &mut data_reader)
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                    let hnsw = if let Some(q_impl) = q_inner {
+                        match q_impl {
+                            QuantizerImpl::TurboQuant(q) => {
+                                if q.bits() == 4 {
+                                    HnswGraph::TurboQuant4(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u4, &mut data_reader)
+                                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                                } else {
+                                    HnswGraph::TurboQuant8(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, crate::core::index::distance::DistL2u8, &mut data_reader)
+                                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                                }
+                            },
+                            QuantizerImpl::Pq(pq) => {
+                                let dist = crate::core::index::pq::DistPqSdc { pq: std::sync::Arc::new(pq.clone()) };
+                                HnswGraph::Pq(crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(&mut graph_reader, &description, dist, &mut data_reader)
+                                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?)
+                            }
                         }
                     } else {
                         match metric {
