@@ -75,8 +75,63 @@ impl PqEncoder {
         self.sdc_lut = sdc_lut;
     }
 
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    unsafe fn encode_avx2(&self, vector: &[f32]) -> Vec<u8> {
+        use std::arch::x86_64::*;
+        let mut encoded = Vec::with_capacity(self.config.m);
+        let sub_dim = self.config.dim / self.config.m;
+        
+        for i in 0..self.config.m {
+            let sub_vec = &vector[i * sub_dim..(i + 1) * sub_dim];
+            
+            let mut min_dist = f32::MAX;
+            let mut best_idx = 0;
+            
+            // If sub_dim is a multiple of 8, we can use 256-bit AVX registers
+            if sub_dim % 8 == 0 {
+                for (j, centroid) in self.codebooks[i].iter().enumerate() {
+                    let mut sum = _mm256_setzero_ps();
+                    let mut k_idx = 0;
+                    while k_idx < sub_dim {
+                        let a_val = _mm256_loadu_ps(sub_vec.as_ptr().add(k_idx));
+                        let b_val = _mm256_loadu_ps(centroid.as_ptr().add(k_idx));
+                        let diff = _mm256_sub_ps(a_val, b_val);
+                        let sq = _mm256_mul_ps(diff, diff);
+                        sum = _mm256_add_ps(sum, sq);
+                        k_idx += 8;
+                    }
+                    let mut res = [0.0f32; 8];
+                    _mm256_storeu_ps(res.as_mut_ptr(), sum);
+                    let dist: f32 = res.iter().sum();
+                    
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = j as u8;
+                    }
+                }
+            } else {
+                for (j, centroid) in self.codebooks[i].iter().enumerate() {
+                    let dist = l2_distance_squared(sub_vec, centroid);
+                    if dist < min_dist {
+                        min_dist = dist;
+                        best_idx = j as u8;
+                    }
+                }
+            }
+            encoded.push(best_idx);
+        }
+        encoded
+    }
+
     pub fn encode(&self, vector: &[f32]) -> Vec<u8> {
-        let s = std::time::Instant::now();
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx2") {
+                return unsafe { self.encode_avx2(vector) };
+            }
+        }
+        
         let mut encoded = Vec::with_capacity(self.config.m);
         let sub_dim = self.config.dim / self.config.m;
         
