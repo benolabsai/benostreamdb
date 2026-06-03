@@ -1,9 +1,44 @@
-System,Operation,Dataset Size,Latency (ms),Throughput (rows/sec),Storage (MB)
-HyperStreamDB,ingest,1000,194.12732124328613,5151.2584297537915,6.944527626037598
-DuckDB (Raw Parquet),ingest,1000,91.32647514343262,10949.727320905049,3.555255889892578
-LanceDB,ingest,1000,79.79059219360352,12532.805842242713,2.9825868606567383
-HyperStreamDB,vector_search_k10,1000,32.79592990875244,,
-LanceDB,vector_search_k10,1000,6.940889358520508,,
-HyperStreamDB,vector_search_k100,1000,35.98213195800781,,
-LanceDB,vector_search_k100,1000,6.746530532836914,,
-DuckDB,scalar_query,1000,1.6322135925292969,,
+System,Operation,Dataset Size,Latency (ms),Throughput (rows/sec),Storage (MB),Hardware,Device
+HyperStreamDB,ingest,1000,194.12732124328613,5151.258429753792,6.944527626037598,Generic Baseline,cpu
+DuckDB (Raw Parquet),ingest,1000,91.32647514343262,10949.727320905047,3.555255889892578,Generic Baseline,cpu
+LanceDB,ingest,1000,79.79059219360352,12532.805842242711,2.9825868606567383,Generic Baseline,cpu
+HyperStreamDB,vector_search_k10,1000,32.79592990875244,,,Generic Baseline,cpu
+LanceDB,vector_search_k10,1000,6.940889358520508,,,Generic Baseline,cpu
+HyperStreamDB,vector_search_k100,1000,35.98213195800781,,,Generic Baseline,cpu
+LanceDB,vector_search_k100,1000,6.746530532836914,,,Generic Baseline,cpu
+DuckDB,scalar_query,1000,1.6322135925292969,,,Generic Baseline,cpu
+HyperStreamDB,ingest,1000,264.8324966430664,3775.971652556564,4.9793901443481445,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB (Raw Parquet),ingest,1000,98.03295135498048,10200.651782674257,3.555100440979004,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,ingest,1000,92.27800369262695,10836.818743185497,2.9825878143310547,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k10,1000,9.768509864807127,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k10,1000,7.0975542068481445,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k100,1000,19.150924682617188,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k100,1000,7.561779022216797,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB,scalar_query,1000,1.7495155334472656,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,ingest,1000,300.0140190124512,3333.1775738069696,4.984220504760742,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB (Raw Parquet),ingest,1000,84.17725563049316,11879.69354084942,3.5551252365112305,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,ingest,1000,31.7080020904541,31537.78018391945,2.9825878143310547,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k10,1000,9.654784202575684,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k10,1000,8.90803337097168,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k100,1000,17.658662796020508,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k100,1000,7.486438751220703,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,hybrid_query,1000,38.135528564453125,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB,scalar_query,1000,1.2454986572265625,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,ingest,10000,1703.951358795166,5868.71212513415,44.705119132995605,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB (Raw Parquet),ingest,10000,359.77673530578613,27795.015682436137,30.189851760864258,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,ingest,10000,219.50006484985352,45558.0731005268,29.8132905960083,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k10,10000,52.651166915893555,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k10,10000,7.157588005065918,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k100,10000,68.36936473846436,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k100,10000,8.919930458068848,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,hybrid_query,10000,164.95966911315918,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB,scalar_query,10000,4.843235015869141,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,ingest,100000,22707.011461257935,4403.926081184976,446.9715394973755,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB (Raw Parquet),ingest,100000,3124.716281890869,32002.90553723063,296.53205394744873,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,ingest,100000,2089.383363723755,47861.010926102776,298.20659351348877,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k10,100000,546.6565370559692,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k10,100000,7.402920722961426,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,vector_search_k100,100000,560.5704307556152,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+LanceDB,vector_search_k100,100000,10.020756721496582,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+HyperStreamDB,hybrid_query,100000,1509.3357563018799,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu
+DuckDB,scalar_query,100000,34.61503982543945,,,Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz,cpu

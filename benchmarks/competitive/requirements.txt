@@ -10,6 +10,7 @@ pymilvus>=2.3.0  # Milvus vector database
 weaviate-client>=3.25.0  # Weaviate vector database
 lancedb>=0.3.0  # LanceDB (vector + data lake)
 duckdb>=0.9.0  # DuckDB (data lake baseline)
+pyiceberg[pyarrow,sql-sqlite]  # For Iceberg compliance testing
 
 # Visualization (optional)
 matplotlib>=3.7.0

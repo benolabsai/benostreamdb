@@ -38,7 +38,7 @@ pub fn sanitize_sql(query: &str) -> PyResult<String> {
         ));
     }
 
-    Ok(SQL_REGEX.replace_all(query, "l2_distance($1, $2)").to_string())
+    Ok(SQL_REGEX.replace_all(query, "dist_l2($1, ARRAY[$2])").to_string())
 }
 
 /// Module-level global Tokio runtime for all Python-bound operations.
