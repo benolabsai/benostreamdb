@@ -52,8 +52,66 @@ fn l2_distance_squared_portable(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn l2_distance_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
-    // LLVM will now generate aggressive AVX2/FMA instructions here
-    l2_distance_squared_portable(a, b)
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let mut i = 0;
+    
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut sum2 = _mm256_setzero_ps();
+    let mut sum3 = _mm256_setzero_ps();
+
+    while i + 31 < n {
+        let a0 = _mm256_loadu_ps(a.as_ptr().add(i));
+        let b0 = _mm256_loadu_ps(b.as_ptr().add(i));
+        let diff0 = _mm256_sub_ps(a0, b0);
+        sum0 = _mm256_fmadd_ps(diff0, diff0, sum0);
+
+        let a1 = _mm256_loadu_ps(a.as_ptr().add(i + 8));
+        let b1 = _mm256_loadu_ps(b.as_ptr().add(i + 8));
+        let diff1 = _mm256_sub_ps(a1, b1);
+        sum1 = _mm256_fmadd_ps(diff1, diff1, sum1);
+
+        let a2 = _mm256_loadu_ps(a.as_ptr().add(i + 16));
+        let b2 = _mm256_loadu_ps(b.as_ptr().add(i + 16));
+        let diff2 = _mm256_sub_ps(a2, b2);
+        sum2 = _mm256_fmadd_ps(diff2, diff2, sum2);
+
+        let a3 = _mm256_loadu_ps(a.as_ptr().add(i + 24));
+        let b3 = _mm256_loadu_ps(b.as_ptr().add(i + 24));
+        let diff3 = _mm256_sub_ps(a3, b3);
+        sum3 = _mm256_fmadd_ps(diff3, diff3, sum3);
+
+        i += 32;
+    }
+
+    sum0 = _mm256_add_ps(sum0, sum1);
+    sum2 = _mm256_add_ps(sum2, sum3);
+    sum0 = _mm256_add_ps(sum0, sum2);
+
+    while i + 7 < n {
+        let a0 = _mm256_loadu_ps(a.as_ptr().add(i));
+        let b0 = _mm256_loadu_ps(b.as_ptr().add(i));
+        let diff0 = _mm256_sub_ps(a0, b0);
+        sum0 = _mm256_fmadd_ps(diff0, diff0, sum0);
+        i += 8;
+    }
+
+    let mut sum_array = [0.0f32; 8];
+    _mm256_storeu_ps(sum_array.as_mut_ptr(), sum0);
+    let mut total = sum_array.iter().sum::<f32>();
+
+    while i < n {
+        let diff = a[i] - b[i];
+        total += diff * diff;
+        i += 1;
+    }
+
+    total
 }
 
 #[inline(always)]
@@ -76,6 +134,17 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 
 #[inline(always)]
 pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
+            return unsafe { dot_product_avx2(a, b) };
+        }
+    }
+    dot_product_portable(a, b)
+}
+
+#[inline(always)]
+fn dot_product_portable(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len();
     assert_eq!(n, b.len(), "Vectors must have the same length");
 
@@ -98,6 +167,65 @@ pub fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     }
 
     sum
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let mut i = 0;
+    
+    let mut sum0 = _mm256_setzero_ps();
+    let mut sum1 = _mm256_setzero_ps();
+    let mut sum2 = _mm256_setzero_ps();
+    let mut sum3 = _mm256_setzero_ps();
+
+    while i + 31 < n {
+        let a0 = _mm256_loadu_ps(a.as_ptr().add(i));
+        let b0 = _mm256_loadu_ps(b.as_ptr().add(i));
+        sum0 = _mm256_fmadd_ps(a0, b0, sum0);
+
+        let a1 = _mm256_loadu_ps(a.as_ptr().add(i + 8));
+        let b1 = _mm256_loadu_ps(b.as_ptr().add(i + 8));
+        sum1 = _mm256_fmadd_ps(a1, b1, sum1);
+
+        let a2 = _mm256_loadu_ps(a.as_ptr().add(i + 16));
+        let b2 = _mm256_loadu_ps(b.as_ptr().add(i + 16));
+        sum2 = _mm256_fmadd_ps(a2, b2, sum2);
+
+        let a3 = _mm256_loadu_ps(a.as_ptr().add(i + 24));
+        let b3 = _mm256_loadu_ps(b.as_ptr().add(i + 24));
+        sum3 = _mm256_fmadd_ps(a3, b3, sum3);
+
+        i += 32;
+    }
+
+    sum0 = _mm256_add_ps(sum0, sum1);
+    sum2 = _mm256_add_ps(sum2, sum3);
+    sum0 = _mm256_add_ps(sum0, sum2);
+
+    while i + 7 < n {
+        let a0 = _mm256_loadu_ps(a.as_ptr().add(i));
+        let b0 = _mm256_loadu_ps(b.as_ptr().add(i));
+        sum0 = _mm256_fmadd_ps(a0, b0, sum0);
+        i += 8;
+    }
+
+    let mut sum_array = [0.0f32; 8];
+    _mm256_storeu_ps(sum_array.as_mut_ptr(), sum0);
+    let mut total = sum_array.iter().sum::<f32>();
+
+    while i < n {
+        total += a[i] * b[i];
+        i += 1;
+    }
+
+    total
 }
 
 /// Vectorized batch L2 distance calculation
@@ -217,7 +345,51 @@ pub fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
 
 /// Bit-optimized Hamming distance for packed binary vectors (e.g. 1 bit per element)
 pub fn hamming_distance_packed(a: &[u8], b: &[u8]) -> u32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if is_x86_feature_detected!("popcnt") {
+            return unsafe { hamming_distance_packed_popcnt(a, b) };
+        }
+    }
+    hamming_distance_packed_portable(a, b)
+}
+
+#[inline(always)]
+fn hamming_distance_packed_portable(a: &[u8], b: &[u8]) -> u32 {
     a.iter().zip(b.iter()).map(|(&x, &y)| (x ^ y).count_ones()).sum()
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "popcnt")]
+unsafe fn hamming_distance_packed_popcnt(a: &[u8], b: &[u8]) -> u32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let mut i = 0;
+    let mut sum = 0;
+
+    let a_ptr = a.as_ptr();
+    let b_ptr = b.as_ptr();
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        while i + 7 < n {
+            let a_val = std::ptr::read_unaligned(a_ptr.add(i) as *const u64);
+            let b_val = std::ptr::read_unaligned(b_ptr.add(i) as *const u64);
+            sum += _popcnt64((a_val ^ b_val) as i64) as u32;
+            i += 8;
+        }
+    }
+
+    while i < n {
+        sum += (a[i] ^ b[i]).count_ones();
+        i += 1;
+    }
+
+    sum
 }
 
 /// Sparse dot product: intersection of two sorted index/value pairs
@@ -283,6 +455,17 @@ pub fn sparse_l2_distance_squared(
 /// Optimized L2 distance for quantized u8 vectors
 #[inline(always)]
 pub fn l2_distance_u8(a: &[u8], b: &[u8]) -> f32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if is_x86_feature_detected!("avx2") {
+            return unsafe { l2_distance_u8_avx2(a, b) };
+        }
+    }
+    l2_distance_u8_portable(a, b)
+}
+
+#[inline(always)]
+fn l2_distance_u8_portable(a: &[u8], b: &[u8]) -> f32 {
     let mut sum = 0;
     let chunks_a = a.chunks_exact(16);
     let chunks_b = b.chunks_exact(16);
@@ -301,6 +484,55 @@ pub fn l2_distance_u8(a: &[u8], b: &[u8]) -> f32 {
         sum += diff * diff;
     }
     sum as f32
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn l2_distance_u8_avx2(a: &[u8], b: &[u8]) -> f32 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let n = a.len();
+    let mut i = 0;
+    let mut sum_vec = _mm256_setzero_si256();
+
+    while i + 31 < n {
+        let a_vec = _mm256_loadu_si256(a.as_ptr().add(i) as *const __m256i);
+        let b_vec = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
+
+        let zero = _mm256_setzero_si256();
+        
+        let a_lo = _mm256_unpacklo_epi8(a_vec, zero);
+        let a_hi = _mm256_unpackhi_epi8(a_vec, zero);
+        
+        let b_lo = _mm256_unpacklo_epi8(b_vec, zero);
+        let b_hi = _mm256_unpackhi_epi8(b_vec, zero);
+
+        let diff_lo = _mm256_sub_epi16(a_lo, b_lo);
+        let diff_hi = _mm256_sub_epi16(a_hi, b_hi);
+
+        let sq_lo = _mm256_madd_epi16(diff_lo, diff_lo);
+        let sq_hi = _mm256_madd_epi16(diff_hi, diff_hi);
+
+        sum_vec = _mm256_add_epi32(sum_vec, sq_lo);
+        sum_vec = _mm256_add_epi32(sum_vec, sq_hi);
+
+        i += 32;
+    }
+
+    let mut sum_array = [0i32; 8];
+    _mm256_storeu_si256(sum_array.as_mut_ptr() as *mut __m256i, sum_vec);
+    let mut total = sum_array.iter().sum::<i32>();
+
+    while i < n {
+        let diff = (a[i] as i32) - (b[i] as i32);
+        total += diff * diff;
+        i += 1;
+    }
+
+    total as f32
 }
 
 /// Asymmetric Distance Calculation (ADC) for quantized vectors.
