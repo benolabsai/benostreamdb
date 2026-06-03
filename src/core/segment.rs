@@ -364,6 +364,15 @@ impl HybridSegmentWriter {
             props_builder = props_builder.set_column_bloom_filter_enabled(parquet::schema::types::ColumnPath::from(pk.clone()), true);
         }
 
+        // Disable compression and dictionary encoding for dense vectors
+        for field in batch.schema().fields() {
+            if matches!(field.data_type(), arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_)) {
+                let path = parquet::schema::types::ColumnPath::from(field.name().clone());
+                props_builder = props_builder.set_column_dictionary_enabled(path.clone(), false);
+                props_builder = props_builder.set_column_compression(path, parquet::basic::Compression::UNCOMPRESSED);
+            }
+        }
+
         let props = props_builder.build();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
         writer.write(batch)?;
