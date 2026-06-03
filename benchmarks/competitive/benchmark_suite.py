@@ -258,6 +258,63 @@ class CompetitiveBenchmark:
         print(f"  ✓ {avg_latency:.1f}ms avg, {p99_latency:.1f}ms p99")
         return result
     
+    def benchmark_hyperstreamdb_vector_search_pq(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
+        """Benchmark HyperStreamDB vector search with Product Quantization (PQ)"""
+        if not HAS_HYPERSTREAMDB:
+            return None
+            
+        print(f"\n[HyperStreamDB] Benchmarking PQ vector search ({n_rows:,} rows, k={k})...")
+        
+        vectors, metadata = self.generate_test_data(n_rows, dim)
+        query_vector = vectors[0]
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            uri = f"file://{tmpdir}/test_table"
+            table = hdb.Table(uri)
+            
+            # Use 8x compression (m = dim / 8)
+            table.add_pq_index("embedding", compression=8)
+            
+            metadata['embedding'] = list(vectors)
+            table.write_pandas(metadata)
+            table.commit()
+            table.wait_for_background_tasks() # MUST wait for index to be built
+            
+            # Warm-up query
+            try:
+                _ = table.search('embedding', query_vector.tolist(), k=k)
+            except Exception as e:
+                print(f"  ⚠ Warm-up failed: {e}")
+                print(f"  ⚠ Skipping PQ search benchmark (index not available)")
+                return None
+            
+            # Benchmark
+            latencies = []
+            for _ in range(10):
+                start = time.time()
+                try:
+                    results = table.search('embedding', query_vector.tolist(), k=k)
+                    latencies.append((time.time() - start) * 1000)
+                except Exception as e:
+                    print(f"  ⚠ Search failed: {e}")
+                    return None
+            
+            avg_latency = np.mean(latencies)
+            p99_latency = np.percentile(latencies, 99)
+            
+        result = BenchmarkResult(
+            system="HyperStreamDB (PQ-8x)",
+            operation=f"vector_search_k{k}",
+            dataset_size=n_rows,
+            latency_ms=avg_latency,
+            hardware=self.hardware,
+            device_type=self.device,
+            metadata={'p99_ms': p99_latency, 'dim': dim, 'compression': 8}
+        )
+        self.results.append(result)
+        print(f"  ✓ {avg_latency:.1f}ms avg, {p99_latency:.1f}ms p99")
+        return result
+    
     def benchmark_hyperstreamdb_hybrid_query(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
         """Benchmark HyperStreamDB hybrid query (scalar + vector)"""
         if not HAS_HYPERSTREAMDB:
@@ -507,6 +564,7 @@ class CompetitiveBenchmark:
             # Vector search benchmarks
             for k in [10, 100]:
                 self.benchmark_hyperstreamdb_vector_search(size, k=k)
+                self.benchmark_hyperstreamdb_vector_search_pq(size, k=k)
                 self.benchmark_lancedb_vector_search(size, k=k)
             
             # Hybrid query benchmarks

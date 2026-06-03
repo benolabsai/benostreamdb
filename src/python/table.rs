@@ -276,6 +276,19 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
+    /// Add a Product Quantization (PQ) index for a vector column
+    #[pyo3(signature = (column, compression=8))]
+    fn add_pq_index(&mut self, column: String, compression: usize) -> PyResult<()> {
+        let algo = crate::core::manifest::IndexAlgorithm::HnswPq {
+            metric: "l2".to_string(),
+            compression,
+            complexity: 16,
+            quality: 128,
+        };
+        self.table.runtime().block_on(self.table.add_index(column, algo))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
+    }
+
     /// Remove columns from indexing configuration
     fn remove_index_columns(&mut self, columns: Vec<String>) {
         self.table.remove_index_columns(columns);
