@@ -819,7 +819,7 @@ pub fn compute_distance(
     dim: usize,
     metric: VectorMetric,
 ) -> Result<Vec<f32>> {
-    let context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
     let n = if dim > 0 { vectors.len() / dim } else { 0 };
     if n < GPU_DISPATCH_THRESHOLD && context.backend != ComputeBackend::Cpu {
         return compute_cpu(query, vectors, dim, metric);
@@ -847,7 +847,7 @@ pub fn compute_kmeans_assignment(
     centroids: &[f32],
     dim: usize,
 ) -> Result<Vec<u32>> {
-    let context = get_global_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
     if let Some(imp) = &context.implementation {
         return imp.compute_kmeans_assignment(vectors, centroids, dim);
     }
@@ -871,33 +871,7 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
-/// Set the global GPU context (deprecated).
-///
-/// # Deprecation
-/// This function sets a process-wide GPU context that is shared across all threads.
-/// CUDA contexts are inherently thread-local; sharing them can cause silent corruption.
-///
-/// **Migration:** Use `set_thread_gpu_context()` instead, which sets a thread-local
-/// context that is safe for concurrent use. The global fallback is retained for
-/// backward compatibility but will be removed in a future major version.
-///
-/// # Safety
-/// Calling this from multiple threads simultaneously creates a data race on the
-/// global context. Prefer `set_thread_gpu_context` for thread-safe configuration.
-#[deprecated(
-    since = "0.5.0",
-    note = "Use set_thread_gpu_context() instead. Global GPU contexts are unsafe for concurrent use."
-)]
-pub fn set_global_gpu_context(ctx: Option<ComputeContext>) {
-    // Set both thread-local and global contexts
-    GPU_THREAD_CONTEXT.with(|f| {
-        *f.borrow_mut() = ctx.clone();
-    });
-    let mut lock = GLOBAL_GPU_CONTEXT.write();
-    *lock = ctx;
-}
-
-/// Set the thread-local GPU context (preferred over `set_global_gpu_context`).
+/// Set the thread-local GPU context (preferred over global context).
 ///
 /// This sets a GPU context that is isolated to the current thread, preventing
 /// CUDA context corruption when multiple threads use different GPU configurations.
@@ -915,7 +889,7 @@ pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
 /// # Thread Safety
 /// This function is safe to call from any thread. Each thread maintains its own
 /// context via thread-local storage, with the global context as a last resort.
-pub fn get_global_gpu_context() -> Option<ComputeContext> {
+pub fn get_thread_gpu_context() -> Option<ComputeContext> {
     // Check thread-local first
     let ctx = GPU_THREAD_CONTEXT.with(|f| f.borrow().clone());
     if ctx.is_some() {

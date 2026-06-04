@@ -1482,8 +1482,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         let (sender, receiver) = channel();
         // make up requests
         let nb_request = datas.len();
-        let requests: Vec<(usize, &Vec<T>)> =
-            (0..nb_request).zip(datas.iter()).collect();
+        let requests: Vec<(usize, &Vec<T>)> = (0..nb_request).zip(datas.iter()).collect();
         //
         requests.par_iter().for_each_with(sender, |s, item| {
             s.send(self.search_with_id(*item, knbn, ef)).unwrap()

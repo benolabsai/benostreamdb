@@ -49,11 +49,7 @@ impl HyperStreamExec {
                 // If projection is invalid, use base schema
                 base_schema.clone()
             } else {
-                Arc::new(
-                    base_schema
-                        .project(proj)
-                        .map_err(DataFusionError::from)?,
-                )
+                Arc::new(base_schema.project(proj).map_err(DataFusionError::from)?)
             }
         } else {
             base_schema.clone()

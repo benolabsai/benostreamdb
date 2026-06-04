@@ -7,7 +7,7 @@
 // available GPU backend, the system should successfully compute distances using GPU acceleration.
 
 use hyperstreamdb::core::index::gpu::{
-    compute_distance, set_global_gpu_context, ComputeBackend, ComputeContext,
+    compute_distance, set_thread_gpu_context, ComputeBackend, ComputeContext,
 };
 use hyperstreamdb::core::index::VectorMetric;
 use proptest::prelude::*;
@@ -72,7 +72,7 @@ proptest! {
 
         // Construct context manually with None implementation first (auto-detect will handle it if needed)
         let context = ComputeContext { backend, device_id: 0, implementation: None };
-        set_global_gpu_context(Some(context.clone()));
+        set_thread_gpu_context(Some(context.clone()));
 
         // The key property: compute_distance should succeed for any metric and backend
         let result = compute_distance(&query, &vectors, dim, metric);
@@ -101,7 +101,7 @@ proptest! {
 
                     // Verify GPU results match CPU results (within tolerance)
                     let cpu_context = ComputeContext::default();
-                    set_global_gpu_context(Some(cpu_context));
+                    set_thread_gpu_context(Some(cpu_context));
                     let cpu_distances = compute_distance(&query, &vectors, dim, metric)
                         .expect("CPU computation should succeed");
 
@@ -136,7 +136,7 @@ proptest! {
         }
 
         // Clean up
-        set_global_gpu_context(None);
+        set_thread_gpu_context(None);
     }
 }
 
@@ -159,7 +159,7 @@ proptest! {
 
         for (query, vector, dim) in test_cases {
             let context = ComputeContext { backend, device_id: 0, implementation: None };
-            set_global_gpu_context(Some(context));
+            set_thread_gpu_context(Some(context));
             let result = compute_distance(&query, &vector, dim, metric);
 
             if backend == ComputeBackend::Cpu {
@@ -168,7 +168,7 @@ proptest! {
                 prop_assert_eq!(distances.len(), 1);
 
                 let cpu_context = ComputeContext::default();
-                set_global_gpu_context(Some(cpu_context));
+                set_thread_gpu_context(Some(cpu_context));
                 let cpu_distances = compute_distance(&query, &vector, dim, metric)
                     .expect("CPU should succeed");
 
@@ -178,6 +178,6 @@ proptest! {
                 }
             }
         }
-        set_global_gpu_context(None);
+        set_thread_gpu_context(None);
     }
 }

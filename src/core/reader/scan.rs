@@ -84,11 +84,10 @@ impl HybridReader {
                         }
 
                         // Only prune if stats are available
-                        if Self::has_stats(s)
-                            && !Self::row_group_might_match_condition(s, cond) {
-                                might_match = false;
-                                break;
-                            }
+                        if Self::has_stats(s) && !Self::row_group_might_match_condition(s, cond) {
+                            might_match = false;
+                            break;
+                        }
                     }
                 }
             }

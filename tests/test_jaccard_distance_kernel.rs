@@ -2,7 +2,7 @@
 
 mod gpu_test_helpers;
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, set_global_gpu_context, ComputeContext};
+use hyperstreamdb::core::index::gpu::{compute_distance, set_thread_gpu_context, ComputeContext};
 use hyperstreamdb::core::index::VectorMetric;
 
 #[test]
@@ -17,7 +17,7 @@ fn test_jaccard_distance_cpu() -> Result<()> {
     ];
     let dim = 4;
     let context = ComputeContext::default();
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
@@ -63,7 +63,7 @@ fn test_jaccard_distance_cuda() -> Result<()> {
     ];
     let dim = 4;
     let context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
@@ -128,12 +128,12 @@ fn test_jaccard_distance_cuda_vs_cpu_parity() -> Result<()> {
 
     // Compute on CPU
     let cpu_context = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_context));
+    set_thread_gpu_context(Some(cpu_context));
     let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
     // Compute on CUDA
     let cuda_context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(cuda_context));
+    set_thread_gpu_context(Some(cuda_context));
     let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
     // Compare results
@@ -165,7 +165,7 @@ fn test_jaccard_distance_various_dimensions() -> Result<()> {
         vectors.extend(vec![2.0; dim]);
 
         let context = ComputeContext::default();
-        set_global_gpu_context(Some(context));
+        set_thread_gpu_context(Some(context));
         let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
         assert_eq!(distances.len(), 2);
@@ -211,12 +211,12 @@ fn test_jaccard_distance_cuda_large_batch() -> Result<()> {
 
     // Compute on CPU (reference)
     let cpu_context = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_context));
+    set_thread_gpu_context(Some(cpu_context));
     let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
     // Compute on CUDA
     let cuda_context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(cuda_context));
+    set_thread_gpu_context(Some(cuda_context));
     let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
     // Compare results
@@ -242,7 +242,7 @@ fn test_jaccard_distance_binary_sets() -> Result<()> {
     ];
     let dim = 5;
     let context = ComputeContext::default();
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
@@ -288,7 +288,7 @@ fn test_jaccard_distance_cuda_binary_sets() -> Result<()> {
     ];
     let dim = 5;
     let context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::Jaccard)?;
 
@@ -324,7 +324,7 @@ fn test_jaccard_distance_edge_cases() -> Result<()> {
     let query = vec![0.0, 0.0, 0.0];
     let vectors = vec![0.0, 0.0, 0.0];
     let context = ComputeContext::default();
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
     let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard)?;
     assert!(
         (distances[0] - 0.0).abs() < 1e-5,
@@ -344,7 +344,7 @@ fn test_jaccard_distance_cuda_edge_cases() -> Result<()> {
     let query = vec![0.0, 0.0, 0.0];
     let vectors = vec![0.0, 0.0, 0.0];
     let context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
     let distances = compute_distance(&query, &vectors, 3, VectorMetric::Jaccard)?;
     assert!(
         (distances[0] - 0.0).abs() < 1e-5,

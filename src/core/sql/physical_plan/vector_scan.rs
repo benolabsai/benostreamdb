@@ -173,9 +173,11 @@ impl ExecutionPlan for VectorScanExec {
         };
 
         let original_schema = table.arrow_schema();
-        let column_names = self.projection.as_ref().map(|proj| proj.iter()
-                    .map(|i| original_schema.field(*i).name().clone())
-                    .collect::<Vec<_>>());
+        let column_names = self.projection.as_ref().map(|proj| {
+            proj.iter()
+                .map(|i| original_schema.field(*i).name().clone())
+                .collect::<Vec<_>>()
+        });
 
         let col_names_owned = column_names;
         let expected_schema = self.schema.clone();

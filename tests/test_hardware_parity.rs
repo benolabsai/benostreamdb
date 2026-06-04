@@ -3,7 +3,7 @@
 mod gpu_test_helpers;
 use anyhow::Result;
 use hyperstreamdb::core::index::gpu::{
-    compute_distance, set_global_gpu_context, ComputeBackend, ComputeContext,
+    compute_distance, set_thread_gpu_context, ComputeBackend, ComputeContext,
 };
 use rand::Rng;
 
@@ -24,16 +24,16 @@ fn assert_parity(
 
     // Compute with backend A
     let ctx_a = ComputeContext::from_backend(backend_a)?;
-    set_global_gpu_context(Some(ctx_a));
+    set_thread_gpu_context(Some(ctx_a));
     let dist_a = compute_distance(query, vectors, dim, VectorMetric::L2)?;
 
     // Compute with backend B
     let ctx_b = ComputeContext::from_backend(backend_b)?;
-    set_global_gpu_context(Some(ctx_b));
+    set_thread_gpu_context(Some(ctx_b));
     let dist_b = compute_distance(query, vectors, dim, VectorMetric::L2)?;
 
     // Clean up
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
 
     assert_eq!(
         dist_a.len(),

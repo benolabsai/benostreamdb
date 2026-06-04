@@ -253,7 +253,7 @@ session.register("users", table)
 
 # Optional: Enable GPU acceleration for SQL queries
 ctx = hdb.GPUContext.auto_detect()
-hdb.set_global_gpu_context(ctx)
+hdb.set_thread_gpu_context(ctx)
 
 # Simple SQL
 results = table.sql("SELECT * FROM t WHERE id > 100")

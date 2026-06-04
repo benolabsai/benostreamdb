@@ -118,10 +118,7 @@ impl Compactor {
             let mut key: Vec<(String, Value)> =
                 candidate.partition_values.clone().into_iter().collect();
             key.sort_by(|a, b| a.0.cmp(&b.0));
-            partition_groups
-                .entry(key)
-                .or_default()
-                .push(candidate);
+            partition_groups.entry(key).or_default().push(candidate);
         }
 
         let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();

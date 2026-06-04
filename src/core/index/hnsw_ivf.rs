@@ -148,9 +148,7 @@ impl HnswGraph {
             (HnswGraph::TurboQuant8(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::Pq(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
-            (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => {
-                h.insert_slice((&[v], local_id))
-            }
+            (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&[v], local_id)),
 
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
 
@@ -330,21 +328,16 @@ impl HnswIvfIndex {
             .fold(
                 HashMap::<usize, Vec<(Vec<f32>, usize)>>::new,
                 |mut acc, (row_id, (vec, cluster_id))| {
-                    acc.entry(cluster_id)
-                        .or_default()
-                        .push((vec, row_id));
+                    acc.entry(cluster_id).or_default().push((vec, row_id));
                     acc
                 },
             )
-            .reduce(
-                HashMap::new,
-                |mut a, b| {
-                    for (k, v) in b {
-                        a.entry(k).or_default().extend(v);
-                    }
-                    a
-                },
-            );
+            .reduce(HashMap::new, |mut a, b| {
+                for (k, v) in b {
+                    a.entry(k).or_default().extend(v);
+                }
+                a
+            });
         tracing::debug!("  - Grouping vectors took: {:.2?}", t1.elapsed());
 
         // Step 3: Build HNSW graph for each cluster in parallel

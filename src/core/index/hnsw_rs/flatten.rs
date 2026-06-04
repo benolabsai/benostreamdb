@@ -78,7 +78,7 @@ fn flatten_point<T: Clone + Send + Sync>(point: &Point<T>) -> FlatPoint {
         }
     }
     flat_neighbours.sort_unstable();
-    
+
     FlatPoint {
         origin_id: point.get_origin_id(),
         p_id: point.get_point_id(),
@@ -97,7 +97,10 @@ impl FlatNeighborhood {
     /// get neighbour of a point given its id.  
     /// The neighbours are sorted in increasing distance from data_id.
     pub fn get_neighbours(&self, p_id: DataId) -> Option<Vec<Neighbour>> {
-        let res = self.hash_t.get(&p_id).map(|point| point.get_neighbours().clone());
+        let res = self
+            .hash_t
+            .get(&p_id)
+            .map(|point| point.get_neighbours().clone());
         res
     }
 } // end impl block for FlatNeighborhood

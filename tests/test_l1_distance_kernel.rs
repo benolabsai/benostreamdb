@@ -2,7 +2,7 @@
 
 mod gpu_test_helpers;
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, set_global_gpu_context, ComputeContext};
+use hyperstreamdb::core::index::gpu::{compute_distance, set_thread_gpu_context, ComputeContext};
 use hyperstreamdb::core::index::VectorMetric;
 
 #[test]
@@ -17,7 +17,7 @@ fn test_l1_distance_cpu() -> Result<()> {
     ];
     let dim = 3;
     let context = ComputeContext::default();
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
@@ -63,7 +63,7 @@ fn test_l1_distance_cuda() -> Result<()> {
     ];
     let dim = 3;
     let context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(context));
+    set_thread_gpu_context(Some(context));
 
     let distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
@@ -112,12 +112,12 @@ fn test_l1_distance_cuda_vs_cpu_parity() -> Result<()> {
 
     // Compute on CPU
     let cpu_context = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_context));
+    set_thread_gpu_context(Some(cpu_context));
     let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
     // Compute on CUDA
     let cuda_context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(cuda_context));
+    set_thread_gpu_context(Some(cuda_context));
     let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
     // Compare results
@@ -148,7 +148,7 @@ fn test_l1_distance_various_dimensions() -> Result<()> {
         let vectors = vec![2.0; dim * 2]; // Two vectors, each with value 2.0
 
         let context = ComputeContext::default();
-        set_global_gpu_context(Some(context));
+        set_thread_gpu_context(Some(context));
         let distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
         assert_eq!(distances.len(), 2);
@@ -192,12 +192,12 @@ fn test_l1_distance_cuda_large_batch() -> Result<()> {
 
     // Compute on CPU (reference)
     let cpu_context = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_context));
+    set_thread_gpu_context(Some(cpu_context));
     let cpu_distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
     // Compute on CUDA
     let cuda_context = ComputeContext::from_device_str("cuda:0")?;
-    set_global_gpu_context(Some(cuda_context));
+    set_thread_gpu_context(Some(cuda_context));
     let cuda_distances = compute_distance(&query, &vectors, dim, VectorMetric::L1)?;
 
     // Compare results

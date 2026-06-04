@@ -78,9 +78,13 @@ impl HybridReader {
                     let end = (start + 2 * 1024 * 1024).min(file_size);
 
                     // Fetch the Bloom Filter blob from storage
-                    let data_res = self.store.get_range(&pq_path, start..end).await.inspect(|b| {
-                        crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                    });
+                    let data_res = self
+                        .store
+                        .get_range(&pq_path, start..end)
+                        .await
+                        .inspect(|b| {
+                            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                        });
                     let data = match data_res {
                         Ok(d) => d,
                         Err(_) => {

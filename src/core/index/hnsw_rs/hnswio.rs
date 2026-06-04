@@ -155,9 +155,7 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     log::debug!(" magic {:X} ", magic);
     if magic != MAGICDESCR_1 && magic != MAGICDESCR_2 {
         log::info!("bad magic");
-        return Err(io::Error::other(
-            "bad magic at descr beginning",
-        ));
+        return Err(io::Error::other("bad magic at descr beginning"));
     } else if magic == MAGICDESCR_1 {
         log::info!("old version of dump..., exiting");
         println!("old version of dump");
@@ -203,9 +201,7 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     if len > 256 {
         log::info!(" length of distance name > 256");
         println!(" length of distance name should not exceed 256");
-        return Err(io::Error::other(
-            "bad lenght for distance name",
-        ));
+        return Err(io::Error::other("bad lenght for distance name"));
     }
     let mut distv = vec![0; len];
     io_in.read_exact(distv.as_mut_slice())?;
@@ -219,9 +215,7 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     log::debug!("length of T  name {:?} ", len);
     if len > 256 {
         println!(" length of T name should not exceed 256");
-        return Err(io::Error::other(
-            "bad lenght for T name",
-        ));
+        return Err(io::Error::other("bad lenght for T name"));
     }
     let mut tnamev = vec![0; len];
     io_in.read_exact(tnamev.as_mut_slice())?;
@@ -320,9 +314,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     let magic = u32::from_ne_bytes(it_slice);
     if magic != MAGICPOINT {
         log::debug!("got instead of MAGICPOINT {:x}", magic);
-        return Err(io::Error::other(
-            "bad magic at point beginning",
-        ));
+        return Err(io::Error::other("bad magic at point beginning"));
     }
     let mut it_slice = [0u8; std::mem::size_of::<DataId>()];
     graph_in.read_exact(&mut it_slice).unwrap();
@@ -447,10 +439,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync> HnswIO for PointInde
             graphout.write(&MAGICLAYER.to_ne_bytes()).unwrap();
             graphout.write(&nb_point.to_ne_bytes()).unwrap();
             for j in 0..layers[i].len() {
-                assert_eq!(
-                    layers[i][j].get_point_id(),
-                    PointId(i as u8, j as i32)
-                );
+                assert_eq!(layers[i][j].get_point_id(), PointId(i as u8, j as i32));
                 dump_point(&layers[i][j], mode, graphout, dataout)?;
             }
         }
@@ -504,9 +493,7 @@ fn load_point_indexation<
     let nb_layer = u8::from_ne_bytes(it_slice);
     log::debug!("nb layer {:?}", nb_layer);
     if nb_layer > NB_LAYER_MAX {
-        return Err(io::Error::other(
-            "inconsistent number of layErrers",
-        ));
+        return Err(io::Error::other("inconsistent number of layErrers"));
     }
     //
     let mut nb_points_loaded: usize = 0;
@@ -518,9 +505,7 @@ fn load_point_indexation<
         graph_in.read_exact(&mut it_slice)?;
         let magic = u32::from_ne_bytes(it_slice);
         if magic != MAGICLAYER {
-            return Err(io::Error::other(
-                "bad magic at layer beginning",
-            ));
+            return Err(io::Error::other("bad magic at layer beginning"));
         }
         let mut it_slice = [0u8; ::std::mem::size_of::<usize>()];
         graph_in.read_exact(&mut it_slice)?;

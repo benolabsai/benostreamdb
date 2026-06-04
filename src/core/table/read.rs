@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::fluent::TableQuery;
-use crate::core::index::gpu::get_global_gpu_context;
+use crate::core::index::gpu::get_thread_gpu_context;
 use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry, ManifestManager};
 use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner, VectorSearchParams};
 use crate::core::query::{execute_vector_search_with_config, QueryConfig, VectorSearchRequest};
@@ -660,7 +660,7 @@ impl Table {
 
         // Capture current GPU context so it can be propagated into each async
         // worker closure (thread_local is per-thread, not per-future).
-        let current_gpu_context = get_global_gpu_context();
+        let current_gpu_context = get_thread_gpu_context();
 
         let expr_arc = expr.map(Arc::new);
         let concurrency = config
@@ -902,28 +902,28 @@ impl Table {
                             .check_bloom_filter(&filter.column, &vals[0])
                             .await
                             .unwrap_or(true)
-                        {
-                            tracing::debug!(
-                                "Bloom Filter Pruned segment: {} for col: {}",
-                                segment_id,
-                                filter.column
-                            );
-                            return Ok(vec![]);
-                        }
+                    {
+                        tracing::debug!(
+                            "Bloom Filter Pruned segment: {} for col: {}",
+                            segment_id,
+                            filter.column
+                        );
+                        return Ok(vec![]);
+                    }
                 } else if let (Some(min), Some(max)) = (&filter.min, &filter.max) {
                     if min == max
                         && !reader
                             .check_bloom_filter(&filter.column, min)
                             .await
                             .unwrap_or(true)
-                        {
-                            tracing::debug!(
-                                "Bloom Filter Pruned segment: {} for col: {}",
-                                segment_id,
-                                filter.column
-                            );
-                            return Ok(vec![]);
-                        }
+                    {
+                        tracing::debug!(
+                            "Bloom Filter Pruned segment: {} for col: {}",
+                            segment_id,
+                            filter.column
+                        );
+                        return Ok(vec![]);
+                    }
                 }
             }
 

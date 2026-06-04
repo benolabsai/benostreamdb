@@ -29,7 +29,7 @@ pub mod schema;
 pub mod write;
 
 use crate::core::compaction::{CompactionOptions, Compactor};
-use crate::core::index::gpu::get_global_gpu_context;
+use crate::core::index::gpu::get_thread_gpu_context;
 use crate::core::index::memory::InMemoryVectorIndex;
 use crate::core::maintenance::Maintenance;
 use crate::core::manifest::{
@@ -72,7 +72,6 @@ pub enum LabelPattern {
     /// Pandas style: 0, 1, 2...
     Pandas,
 }
-
 
 /// Indexing state and configuration for a Table
 #[derive(Clone)]
@@ -677,9 +676,7 @@ impl Table {
                         continue;
                     }
 
-                    let algorithms = inferred_specs
-                        .entry(col_name.clone())
-                        .or_default();
+                    let algorithms = inferred_specs.entry(col_name.clone()).or_default();
 
                     let alg = match index_file.index_type.as_str() {
                         "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {
@@ -3221,7 +3218,7 @@ impl Table {
         let (centroids, _) = simple_kmeans(&vectors, k, 3)?; // Fast 3-iter training
 
         // 3. Assign all vectors (GPU Accelerated!)
-        let _ = get_global_gpu_context()
+        let _ = get_thread_gpu_context()
             .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
 
         let dim = list_array.value_length() as usize;

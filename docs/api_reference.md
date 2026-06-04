@@ -117,7 +117,7 @@ results = session.sql("""
 
 # Enable GPU acceleration for SQL
 ctx = hdb.GPUContext.auto_detect()
-hdb.set_global_gpu_context(ctx)
+hdb.set_thread_gpu_context(ctx)
 ```
 
 See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for SQL syntax reference.

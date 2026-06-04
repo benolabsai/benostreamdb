@@ -29,9 +29,7 @@ exclude = [
 name = "hyperstreamdb"
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "profile_ingest"
-path = "src/bin/profile_ingest.rs"
+
 
 [[test]]
 name = "test_connector_ffi"

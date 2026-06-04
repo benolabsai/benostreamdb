@@ -471,7 +471,7 @@ import hyperstreamdb as hdb
 
 # Set global GPU context
 ctx = hdb.GPUContext.auto_detect()
-hdb.set_global_gpu_context(ctx)
+hdb.set_thread_gpu_context(ctx)
 
 # SQL queries now use GPU acceleration
 session = hdb.Session()

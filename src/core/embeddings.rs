@@ -73,7 +73,7 @@ impl EmbeddingFunction for PythonCallbackFunction {
         // Use spawn_blocking to avoid blocking the Tokio executor thread,
         // which is critical when the Python callback holds the GIL.
         let callback_ref = &self.callback;
-        
+
         tokio::task::block_in_place(|| (callback_ref)(texts))
     }
 

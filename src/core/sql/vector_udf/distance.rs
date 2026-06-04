@@ -119,7 +119,7 @@ where
     use crate::core::index::gpu;
 
     // Check if GPU context is available
-    if let Some(_ctx) = gpu::get_global_gpu_context() {
+    if let Some(_ctx) = gpu::get_thread_gpu_context() {
         // Prepare vectors for batch computation (single pair)
         let dim = v1.len();
 

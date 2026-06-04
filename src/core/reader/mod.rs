@@ -207,12 +207,7 @@ impl HybridReader {
     fn resolve_object_path(&self, extension: &str) -> Path {
         // 1. Get the base string and determine if it includes the filename
         let (base, has_filename) = if extension == "parquet" && self.config.parquet_path.is_some() {
-            (
-                self.config
-                    .parquet_path.as_deref()
-                    .unwrap_or(""),
-                true,
-            )
+            (self.config.parquet_path.as_deref().unwrap_or(""), true)
         } else {
             (self.config.base_path.as_str(), false)
         };

@@ -12,7 +12,7 @@ use datafusion::prelude::*;
 ///
 /// Requirements: 7.6, 7.7
 use hyperstreamdb::core::index::gpu::{
-    get_global_gpu_context, set_global_gpu_context, ComputeContext,
+    get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
 use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ async fn test_pgvector_operators_use_gpu_context() {
     let df = ctx.read_batch(batch).unwrap();
 
     // Test 1: Compute distance (verifies CPU path if no GPU is active, or safe auto-detect)
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
 
     // Use the UDF directly (simulating what pgvector operator would do)
     let result_cpu = df
@@ -94,9 +94,9 @@ async fn test_pgvector_operators_use_gpu_context() {
 
     // Test 2: Set GPU context and verify same result (GPU path)
     let gpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(gpu_ctx));
+    set_thread_gpu_context(Some(gpu_ctx));
     assert!(
-        get_global_gpu_context().is_some(),
+        get_thread_gpu_context().is_some(),
         "GPU context should be set"
     );
 
@@ -146,7 +146,7 @@ async fn test_all_pgvector_operators_with_gpu() {
 
     // Set GPU context (using CPU backend for testing)
     let gpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(gpu_ctx));
+    set_thread_gpu_context(Some(gpu_ctx));
 
     // Create test data
     let vec1 = vec![1.0f32, 2.0, 3.0];
@@ -264,7 +264,7 @@ async fn test_gpu_context_persistence_across_queries() {
 
     // Set GPU context once
     let gpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(gpu_ctx));
+    set_thread_gpu_context(Some(gpu_ctx));
 
     // Execute multiple queries - all should use GPU context
     for _ in 0..3 {
@@ -286,7 +286,7 @@ async fn test_gpu_context_persistence_across_queries() {
         );
 
         // Verify context is still set
-        assert!(get_global_gpu_context().is_some());
+        assert!(get_thread_gpu_context().is_some());
     }
 
     // Letting context persist for parallel test safety
@@ -305,7 +305,7 @@ async fn test_pgvector_operators_batch_with_gpu() {
 
     // Set GPU context
     let gpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(gpu_ctx));
+    set_thread_gpu_context(Some(gpu_ctx));
 
     // Create test data with multiple rows
     let vectors = [

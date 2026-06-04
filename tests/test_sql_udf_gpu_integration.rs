@@ -9,7 +9,7 @@ use datafusion::prelude::*;
 /// This test verifies that SQL distance UDFs can use GPU acceleration
 /// when a GPU context is configured via the global context.
 use hyperstreamdb::core::index::gpu::{
-    get_global_gpu_context, set_global_gpu_context, ComputeContext,
+    get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
 use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
 use std::sync::Arc;
@@ -52,9 +52,9 @@ async fn test_sql_udf_uses_gpu_context() {
     let df = ctx.read_batch(batch).unwrap();
 
     // Test 1: Without GPU context (should use CPU)
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
     assert!(
-        get_global_gpu_context().is_none(),
+        get_thread_gpu_context().is_none(),
         "GPU context should be None"
     );
 
@@ -90,9 +90,9 @@ async fn test_sql_udf_uses_gpu_context() {
 
     // Test 2: With GPU context set to CPU backend (should still work)
     let cpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_ctx));
+    set_thread_gpu_context(Some(cpu_ctx));
     assert!(
-        get_global_gpu_context().is_some(),
+        get_thread_gpu_context().is_some(),
         "GPU context should be set"
     );
 
@@ -128,7 +128,7 @@ async fn test_sql_udf_uses_gpu_context() {
     );
 
     // Clean up
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
 }
 
 #[tokio::test]
@@ -143,7 +143,7 @@ async fn test_all_distance_metrics_with_gpu_context() {
 
     // Set CPU backend context
     let cpu_ctx = ComputeContext::default();
-    set_global_gpu_context(Some(cpu_ctx));
+    set_thread_gpu_context(Some(cpu_ctx));
 
     // Create test data
     let vec1 = vec![1.0f32, 2.0, 3.0];
@@ -216,7 +216,7 @@ async fn test_all_distance_metrics_with_gpu_context() {
     }
 
     // Clean up
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
 }
 
 #[tokio::test]
@@ -226,10 +226,10 @@ async fn test_gpu_context_thread_local() {
 
     // Set context in current task
     let ctx1 = ComputeContext::default();
-    set_global_gpu_context(Some(ctx1));
+    set_thread_gpu_context(Some(ctx1));
 
     assert!(
-        get_global_gpu_context().is_some(),
+        get_thread_gpu_context().is_some(),
         "Current task should have context"
     );
 
@@ -238,24 +238,24 @@ async fn test_gpu_context_thread_local() {
     // but the GpuBackend dispatch uses thread-local because most GPU SDKs (CUDA, etc.)
     // are thread-bound or have thread-local state.
     let handle = tokio::spawn(async move {
-        let _ctx = get_global_gpu_context();
+        let _ctx = get_thread_gpu_context();
         // Since tokio executor might reuse threads, we can't strictly guarantee
         // it's None if we don't control the thread pool, but in a fresh thread it should be.
         // For the sake of this test, we just set a new one and verify it.
 
         let ctx2 = ComputeContext::default();
-        set_global_gpu_context(Some(ctx2));
+        set_thread_gpu_context(Some(ctx2));
 
-        let ctx = get_global_gpu_context();
+        let ctx = get_thread_gpu_context();
         assert!(ctx.is_some(), "Task should have context");
     });
 
     handle.await.unwrap();
 
     // Current task should still have its context
-    let ctx = get_global_gpu_context();
+    let ctx = get_thread_gpu_context();
     assert!(ctx.is_some(), "Current task should still have context");
 
     // Clean up
-    set_global_gpu_context(None);
+    set_thread_gpu_context(None);
 }
