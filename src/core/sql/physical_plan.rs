@@ -52,7 +52,7 @@ impl HyperStreamExec {
                 Arc::new(
                     base_schema
                         .project(proj)
-                        .map_err(|e| DataFusionError::from(e))?,
+                        .map_err(DataFusionError::from)?,
                 )
             }
         } else {

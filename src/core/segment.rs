@@ -99,7 +99,7 @@ impl HybridSegmentWriter {
         let mut total_size = 0;
 
         for f in &files {
-            let filename = f.split('/').next_back().unwrap_or(&f).to_string();
+            let filename = f.split('/').next_back().unwrap_or(f).to_string();
 
             if filename.ends_with(".inv.parquet") {
                 // Inverted Index
@@ -192,7 +192,7 @@ impl HybridSegmentWriter {
 
     /// Compute vector statistics (HyperStream exclusive) while delegating
     /// scalar statistics to the Parquet writer metadata (Zero-Copy).
-    fn compute_vector_stats(&self, batch: &RecordBatch) -> Result<HashMap<String, VectorStats>> {
+    fn compute_vector_stats(&self, _batch: &RecordBatch) -> Result<HashMap<String, VectorStats>> {
         // Bypassing vector stats computation (dim_min, dim_max) to maximize bulk ingestion throughput.
         // HNSW builds its own bounding boxes, and Parquet provides scalar stats.
         Ok(HashMap::new())

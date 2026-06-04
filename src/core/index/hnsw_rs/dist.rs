@@ -139,7 +139,7 @@ implement_scalar!(DistJaccard, u8, |(a, b)| if a == b { 0.0 } else { 1.0 });
 
 /// L2 normalization utility
 pub fn l2_normalize(va: &mut [f32]) {
-    let l2norm = va.iter().map(|t| (*t * *t) as f32).sum::<f32>().sqrt();
+    let l2norm = va.iter().map(|t| *t * *t).sum::<f32>().sqrt();
     if l2norm > 0. {
         for i in 0..va.len() {
             va[i] /= l2norm;

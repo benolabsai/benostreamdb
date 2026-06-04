@@ -209,9 +209,7 @@ impl HybridReader {
         let (base, has_filename) = if extension == "parquet" && self.config.parquet_path.is_some() {
             (
                 self.config
-                    .parquet_path
-                    .as_ref()
-                    .map(|p| p.as_str())
+                    .parquet_path.as_deref()
                     .unwrap_or(""),
                 true,
             )

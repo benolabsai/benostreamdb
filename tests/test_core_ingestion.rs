@@ -14,7 +14,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     let uri = format!("file://{}", path);
 
     // 1. Setup Table
-    let mut table = Table::new_async(uri.clone()).await?;
+    let table = Table::new_async(uri.clone()).await?;
     table.set_autocommit(false);
     table
         .add_index(
@@ -80,7 +80,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     // Drop the table and reopen
     drop(table);
 
-    let mut table2 = Table::new_async(uri.clone()).await?;
+    let table2 = Table::new_async(uri.clone()).await?;
     table2
         .add_index(
             "embedding".to_string(),

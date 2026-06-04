@@ -454,6 +454,21 @@ impl WriteAheadLog {
     }
 }
 
+impl Drop for WriteAheadLog {
+    fn drop(&mut self) {
+        // Only finish if we have a direct writer (synchronous mode)
+        // If tx is Some, the worker handles the finish.
+        if self.tx.is_none() {
+            if let Some(mut writer) = self.writer.take() {
+                let _ = writer.finish();
+                if let Ok(file) = writer.into_inner() {
+                    let _ = file.sync_all();
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,20 +715,5 @@ mod tests {
         assert_eq!(actual_values, expected_values);
 
         Ok(())
-    }
-}
-
-impl Drop for WriteAheadLog {
-    fn drop(&mut self) {
-        // Only finish if we have a direct writer (synchronous mode)
-        // If tx is Some, the worker handles the finish.
-        if self.tx.is_none() {
-            if let Some(mut writer) = self.writer.take() {
-                let _ = writer.finish();
-                if let Ok(file) = writer.into_inner() {
-                    let _ = file.sync_all();
-                }
-            }
-        }
     }
 }

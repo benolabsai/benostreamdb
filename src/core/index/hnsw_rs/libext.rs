@@ -757,6 +757,12 @@ pub struct DescriptionFFI {
     pub t_name: *const u8,
 }
 
+impl Default for DescriptionFFI {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DescriptionFFI {
     pub fn new() -> Self {
         DescriptionFFI {
@@ -807,7 +813,7 @@ pub extern "C" fn load_hnsw_description(flen: usize, name: *const u8) -> *const 
                 ffi_description.t_name = t_name_ptr;
                 return Box::into_raw(Box::new(ffi_description));
             }
-            return ptr::null();
+            ptr::null()
         }
         Err(_) => ptr::null(),
     }

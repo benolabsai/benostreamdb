@@ -106,7 +106,7 @@ impl PqEncoder {
             let mut best_idx = 0;
 
             // If sub_dim is a multiple of 8, we can use 256-bit AVX registers
-            if sub_dim % 8 == 0 {
+            if sub_dim.is_multiple_of(8) {
                 for (j, centroid) in self.codebooks[i].iter().enumerate() {
                     let mut sum = _mm256_setzero_ps();
                     let mut k_idx = 0;
@@ -282,7 +282,7 @@ unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
         4 * 65536,
         3 * 65536,
         2 * 65536,
-        1 * 65536,
+        65536,
         0 * 65536,
     );
 

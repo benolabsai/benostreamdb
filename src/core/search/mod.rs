@@ -11,6 +11,12 @@ pub struct HybridSearchCoordinator {
     rrf: ReciprocalRankFusion,
 }
 
+impl Default for HybridSearchCoordinator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HybridSearchCoordinator {
     pub fn new() -> Self {
         Self {

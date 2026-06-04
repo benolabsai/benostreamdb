@@ -94,7 +94,7 @@ async fn test_pk_acceleration_multi_segment() -> anyhow::Result<()> {
         )?;
 
         let now = Instant::now();
-        let _ = table.write_async(vec![batch]).await?;
+        table.write_async(vec![batch]).await?;
         println!("  New key insert id={:>7}: {:?}", id, now.elapsed());
     }
 

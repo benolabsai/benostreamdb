@@ -431,7 +431,7 @@ impl Table {
             },
             // Indexing Task
             async move {
-                let t_idx = std::time::Instant::now();
+                let _t_idx = std::time::Instant::now();
                 if let Some(col_name) = target_col {
                     let mut idx_lock = memory_index.write();
 
@@ -477,7 +477,7 @@ impl Table {
         idx_res?;
         // -----------------------------
 
-        let write_buffer_len = {
+        let _write_buffer_len = {
             let mut buffer = self.write_buffer.write();
             buffer.extend(batches);
             buffer.len()

@@ -22,7 +22,7 @@ impl ManifestManager {
             let meta = meta?;
             let path = meta.location.as_ref();
             if path.ends_with(".json") {
-                if let Some(filename) = path.split('/').last() {
+                if let Some(filename) = path.split('/').next_back() {
                     if filename.starts_with('v') && filename.ends_with(".json") {
                         if let Ok(ver) = filename[1..filename.len() - 5].parse::<u64>() {
                             if ver >= max_ver {

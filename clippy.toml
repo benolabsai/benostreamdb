@@ -3,7 +3,7 @@
 
 # Maximum type complexity before clippy warns (default: 250).
 # Database code involves nested generics, futures, and trait objects.
-max-type-complexity = 400
+type-complexity-threshold = 400
 
 # Maximum cognitive complexity before clippy warns (default: 25).
 # Query planning and execution logic are inherently complex.
@@ -14,4 +14,4 @@ disallowed-macros = []
 
 # Allow larger number of arguments in functions (default: 7)
 # Database APIs often take multiple configuration parameters.
-max-fn-params = 10
+too-many-arguments-threshold = 10

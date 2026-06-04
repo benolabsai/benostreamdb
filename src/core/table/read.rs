@@ -147,7 +147,7 @@ impl Table {
             .map(|(e, _)| e.record_count as usize)
             .sum();
 
-        plan.push(format!("Context Selection:"));
+        plan.push("Context Selection:".to_string());
         plan.push(format!(
             "  -> Total Table Scope: {} rows in {} segments",
             total_rows_table, total_segments_table
@@ -353,7 +353,7 @@ impl Table {
             plan.push("".to_string());
         }
 
-        plan.push(format!("Final Retrieval:"));
+        plan.push("Final Retrieval:".to_string());
         plan.push(format!(
             "  -> ParallelRead (threads: {}, format: Parquet)",
             self.query_config.max_parallel_readers.unwrap_or(16)
@@ -686,7 +686,7 @@ impl Table {
             schema: iceberg_schema_arc,
             gpu: current_gpu_context,
             columns: columns.map(|c| c.iter().map(|s| s.to_string()).collect()),
-            version: version as u64,
+            version,
         });
 
         let stream = futures::stream::iter(entries_to_read)
@@ -897,8 +897,8 @@ impl Table {
             // Point Selection Optimization: Check Bloom Filters before scanning
             for filter in &and_filters {
                 if let Some(vals) = &filter.values {
-                    if vals.len() == 1 {
-                        if !reader
+                    if vals.len() == 1
+                        && !reader
                             .check_bloom_filter(&filter.column, &vals[0])
                             .await
                             .unwrap_or(true)
@@ -910,10 +910,9 @@ impl Table {
                             );
                             return Ok(vec![]);
                         }
-                    }
                 } else if let (Some(min), Some(max)) = (&filter.min, &filter.max) {
-                    if min == max {
-                        if !reader
+                    if min == max
+                        && !reader
                             .check_bloom_filter(&filter.column, min)
                             .await
                             .unwrap_or(true)
@@ -925,7 +924,6 @@ impl Table {
                             );
                             return Ok(vec![]);
                         }
-                    }
                 }
             }
 
@@ -1237,7 +1235,7 @@ impl Table {
                             if path_parts.len() > 1 {
                                 format!("{}/{}", path_parts[1], file_path)
                             } else {
-                                format!("{}", file_path)
+                                file_path.to_string()
                             }
                         } else {
                             file_path.clone()

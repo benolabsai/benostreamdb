@@ -37,6 +37,12 @@ pub struct VectorToSparseUDF {
     signature: Signature,
 }
 impl_dyn_traits!(VectorToSparseUDF);
+impl Default for VectorToSparseUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorToSparseUDF {
     pub fn new() -> Self {
         Self {
@@ -179,6 +185,12 @@ pub struct SparseToVectorUDF {
     signature: Signature,
 }
 impl_dyn_traits!(SparseToVectorUDF);
+impl Default for SparseToVectorUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SparseToVectorUDF {
     pub fn new() -> Self {
         Self {

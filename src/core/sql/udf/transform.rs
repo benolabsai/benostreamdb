@@ -680,6 +680,12 @@ pub struct VectorToBinaryUDF {
     signature: Signature,
 }
 impl_dyn_traits!(VectorToBinaryUDF);
+impl Default for VectorToBinaryUDF {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VectorToBinaryUDF {
     pub fn new() -> Self {
         Self {

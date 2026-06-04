@@ -88,8 +88,8 @@ impl TreeNodeRewriter for PgVectorRewriter {
                         | "dist_l1"
                         | "dist_hamming"
                         | "dist_jaccard"
-                ) {
-                    if func.args.len() == 2 {
+                )
+                    && func.args.len() == 2 {
                         // Support both regular and large string literals for the second argument
                         let literal_text = match &func.args[1] {
                             Expr::Literal(ScalarValue::Utf8(Some(s)), _) => Some(s.as_str()),
@@ -114,7 +114,6 @@ impl TreeNodeRewriter for PgVectorRewriter {
                             }
                         }
                     }
-                }
                 Ok(Transformed::no(Expr::ScalarFunction(func)))
             }
 

@@ -56,7 +56,7 @@ impl HybridReader {
         let file_size = if let Some(s) = self.config.file_size {
             s
         } else {
-            self.store.head(&pq_path).await?.size as u64
+            self.store.head(&pq_path).await?.size
         };
 
         for i in 0..metadata.num_row_groups() {
@@ -78,9 +78,8 @@ impl HybridReader {
                     let end = (start + 2 * 1024 * 1024).min(file_size);
 
                     // Fetch the Bloom Filter blob from storage
-                    let data_res = self.store.get_range(&pq_path, start..end).await.map(|b| {
+                    let data_res = self.store.get_range(&pq_path, start..end).await.inspect(|b| {
                         crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                        b
                     });
                     let data = match data_res {
                         Ok(d) => d,

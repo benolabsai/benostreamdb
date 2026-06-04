@@ -107,22 +107,22 @@ where
         graphbufw.flush().unwrap();
         databufw.flush().unwrap();
         log::debug!("\n end of dump");
-        return res;
+        res
     } // end of dump
 } // end of impl block AnnT for Hnsw<T,D>
 
 // macro export makes the macro export t the root of the crate
 #[macro_export]
 macro_rules! mapdist_t(
-    ("DistL1")       => (crate::core::index::hnsw_rs::dist::DistL1);
-    ("DistL2")       => (crate::core::index::hnsw_rs::dist::DistL2);
-    ("DistL2")       => (crate::core::index::hnsw_rs::dist::DistL2);
-    ("DistDot")      => (crate::core::index::hnsw_rs::dist::DistDot);
-    ("DistHamming")  => (crate::core::index::hnsw_rs::dist::DistHamming);
-    ("DistJaccard")  => (crate::core::index::hnsw_rs::dist::DistJaccard);
-    ("DistPtr")      => (crate::core::index::hnsw_rs::dist::DistPtr);
-    ("DistLevenshtein") => (crate::core::index::hnsw_rs::dist::DistLevenshtein);
-    ("DistJensenShannon") => (crate::core::index::hnsw_rs::dist::DistJensenShannon);
-    ("DistHellinger") => (crate::core::index::hnsw_rs::dist::DistHellinger);
-    ("DistJeffreys") => (crate::core::index::hnsw_rs::dist::DistJeffreys);
+    ("DistL1")       => ($crate::core::index::hnsw_rs::dist::DistL1);
+    ("DistL2")       => ($crate::core::index::hnsw_rs::dist::DistL2);
+    ("DistL2")       => ($crate::core::index::hnsw_rs::dist::DistL2);
+    ("DistDot")      => ($crate::core::index::hnsw_rs::dist::DistDot);
+    ("DistHamming")  => ($crate::core::index::hnsw_rs::dist::DistHamming);
+    ("DistJaccard")  => ($crate::core::index::hnsw_rs::dist::DistJaccard);
+    ("DistPtr")      => ($crate::core::index::hnsw_rs::dist::DistPtr);
+    ("DistLevenshtein") => ($crate::core::index::hnsw_rs::dist::DistLevenshtein);
+    ("DistJensenShannon") => ($crate::core::index::hnsw_rs::dist::DistJensenShannon);
+    ("DistHellinger") => ($crate::core::index::hnsw_rs::dist::DistHellinger);
+    ("DistJeffreys") => ($crate::core::index::hnsw_rs::dist::DistJeffreys);
 );

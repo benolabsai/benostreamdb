@@ -78,9 +78,7 @@ impl IcebergWriter {
 
             // Build partition field summaries from partition_stats
             let partition_summaries: Vec<apache_avro::types::Value> = entry
-                .partition_stats
-                .iter()
-                .map(|(_field_name, stats)| {
+                .partition_stats.values().map(|stats| {
                     use crate::core::manifest::ManifestValue;
                     let lower_bound = match &stats.min {
                         None | Some(ManifestValue::Null) => apache_avro::types::Value::Null,

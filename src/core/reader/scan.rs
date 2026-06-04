@@ -75,7 +75,7 @@ impl HybridReader {
                     let col_meta = rg.column(pos);
                     let stats = col_meta.statistics();
 
-                    if let Some(ref s) = stats {
+                    if let Some(s) = stats {
                         // If all rows are null, skip this row group
                         let null_count = s.null_count_opt().unwrap_or(0);
                         if null_count >= rg.num_rows() as u64 {
@@ -84,12 +84,11 @@ impl HybridReader {
                         }
 
                         // Only prune if stats are available
-                        if Self::has_stats(s) {
-                            if !Self::row_group_might_match_condition(s, cond) {
+                        if Self::has_stats(s)
+                            && !Self::row_group_might_match_condition(s, cond) {
                                 might_match = false;
                                 break;
                             }
-                        }
                     }
                 }
             }

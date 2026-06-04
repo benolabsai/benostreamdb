@@ -120,7 +120,7 @@ impl Compactor {
             key.sort_by(|a, b| a.0.cmp(&b.0));
             partition_groups
                 .entry(key)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(candidate);
         }
 

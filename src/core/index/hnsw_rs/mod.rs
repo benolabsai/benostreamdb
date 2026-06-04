@@ -17,8 +17,8 @@ pub mod prelude;
 
 lazy_static! {
     static ref LOG: u64 = {
-        let res = init_log();
-        res
+        
+        init_log()
     };
 }
 
@@ -27,5 +27,5 @@ lazy_static! {
 fn init_log() -> u64 {
     let mut builder = env_logger::Builder::from_default_env();
     let _ = builder.try_init();
-    return 1;
+    1
 }

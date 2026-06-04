@@ -149,7 +149,7 @@ impl HnswGraph {
             (HnswGraph::TurboQuant4(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::Pq(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => {
-                h.insert_slice((&vec![v], local_id))
+                h.insert_slice((&[v], local_id))
             }
 
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
@@ -328,16 +328,16 @@ impl HnswIvfIndex {
             .zip(labels.into_par_iter())
             .enumerate()
             .fold(
-                || HashMap::<usize, Vec<(Vec<f32>, usize)>>::new(),
+                HashMap::<usize, Vec<(Vec<f32>, usize)>>::new,
                 |mut acc, (row_id, (vec, cluster_id))| {
-                    acc.entry(cluster_id as usize)
+                    acc.entry(cluster_id)
                         .or_default()
                         .push((vec, row_id));
                     acc
                 },
             )
             .reduce(
-                || HashMap::new(),
+                HashMap::new,
                 |mut a, b| {
                     for (k, v) in b {
                         a.entry(k).or_default().extend(v);
@@ -442,7 +442,7 @@ impl HnswIvfIndex {
 
                 // Build locally sequential
                 for (local_id, (vec, _)) in vecs.iter().enumerate() {
-                    if let Some(ref q) = q_ref {
+                    if let Some(q) = q_ref {
                         let encoded = q.encode(vec);
                         hnsw.insert((crate::core::index::VectorValue::Binary(encoded), local_id));
                     } else {
@@ -1010,7 +1010,7 @@ impl HnswIvfIndex {
                         }
                     } else if kv.key == "quantizer_config" {
                         if let Some(ref val) = kv.value {
-                            if let Some(mut q) = serde_json::from_str::<QuantizerImpl>(val).ok() {
+                            if let Ok(mut q) = serde_json::from_str::<QuantizerImpl>(val) {
                                 if let QuantizerImpl::Pq(ref mut pq) = q {
                                     pq.init_lut();
                                 }

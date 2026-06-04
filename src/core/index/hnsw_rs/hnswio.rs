@@ -130,7 +130,7 @@ impl Description {
         out.write(&namelen.to_ne_bytes()).unwrap();
         out.write(self.t_name.as_bytes()).unwrap();
         //
-        return Ok(1);
+        Ok(1)
     } // end fo dump
 } // end of HnswIO impl for Descr
 
@@ -155,14 +155,13 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     log::debug!(" magic {:X} ", magic);
     if magic != MAGICDESCR_1 && magic != MAGICDESCR_2 {
         log::info!("bad magic");
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "bad magic at descr beginning",
         ));
     } else if magic == MAGICDESCR_1 {
         log::info!("old version of dump..., exiting");
         println!("old version of dump");
-        return Err(io::Error::new(io::ErrorKind::Other, "old format of dump"));
+        return Err(io::Error::other("old format of dump"));
     }
     let mut it_slice = [0u8; std::mem::size_of::<u8>()];
     io_in.read_exact(&mut it_slice)?;
@@ -204,13 +203,11 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     if len > 256 {
         log::info!(" length of distance name > 256");
         println!(" length of distance name should not exceed 256");
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "bad lenght for distance name",
         ));
     }
-    let mut distv = Vec::<u8>::new();
-    distv.resize(len, 0);
+    let mut distv = vec![0; len];
     io_in.read_exact(distv.as_mut_slice())?;
     let distname = String::from_utf8(distv).unwrap();
     log::debug!("distance name {:?} ", distname);
@@ -222,13 +219,11 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     log::debug!("length of T  name {:?} ", len);
     if len > 256 {
         println!(" length of T name should not exceed 256");
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "bad lenght for T name",
         ));
     }
-    let mut tnamev = Vec::<u8>::new();
-    tnamev.resize(len, 0);
+    let mut tnamev = vec![0; len];
     io_in.read_exact(tnamev.as_mut_slice())?;
     let t_name = String::from_utf8(tnamev).unwrap();
     log::debug!("T type name {:?} ", t_name);
@@ -255,7 +250,6 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
 ///  1. The value MAGICDATAP (u32)
 ///  2. origin_id as a u64
 ///  3. The vector of data (the length is known from Description)
-
 fn dump_point<'a, T: Serialize + Clone + Sized + Send + Sync, W: Write>(
     point: &Point<T>,
     mode: DumpMode,
@@ -305,7 +299,7 @@ fn dump_point<'a, T: Serialize + Clone + Sized + Send + Sync, W: Write>(
     dataout.write(&len_64.to_ne_bytes()).unwrap();
     dataout.write_all(&serialized).unwrap();
     //
-    return Ok(1);
+    Ok(1)
 } // end of dump for Point<T>
 
 //
@@ -326,8 +320,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     let magic = u32::from_ne_bytes(it_slice);
     if magic != MAGICPOINT {
         log::debug!("got instead of MAGICPOINT {:x}", magic);
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "bad magic at point beginning",
         ));
     }
@@ -342,10 +335,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     let mut it_slice = [0u8; std::mem::size_of::<i32>()];
     graph_in.read_exact(&mut it_slice)?;
     let rank_in_l = i32::from_ne_bytes(it_slice);
-    let p_id = PointId {
-        0: layer,
-        1: rank_in_l,
-    };
+    let p_id = PointId(layer, rank_in_l);
     //    log::debug!(" point load {:?} {:?}  ", p_id, origin_id);
     // Now  for each layer , read neighbours
     let nb_layer = descr.nb_layer;
@@ -356,7 +346,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
         let mut it_slice = [0u8; std::mem::size_of::<usize>()];
         graph_in.read_exact(&mut it_slice)?;
         let nb_neighbours = usize::from_ne_bytes(it_slice);
-        let mut neighborhood_l: Vec<Neighbour> = Vec::with_capacity(nb_neighbours as usize);
+        let mut neighborhood_l: Vec<Neighbour> = Vec::with_capacity(nb_neighbours);
         for _j in 0..nb_neighbours {
             let mut it_slice = [0u8; std::mem::size_of::<DataId>()];
             graph_in.read_exact(&mut it_slice)?;
@@ -417,7 +407,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     } else {
         v = Vec::<T>::new();
     }
-    let point = Point::<T>::new(&v, origin_id as usize, p_id);
+    let point = Point::<T>::new(&v, origin_id, p_id);
     log::trace!(
         "load_point  origin {:?} allocated size {:?}, dim {:?}",
         origin_id,
@@ -425,7 +415,7 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
         descr.dimension
     );
     //
-    return Ok((Arc::new(point), neighborhood));
+    Ok((Arc::new(point), neighborhood))
 } // end of load_point
 
 //
@@ -459,10 +449,7 @@ impl<T: Serialize + DeserializeOwned + Clone + Send + Sync> HnswIO for PointInde
             for j in 0..layers[i].len() {
                 assert_eq!(
                     layers[i][j].get_point_id(),
-                    PointId {
-                        0: i as u8,
-                        1: j as i32
-                    }
+                    PointId(i as u8, j as i32)
                 );
                 dump_point(&layers[i][j], mode, graphout, dataout)?;
             }
@@ -517,8 +504,7 @@ fn load_point_indexation<
     let nb_layer = u8::from_ne_bytes(it_slice);
     log::debug!("nb layer {:?}", nb_layer);
     if nb_layer > NB_LAYER_MAX {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
+        return Err(io::Error::other(
             "inconsistent number of layErrers",
         ));
     }
@@ -532,8 +518,7 @@ fn load_point_indexation<
         graph_in.read_exact(&mut it_slice)?;
         let magic = u32::from_ne_bytes(it_slice);
         if magic != MAGICLAYER {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "bad magic at layer beginning",
             ));
         }
@@ -545,12 +530,9 @@ fn load_point_indexation<
         for r in 0..nbpoints {
             // load graph and data part of point. Points are dumped in the same order.
             let load_point_res = load_point(graph_in, descr, data_in);
-            match load_point_res {
-                Err(other) => {
-                    log::error!("in load_point_indexation, loading of point {} failed", r);
-                    return Err(other);
-                }
-                _ => {}
+            if let Err(other) = load_point_res {
+                log::error!("in load_point_indexation, loading of point {} failed", r);
+                return Err(other);
             }
             let load_point_res = load_point_res.unwrap();
             let point = load_point_res.0;
@@ -589,7 +571,7 @@ fn load_point_indexation<
             point.neighbours.write()[l].sort_unstable();
         } // end of for l
         nbp += 1;
-        if nbp % 500_000 == 0 {
+        if nbp.is_multiple_of(500_000) {
             log::debug!("reloading nb_points neighbourhood completed : {}", nbp);
         }
     } // end loop in neighbourhood_map
@@ -669,7 +651,7 @@ impl<
 
         let description = Description {
             //  value is 1 for Full 0 for Light
-            dumpmode: dumpmode,
+            dumpmode,
             max_nb_connection: self.get_max_nb_connection(),
             nb_layer: self.get_max_level() as u8,
             ef: self.get_ef_construction(),
@@ -739,11 +721,11 @@ pub fn load_hnsw<
         errmsg.push_str(&d_type_name);
         log::error!(" distance in type argument : {:?}", d_type_name);
         log::error!("error , dump is for distance = {:?}", distname);
-        return Err(io::Error::new(io::ErrorKind::Other, errmsg));
+        return Err(io::Error::other(errmsg));
     }
     let t_type = description.t_name.clone();
     log::debug!("T type name in dump = {:?}", t_type);
-    let layer_point_indexation = load_point_indexation(graph_in, &description, data_in)?;
+    let layer_point_indexation = load_point_indexation(graph_in, description, data_in)?;
     let data_dim = layer_point_indexation.get_data_dimension();
     //
     let hnsw: Hnsw<T, D> = Hnsw {
@@ -813,11 +795,11 @@ pub fn load_hnsw_with_dist<
         errmsg.push_str(&d_type_name);
         log::error!(" distance in type argument : {:?}", d_type_name);
         log::error!("error , dump is for distance = {:?}", distname);
-        return Err(io::Error::new(io::ErrorKind::Other, errmsg));
+        return Err(io::Error::other(errmsg));
     }
     let t_type = description.t_name.clone();
     log::debug!("T type name in dump = {:?}", t_type);
-    let layer_point_indexation = load_point_indexation(graph_in, &description, data_in)?;
+    let layer_point_indexation = load_point_indexation(graph_in, description, data_in)?;
     let data_dim = layer_point_indexation.get_data_dimension();
     //
     let hnsw: Hnsw<T, D> = Hnsw {
@@ -841,7 +823,6 @@ pub fn load_hnsw_with_dist<
 //===============================================================================================================
 
 #[cfg(test)]
-
 mod tests {
 
     use super::*;
@@ -862,7 +843,7 @@ mod tests {
 
     fn my_fn(v1: &[f32], v2: &[f32]) -> f32 {
         let norm_l1: f32 = v1.iter().zip(v2.iter()).map(|t| (*t.0 - *t.1).abs()).sum();
-        norm_l1 as f32
+        norm_l1
     }
 
     #[test]

@@ -730,7 +730,7 @@ impl SchemaField {
                     // Parse "timestamp(unit, tz_or_none)"
                     let inner = s.trim_start_matches("timestamp(").trim_end_matches(')');
                     let parts: Vec<&str> = inner.splitn(2, ',').map(|p| p.trim()).collect();
-                    let unit = match parts.first().map(|s| *s) {
+                    let unit = match parts.first().copied() {
                         Some("second") => arrow::datatypes::TimeUnit::Second,
                         Some("millisecond") => arrow::datatypes::TimeUnit::Millisecond,
                         Some("nanosecond") => arrow::datatypes::TimeUnit::Nanosecond,

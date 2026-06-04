@@ -23,14 +23,14 @@ fn main() {
 fn get_git_version() -> String {
     // Try to get the latest git tag
     if let Ok(output) = Command::new("git")
-        .args(&["describe", "--tags", "--abbrev=0"])
+        .args(["describe", "--tags", "--abbrev=0"])
         .output()
     {
         if output.status.success() {
             let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
             // Remove 'v' prefix if present (e.g., v0.1.2 -> 0.1.2)
-            if tag.starts_with('v') {
-                return tag[1..].to_string();
+            if let Some(stripped) = tag.strip_prefix('v') {
+                return stripped.to_string();
             }
             return tag;
         }
@@ -38,7 +38,7 @@ fn get_git_version() -> String {
 
     // Fall back to getting current commit hash
     if let Ok(output) = Command::new("git")
-        .args(&["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
     {
         if output.status.success() {

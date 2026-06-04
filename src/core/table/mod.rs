@@ -62,8 +62,10 @@ pub struct ColumnIndexConfig {
 /// Strategy for labeling unnamed or numerically named columns during first write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum LabelPattern {
     /// Excel style: A, B, C... AA, AB... (Default for premium UX)
+    #[default]
     ExcelAlpha,
     /// Polars style: column_1, column_2...
     Polars,
@@ -71,11 +73,6 @@ pub enum LabelPattern {
     Pandas,
 }
 
-impl Default for LabelPattern {
-    fn default() -> Self {
-        Self::ExcelAlpha
-    }
-}
 
 /// Indexing state and configuration for a Table
 #[derive(Clone)]
@@ -469,7 +466,7 @@ impl Table {
         next_ids.push(field_id);
 
         // Validate uniqueness before committing
-        self._validate_pk_uniqueness(&next_ids, &latest_schema)
+        self._validate_pk_uniqueness(&next_ids, latest_schema)
             .await?;
 
         // Atomic commit to manifest
@@ -682,7 +679,7 @@ impl Table {
 
                     let algorithms = inferred_specs
                         .entry(col_name.clone())
-                        .or_insert_with(Vec::new);
+                        .or_default();
 
                     let alg = match index_file.index_type.as_str() {
                         "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {
