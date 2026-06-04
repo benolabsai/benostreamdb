@@ -181,9 +181,31 @@ class Query:
 
 class Table:
     """
-    Enhanced HyperStreamDB Table with auto-vectorization and embedding registry support.
+    HyperStreamDB Table — Apache Iceberg/Parquet-compatible columnar vector store.
+
+    **Default behaviour (v0.4.1+)**
+
+    - ``index_all = False`` — Vector indexes are *not* built automatically.
+      Call ``table.index_all = True`` or ``table.add_index(column, 'hnsw')``
+      to enable indexing for a specific session or column.
+    - ``autocommit = False`` — Writes accumulate in an in-memory buffer.
+      Call ``table.commit()`` (or ``await table.commit_async()``) to persist
+      data to Parquet and advance the Iceberg snapshot.
+
+    These defaults exist for performance: automatic indexing previously caused
+    silent 15-18 s HNSW build latency on every ``commit()`` for tables with
+    vector columns, even when the user had not requested an index.
+
+    Args:
+        uri:         Table location (``file:///path`` or cloud URI).
+        inner_table: Internal — do not pass directly.
+        device:      Optional compute device for GPU-accelerated index builds.
+        index_all:   Enable automatic indexing of all compatible columns.
+                     Defaults to ``False``. Set ``True`` to restore legacy behaviour.
+        primary_key: Column name (or list) to use as primary key.
+        explain:     If ``True``, return query plans instead of results.
     """
-    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = True, primary_key: Optional[str] = None, explain: bool = False):
+    def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = False, primary_key: Optional[str] = None, explain: bool = False):
         uri = _resolve_uri(uri)
         self.explain = explain
         if inner_table:
@@ -569,7 +591,16 @@ class Table:
 
     @property
     def index_all(self):
-        """Whether to index all compatible columns by default."""
+        """
+        Whether to build HNSW/BM25 indexes for all compatible columns on commit.
+
+        Defaults to ``False`` (opt-in). Setting this to ``True`` triggers
+        background index builds after every ``commit()`` call — useful when
+        you want fast ANN search but be aware of the additional commit latency
+        (~15 s per 100 K rows with 768-dim vectors on CPU).
+
+        For selective indexing, prefer ``table.add_index(column, 'hnsw')``.
+        """
         return self._inner.get_index_all()
 
     @index_all.setter

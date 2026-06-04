@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] - 2026-06-03
+
 ### Added
 - Comprehensive unit test suites for Spark and Trino connectors
 - Thread-local GPU context for concurrent query safety
@@ -14,11 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Query configuration API
 - Metrics instrumentation for observability
 - Release profiles (`release` and `release-lto`) in Cargo.toml
+- `WriteAheadLog::append_fire_and_forget` — non-blocking WAL append that hands off batches to the WAL worker without blocking on `fdatasync`, eliminating ~800 ms write latency per call
 
 ### Changed
 - CUDA is now an optional feature (no longer required for CI builds)
 - FFI bounds hardened with panic safety guarantees
 - Public APIs documented with rustdoc
+- **`Table(index_all=False)` is now the default** (previously `True`). Automatic HNSW/BM25 index building on commit is now opt-in. This eliminates a silent 15–18 s background build that previously fired on every `commit()` for any table containing a vector column. To restore the old behaviour: `Table(uri, index_all=True)` or `table.index_all = True`.
+- **`Table(autocommit=False)` is now the default** (previously `True`). Writes accumulate in an in-memory buffer and must be explicitly committed with `table.commit()`. This eliminates unexpected auto-flush overhead during ingestion loops.
+- `write_async` no longer auto-detects columns named `"embedding"` as implicit HNSW index targets. Only columns explicitly registered via `add_index()` or `set_index_columns()` are indexed.
+- `manifest_manager.load_latest_full` replaced with `load_latest` in the `flush_async` hot path, eliminating two unnecessary full manifest scans per commit.
+- Primary key uniqueness check upgraded from O(N²) to O(N) using `HashSet`.
 
 ### Fixed
 - Rustdoc warnings across the codebase
@@ -282,7 +292,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rla3rd/hyperstreamdb/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/rla3rd/hyperstreamdb/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/rla3rd/hyperstreamdb/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/rla3rd/hyperstreamdb/compare/v0.3.1...v0.3.2

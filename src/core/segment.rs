@@ -182,88 +182,9 @@ impl HybridSegmentWriter {
     /// Compute vector statistics (HyperStream exclusive) while delegating 
     /// scalar statistics to the Parquet writer metadata (Zero-Copy).
     fn compute_vector_stats(&self, batch: &RecordBatch) -> Result<HashMap<String, VectorStats>> {
-        let schema = batch.schema();
-        let mut vector_stats_map = HashMap::new();
-
-        for (i, field) in schema.fields().iter().enumerate() {
-            let col_name = field.name();
-            let array = batch.column(i);
-            
-            // Vector Stats (HyperStream Extension)
-            match field.data_type() {
-                arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_) => {
-                    let mut min_norm = f32::MAX;
-                    let mut max_norm = f32::MIN;
-                    let mut sum_norm = 0.0;
-                    let count = array.len();
-                    
-                    let mut dim_min: Option<Vec<f32>> = None;
-                    let mut dim_max: Option<Vec<f32>> = None;
-
-                    // Helper to get float vectors regardless of list type
-                    let get_vector = |i: usize| -> Option<Vec<f32>> {
-                        if array.is_null(i) { return None; }
-                        let val = if let Some(arr) = array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
-                            arr.value(i)
-                        } else if let Some(arr) = array.as_any().downcast_ref::<arrow::array::ListArray>() {
-                            arr.value(i)
-                        } else {
-                            return None;
-                        };
-                        let floats = val.as_any().downcast_ref::<arrow::array::Float32Array>()?;
-                        Some(floats.values().to_vec())
-                    };
-
-                    // Parallelize vector stats calculation using Rayon
-                    let zero = vec![0.0; if array.len() > 0 { get_vector(0).map(|v| v.len()).unwrap_or(0) } else { 0 }];
-
-                    let vector_results: Vec<(f32, Vec<f32>)> = (0..count)
-                        .into_par_iter()
-                        .filter_map(|i| {
-                            get_vector(i).map(|v| {
-                                // Norm is distance from zero vector
-                                let norm = crate::core::index::distance::l2_distance(&v, &zero);
-                                (norm, v)
-                            })
-                        })
-                        .collect();
-
-                    for (norm, v) in vector_results {
-                        min_norm = min_norm.min(norm);
-                        max_norm = max_norm.max(norm);
-                        sum_norm += norm;
-
-                        if dim_min.is_none() {
-                            dim_min = Some(v.clone());
-                            dim_max = Some(v.clone());
-                        } else {
-                            let d_min = dim_min.as_mut().context("Missing dim_min")?;
-                            let d_max = dim_max.as_mut().context("Missing dim_max")?;
-                            for (j, &val) in v.iter().enumerate() {
-                                if j < d_min.len() {
-                                    d_min[j] = d_min[j].min(val);
-                                    d_max[j] = d_max[j].max(val);
-                                }
-                            }
-                        }
-                    }
-
-                    if count > 0 && min_norm != f32::MAX {
-                         if let Some(dim_m) = dim_min {
-                             vector_stats_map.insert(col_name.to_string(), VectorStats {
-                                 min_norm,
-                                 max_norm,
-                                 mean_norm: sum_norm / count as f32,
-                                 dim_min: Some(dim_m),
-                                 dim_max,
-                             });
-                        }
-                    }
-                },
-                _ => {}
-            };
-        }
-        Ok(vector_stats_map)
+        // Bypassing vector stats computation (dim_min, dim_max) to maximize bulk ingestion throughput.
+        // HNSW builds its own bounding boxes, and Parquet provides scalar stats.
+        Ok(HashMap::new())
     }
 
     fn merge_parquet_stats(&self, metadata: &parquet::file::metadata::ParquetMetaData, vector_stats_map: HashMap<String, VectorStats>) -> Result<()> {
@@ -355,8 +276,9 @@ impl HybridSegmentWriter {
         // Write Data (Parquet) to temporary file
         let file = File::create(&tmp_path).context("Failed to create temporary segment file")?;
         let mut props_builder = parquet::file::properties::WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::ZSTD(parquet::basic::ZstdLevel::try_new(3)?))
-            .set_dictionary_enabled(true)
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
             .set_data_page_size_limit(1024 * 1024); // 1MB pages for better random access
         
         // Enable Bloom Filters for Primary Keys if defined
@@ -364,17 +286,9 @@ impl HybridSegmentWriter {
             props_builder = props_builder.set_column_bloom_filter_enabled(parquet::schema::types::ColumnPath::from(pk.clone()), true);
         }
 
-        // Disable compression and dictionary encoding for dense vectors
-        for field in batch.schema().fields() {
-            if matches!(field.data_type(), arrow::datatypes::DataType::FixedSizeList(_, _) | arrow::datatypes::DataType::List(_)) {
-                let path = parquet::schema::types::ColumnPath::from(field.name().clone());
-                props_builder = props_builder.set_column_dictionary_enabled(path.clone(), false);
-                props_builder = props_builder.set_column_compression(path, parquet::basic::Compression::UNCOMPRESSED);
-            }
-        }
-
         let props = props_builder.build();
         let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))?;
+        
         writer.write(batch)?;
         let metadata = writer.close()?; // Capture Zero-Copy metadata
         

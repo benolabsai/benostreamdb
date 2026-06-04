@@ -152,7 +152,7 @@ impl TableBuilder {
             catalog_namespace: None,
             catalog_table_name: None,
             runtime: None,
-            index_all: true,
+            index_all: false,
             default_device: None,
             query_config: QueryConfig::default(),
             data_store: None,
@@ -291,7 +291,7 @@ impl TableBuilder {
             #[cfg(feature = "enterprise")]
             enterprise_license: None,
             primary_key: Arc::new(parking_lot::RwLock::new(Vec::new())),
-            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            autocommit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             recovered_wal_paths: Arc::new(parking_lot::Mutex::new(recovered_paths)),
             partition_spec,
             label_pattern: self.label_pattern,

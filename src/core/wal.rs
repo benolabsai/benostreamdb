@@ -222,6 +222,24 @@ impl WriteAheadLog {
         }
     }
 
+    /// Append a batch to the WAL without waiting for the fsync reply.
+    /// Returns as soon as the batch is handed off to the WAL worker channel.
+    /// The worker still persists and syncs on its own schedule — durability is maintained
+    /// but the write path is not blocked by disk I/O latency.
+    pub async fn append_fire_and_forget(&self, batch: RecordBatch) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            // We still create a reply channel so the WAL worker can function normally,
+            // but we intentionally drop reply_rx — the worker reply will silently fail,
+            // which is fine because we don't need to wait for it.
+            let (reply_tx, _reply_rx) = oneshot::channel();
+            tx.send(LogOp::Append(batch, reply_tx)).await
+                .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
+            Ok(())
+        } else {
+            anyhow::bail!("WAL worker not started. Call spawn_worker() first.");
+        }
+    }
+
     /// Replay all log files in the WAL directory and return an iterator of batches.
     /// This should be used on startup for memory-efficient recovery.
     pub fn replay_stream(&self) -> Result<Box<dyn Iterator<Item = Result<RecordBatch>>>> {

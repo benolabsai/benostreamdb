@@ -9,9 +9,14 @@ if os.path.exists("test_admin_table"):
     shutil.rmtree("test_admin_table")
 
 table = hdb.Table(uri)
-print(f"Default autocommit: {table.autocommit}")
 
-# Write data with autocommit=True (default)
+# v0.4.1+: Default autocommit is False (opt-in for explicit transaction control)
+print(f"Default autocommit: {table.autocommit}")
+assert not table.autocommit, "Expected autocommit=False by default"
+
+# Write data with explicit autocommit=True
+print("Setting autocommit=True for this test section...")
+table.autocommit = True
 df = pd.DataFrame({"id": [1, 2, 3], "val": ["a", "b", "c"]})
 table.write(df)
 

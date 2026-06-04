@@ -698,14 +698,10 @@ impl PyTable {
 
     /// Commit buffered writes to disk (automatically flushes first, then finalizes metadata)
     fn commit(&self, py: Python<'_>) -> PyResult<()> {
-        // Flush write buffer to disk first (triggers vector shuffling and index building)
+        // Flush write buffer to disk and commit metadata
+        // Note: Vector indexing continues in background tasks
         py.allow_threads(|| {
             TOKIO_RUNTIME.block_on(self.table.flush_async())
-        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))?;
-
-        // Finalize metadata
-        py.allow_threads(|| {
-            self.table.commit()
         }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(), )))
     }
 
@@ -718,8 +714,7 @@ impl PyTable {
     fn commit_async(&self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| {
             TOKIO_RUNTIME.block_on(async {
-                self.table.flush_async().await?;
-                self.table.commit_async().await
+                self.table.flush_async().await
             })
         })
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))

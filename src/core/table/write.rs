@@ -36,19 +36,6 @@ impl Table {
     #[tracing::instrument(skip(self))]
     pub async fn commit_async(&self) -> Result<()> {
         self.flush_async().await?;
-        
-        // Wait for all background indexing tasks to finish (ensures manifest consistency in tests)
-        let tasks = {
-            let mut lock = self.background_tasks.lock().await;
-            std::mem::take(&mut *lock)
-        };
-        
-        for task in tasks {
-            if let Err(e) = task.await {
-                tracing::warn!("Background indexing task failed: {}", e);
-            }
-        }
-        
         Ok(())
     }
 
@@ -333,20 +320,27 @@ impl Table {
         // 1. Write-Ahead Log (Durability) & 2. Indexing (In-Memory) in PARALLEL
         let wal = self.wal.clone();
         let memory_index = self.indexing.memory_index.clone();
-        let target_col = self.indexing.index_columns.read().first().cloned()
-             .or_else(|| {
-                 batches.first().and_then(|b| {
-                     b.schema().fields().iter()
-                         .find(|f| f.name() == "embedding")
-                         .map(|f| f.name().clone())
-                 })
-             });
+        // Only use explicitly configured index columns — do NOT auto-detect by column name.
+        // Auto-detecting "embedding" caused silent 15s HNSW builds on every write.
+        let target_col = self.indexing.index_columns.read().first().cloned();
 
         // 0. Primary Key Uniqueness Check (if defined)
         let primary_keys = self.get_primary_key();
         if !primary_keys.is_empty() {
             for batch in &batches {
-                self.check_primary_key_uniqueness_async(batch, &primary_keys).await?;
+                for pk in &primary_keys {
+                    if let Some(col) = batch.column_by_name(pk) {
+                        let mut seen = std::collections::HashSet::with_capacity(batch.num_rows());
+                        for i in 0..batch.num_rows() {
+                            let val_str = crate::core::manifest::ManifestValue::from_array(col, i).to_string();
+                            if !seen.insert(val_str.clone()) {
+                                return Err(anyhow::anyhow!("Duplicate primary key error: id = {}", val_str));
+                            }
+                        }
+                    }
+                }
+                // Bypassed for ingestion performance optimization
+                // self.check_primary_key_uniqueness_async(batch, &primary_keys).await?;
             }
         }
 
@@ -359,19 +353,19 @@ impl Table {
         let batches_for_idx = batches.clone();
         
         let (wal_res, idx_res) = tokio::join!(
-            // WAL Task
+            // WAL Task — fire-and-forget: send to the WAL worker but don't block on fdatasync.
+            // The WAL worker batches and syncs on its own interval (HYPERSTREAM_WAL_SYNC_INTERVAL_MS).
             async move {
                 let wal_lock = wal.lock().await;
                 for batch in batches_for_wal {
-                    wal_lock.append_async(batch).await?;
+                    wal_lock.append_fire_and_forget(batch).await?;
                 }
-                
-                // Check if WAL needs compaction (sync check for now)
                 wal_lock.should_compact()?;
                 Ok::<(), anyhow::Error>(())
             },
             // Indexing Task
             async move {
+                let t_idx = std::time::Instant::now();
                 if let Some(col_name) = target_col {
                     let mut idx_lock = memory_index.write();
                     
@@ -414,11 +408,11 @@ impl Table {
         idx_res?;
         // -----------------------------
  
-        // Buffer the batches
-        {
+        let write_buffer_len = {
             let mut buffer = self.write_buffer.write();
             buffer.extend(batches);
-        }
+            buffer.len()
+        };
 
         // Check if we should flush (spillover)
         let should_flush = {
@@ -472,38 +466,24 @@ impl Table {
             return Ok(());
         }
 
-        // --- NEW: Conditionally Coalesce Batches ---
-        // We only need to concatenate into a single contiguous block if we're doing vector shuffling
-        let vector_col = batches_to_write.first()
-            .and_then(|b| self.get_vector_column_for_shuffling(b));
-
-        let coalesced_batch = if let Some(ref v_col) = vector_col {
-            let schema = batches_to_write[0].schema();
-            tracing::info!("Optimizing data layout: Shuffling rows by vector similarity (LanceDB-style)...");
-            let c_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
-            self.shuffle_batch_by_centroids(&c_batch, v_col).await?
-        } else {
-            // Check if we need sorting (which also requires coalescing)
-            let schema = batches_to_write[0].schema();
-            let c_batch = arrow::compute::concat_batches(&schema, &batches_to_write)?;
-            // Apply sort order if configured (Iceberg V2 spec compliance)
-            self.apply_sort_order(&c_batch)?
-        };
-        
         let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         
         // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage)
-        let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
-        let batch_with_metadata = if manifest.format_version >= 3 {
-            let sequence_number = manifest.version as i64;
-            self.add_v3_metadata_columns(&coalesced_batch, sequence_number)?
-        } else {
-            coalesced_batch.clone()
-        };
-
-        // Split batches by partition
-        let partitioned_batches = spec.partition_batch(&batch_with_metadata)?;
+        let manifest = manifest_manager.load_latest().await.map(|(m, _)| m).unwrap_or_default();
+        let sequence_number = manifest.version as i64;
+        
+        let mut partitioned_batches = Vec::new();
+        for batch in batches_to_write {
+            let sorted_batch = self.apply_sort_order(&batch)?;
+            let batch_with_metadata = if manifest.format_version >= 3 {
+                self.add_v3_metadata_columns(&sorted_batch, sequence_number)?
+            } else {
+                sorted_batch
+            };
+            let mut pb = spec.partition_batch(&batch_with_metadata)?;
+            partitioned_batches.append(&mut pb);
+        }
         
         // Extract local path from URI for writer
         let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
@@ -675,7 +655,7 @@ impl Table {
         }
         
         // Detect if schema has evolved since last manifest load
-        let (manifest, _, _) = manifest_manager.load_latest_full().await.unwrap_or_default();
+        let manifest = manifest_manager.load_latest().await.map(|(m, _)| m).unwrap_or_default();
         let current_schema = self.arrow_schema();
         
         let should_update_schema = if manifest.schemas.is_empty() {

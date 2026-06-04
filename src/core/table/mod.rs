@@ -2901,10 +2901,10 @@ mod tests {
         let uri = format!("file://{}", path);
         let table = Table::new_async(uri.clone()).await?;
 
-        // 1. Initial State: Autocommit is True
-        assert!(table.get_autocommit());
+        // 1. Initial State: Autocommit is now false by default (opt-in)
+        assert!(!table.get_autocommit());
 
-        // 2. Write Data (Autocommit)
+        // 2. Write Data with explicit autocommit enabled
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
         ]));
@@ -2913,6 +2913,7 @@ mod tests {
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]
         )?;
         
+        table.set_autocommit(true);
         table.write_async(vec![batch.clone()]).await?;
         
         // Should be committed automatically
@@ -2927,7 +2928,7 @@ mod tests {
         tracing::info!("After truncate, read {} records in {} batches", total_rows, batches.len());
         assert!(total_rows == 0, "Table should be empty after truncate, but found {} rows!", total_rows);
 
-        // 4. Autocommit
+        // 4. Manual commit (autocommit=false)
         table.set_autocommit(false);
         table.write_async(vec![batch.clone()]).await?;
         
