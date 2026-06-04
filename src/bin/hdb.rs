@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use arrow::util::pretty::print_batches;
 use clap::{Parser, Subcommand};
-use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
 use hyperstreamdb::core::sql::session::HyperStreamSession;
 use hyperstreamdb::core::table::Table;
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 use std::sync::Arc;
-use arrow::util::pretty::print_batches;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -37,7 +37,7 @@ enum Commands {
         name: String,
         #[arg(short, long)]
         uri: String,
-    }
+    },
 }
 
 #[derive(Subcommand)]
@@ -62,7 +62,7 @@ enum TableCommands {
         /// Remove files older than N days
         #[arg(long, default_value_t = 7)]
         older_than_days: u64,
-    }
+    },
 }
 
 #[tokio::main]
@@ -76,18 +76,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Query { query }) => {
             run_query(&session, &query).await;
         }
-        Some(Commands::Table { command }) => {
-            match command {
-                TableCommands::Inspect { uri } => inspect_table(&uri).await?,
-                TableCommands::Compact { uri } => compact_table(&uri).await?,
-                TableCommands::Vacuum { uri, older_than_days } => vacuum_table(&uri, older_than_days).await?,
-            }
-        }
+        Some(Commands::Table { command }) => match command {
+            TableCommands::Inspect { uri } => inspect_table(&uri).await?,
+            TableCommands::Compact { uri } => compact_table(&uri).await?,
+            TableCommands::Vacuum {
+                uri,
+                older_than_days,
+            } => vacuum_table(&uri, older_than_days).await?,
+        },
         Some(Commands::Register { name, uri }) => {
-             println!("Registering table '{}' at '{}'", name, uri);
-             let table = Table::new_async(uri).await?;
-             session.register_table(&name, Arc::new(table))?;
-             println!("Table registered.");
+            println!("Registering table '{}' at '{}'", name, uri);
+            let table = Table::new_async(uri).await?;
+            session.register_table(&name, Arc::new(table))?;
+            println!("Table registered.");
         }
         Some(Commands::Repl) | None => {
             run_repl(session).await?;
@@ -101,7 +102,7 @@ async fn inspect_table(uri: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("Inspecting table: {}", uri);
     let table = Table::new_async(uri.to_string()).await?;
     let stats = table.get_table_statistics_async().await?;
-    
+
     println!("--- Table Statistics ---");
     println!("Row Count: {}", stats.row_count);
     println!("File Count: {}", stats.file_count);
@@ -124,7 +125,11 @@ async fn vacuum_table(uri: &str, days: u64) -> Result<(), Box<dyn std::error::Er
     let table = Table::new_async(uri.to_string()).await?;
     let start = Instant::now();
     let deleted_count = table.vacuum_async(days as usize).await?;
-    println!("Vacuum completed in {:.2?}. Deleted {} files.", start.elapsed(), deleted_count);
+    println!(
+        "Vacuum completed in {:.2?}. Deleted {} files.",
+        start.elapsed(),
+        deleted_count
+    );
     Ok(())
 }
 
@@ -133,7 +138,7 @@ async fn run_repl(session: HyperStreamSession) -> Result<(), Box<dyn std::error:
     if rl.load_history("history.txt").is_err() {
         println!("No previous history.");
     }
-    
+
     println!("Welcome to HyperStreamDB CLI (hdb)");
     println!("Type 'exit' or 'quit' to leave.");
     println!("Type 'register table_name uri' to register a table.");
@@ -144,44 +149,44 @@ async fn run_repl(session: HyperStreamSession) -> Result<(), Box<dyn std::error:
             Ok(line) => {
                 let line = line.trim();
                 rl.add_history_entry(line)?;
-                
+
                 if line.eq_ignore_ascii_case("exit") || line.eq_ignore_ascii_case("quit") {
                     break;
                 }
-                
+
                 if line.is_empty() {
                     continue;
                 }
 
                 if line.to_lowercase().starts_with("register ") {
-                     let parts: Vec<&str> = line.split_whitespace().collect();
-                     if parts.len() == 3 {
-                         let name = parts[1];
-                         let uri = parts[2];
-                         match Table::new_async(uri.to_string()).await {
-                             Ok(table) => {
-                                 if let Err(e) = session.register_table(name, Arc::new(table)) {
-                                     println!("Error registering table: {}", e);
-                                 } else {
-                                     println!("Table '{}' registered.", name);
-                                 }
-                             },
-                             Err(e) => println!("Error creating table: {}", e),
-                         }
-                         continue;
-                     }
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() == 3 {
+                        let name = parts[1];
+                        let uri = parts[2];
+                        match Table::new_async(uri.to_string()).await {
+                            Ok(table) => {
+                                if let Err(e) = session.register_table(name, Arc::new(table)) {
+                                    println!("Error registering table: {}", e);
+                                } else {
+                                    println!("Table '{}' registered.", name);
+                                }
+                            }
+                            Err(e) => println!("Error creating table: {}", e),
+                        }
+                        continue;
+                    }
                 }
 
                 run_query(&session, line).await;
-            },
+            }
             Err(ReadlineError::Interrupted) => {
                 println!("CTRL-C");
                 break;
-            },
+            }
             Err(ReadlineError::Eof) => {
                 println!("CTRL-D");
                 break;
-            },
+            }
             Err(err) => {
                 println!("Error: {:?}", err);
                 break;
@@ -204,7 +209,7 @@ async fn run_query(session: &HyperStreamSession, query: &str) {
                 println!("Query returned {} rows in {:.2?}", num_rows, duration);
                 print_batches(&batches).unwrap();
             }
-        },
+        }
         Err(e) => {
             println!("Error executing query: {}", e);
         }

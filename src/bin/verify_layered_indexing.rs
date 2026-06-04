@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::Table;
 use anyhow::Result;
-use apache_avro::{Writer, Schema as AvroSchema, types::Value as AvroValue};
-use std::fs::File;
+use apache_avro::{types::Value as AvroValue, Schema as AvroSchema, Writer};
+use arrow::array::{FixedSizeListArray, Float32Array, Int32Array};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{Int32Array, FixedSizeListArray, Float32Array};
+use hyperstreamdb::Table;
+use std::fs::File;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -21,19 +21,20 @@ async fn main() -> Result<()> {
 
     println!("2. Creating Iceberg Metadata v1...");
     create_iceberg_snapshot(base_dir, 1, &data_path1, "m1.avro", "ml1.avro")?;
-    
+
     let metadata_path = format!("{}/metadata/v1.metadata.json", base_dir);
     let metadata_json = iceberg_metadata_json(base_dir, 1, "ml1.avro");
-    std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata_json)?)?;
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_string_pretty(&metadata_json)?,
+    )?;
 
     println!("3. Registering external table in HyperStreamDB...");
     let hdb_uri = "file:///tmp/hdb_shadow";
     let _ = std::fs::remove_dir_all("/tmp/hdb_shadow");
-    
-    let mut table = Table::register_external(
-        hdb_uri.to_string(), 
-        &format!("file://{}", metadata_path)
-    ).await?;
+
+    let mut table =
+        Table::register_external(hdb_uri.to_string(), &format!("file://{}", metadata_path)).await?;
 
     println!("4. Verifying initial shadowed entries...");
     let segments = table.get_snapshot_segments().await?;
@@ -42,8 +43,10 @@ async fn main() -> Result<()> {
 
     println!("5. Building Scalar Index for 'id' column...");
     // This should build a sidecar index in /tmp/hdb_shadow
-    table.add_index_columns_async(vec!["id".to_string()], None).await?;
-    
+    table
+        .add_index_columns_async(vec!["id".to_string()], None)
+        .await?;
+
     println!("6. Checking for local sidecar index file...");
     let mut found_idx = false;
     for entry in std::fs::read_dir("/tmp/hdb_shadow")? {
@@ -54,7 +57,10 @@ async fn main() -> Result<()> {
             found_idx = true;
         }
     }
-    assert!(found_idx, "Sidecar index file was not created in local HDB directory");
+    assert!(
+        found_idx,
+        "Sidecar index file was not created in local HDB directory"
+    );
 
     println!("7. Verifying Query using sidecar index...");
     // The dummy data has id=1..100. Let's filter id=10.
@@ -65,27 +71,35 @@ async fn main() -> Result<()> {
     let mut total_rows = 0;
     for batch in results {
         total_rows += batch.num_rows();
-        let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
         for i in 0..batch.num_rows() {
-             assert_eq!(id_col.value(i), 10, "Query returned wrong ID");
+            assert_eq!(id_col.value(i), 10, "Query returned wrong ID");
         }
     }
-    assert!(total_rows > 0, "Query should have returned at least one row");
+    assert!(
+        total_rows > 0,
+        "Query should have returned at least one row"
+    );
     println!("Universal Indexing Verified Successfully!");
 
     Ok(())
 }
 
 fn create_dummy_parquet(path: &str) -> Result<()> {
-    use parquet::arrow::ArrowWriter;
     use arrow::datatypes::{DataType, Field, Schema};
-    
+    use parquet::arrow::ArrowWriter;
+
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
-        Field::new("vector", DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            4
-        ), false),
+        Field::new(
+            "vector",
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), 4),
+            false,
+        ),
     ]));
 
     let file = File::create(path)?;
@@ -103,7 +117,7 @@ fn create_dummy_parquet(path: &str) -> Result<()> {
         Arc::new(Field::new("item", DataType::Float32, true)),
         4,
         Arc::new(flattened_vectors),
-        None
+        None,
     )?;
 
     let batch = RecordBatch::try_new(schema, vec![Arc::new(ids), Arc::new(vectors)])?;
@@ -112,7 +126,13 @@ fn create_dummy_parquet(path: &str) -> Result<()> {
     Ok(())
 }
 
-fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_name: &str, ml_name: &str) -> Result<()> {
+fn create_iceberg_snapshot(
+    base_dir: &str,
+    snapshot_id: i64,
+    data_path: &str,
+    m_name: &str,
+    ml_name: &str,
+) -> Result<()> {
     let manifest_schema_str = r#"{
         "type": "record",
         "name": "manifest_entry",
@@ -140,8 +160,14 @@ fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_
     let mut writer = Writer::new(&manifest_schema, File::create(&manifest_path)?);
 
     let data_file = vec![
-        ("file_path".to_string(), AvroValue::String(data_path.to_string())),
-        ("file_format".to_string(), AvroValue::String("PARQUET".to_string())),
+        (
+            "file_path".to_string(),
+            AvroValue::String(data_path.to_string()),
+        ),
+        (
+            "file_format".to_string(),
+            AvroValue::String("PARQUET".to_string()),
+        ),
         ("partition".to_string(), AvroValue::Record(Vec::new())),
         ("record_count".to_string(), AvroValue::Long(100)),
         ("file_size_in_bytes".to_string(), AvroValue::Long(1024)),
@@ -149,7 +175,10 @@ fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_
 
     let entry = vec![
         ("status".to_string(), AvroValue::Int(1)), // Added
-        ("snapshot_id".to_string(), AvroValue::Union(1, Box::new(AvroValue::Long(snapshot_id)))),
+        (
+            "snapshot_id".to_string(),
+            AvroValue::Union(1, Box::new(AvroValue::Long(snapshot_id))),
+        ),
         ("data_file".to_string(), AvroValue::Record(data_file)),
     ];
 
@@ -171,10 +200,16 @@ fn create_iceberg_snapshot(base_dir: &str, snapshot_id: i64, data_path: &str, m_
     let mut ml_writer = Writer::new(&ml_schema, File::create(&ml_path)?);
 
     let ml_entry = vec![
-        ("manifest_path".to_string(), AvroValue::String(m_name.to_string())),
+        (
+            "manifest_path".to_string(),
+            AvroValue::String(m_name.to_string()),
+        ),
         ("manifest_length".to_string(), AvroValue::Long(512)),
         ("partition_spec_id".to_string(), AvroValue::Int(0)),
-        ("added_snapshot_id".to_string(), AvroValue::Long(snapshot_id)),
+        (
+            "added_snapshot_id".to_string(),
+            AvroValue::Long(snapshot_id),
+        ),
     ];
 
     ml_writer.append(AvroValue::Record(ml_entry))?;
@@ -193,7 +228,7 @@ fn iceberg_metadata_json(base_dir: &str, snapshot_id: i64, ml_name: &str) -> ser
         "current-schema-id": 0,
         "schemas": [
             {
-                "schema-id": 0, 
+                "schema-id": 0,
                 "fields": [
                     {"id": 1, "name": "id", "required": true, "type": "int"},
                     {"id": 2, "name": "vector", "required": true, "type": "fixed_list<float, 4>"}

@@ -1,8 +1,8 @@
-use object_store::{ObjectStore, PutMode, PutOptions, path::Path, UpdateVersion};
+use anyhow::Result;
+use object_store::{path::Path, ObjectStore, PutMode, PutOptions, UpdateVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use anyhow::Result;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -41,7 +41,11 @@ impl FileBasedLock {
             ..Default::default()
         };
 
-        match self.store.put_opts(&self.path, bytes.clone().into(), opts.clone()).await {
+        match self
+            .store
+            .put_opts(&self.path, bytes.clone().into(), opts.clone())
+            .await
+        {
             Ok(_) => Ok(true),
             Err(object_store::Error::AlreadyExists { .. }) => {
                 // Check if expired
@@ -49,7 +53,9 @@ impl FileBasedLock {
                     Ok(get_res) => {
                         let meta = get_res.meta.clone();
                         let current_bytes = get_res.bytes().await?;
-                        if let Ok(current_payload) = serde_json::from_slice::<LockPayload>(&current_bytes) {
+                        if let Ok(current_payload) =
+                            serde_json::from_slice::<LockPayload>(&current_bytes)
+                        {
                             if now > current_payload.expires_at {
                                 // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
                                 let update_opts = PutOptions {
@@ -59,10 +65,15 @@ impl FileBasedLock {
                                     }),
                                     ..Default::default()
                                 };
-                                
-                                match self.store.put_opts(&self.path, bytes.clone().into(), update_opts).await {
+
+                                match self
+                                    .store
+                                    .put_opts(&self.path, bytes.clone().into(), update_opts)
+                                    .await
+                                {
                                     Ok(_) => return Ok(true),
-                                    Err(object_store::Error::NotImplemented) | Err(object_store::Error::NotSupported { .. }) => {
+                                    Err(object_store::Error::NotImplemented)
+                                    | Err(object_store::Error::NotSupported { .. }) => {
                                         // SAFETY NOTE: This fallback path has a TOCTOU (time-of-check-time-of-use)
                                         // race condition. The delete → sleep → create_exclusive sequence is NOT atomic.
                                         // Two concurrent callers can both delete the expired lock and race to re-create it.
@@ -72,9 +83,16 @@ impl FileBasedLock {
                                         tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
                                         let _ = self.store.delete(&self.path).await;
                                         let jitter = rand::random::<u64>() % 50;
-                                        tokio::time::sleep(std::time::Duration::from_millis(jitter)).await;
-                                        
-                                        match self.store.put_opts(&self.path, bytes.clone().into(), opts).await {
+                                        tokio::time::sleep(std::time::Duration::from_millis(
+                                            jitter,
+                                        ))
+                                        .await;
+
+                                        match self
+                                            .store
+                                            .put_opts(&self.path, bytes.clone().into(), opts)
+                                            .await
+                                        {
                                             Ok(_) => return Ok(true),
                                             Err(_) => return Ok(false),
                                         }
@@ -91,7 +109,7 @@ impl FileBasedLock {
             Err(e) => Err(e.into()),
         }
     }
-    
+
     pub async fn acquire(&self) -> Result<()> {
         let max_retries = 100;
         for attempt in 0..max_retries {
@@ -102,7 +120,10 @@ impl FileBasedLock {
             let jitter = rand::random::<u64>() % base_delay;
             tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
         }
-        Err(anyhow::anyhow!("Failed to acquire distributed lock after {} attempts", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to acquire distributed lock after {} attempts",
+            max_retries
+        ))
     }
 
     pub async fn release(&self) -> Result<()> {
@@ -111,8 +132,9 @@ impl FileBasedLock {
                 let bytes = res.bytes().await?;
                 if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
                     if payload.owner == self.owner {
-                        self.store.delete(&self.path).await
-                            .map_err(|e| anyhow::anyhow!("Failed to delete lock file during release: {}", e))?;
+                        self.store.delete(&self.path).await.map_err(|e| {
+                            anyhow::anyhow!("Failed to delete lock file during release: {}", e)
+                        })?;
                     } else {
                         // Lock was stolen by another owner — caller should know
                         tracing::warn!(
@@ -144,18 +166,30 @@ mod tests {
         let lock = FileBasedLock::new(store.clone(), path.clone(), 30);
 
         assert!(lock.try_acquire().await.unwrap(), "Should acquire lock");
-        assert!(!FileBasedLock::new(store.clone(), path.clone(), 30).try_acquire().await.unwrap(), "Second acquire should fail");
-        
+        assert!(
+            !FileBasedLock::new(store.clone(), path.clone(), 30)
+                .try_acquire()
+                .await
+                .unwrap(),
+            "Second acquire should fail"
+        );
+
         lock.release().await.unwrap();
-        
-        assert!(FileBasedLock::new(store.clone(), path.clone(), 30).try_acquire().await.unwrap(), "Should acquire after release");
+
+        assert!(
+            FileBasedLock::new(store.clone(), path.clone(), 30)
+                .try_acquire()
+                .await
+                .unwrap(),
+            "Should acquire after release"
+        );
     }
 
     #[tokio::test]
     async fn test_lock_expiration_steal() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let path = Path::from("test_expire.lock");
-        
+
         // Lock with 0 TTL (expires immediately)
         let lock1 = FileBasedLock::new(store.clone(), path.clone(), 0);
         assert!(lock1.try_acquire().await.unwrap());
@@ -163,6 +197,9 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
         let lock2 = FileBasedLock::new(store.clone(), path.clone(), 30);
-        assert!(lock2.try_acquire().await.unwrap(), "Should steal expired lock");
+        assert!(
+            lock2.try_acquire().await.unwrap(),
+            "Should steal expired lock"
+        );
     }
 }

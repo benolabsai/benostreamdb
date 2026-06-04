@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use anyhow::{Result, anyhow};
-use std::collections::HashMap;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 use super::{Catalog, TableMetadata};
 use arrow::datatypes::SchemaRef;
@@ -22,7 +22,6 @@ pub struct Branch {
     pub name: String,
     pub hash: Option<String>,
 }
-
 
 // Internal structures for Nessie API
 #[derive(Serialize)]
@@ -113,56 +112,59 @@ struct ReferenceResponse {
     reference: Branch,
 }
 
-
 #[async_trait]
 impl Catalog for NessieClient {
     async fn create_table(
         &self,
-        namespace: &str, // e.g. "main" (branch)
+        namespace: &str,  // e.g. "main" (branch)
         table_name: &str, // e.g. "db.table"
         schema: SchemaRef,
         location: Option<&str>,
     ) -> Result<()> {
-        let loc = location.unwrap_or(""); 
-        
+        let loc = location.unwrap_or("");
+
         // 1. Initialize table manifest if location is provided
         if !loc.is_empty() {
-             crate::Table::create_async(loc.to_string(), schema.clone()).await?;
+            crate::Table::create_async(loc.to_string(), schema.clone()).await?;
         }
 
         // 2. Register in Nessie
-        self.create_table_internal(namespace, table_name, loc, schema).await
+        self.create_table_internal(namespace, table_name, loc, schema)
+            .await
     }
 
     async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
         let branch = self.get_reference(namespace).await?;
         let _elements: Vec<String> = table_name.split('.').map(|s| s.to_string()).collect();
-        
+
         // Construct ContentKey
-        let url = format!("{}/api/v2/trees/{}@{}/content", self.base_url, namespace, branch.hash.as_deref().unwrap_or(""));
-        let query = [
-             ("key", table_name), 
-        ];
+        let url = format!(
+            "{}/api/v2/trees/{}@{}/content",
+            self.base_url,
+            namespace,
+            branch.hash.as_deref().unwrap_or("")
+        );
+        let query = [("key", table_name)];
 
         // This is a simplification; Nessie's content API is more complex
         // For strictly verifying existence or fetching metadata location:
         let resp = self.client.get(&url).query(&query).send().await?;
-         if !resp.status().is_success() {
-             return Err(anyhow!("Table not found or error loading"));
+        if !resp.status().is_success() {
+            return Err(anyhow!("Table not found or error loading"));
         }
-        
+
         let content_resp: ContentResponse = resp.json().await?;
         if let Some(details) = content_resp.content {
-             Ok(TableMetadata::minimal(details.metadata_location))
+            Ok(TableMetadata::minimal(details.metadata_location))
         } else {
-             Err(anyhow!("Table content not found"))
+            Err(anyhow!("Table content not found"))
         }
     }
-    
+
     async fn create_branch(&self, branch_name: &str, source_ref: Option<&str>) -> Result<()> {
         self.create_branch_internal(branch_name, source_ref).await
     }
-    
+
     async fn table_exists(&self, namespace: &str, table_name: &str) -> Result<bool> {
         match self.load_table(namespace, table_name).await {
             Ok(_) => Ok(true),
@@ -170,39 +172,59 @@ impl Catalog for NessieClient {
         }
     }
 
-    async fn commit_table(&self, namespace: &str, table_name: &str, updates: Vec<serde_json::Value>) -> Result<()> {
+    async fn commit_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+    ) -> Result<()> {
         // For Nessie, we create a commit with an updated ICEBERG_TABLE content
         let branch = self.get_reference(namespace).await?;
-        let hash = branch.hash.clone().ok_or_else(|| anyhow!("Branch {} has no hash", namespace))?;
-        
+        let hash = branch
+            .hash
+            .clone()
+            .ok_or_else(|| anyhow!("Branch {} has no hash", namespace))?;
+
         // Extract metadata from updates
         let mut metadata_location = String::new();
         let mut snapshot_id: i64 = -1;
         let mut schema_id: i32 = 0;
-        
+
         for update in &updates {
             if let Some(action) = update.get("action").and_then(|v| v.as_str()) {
                 if action == "add-snapshot" {
                     if let Some(snapshot) = update.get("snapshot") {
-                        if let Some(manifest_list) = snapshot.get("manifest-list").and_then(|v| v.as_str()) {
+                        if let Some(manifest_list) =
+                            snapshot.get("manifest-list").and_then(|v| v.as_str())
+                        {
                             if let Some(table_root) = manifest_list.rsplit_once("/_manifest/") {
-                                let snap_id = snapshot.get("snapshot-id").and_then(|v| v.as_i64()).unwrap_or(1);
-                                metadata_location = format!("{}/metadata/v{}.metadata.json", table_root.0, snap_id);
+                                let snap_id = snapshot
+                                    .get("snapshot-id")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(1);
+                                metadata_location =
+                                    format!("{}/metadata/v{}.metadata.json", table_root.0, snap_id);
                                 snapshot_id = snap_id;
-                                schema_id = snapshot.get("schema-id").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                                schema_id = snapshot
+                                    .get("schema-id")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(0)
+                                    as i32;
                             }
                         }
                     }
                 }
             }
         }
-        
+
         if metadata_location.is_empty() {
-            return Err(anyhow!("Could not determine new metadata location from updates"));
+            return Err(anyhow!(
+                "Could not determine new metadata location from updates"
+            ));
         }
-        
+
         let elements: Vec<String> = table_name.split('.').map(|s| s.to_string()).collect();
-        
+
         let op = Operation {
             op_type: "PUT".to_string(),
             key: Key { elements },
@@ -217,10 +239,17 @@ impl Catalog for NessieClient {
                 sql_text: None,
                 version_id: None,
                 dialect: None,
-            }
+            },
         };
-        
-        self.commit_operation(namespace, &hash, branch.name, op, format!("Update table {}", table_name)).await
+
+        self.commit_operation(
+            namespace,
+            &hash,
+            branch.name,
+            op,
+            format!("Update table {}", table_name),
+        )
+        .await
     }
 }
 
@@ -234,31 +263,30 @@ impl NessieClient {
 
     pub async fn create_branch_internal(&self, name: &str, source_ref: Option<&str>) -> Result<()> {
         let url = format!("{}/api/v2/trees", self.base_url);
-        
-        let query = [
-            ("name", name),
-            ("type", "BRANCH"),
-        ];
+
+        let query = [("name", name), ("type", "BRANCH")];
 
         let body = if let Some(source_name) = source_ref {
             let source = self.get_reference(source_name).await?;
             serde_json::to_value(&source)?
         } else {
-             serde_json::json!({
-                 "type": "BRANCH",
-                 "name": "main" 
-             })
+            serde_json::json!({
+                "type": "BRANCH",
+                "name": "main"
+            })
         };
 
-        let resp = self.client.post(&url)
+        let resp = self
+            .client
+            .post(&url)
             .query(&query)
             .json(&body)
             .send()
             .await?;
-            
+
         if !resp.status().is_success() {
-             let error_text = resp.text().await?;
-             return Err(anyhow!("Failed to create branch: {}", error_text));
+            let error_text = resp.text().await?;
+            return Err(anyhow!("Failed to create branch: {}", error_text));
         }
         Ok(())
     }
@@ -266,10 +294,14 @@ impl NessieClient {
     pub async fn get_reference(&self, name: &str) -> Result<Branch> {
         let url = format!("{}/api/v2/trees/{}", self.base_url, name);
         let resp = self.client.get(&url).send().await?;
-        
+
         if !resp.status().is_success() {
-             let error_text = resp.text().await?;
-             return Err(anyhow!("Failed to get reference '{}': {}", name, error_text));
+            let error_text = resp.text().await?;
+            return Err(anyhow!(
+                "Failed to get reference '{}': {}",
+                name,
+                error_text
+            ));
         }
 
         let wrapper: ReferenceResponse = resp.json().await?;
@@ -277,14 +309,16 @@ impl NessieClient {
     }
 
     pub async fn create_table_internal(
-        &self, 
-        branch_name: &str, 
-        table_name: &str, 
+        &self,
+        branch_name: &str,
+        table_name: &str,
         location: &str,
-        _schema: SchemaRef
+        _schema: SchemaRef,
     ) -> Result<()> {
         let branch = self.get_reference(branch_name).await?;
-        let hash = branch.hash.ok_or_else(|| anyhow!("Branch {} has no hash", branch_name))?;
+        let hash = branch
+            .hash
+            .ok_or_else(|| anyhow!("Branch {} has no hash", branch_name))?;
 
         let elements: Vec<String> = table_name.split('.').map(|s| s.to_string()).collect();
 
@@ -302,10 +336,17 @@ impl NessieClient {
                 sql_text: None,
                 version_id: None,
                 dialect: None,
-            }
+            },
         };
 
-        self.commit_operation(branch_name, &hash, branch.name, op, format!("Create table {}", table_name)).await
+        self.commit_operation(
+            branch_name,
+            &hash,
+            branch.name,
+            op,
+            format!("Create table {}", table_name),
+        )
+        .await
     }
 
     pub async fn create_view(
@@ -317,7 +358,9 @@ impl NessieClient {
         dialect: &str,
     ) -> Result<()> {
         let branch = self.get_reference(branch_name).await?;
-        let hash = branch.hash.ok_or_else(|| anyhow!("Branch {} has no hash", branch_name))?;
+        let hash = branch
+            .hash
+            .ok_or_else(|| anyhow!("Branch {} has no hash", branch_name))?;
 
         let elements: Vec<String> = view_name.split('.').map(|s| s.to_string()).collect();
 
@@ -328,17 +371,24 @@ impl NessieClient {
                 content_type: "ICEBERG_VIEW".to_string(),
                 metadata_location: metadata_location.to_string(),
                 id: None,
-                snapshot_id: -1, 
+                snapshot_id: -1,
                 schema_id: 0,
                 spec_id: 0,
                 sort_order_id: 0,
                 sql_text: Some(sql_text.to_string()),
                 version_id: Some(1),
                 dialect: Some(dialect.to_string()),
-            }
+            },
         };
 
-        self.commit_operation(branch_name, &hash, branch.name, op, format!("Create view {}", view_name)).await
+        self.commit_operation(
+            branch_name,
+            &hash,
+            branch.name,
+            op,
+            format!("Create view {}", view_name),
+        )
+        .await
     }
 
     async fn commit_operation(
@@ -347,7 +397,7 @@ impl NessieClient {
         hash: &str,
         ref_name: String,
         op: Operation,
-        message: String
+        message: String,
     ) -> Result<()> {
         let commit = CommitRequest {
             branch: BranchRef {
@@ -363,13 +413,16 @@ impl NessieClient {
             },
         };
 
-        let url = format!("{}/api/v2/trees/{}@{}/history/commit", self.base_url, branch_name, hash);
-        
+        let url = format!(
+            "{}/api/v2/trees/{}@{}/history/commit",
+            self.base_url, branch_name, hash
+        );
+
         let resp = self.client.post(&url).json(&commit).send().await?;
 
         if !resp.status().is_success() {
-             let error_text = resp.text().await?;
-             return Err(anyhow!("Failed to commit operation: {}", error_text));
+            let error_text = resp.text().await?;
+            return Err(anyhow!("Failed to commit operation: {}", error_text));
         }
         Ok(())
     }

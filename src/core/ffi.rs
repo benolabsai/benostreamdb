@@ -1,17 +1,17 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 #![cfg(feature = "java")]
 
-use jni::JNIEnv;
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jlong, jstring};
+use jni::JNIEnv;
 // use std::sync::Arc;
-use tokio::runtime::Runtime;
 use crate::core::reader::HybridReader;
-use crate::SegmentConfig;
 use crate::core::storage::create_object_store;
 use crate::core::table::Table;
+use crate::SegmentConfig;
 use futures::StreamExt;
 use lazy_static::lazy_static;
+use tokio::runtime::Runtime;
 
 lazy_static! {
     static ref RUNTIME: Runtime = Runtime::new().unwrap();
@@ -26,11 +26,11 @@ pub struct HyperStreamSession {
 impl HyperStreamSession {
     pub fn new(path: &str) -> anyhow::Result<Self> {
         // Path expected: s3://bucket/path/to/segment_001.parquet or file:///path/to/file.parquet
-        
+
         // 1. Extract Parent (Store Root) and Segment ID
         let (parent_uri, segment_id) = if let Some(idx) = path.rfind('/') {
             let parent = &path[..idx];
-            let filename = &path[idx+1..];
+            let filename = &path[idx + 1..];
             let seg_id = filename.strip_suffix(".parquet").unwrap_or(filename);
             (parent, seg_id)
         } else {
@@ -40,10 +40,10 @@ impl HyperStreamSession {
 
         // 2. Create Store pointing to parent directory
         let store = create_object_store(parent_uri)?;
-        
+
         // 3. Config with just the ID
-        let config = SegmentConfig::new("", segment_id); 
-        
+        let config = SegmentConfig::new("", segment_id);
+
         let reader = HybridReader::new(config, store, path);
         Ok(Self {
             reader,
@@ -51,40 +51,40 @@ impl HyperStreamSession {
             current_idx: 0,
         })
     }
-    
+
     pub fn next_batch(&mut self) -> Option<arrow::record_batch::RecordBatch> {
-        // Simple buffering logic: load everything once? 
+        // Simple buffering logic: load everything once?
         // Or implement async stream polling in sync context.
         if self.current_batches.is_empty() {
-             // Load from Reader (blocking on global runtime)
-             // In real impl, keep the stream open.
-             let res = RUNTIME.block_on(async {
-                 // FFI reads all columns by default
-                 let mut stream = self.reader.stream_all(None).await?;
-                 let mut batches = Vec::new();
-                 while let Some(batch_result) = stream.next().await {
-                     batches.push(batch_result?);
-                 }
-                 Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(batches)
-             });
-             match res {
-                 Ok(batches) => {
-                     self.current_batches = batches;
-                     self.current_idx = 0;
-                 },
-                 Err(e) => {
-                     tracing::error!("Error reading batches: {}", e);
-                     return None;
-                 }
-             }
+            // Load from Reader (blocking on global runtime)
+            // In real impl, keep the stream open.
+            let res = RUNTIME.block_on(async {
+                // FFI reads all columns by default
+                let mut stream = self.reader.stream_all(None).await?;
+                let mut batches = Vec::new();
+                while let Some(batch_result) = stream.next().await {
+                    batches.push(batch_result?);
+                }
+                Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(batches)
+            });
+            match res {
+                Ok(batches) => {
+                    self.current_batches = batches;
+                    self.current_idx = 0;
+                }
+                Err(e) => {
+                    tracing::error!("Error reading batches: {}", e);
+                    return None;
+                }
+            }
         }
-        
+
         if self.current_idx < self.current_batches.len() {
             let batch = self.current_batches[self.current_idx].clone();
             self.current_idx += 1;
             return Some(batch);
         }
-        
+
         None
     }
 }
@@ -115,9 +115,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
     tracing::info!("FFI: Opening Session to {}", path_str);
 
     match HyperStreamSession::new(&path_str) {
-        Ok(session) => {
-            Box::into_raw(Box::new(session)) as jlong
-        },
+        Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
             tracing::error!("FFI Error opening session: {}", e);
             0
@@ -125,7 +123,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
     }
 }
 
-use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, to_ffi};
+use arrow::ffi::{to_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 
 use arrow::array::Array; // Fix E0599
 
@@ -148,11 +146,11 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
     }
 
     let session = unsafe { &mut *(handle as *mut HyperStreamSession) };
-    
+
     match session.next_batch() {
         Some(batch) => {
             tracing::debug!("FFI: Read batch with {} rows", batch.num_rows());
-            
+
             // 1. Convert RecordBatch to StructArray
             let struct_array: arrow::array::StructArray = batch.into();
             let array_data = struct_array.to_data(); // to_data is often inherent, or via Array trait
@@ -160,7 +158,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
             // 2. Export to C Data Interface
             // to_ffi returns (FFI_ArrowArray, FFI_ArrowSchema)
             // We need to move these into the pointers provided by Java
-            
+
             let (ffi_array, ffi_schema) = match to_ffi(&array_data) {
                 Ok(tuple) => tuple,
                 Err(e) => {
@@ -168,15 +166,15 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
                     return 0;
                 }
             };
-            
+
             unsafe {
                 std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
                 std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
             }
 
             1 // Success
-        },
-        None => 0 // Finished
+        }
+        None => 0, // Finished
     }
 }
 
@@ -205,7 +203,11 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
     }
 
     // Default 64MB if invalid
-    let split_size = if max_split_size <= 0 { 64 * 1024 * 1024 } else { max_split_size as usize };
+    let split_size = if max_split_size <= 0 {
+        64 * 1024 * 1024
+    } else {
+        max_split_size as usize
+    };
 
     // Bounds check: reject absurdly large split sizes (>1GB)
     if split_size > 1_073_741_824 {
@@ -215,23 +217,19 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
     tracing::info!("FFI: Getting splits for {} (max size: {})", uri, split_size);
 
     let splits_json = match Table::new(uri.clone()) {
-        Ok(table) => {
-            match table.get_splits(split_size) {
-                Ok(splits) => {
-                    serde_json::to_string(&splits).unwrap_or_else(|_| "[]".to_string())
-                },
-                Err(e) => {
-                    tracing::error!("FFI Error getting splits: {}", e);
-                    "[]".to_string()
-                }
+        Ok(table) => match table.get_splits(split_size) {
+            Ok(splits) => serde_json::to_string(&splits).unwrap_or_else(|_| "[]".to_string()),
+            Err(e) => {
+                tracing::error!("FFI Error getting splits: {}", e);
+                "[]".to_string()
             }
         },
         Err(e) => {
-             tracing::error!("FFI Error creating table: {}", e);
-             "[]".to_string()
+            tracing::error!("FFI Error creating table: {}", e);
+            "[]".to_string()
         }
     };
-    
+
     match env.new_string(splits_json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -263,23 +261,19 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
     tracing::info!("FFI: Listing data files for {}", uri);
 
     // Call Table API
-    // Note: Table::new and list_data_files are currently synchronous, 
+    // Note: Table::new and list_data_files are currently synchronous,
     // potentially blocking on internal runtime for IO.
     let files_json = match Table::new(uri.clone()) {
-        Ok(table) => {
-            match table.list_data_files() {
-                Ok(files) => {
-                    serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string())
-                },
-                Err(e) => {
-                    tracing::error!("FFI Error listing files: {}", e);
-                    "[]".to_string()
-                }
+        Ok(table) => match table.list_data_files() {
+            Ok(files) => serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string()),
+            Err(e) => {
+                tracing::error!("FFI Error listing files: {}", e);
+                "[]".to_string()
             }
         },
         Err(e) => {
-             tracing::error!("FFI Error creating table: {}", e);
-             "[]".to_string()
+            tracing::error!("FFI Error creating table: {}", e);
+            "[]".to_string()
         }
     };
 
@@ -294,7 +288,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
 pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_getSplits(
     env: JNIEnv,
     _class: JClass,
-    _options: JObject, 
+    _options: JObject,
 ) -> jstring {
     // Deprecated in favor of listDataFiles for V2 connector
     let splits_json = "[]";
@@ -367,14 +361,17 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
             let array_data = struct_array.to_data();
             let (ffi_array, ffi_schema) = match arrow::ffi::to_ffi(&array_data) {
                 Ok(tuple) => tuple,
-                Err(e) => { tracing::error!("FFI Error: {}", e); return 0; }
+                Err(e) => {
+                    tracing::error!("FFI Error: {}", e);
+                    return 0;
+                }
             };
             unsafe {
                 std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
                 std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
             }
             1
-        },
-        None => 0
+        }
+        None => 0,
     }
 }

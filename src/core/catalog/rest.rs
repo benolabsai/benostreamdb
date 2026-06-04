@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use serde::{Deserialize, Serialize};
-use reqwest::Client;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::{Catalog, TableMetadata};
@@ -14,7 +14,7 @@ use arrow::datatypes::SchemaRef;
 pub struct RestCatalogClient {
     base_url: String,
     client: Client,
-    prefix: String,  // Optional prefix (e.g., "warehouse")
+    prefix: String, // Optional prefix (e.g., "warehouse")
 }
 
 // Request structures
@@ -57,7 +57,7 @@ impl RestCatalogClient {
             prefix: prefix.unwrap_or_default(),
         }
     }
-    
+
     /// Build full URL with optional prefix
     fn build_url(&self, path: &str) -> String {
         if self.prefix.is_empty() {
@@ -78,13 +78,12 @@ impl Catalog for RestCatalogClient {
         location: Option<&str>,
     ) -> Result<()> {
         let url = self.build_url(&format!("/namespaces/{}/tables", namespace));
-        
 
         // 2. Convert schema to JSON for REST API
         // For now, we use our internal manifest schema format as a proxy for Iceberg schema
         let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
         let schema_json = serde_json::to_value(&manifest_schema)?;
-        
+
         let req = CreateTableRequest {
             name: table_name.to_string(),
             location: location.map(|s| s.to_string()),
@@ -93,66 +92,71 @@ impl Catalog for RestCatalogClient {
             write_order: None,
             properties: None,
         };
-        
-        let resp = self.client.post(&url)
-            .json(&req)
-            .send()
-            .await?;
-        
+
+        let resp = self.client.post(&url).json(&req).send().await?;
+
         if !resp.status().is_success() {
             let status = resp.status();
             let error = resp.text().await?;
             return Err(anyhow!("Failed to create table ({}): {}", status, error));
         }
-        
+
         Ok(())
     }
-    
+
     async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata> {
         let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
-        
+
         let resp = self.client.get(&url).send().await?;
-        
+
         if !resp.status().is_success() {
             let status = resp.status();
             let error = resp.text().await?;
             return Err(anyhow!("Failed to load table ({}): {}", status, error));
         }
-        
+
         let table_resp: LoadTableResponse = resp.json().await?;
-        
+
         // Note: metadata.location remains the table root, while table_resp.metadata_location is the file URI.
-        
+
         Ok(table_resp.metadata)
     }
 
-    async fn commit_table(&self, namespace: &str, table_name: &str, updates: Vec<serde_json::Value>) -> Result<()> {
+    async fn commit_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+    ) -> Result<()> {
         let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
-        
+
         let req = UpdateTableRequest {
             updates,
             requirements: None,
         };
 
-        let resp = self.client.post(&url)
-            .json(&req)
-            .send()
-            .await?;
+        let resp = self.client.post(&url).json(&req).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let error = resp.text().await?;
-            return Err(anyhow!("Failed to commit table update ({}): {}", status, error));
+            return Err(anyhow!(
+                "Failed to commit table update ({}): {}",
+                status,
+                error
+            ));
         }
 
         Ok(())
     }
-    
+
     async fn create_branch(&self, _branch_name: &str, _source_ref: Option<&str>) -> Result<()> {
         // REST Catalog doesn't support branches (Nessie-specific feature)
-        Err(anyhow!("REST Catalog does not support branching. Use Nessie for Git-like branching."))
+        Err(anyhow!(
+            "REST Catalog does not support branching. Use Nessie for Git-like branching."
+        ))
     }
-    
+
     async fn table_exists(&self, namespace: &str, table_name: &str) -> Result<bool> {
         match self.load_table(namespace, table_name).await {
             Ok(_) => Ok(true),

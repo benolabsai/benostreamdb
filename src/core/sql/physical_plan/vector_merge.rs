@@ -1,23 +1,20 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::sync::Arc;
-use futures::{StreamExt, TryStreamExt};
 
-use datafusion::physical_plan::{
-    ExecutionPlan, 
-    SendableRecordBatchStream, 
-    DisplayAs, 
-    PlanProperties
-};
+use datafusion::arrow::array::Float32Array;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::{DataFusionError, Result as DataFusionResult};
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::execution::context::TaskContext;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::error::{Result as DataFusionResult, DataFusionError};
-use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::Partitioning;
-use datafusion::arrow::array::Float32Array;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+};
 
 use crate::core::query::merge_and_rerank_vector_results;
 
@@ -62,7 +59,8 @@ impl DisplayAs for VectorMergeExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            datafusion::physical_plan::DisplayFormatType::Default | datafusion::physical_plan::DisplayFormatType::Verbose => {
+            datafusion::physical_plan::DisplayFormatType::Default
+            | datafusion::physical_plan::DisplayFormatType::Verbose => {
                 write!(f, "VectorMergeExec: k={}, offset={}", self.k, self.offset)
             }
             _ => Ok(()),
@@ -119,9 +117,13 @@ impl ExecutionPlan for VectorMergeExec {
             ));
         }
 
-        let input_partitions = self.input.properties().output_partitioning().partition_count();
+        let input_partitions = self
+            .input
+            .properties()
+            .output_partitioning()
+            .partition_count();
         let mut streams = Vec::with_capacity(input_partitions);
-        
+
         for i in 0..input_partitions {
             streams.push(self.input.execute(i, context.clone())?);
         }
@@ -191,7 +193,7 @@ impl ExecutionPlan for VectorMergeExec {
                         // If final schema doesn't have it, drop it.
                         let has_distance = expected_schema_inner.column_with_name("distance").is_some();
                         let batch_has_distance = batch.schema().column_with_name("distance").is_some();
-                        
+
                         if !has_distance && batch_has_distance {
                             let dist_idx = batch.schema().index_of("distance").unwrap();
                             let mut cols = batch.columns().to_vec();
@@ -207,7 +209,7 @@ impl ExecutionPlan for VectorMergeExec {
                             batch = datafusion::arrow::record_batch::RecordBatch::try_new_with_options(expected_schema_inner.clone(), batch.columns().to_vec(), &options)
                                 .map_err(|e| DataFusionError::Execution(format!("Schema mismatch: {}", e)))?;
                         }
-                        
+
                         yield Ok(batch);
                     }
                 },

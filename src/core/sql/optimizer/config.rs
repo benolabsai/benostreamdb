@@ -3,7 +3,7 @@
 //! Configuration parameters for vector search operations.
 //! Adapted from Apache Iceberg Rust project (v0.9.0+)
 
-use datafusion::common::config::{ConfigExtension, ConfigEntry, ExtensionOptions};
+use datafusion::common::config::{ConfigEntry, ConfigExtension, ExtensionOptions};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 
@@ -44,42 +44,64 @@ impl ExtensionOptions for VectorSearchConfig {
         match key {
             "ef_search" => {
                 self.ef_search = Some(value.parse::<usize>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid ef_search value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid ef_search value: {}",
+                        e
+                    ))
                 })?);
             }
             "probes" => {
                 self.probes = Some(value.parse::<usize>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid probes value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid probes value: {}",
+                        e
+                    ))
                 })?);
             }
             "use_index" => {
                 self.use_index = value.parse::<bool>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid use_index value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid use_index value: {}",
+                        e
+                    ))
                 })?;
             }
             "limit_pushdown" => {
                 self.limit_pushdown = value.parse::<bool>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid limit_pushdown value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid limit_pushdown value: {}",
+                        e
+                    ))
                 })?;
             }
             "skip_row_groups" => {
                 self.skip_row_groups = value.parse::<bool>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid skip_row_groups value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid skip_row_groups value: {}",
+                        e
+                    ))
                 })?;
             }
             "cache_manifests" => {
                 self.cache_manifests = value.parse::<bool>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid cache_manifests value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid cache_manifests value: {}",
+                        e
+                    ))
                 })?;
             }
             "fast_path" => {
                 self.fast_path = value.parse::<bool>().map_err(|e| {
-                    datafusion::common::DataFusionError::Configuration(format!("Invalid fast_path value: {}", e))
+                    datafusion::common::DataFusionError::Configuration(format!(
+                        "Invalid fast_path value: {}",
+                        e
+                    ))
                 })?;
             }
             _ => {
                 return Err(datafusion::common::DataFusionError::Configuration(format!(
-                    "Unknown configuration key: {}", key
+                    "Unknown configuration key: {}",
+                    key
                 )));
             }
         }
@@ -138,10 +160,10 @@ impl VectorSearchConfig {
             ef_search: None,
             probes: None,
             use_index: true,
-            limit_pushdown: true,      // Enable by default
-            skip_row_groups: true,      // Enable by default
-            cache_manifests: true,      // Enable by default
-            fast_path: true,            // Enable by default
+            limit_pushdown: true,  // Enable by default
+            skip_row_groups: true, // Enable by default
+            cache_manifests: true, // Enable by default
+            fast_path: true,       // Enable by default
         }
     }
 

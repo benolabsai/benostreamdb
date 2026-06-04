@@ -1,30 +1,30 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-pub mod error;
-pub mod table;
-pub mod segment;
-pub mod reader;
-pub mod manifest;
-pub mod storage;
-pub mod wal;
 pub mod cache;
-pub mod maintenance;
+pub mod catalog;
+pub mod clustering;
 pub mod compaction;
-pub mod merge;
-pub mod query;
+pub mod error;
 #[cfg(feature = "java")]
 pub mod ffi;
-pub mod index;
-pub mod sql;
-pub mod planner;
-pub mod catalog;
 pub mod iceberg;
+pub mod index;
+pub mod maintenance;
+pub mod manifest;
+pub mod merge;
 pub mod metadata;
-pub mod clustering;
 pub mod nessie;
+pub mod planner;
 pub mod puffin;
+pub mod query;
+pub mod reader;
+pub mod segment;
+pub mod sql;
+pub mod storage;
+pub mod table;
+pub mod wal;
 // pub mod parquet_filter;
 pub mod embeddings;
-pub mod search;
-pub mod lock;
 pub mod license;
+pub mod lock;
+pub mod search;

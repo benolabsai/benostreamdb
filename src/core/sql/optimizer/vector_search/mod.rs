@@ -10,11 +10,11 @@ mod sort_expr_parser;
 
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
-use datafusion::common::tree_node::{Transformed, TreeNode};
 
 use plan_detection::detect_knn_pattern;
 use plan_rewriter::build_optimized_plan;
@@ -62,7 +62,8 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
             let new_plan = build_optimized_plan(&pattern, primary_search, config)?;
 
             Ok(Transformed::yes(new_plan))
-        }).map(|t| t.data)
+        })
+        .map(|t| t.data)
     }
 
     fn name(&self) -> &str {

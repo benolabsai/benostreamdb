@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::index::distance::l2_distance_squared;
 use anyhow::Result;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
-use rayon::prelude::*;
-use crate::core::index::distance::l2_distance_squared;
 
 /// IVF Index Implementation
 #[derive(Debug, Clone)]
@@ -21,12 +21,17 @@ pub struct IvfIndex {
 
 /// Assign vectors to the nearest centroids using L2 distance.
 /// Optimized for parallel execution on CPU.
-pub fn simple_kmeans_assignment(vectors: &[f32], centroids: &[f32], dim: usize) -> Result<Vec<u32>> {
+pub fn simple_kmeans_assignment(
+    vectors: &[f32],
+    centroids: &[f32],
+    dim: usize,
+) -> Result<Vec<u32>> {
     use rayon::prelude::*;
     let _n_vectors = vectors.len() / dim;
     let n_centroids = centroids.len() / dim;
 
-    let assignments: Vec<u32> = vectors.par_chunks(dim)
+    let assignments: Vec<u32> = vectors
+        .par_chunks(dim)
         .map(|vec| {
             let mut min_dist = f32::MAX;
             let mut min_idx = 0;
@@ -45,22 +50,21 @@ pub fn simple_kmeans_assignment(vectors: &[f32], centroids: &[f32], dim: usize) 
     Ok(assignments)
 }
 
-
 impl IvfIndex {
     /// Build IVF index from vectors
     pub fn build(vectors: Vec<Vec<f32>>, n_lists: Option<usize>) -> Result<Self> {
         if vectors.is_empty() {
             anyhow::bail!("Cannot build IVF index from empty vector set");
         }
-        
+
         let n = vectors.len();
         let dim = vectors[0].len();
         let n_lists = n_lists.unwrap_or_else(|| (n as f64).sqrt() as usize).max(1);
         let max_iters = 10;
-        
+
         // 1. Cluster vectors using k-means
         let (centroids, labels) = simple_kmeans(&vectors, n_lists, max_iters)?;
-        
+
         // 2. Transpose into inverted lists
         let mut inverted_lists = HashMap::with_capacity(n_lists);
         for (i, (vec, &label)) in vectors.into_iter().zip(labels.iter()).enumerate() {
@@ -69,7 +73,7 @@ impl IvfIndex {
                 .or_insert_with(Vec::new)
                 .push((vec, i));
         }
-        
+
         Ok(IvfIndex {
             centroids,
             inverted_lists,
@@ -77,22 +81,31 @@ impl IvfIndex {
             dim,
         })
     }
-    
+
     /// Search IVF index
-    pub fn search(&self, query: &crate::core::index::VectorValue, k: usize, n_probes: usize, filter: Option<&roaring::RoaringBitmap>) -> Vec<(usize, f32)> {
+    pub fn search(
+        &self,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        n_probes: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+    ) -> Vec<(usize, f32)> {
         let q_vec = match query {
             crate::core::index::VectorValue::Float32(v) => v,
             _ => return Vec::new(),
         };
-        
+
         // 1. Find nearest centroids
-        let mut centroid_distances: Vec<(usize, f32)> = self.centroids.iter()
+        let mut centroid_distances: Vec<(usize, f32)> = self
+            .centroids
+            .iter()
             .enumerate()
             .map(|(i, c)| (i, l2_distance_squared(q_vec, c)))
             .collect();
-        
-        centroid_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
+        centroid_distances
+            .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
         // 2. Search nearest clusters
         let mut candidates = Vec::new();
         for i in 0..n_probes.min(self.n_lists) {
@@ -108,13 +121,13 @@ impl IvfIndex {
                 }
             }
         }
-        
+
         // 3. Sort and return top-k
         candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(k);
         candidates
     }
-    
+
     /// Serialize IVF index
     pub fn serialize(&self) -> Result<Vec<u8>> {
         let mut buf = Vec::new();
@@ -138,7 +151,7 @@ impl IvfIndex {
         }
         Ok(buf)
     }
-    
+
     /// Deserialize IVF index
     pub fn deserialize(data: &[u8]) -> Result<Self> {
         let mut cursor = Cursor::new(data);
@@ -189,45 +202,62 @@ impl IvfIndex {
 
 /// Professional-grade k-means implementation using Flat Storage for SIMD throughput.
 /// Optimized for many-core CPU and GPU dispatch.
-pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result<(Vec<Vec<f32>>, Vec<usize>)> {
+pub fn simple_kmeans(
+    vectors: &[Vec<f32>],
+    k: usize,
+    max_iters: usize,
+) -> Result<(Vec<Vec<f32>>, Vec<usize>)> {
     use rand::seq::SliceRandom;
     use rand::thread_rng;
-    
+
     let n = vectors.len();
-    if n == 0 { anyhow::bail!("Cannot cluster empty vectors"); }
+    if n == 0 {
+        anyhow::bail!("Cannot cluster empty vectors");
+    }
     let dim = vectors[0].len();
-    
+
     // Step 1: Flatten training vectors once for SIMD/Cache locality
     // For large datasets, use a 10% sub-sample to speed up centroid movement
     let sample_size = (n / 10).max(1000).min(n);
     let mut rng = thread_rng();
-    let training_indices: Vec<usize> = (0..n).collect::<Vec<_>>()
-        .choose_multiple(&mut rng, sample_size).cloned().collect();
-    
-    let flat_training_set: Vec<f32> = training_indices.iter()
+    let training_indices: Vec<usize> = (0..n)
+        .collect::<Vec<_>>()
+        .choose_multiple(&mut rng, sample_size)
+        .cloned()
+        .collect();
+
+    let flat_training_set: Vec<f32> = training_indices
+        .iter()
         .flat_map(|&idx| &vectors[idx])
         .cloned()
         .collect();
-    
+
     // Initialize centroids
-    let mut centroids: Vec<Vec<f32>> = training_indices.choose_multiple(&mut rng, k)
+    let mut centroids: Vec<Vec<f32>> = training_indices
+        .choose_multiple(&mut rng, k)
         .map(|&idx| vectors[idx].clone())
         .collect();
-    
+
     // Step 2: Training iterations on sub-sample
     for iter in 0..max_iters {
         // Parallel assignment (Flat Storage batching)
         // We use par_chunks for optimal work-stealing distribution
-        let batch_labels: Vec<usize> = flat_training_set.par_chunks(dim)
+        let batch_labels: Vec<usize> = flat_training_set
+            .par_chunks(dim)
             .map(|vec_slice| {
-                centroids.iter().enumerate()
+                centroids
+                    .iter()
+                    .enumerate()
                     .map(|(i, centroid)| (i, l2_distance_squared(vec_slice, centroid)))
                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                    .map(|(i, _)| i).unwrap()
-            }).collect();
+                    .map(|(i, _)| i)
+                    .unwrap()
+            })
+            .collect();
 
         // Update centroids using parallel reduction for accumulation
-        let (new_centroids_sum, new_counts) = flat_training_set.par_chunks(dim)
+        let (new_centroids_sum, new_counts) = flat_training_set
+            .par_chunks(dim)
             .zip(batch_labels.par_iter())
             .fold(
                 || (vec![vec![0.0; dim]; k], vec![0usize; k]),
@@ -238,7 +268,7 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
                     }
                     local_count[cluster_id] += 1;
                     (local_sum, local_count)
-                }
+                },
             )
             .reduce(
                 || (vec![vec![0.0; dim]; k], vec![0usize; k]),
@@ -252,7 +282,7 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
                         }
                     }
                     (sum_a, count_a)
-                }
+                },
             );
 
         let mut changed = false;
@@ -268,7 +298,7 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
                 }
             }
         }
-        
+
         if !changed && iter > 0 {
             tracing::debug!("K-Means converged early at iteration {}", iter + 1);
             break;
@@ -277,14 +307,20 @@ pub fn simple_kmeans(vectors: &[Vec<f32>], k: usize, max_iters: usize) -> Result
 
     // Final assignment uses CPU parallel iteration.
     // GPU dispatch is handled at a higher level by the caller if needed.
-    
+
     // We already have nested Vec<Vec<f32>>, so we'll do direct assignment
-    let labels: Vec<usize> = vectors.par_iter().map(|v| {
-        centroids.iter().enumerate()
-            .map(|(i, centroid)| (i, l2_distance_squared(v, centroid)))
-            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(i, _)| i).unwrap()
-    }).collect();
+    let labels: Vec<usize> = vectors
+        .par_iter()
+        .map(|v| {
+            centroids
+                .iter()
+                .enumerate()
+                .map(|(i, centroid)| (i, l2_distance_squared(v, centroid)))
+                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _)| i)
+                .unwrap()
+        })
+        .collect();
 
     Ok((centroids, labels))
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::index::gpu::{ComputeBackend, ComputeContext};
 use pyo3::prelude::*;
-use crate::core::index::gpu::{ComputeContext, ComputeBackend};
 use std::sync::{Arc, Mutex};
 
 /// Performance statistics for GPU operations
@@ -28,16 +28,20 @@ impl PyDevice {
     #[pyo3(signature = (device, index=None))]
     fn new(device: &str, index: Option<i32>) -> PyResult<Self> {
         let (backend_str, device_id) = if device.contains(':') {
-             let parts: Vec<&str> = device.split(':').collect();
-             if parts.len() != 2 {
-                 return Err(pyo3::exceptions::PyValueError::new_err("Device string must be in 'type:index' format (e.g., 'cuda:0')"));
-             }
-             let b = parts[0];
-             let i = parts[1].parse::<i32>().map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid device index"))?;
-             (b, i)
+            let parts: Vec<&str> = device.split(':').collect();
+            if parts.len() != 2 {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "Device string must be in 'type:index' format (e.g., 'cuda:0')",
+                ));
+            }
+            let b = parts[0];
+            let i = parts[1]
+                .parse::<i32>()
+                .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid device index"))?;
+            (b, i)
         } else {
-             let lower = device.to_lowercase();
-             (device, index.unwrap_or(if lower == "cpu" { -1 } else { 0 }))
+            let lower = device.to_lowercase();
+            (device, index.unwrap_or(if lower == "cpu" { -1 } else { 0 }))
         };
 
         let backend_enum = match backend_str.to_lowercase().as_str() {
@@ -46,51 +50,100 @@ impl PyDevice {
                 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
                 {
                     let b = ComputeBackend::Cuda;
-                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("CUDA device {} not available", device_id)));
+                    if !(ComputeContext {
+                        backend: b,
+                        device_id,
+                        implementation: None,
+                    })
+                    .is_available()
+                    {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "CUDA device {} not available",
+                            device_id
+                        )));
                     }
                     b
                 }
                 #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "CUDA backend not available (enable the 'cuda' feature)."
-                )); }
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "CUDA backend not available (enable the 'cuda' feature).",
+                    ));
+                }
             }
             "mps" | "metal" => {
                 #[cfg(target_os = "macos")]
-                { 
+                {
                     let b = ComputeBackend::Mps;
-                    if !(ComputeContext { backend: b, device_id: 0, implementation: None }).is_available() {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err("MPS device not available"));
+                    if !(ComputeContext {
+                        backend: b,
+                        device_id: 0,
+                        implementation: None,
+                    })
+                    .is_available()
+                    {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                            "MPS device not available",
+                        ));
                     }
                     b
                 }
                 #[cfg(not(target_os = "macos"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'mps' is only available on macOS.")); }
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "Backend 'mps' is only available on macOS.",
+                    ));
+                }
             }
             "intel" | "graphics" => {
                 #[cfg(target_os = "linux")]
-                { 
+                {
                     let b = ComputeBackend::Intel;
-                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("Intel GPU device {} not available", device_id)));
+                    if !(ComputeContext {
+                        backend: b,
+                        device_id,
+                        implementation: None,
+                    })
+                    .is_available()
+                    {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "Intel GPU device {} not available",
+                            device_id
+                        )));
                     }
                     b
                 }
                 #[cfg(not(target_os = "linux"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'intel' (XPU) is only supported on Linux.")); }
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "Backend 'intel' (XPU) is only supported on Linux.",
+                    ));
+                }
             }
             "rocm" => {
                 #[cfg(target_os = "linux")]
-                { 
+                {
                     let b = ComputeBackend::Rocm;
-                    if !(ComputeContext { backend: b, device_id, implementation: None }).is_available() {
-                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!("ROCm device {} not available", device_id)));
+                    if !(ComputeContext {
+                        backend: b,
+                        device_id,
+                        implementation: None,
+                    })
+                    .is_available()
+                    {
+                        return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                            "ROCm device {} not available",
+                            device_id
+                        )));
                     }
                     b
                 }
                 #[cfg(not(target_os = "linux"))]
-                { return Err(pyo3::exceptions::PyRuntimeError::new_err("Backend 'rocm' is only supported on Linux.")); }
+                {
+                    return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                        "Backend 'rocm' is only supported on Linux.",
+                    ));
+                }
             }
             "auto" | "gpu" => {
                 let context = crate::core::index::gpu::ComputeContext::auto_detect();
@@ -125,7 +178,12 @@ impl PyDevice {
             "rocm" => ComputeBackend::Rocm,
             _ => return false,
         };
-        ComputeContext { backend, device_id: 0, implementation: None }.is_available()
+        ComputeContext {
+            backend,
+            device_id: 0,
+            implementation: None,
+        }
+        .is_available()
     }
 
     #[getter]
@@ -170,7 +228,11 @@ impl PyDevice {
     }
 
     fn __repr__(&self) -> String {
-        format!("Device(type='{}', index={})", self.type_name(), self.index())
+        format!(
+            "Device(type='{}', index={})",
+            self.type_name(),
+            self.index()
+        )
     }
 
     #[pyo3(signature = (vectors, k, max_iters=10))]
@@ -182,9 +244,8 @@ impl PyDevice {
         max_iters: usize,
     ) -> PyResult<(Vec<Vec<f32>>, Vec<usize>)> {
         #[allow(deprecated)]
-        py.allow_threads(|| {
-            crate::core::index::ivf::simple_kmeans(&vectors, k, max_iters)
-        }).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+        py.allow_threads(|| crate::core::index::ivf::simple_kmeans(&vectors, k, max_iters))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 }
 

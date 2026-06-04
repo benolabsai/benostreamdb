@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::core::table::Table;
-use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
-use arrow::record_batch::RecordBatch;
+use anyhow::Result;
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use hyperstreamdb::core::manifest::{PartitionField, PartitionSpec};
+use hyperstreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
-use anyhow::Result;
 
 #[tokio::test]
 async fn test_multi_column_null_partitioning() -> Result<()> {
@@ -27,8 +27,20 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     let spec = PartitionSpec {
         spec_id: 1,
         fields: vec![
-            PartitionField { source_ids: vec![1], source_id: Some(1), field_id: None, name: "year".to_string(), transform: "identity".to_string() },
-            PartitionField { source_ids: vec![3], source_id: Some(3), field_id: None, name: "category".to_string(), transform: "identity".to_string() },
+            PartitionField {
+                source_ids: vec![1],
+                source_id: Some(1),
+                field_id: None,
+                name: "year".to_string(),
+                transform: "identity".to_string(),
+            },
+            PartitionField {
+                source_ids: vec![3],
+                source_id: Some(3),
+                field_id: None,
+                name: "category".to_string(),
+                transform: "identity".to_string(),
+            },
         ],
     };
 
@@ -39,11 +51,21 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(arrow::array::Int64Array::from(vec![Some(2022), Some(2022), Some(2023), None])),
+            Arc::new(arrow::array::Int64Array::from(vec![
+                Some(2022),
+                Some(2022),
+                Some(2023),
+                None,
+            ])),
             Arc::new(arrow::array::Int64Array::from(vec![1, 2, 1, 1])),
-            Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("A"), Some("C")])),
+            Arc::new(StringArray::from(vec![
+                Some("A"),
+                Some("B"),
+                Some("A"),
+                Some("C"),
+            ])),
             Arc::new(arrow::array::Int64Array::from(vec![10, 20, 30, 40])),
-        ]
+        ],
     )?;
 
     table.write_async(vec![batch]).await?;
@@ -66,8 +88,10 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
         values: None,
         negated: false,
     };
-    
-    let results_year = table.read_filter_async(vec![filter_year], None, None).await?;
+
+    let results_year = table
+        .read_filter_async(vec![filter_year], None, None)
+        .await?;
     let total_rows_year: usize = results_year.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows_year, 2, "year=2022 should return 2 rows");
 
@@ -81,14 +105,22 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
         values: None,
         negated: false,
     };
-    let results_cat = table.read_filter_async(vec![filter_cat], None, None).await?;
+    let results_cat = table
+        .read_filter_async(vec![filter_cat], None, None)
+        .await?;
     let total_rows_cat: usize = results_cat.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows_cat, 2, "category=A should return 2 rows (one in 2022, one in 2023)");
+    assert_eq!(
+        total_rows_cat, 2,
+        "category=A should return 2 rows (one in 2022, one in 2023)"
+    );
 
     // 8. Test NULL Pruning (Implicitly)
     let results_all = table.read_filter_async(vec![], None, None).await?;
     let total_rows_all: usize = results_all.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows_all, 4, "Should read all 4 rows including NULL partition");
+    assert_eq!(
+        total_rows_all, 4,
+        "Should read all 4 rows including NULL partition"
+    );
 
     Ok(())
 }
@@ -106,9 +138,13 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
 
     let spec = PartitionSpec {
         spec_id: 1,
-        fields: vec![
-            PartitionField { source_ids: vec![1], source_id: Some(1), field_id: None, name: "category".to_string(), transform: "identity".to_string() },
-        ],
+        fields: vec![PartitionField {
+            source_ids: vec![1],
+            source_id: Some(1),
+            field_id: None,
+            name: "category".to_string(),
+            transform: "identity".to_string(),
+        }],
     };
 
     let table = Table::create_partitioned_async(uri.clone(), schema.clone(), spec).await?;
@@ -120,7 +156,7 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
             vec![
                 Arc::new(StringArray::from(vec!["A"])),
                 Arc::new(arrow::array::Int64Array::from(vec![1])),
-            ]
+            ],
         )?;
         table.write_async(vec![batch]).await?;
         table.flush_async().await?;
@@ -137,10 +173,16 @@ async fn test_compaction_preserves_partitions() -> Result<()> {
     // Verify we have 1 segment now, and it STILL HAS partition_values = {category: A}
     let entries_post = table.get_snapshot_segments().await?;
     assert_eq!(entries_post.len(), 1, "Compaction should merge segments");
-    
+
     let entry = &entries_post[0];
-    assert!(entry.partition_values.contains_key("category"), "Compacted entry must have partition key");
-    assert_eq!(entry.partition_values.get("category").unwrap(), &serde_json::json!("A"));
+    assert!(
+        entry.partition_values.contains_key("category"),
+        "Compacted entry must have partition key"
+    );
+    assert_eq!(
+        entry.partition_values.get("category").unwrap(),
+        &serde_json::json!("A")
+    );
 
     Ok(())
 }

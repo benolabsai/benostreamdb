@@ -1,14 +1,14 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-pub mod tokenizer;
-pub mod ivf;
-pub mod hnsw_ivf;
-pub mod turboquant;
 pub mod distance;
-pub mod pq;
-pub mod memory;
 pub mod gpu;
+pub mod hnsw_ivf;
 pub mod hnsw_rs;
+pub mod ivf;
+pub mod memory;
+pub mod pq;
+pub mod tokenizer;
+pub mod turboquant;
 
 use anyhow::Result;
 use roaring::RoaringBitmap;
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub trait Quantizer: std::fmt::Debug + Send + Sync {
     /// Encode a single f32 vector into quantized bytes.
     fn encode(&self, vector: &[f32]) -> Vec<u8>;
-    
+
     /// Batch encode multiple vectors.
     fn encode_batch(&self, vectors: &[Vec<f32>]) -> Vec<Vec<u8>> {
         vectors.iter().map(|v| self.encode(v)).collect()
@@ -92,8 +92,7 @@ impl Quantizer for QuantizerImpl {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum VectorMetric {
     #[default]
     L2,
@@ -128,10 +127,14 @@ pub enum VectorValue {
     Keyword(String),
 }
 
-
 pub trait VectorIndex {
-    fn search(&self, query: &VectorValue, k: usize, filter: Option<&RoaringBitmap>) -> Result<Vec<(u32, f32)>>;
+    fn search(
+        &self,
+        query: &VectorValue,
+        k: usize,
+        filter: Option<&RoaringBitmap>,
+    ) -> Result<Vec<(u32, f32)>>;
 }
 
-pub mod build_vector;
 pub mod build_inverted;
+pub mod build_vector;

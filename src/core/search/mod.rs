@@ -2,9 +2,9 @@
 
 pub mod rrf;
 
-pub use rrf::{ScoredResult, ReciprocalRankFusion};
 use crate::core::planner::VectorSearchParams;
 use anyhow::Result;
+pub use rrf::{ReciprocalRankFusion, ScoredResult};
 
 /// Coordinates multi-path search (Hybrid Search)
 pub struct HybridSearchCoordinator {
@@ -34,18 +34,16 @@ impl HybridSearchCoordinator {
         // 1. Vector Search Path
         if let Some(vp) = vector_params {
             let table_clone = table.clone();
-            let handle = tokio::spawn(async move {
-                table_clone.execute_vector_search_as_scored(vp).await
-            });
+            let handle =
+                tokio::spawn(async move { table_clone.execute_vector_search_as_scored(vp).await });
             search_handles.push(handle);
         }
 
         // 2. Keyword Search Path (BM25)
         if let Some(kp) = keyword_params {
             let table_clone = table.clone();
-            let handle = tokio::spawn(async move {
-                table_clone.execute_keyword_search_as_scored(kp).await
-            });
+            let handle =
+                tokio::spawn(async move { table_clone.execute_keyword_search_as_scored(kp).await });
             search_handles.push(handle);
         }
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 /// Optimized distance functions for vector search
-/// 
+///
 /// This module provides SIMD-accelerated distance metrics.
 /// We use explicit loop unrolling and suggest the compiler use AVX2/NEON.
 #[inline(always)]
@@ -17,7 +17,7 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
             return unsafe { l2_distance_squared_avx2(a, b) };
         }
     }
-    
+
     // Fallback to portable unrolled implementation
     l2_distance_squared_portable(a, b)
 }
@@ -27,7 +27,7 @@ pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
 fn l2_distance_squared_portable(a: &[f32], b: &[f32]) -> f32 {
     let _n = a.len();
     let mut sum = 0.0;
-    
+
     let chunks = a.chunks_exact(16);
     let b_chunks = b.chunks_exact(16);
     let rem_a = chunks.remainder();
@@ -59,7 +59,7 @@ unsafe fn l2_distance_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
 
     let n = a.len();
     let mut i = 0;
-    
+
     let mut sum0 = _mm256_setzero_ps();
     let mut sum1 = _mm256_setzero_ps();
     let mut sum2 = _mm256_setzero_ps();
@@ -124,11 +124,11 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot = dot_product(a, b);
     let norm_a = dot_product(a, a).sqrt();
     let norm_b = dot_product(b, b).sqrt();
-    
+
     if norm_a == 0.0 || norm_b == 0.0 {
         return 0.0;
     }
-    
+
     dot / (norm_a * norm_b)
 }
 
@@ -179,7 +179,7 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 
     let n = a.len();
     let mut i = 0;
-    
+
     let mut sum0 = _mm256_setzero_ps();
     let mut sum1 = _mm256_setzero_ps();
     let mut sum2 = _mm256_setzero_ps();
@@ -231,13 +231,19 @@ unsafe fn dot_product_avx2(a: &[f32], b: &[f32]) -> f32 {
 /// Vectorized batch L2 distance calculation
 pub fn l2_distance_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &[V]) -> Vec<f32> {
     use rayon::prelude::*;
-    vectors.par_iter().map(|vec| l2_distance(query, vec.as_ref())).collect()
+    vectors
+        .par_iter()
+        .map(|vec| l2_distance(query, vec.as_ref()))
+        .collect()
 }
 
 /// Vectorized batch dot product calculation
 pub fn dot_product_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &[V]) -> Vec<f32> {
     use rayon::prelude::*;
-    vectors.par_iter().map(|vec| dot_product(query, vec.as_ref())).collect()
+    vectors
+        .par_iter()
+        .map(|vec| dot_product(query, vec.as_ref()))
+        .collect()
 }
 
 /// Vectorized batch cosine similarity calculation
@@ -248,16 +254,19 @@ pub fn cosine_similarity_batch<V: AsRef<[f32]> + Sync>(query: &[f32], vectors: &
         return vec![0.0; vectors.len()];
     }
 
-    vectors.par_iter().map(|vec| {
-        let v = vec.as_ref();
-        let dot = dot_product(query, v);
-        let norm_v = dot_product(v, v).sqrt();
-        if norm_v == 0.0 {
-            0.0
-        } else {
-            dot / (norm_q * norm_v)
-        }
-    }).collect()
+    vectors
+        .par_iter()
+        .map(|vec| {
+            let v = vec.as_ref();
+            let dot = dot_product(query, v);
+            let norm_v = dot_product(v, v).sqrt();
+            if norm_v == 0.0 {
+                0.0
+            } else {
+                dot / (norm_q * norm_v)
+            }
+        })
+        .collect()
 }
 
 #[inline(always)]
@@ -317,8 +326,8 @@ pub fn hamming_distance(a: &[f32], b: &[f32]) -> f32 {
 /// Jaccard distance for sets.
 ///
 /// NOTE: This implementation expects vectors of binary indicators (0.0 or 1.0).
-/// While it handles non-binary floats, the semantics of intersection/union 
-/// implemented here are tailored for set membership. For general float 
+/// While it handles non-binary floats, the semantics of intersection/union
+/// implemented here are tailored for set membership. For general float
 /// similarity, consider Cosine or L2 distance.
 pub fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len();
@@ -326,7 +335,7 @@ pub fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
 
     let mut intersection = 0.0;
     let mut union = 0.0;
-    
+
     for (x, y) in a.iter().zip(b.iter()) {
         if *x > 0.0 || *y > 0.0 {
             if *x == *y && *x > 0.0 {
@@ -339,7 +348,7 @@ pub fn jaccard_distance(a: &[f32], b: &[f32]) -> f32 {
     if union == 0.0 {
         return 0.0;
     }
-    
+
     1.0 - (intersection / union)
 }
 
@@ -356,7 +365,10 @@ pub fn hamming_distance_packed(a: &[u8], b: &[u8]) -> u32 {
 
 #[inline(always)]
 fn hamming_distance_packed_portable(a: &[u8], b: &[u8]) -> u32 {
-    a.iter().zip(b.iter()).map(|(&x, &y)| (x ^ y).count_ones()).sum()
+    a.iter()
+        .zip(b.iter())
+        .map(|(&x, &y)| (x ^ y).count_ones())
+        .sum()
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -394,13 +406,15 @@ unsafe fn hamming_distance_packed_popcnt(a: &[u8], b: &[u8]) -> u32 {
 
 /// Sparse dot product: intersection of two sorted index/value pairs
 pub fn sparse_dot_product(
-    a_indices: &[u32], a_values: &[f32],
-    b_indices: &[u32], b_values: &[f32]
+    a_indices: &[u32],
+    a_values: &[f32],
+    b_indices: &[u32],
+    b_values: &[f32],
 ) -> f32 {
     let mut sum = 0.0;
     let mut i = 0;
     let mut j = 0;
-    
+
     while i < a_indices.len() && j < b_indices.len() {
         if a_indices[i] == b_indices[j] {
             sum += a_values[i] * b_values[j];
@@ -417,13 +431,15 @@ pub fn sparse_dot_product(
 
 /// L2 distance for sparse vectors
 pub fn sparse_l2_distance_squared(
-    a_indices: &[u32], a_values: &[f32],
-    b_indices: &[u32], b_values: &[f32]
+    a_indices: &[u32],
+    a_values: &[f32],
+    b_indices: &[u32],
+    b_values: &[f32],
 ) -> f32 {
     let mut sum = 0.0;
     let mut i = 0;
     let mut j = 0;
-    
+
     while i < a_indices.len() && j < b_indices.len() {
         if a_indices[i] == b_indices[j] {
             let diff = a_values[i] - b_values[j];
@@ -438,7 +454,7 @@ pub fn sparse_l2_distance_squared(
             j += 1;
         }
     }
-    
+
     // Add remaining squared values
     while i < a_indices.len() {
         sum += a_values[i] * a_values[i];
@@ -448,7 +464,7 @@ pub fn sparse_l2_distance_squared(
         sum += b_values[j] * b_values[j];
         j += 1;
     }
-    
+
     sum
 }
 
@@ -503,10 +519,10 @@ unsafe fn l2_distance_u8_avx2(a: &[u8], b: &[u8]) -> f32 {
         let b_vec = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
 
         let zero = _mm256_setzero_si256();
-        
+
         let a_lo = _mm256_unpacklo_epi8(a_vec, zero);
         let a_hi = _mm256_unpackhi_epi8(a_vec, zero);
-        
+
         let b_lo = _mm256_unpacklo_epi8(b_vec, zero);
         let b_hi = _mm256_unpackhi_epi8(b_vec, zero);
 
@@ -541,7 +557,7 @@ unsafe fn l2_distance_u8_avx2(a: &[u8], b: &[u8]) -> f32 {
 pub fn l2_distance_adc(query: &[f32], encoded: &[u8], offset: f32, scale: f32) -> f32 {
     let mut sum = 0.0;
     let inv_scale = 1.0 / scale;
-    
+
     // Unrolled for performance
     let chunks_q = query.chunks_exact(8);
     let chunks_e = encoded.chunks_exact(8);

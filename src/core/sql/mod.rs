@@ -1,30 +1,30 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod literal;
+pub mod optimizer;
+pub mod pgvector_rewriter;
 pub mod physical_plan;
 pub mod session;
-pub mod optimizer;
-pub mod vector_operators;
-pub mod literal;
-pub mod vector_literal;
-pub mod pgvector_rewriter;
 pub mod udf;
+pub mod vector_literal;
+pub mod vector_operators;
 
 // Alias `udf` as `vector_udf` for backward compatibility with existing import paths
 pub use udf as vector_udf;
 
 use std::any::Any;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::TableType;
+use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::logical_expr::{TableProviderFilterPushDown, Expr};
-use datafusion::arrow::datatypes::{SchemaRef, Field, Schema};
 
-use crate::core::table::Table;
 use crate::core::sql::physical_plan::HyperStreamExec;
+use crate::core::table::Table;
 
 #[derive(Debug)]
 pub struct HyperStreamTableProvider {
@@ -44,13 +44,19 @@ fn strip_field_metadata(field: &Field) -> Field {
             arrow::datatypes::DataType::List(Arc::new(strip_field_metadata(f.as_ref())))
         }
         arrow::datatypes::DataType::FixedSizeList(f, size) => {
-            arrow::datatypes::DataType::FixedSizeList(Arc::new(strip_field_metadata(f.as_ref())), size)
+            arrow::datatypes::DataType::FixedSizeList(
+                Arc::new(strip_field_metadata(f.as_ref())),
+                size,
+            )
         }
         arrow::datatypes::DataType::LargeList(f) => {
             arrow::datatypes::DataType::LargeList(Arc::new(strip_field_metadata(f.as_ref())))
         }
         arrow::datatypes::DataType::Struct(fields) => {
-            let fields = fields.iter().map(|f| strip_field_metadata(f.as_ref())).collect();
+            let fields = fields
+                .iter()
+                .map(|f| strip_field_metadata(f.as_ref()))
+                .collect();
             arrow::datatypes::DataType::Struct(fields)
         }
         arrow::datatypes::DataType::Map(f, sorted) => {
@@ -58,12 +64,15 @@ fn strip_field_metadata(field: &Field) -> Field {
         }
         _ => dt,
     };
-    Field::new(field.name(), dt, field.is_nullable())
-        .with_metadata(HashMap::new())
+    Field::new(field.name(), dt, field.is_nullable()).with_metadata(HashMap::new())
 }
 
 fn strip_metadata(schema: SchemaRef) -> SchemaRef {
-    let fields: Vec<Field> = schema.fields().iter().map(|f| strip_field_metadata(f.as_ref())).collect();
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| strip_field_metadata(f.as_ref()))
+        .collect();
     Arc::new(Schema::new_with_metadata(fields, HashMap::new()))
 }
 
@@ -88,20 +97,22 @@ impl TableProvider for HyperStreamTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        
         // Fetch segments from table state
-        let segments = self.table.get_snapshot_segments().await
+        let segments = self
+            .table
+            .get_snapshot_segments()
+            .await
             .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
 
         // Determine parallelism
-        let target_partitions = self.table.get_max_parallel_readers().unwrap_or(4); 
-        
+        let target_partitions = self.table.get_max_parallel_readers().unwrap_or(4);
+
         let mut partitions = vec![Vec::new(); target_partitions];
         for (i, segment) in segments.into_iter().enumerate() {
             partitions[i % target_partitions].push(segment);
         }
         let partitions: Vec<_> = partitions.into_iter().filter(|p| !p.is_empty()).collect();
-        
+
         tracing::info!("SQL Scan: Created {} partitions", partitions.len());
 
         // fetch index columns to prioritize filters
@@ -110,7 +121,7 @@ impl TableProvider for HyperStreamTableProvider {
         // Convert DataFusion filters to HyperStream SQL-like filter string
         // Returns Option<(ColumnName, SQLString)>
         fn expr_to_sql(expr: &Expr) -> Option<(String, String)> {
-             match expr {
+            match expr {
                 Expr::BinaryExpr(binary) => {
                     let (left_col, left_sql) = match &*binary.left {
                         Expr::Column(c) => (c.name.clone(), c.name.clone()),
@@ -118,16 +129,14 @@ impl TableProvider for HyperStreamTableProvider {
                     };
 
                     let right_val = match &*binary.right {
-                        Expr::Literal(scalar_value, _) => {
-                             match scalar_value {
-                                datafusion::scalar::ScalarValue::Utf8(Some(s)) => format!("'{}'", s),
-                                datafusion::scalar::ScalarValue::Int32(Some(i)) => i.to_string(),
-                                datafusion::scalar::ScalarValue::Int64(Some(i)) => i.to_string(),
-                                datafusion::scalar::ScalarValue::Float32(Some(f)) => f.to_string(),
-                                datafusion::scalar::ScalarValue::Float64(Some(f)) => f.to_string(),
-                                datafusion::scalar::ScalarValue::Boolean(Some(b)) => b.to_string(),
-                                _ => scalar_value.to_string(),
-                            }
+                        Expr::Literal(scalar_value, _) => match scalar_value {
+                            datafusion::scalar::ScalarValue::Utf8(Some(s)) => format!("'{}'", s),
+                            datafusion::scalar::ScalarValue::Int32(Some(i)) => i.to_string(),
+                            datafusion::scalar::ScalarValue::Int64(Some(i)) => i.to_string(),
+                            datafusion::scalar::ScalarValue::Float32(Some(f)) => f.to_string(),
+                            datafusion::scalar::ScalarValue::Float64(Some(f)) => f.to_string(),
+                            datafusion::scalar::ScalarValue::Boolean(Some(b)) => b.to_string(),
+                            _ => scalar_value.to_string(),
                         },
                         _ => return None, // Right must be literal
                     };
@@ -140,36 +149,46 @@ impl TableProvider for HyperStreamTableProvider {
                         datafusion::logical_expr::Operator::LtEq => "<=",
                         _ => return None,
                     };
-                    
+
                     Some((left_col, format!("{} {} {}", left_sql, op, right_val)))
-                },
+                }
                 Expr::InList(in_list) => {
-                    if in_list.negated { return None; }
+                    if in_list.negated {
+                        return None;
+                    }
                     let col_name = match &*in_list.expr {
                         Expr::Column(c) => c.name.clone(),
                         _ => return None,
                     };
-                    
+
                     let mut values = Vec::new();
                     for v in &in_list.list {
                         if let Expr::Literal(scalar_value, _) = v {
-                             match scalar_value {
-                                datafusion::scalar::ScalarValue::Utf8(Some(s)) => values.push(format!("'{}'", s)),
-                                datafusion::scalar::ScalarValue::Int32(Some(i)) => values.push(i.to_string()),
-                                datafusion::scalar::ScalarValue::Int64(Some(i)) => values.push(i.to_string()),
+                            match scalar_value {
+                                datafusion::scalar::ScalarValue::Utf8(Some(s)) => {
+                                    values.push(format!("'{}'", s))
+                                }
+                                datafusion::scalar::ScalarValue::Int32(Some(i)) => {
+                                    values.push(i.to_string())
+                                }
+                                datafusion::scalar::ScalarValue::Int64(Some(i)) => {
+                                    values.push(i.to_string())
+                                }
                                 _ => return None, // Complex types in IN list
-                             }
+                            }
                         } else {
                             return None;
                         }
                     }
-                    
-                    if values.is_empty() { return None; }
+
+                    if values.is_empty() {
+                        return None;
+                    }
                     let val_str = values.join(",");
                     Some((col_name.clone(), format!("{} IN ({})", col_name, val_str)))
                 }
-                _ => None, 
-             }
+                _ => None,
+            }
         }
 
         // Selection Logic:
@@ -180,7 +199,11 @@ impl TableProvider for HyperStreamTableProvider {
         for filter in filters {
             if let Some((col, sql)) = expr_to_sql(filter) {
                 // Check if this is a BM25 candidate: Column has BM25 index and is an equality match
-                let has_bm25 = self.table.indexing.index_configs.read()
+                let has_bm25 = self
+                    .table
+                    .indexing
+                    .index_configs
+                    .read()
                     .get(&col)
                     .map(|cfg| cfg.tokenizer.is_some())
                     .unwrap_or(false);
@@ -190,30 +213,36 @@ impl TableProvider for HyperStreamTableProvider {
                         if b.op == datafusion::logical_expr::Operator::Eq {
                             // Extract the literal value
                             if let datafusion::logical_expr::Expr::Literal(scalar, _) = &*b.right {
-                                if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) = scalar {
+                                if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) =
+                                    scalar
+                                {
                                     tracing::info!("SQL BM25 Pushdown: Triggering keyword search for '{}' on column '{}'", query_str, col);
-                                    let params = crate::core::planner::VectorSearchParams::new(&col, crate::core::index::VectorValue::Keyword(query_str.clone()), limit.unwrap_or(100));
+                                    let params = crate::core::planner::VectorSearchParams::new(
+                                        &col,
+                                        crate::core::index::VectorValue::Keyword(query_str.clone()),
+                                        limit.unwrap_or(100),
+                                    );
                                     bm25_params = Some(params);
                                 }
                             }
                         }
                     }
                 }
-                
+
                 all_filters.push(sql);
             }
         }
-        
+
         let best_filter = if all_filters.is_empty() {
             None
         } else {
             Some(all_filters.join(" AND "))
         };
-        
+
         if let Some(vp) = bm25_params {
-            use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
             use crate::core::sql::physical_plan::vector_merge::VectorMergeExec;
-            
+            use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
+
             let scan_exec = VectorScanExec::new(
                 self.table.clone(),
                 partitions,
@@ -223,14 +252,10 @@ impl TableProvider for HyperStreamTableProvider {
                 limit,
                 self.schema(),
             )?;
-            
-            let merge_exec = VectorMergeExec::new(
-                Arc::new(scan_exec),
-                limit.unwrap_or(100),
-                0,
-                self.schema(),
-            )?;
-            
+
+            let merge_exec =
+                VectorMergeExec::new(Arc::new(scan_exec), limit.unwrap_or(100), 0, self.schema())?;
+
             Ok(Arc::new(merge_exec))
         } else {
             Ok(Arc::new(HyperStreamExec::new(
@@ -249,77 +274,93 @@ impl TableProvider for HyperStreamTableProvider {
         filters: &[&Expr],
     ) -> datafusion::error::Result<Vec<TableProviderFilterPushDown>> {
         let index_configs = self.table.indexing.index_configs.read();
-        
-        Ok(filters.iter().map(|f| {
-            if let Expr::BinaryExpr(b) = f {
-                if b.op == datafusion::logical_expr::Operator::Eq {
-                    if let Expr::Column(c) = &*b.left {
-                        let has_bm25 = index_configs.get(&c.name)
-                            .map(|cfg| cfg.tokenizer.is_some())
-                            .unwrap_or(false);
-                        if has_bm25 {
-                            return TableProviderFilterPushDown::Exact;
+
+        Ok(filters
+            .iter()
+            .map(|f| {
+                if let Expr::BinaryExpr(b) = f {
+                    if b.op == datafusion::logical_expr::Operator::Eq {
+                        if let Expr::Column(c) = &*b.left {
+                            let has_bm25 = index_configs
+                                .get(&c.name)
+                                .map(|cfg| cfg.tokenizer.is_some())
+                                .unwrap_or(false);
+                            if has_bm25 {
+                                return TableProviderFilterPushDown::Exact;
+                            }
                         }
                     }
                 }
-            }
-            TableProviderFilterPushDown::Inexact
-        }).collect())
+                TableProviderFilterPushDown::Inexact
+            })
+            .collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::prelude::SessionContext;
     use crate::core::table::Table;
-    use arrow::record_batch::RecordBatch;
     use arrow::array::Int32Array;
-    use arrow::datatypes::{Schema, Field, DataType};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::record_batch::RecordBatch;
+    use datafusion::prelude::SessionContext;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_parallel_scan_planning() -> datafusion::error::Result<()> {
         // Setup a table with multiple segments
-        let uri = format!("file://{}", std::env::temp_dir().join("test_parallel_scan").to_string_lossy());
+        let uri = format!(
+            "file://{}",
+            std::env::temp_dir()
+                .join("test_parallel_scan")
+                .to_string_lossy()
+        );
         let _ = std::fs::remove_dir_all(uri.strip_prefix("file://").unwrap()); // Cleanup previous
-        
+
         let table = Table::new_async(uri.clone()).await.unwrap();
-        
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
-        
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
         // Write Segment 1
-        let batch1 = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1]))]).unwrap();
+        let batch1 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1]))])
+                .unwrap();
         table.write_async(vec![batch1]).await.unwrap();
         table.commit_async().await.unwrap();
-        
+
         // Write Segment 2
-        let batch2 = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![2]))]).unwrap();
+        let batch2 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![2]))])
+                .unwrap();
         table.write_async(vec![batch2]).await.unwrap();
         table.commit_async().await.unwrap();
-        
+
         // Write Segment 3
-        let batch3 = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))]).unwrap();
+        let batch3 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))])
+                .unwrap();
         table.write_async(vec![batch3]).await.unwrap();
         table.commit_async().await.unwrap();
 
         // Create Provider
         let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(table)));
-        
+
         // Create DataFusion context and plan a scan
         let ctx = SessionContext::new();
         ctx.register_table("t", provider).unwrap();
-        
+
         let df = ctx.sql("SELECT * FROM t").await?;
         let logical_plan = df.logical_plan();
         let physical_plan = ctx.state().create_physical_plan(logical_plan).await?;
-        
+
         // Verify Physical Plan is HyperStreamExec and has partitions
-        let display = format!("{}", datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true));
+        let display = format!(
+            "{}",
+            datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true)
+        );
         println!("Plan: {}", display);
-        
+
         // We expect HyperStreamExec to be present.
         // And since we didn't set max_readers, default is 4.
         // We have 3 segments.
@@ -331,10 +372,15 @@ mod tests {
         // Partitions[3] is empty.
         // Filter removes empty.
         // Result: 3 partitions.
-        
+
         // Assert string contains "partitions=3" (based on DisplayAs impl)
-        assert!(display.contains("HyperStreamExec: partitions=3") || display.contains("VectorMergeExec: k=100"), "Plan did not match expected structure. Plan was: {}", display);
-        
+        assert!(
+            display.contains("HyperStreamExec: partitions=3")
+                || display.contains("VectorMergeExec: k=100"),
+            "Plan did not match expected structure. Plan was: {}",
+            display
+        );
+
         Ok(())
     }
 }

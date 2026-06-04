@@ -1,12 +1,12 @@
 use opentelemetry::global;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use tracing_subscriber::layer::{SubscriberExt, Layer};
-use tracing_subscriber::{Registry, layer::Context};
-use tracing_subscriber::fmt;
-use tracing_subscriber::filter::EnvFilter;
-use tracing::{Subscriber, Metadata};
-use std::sync::Arc;
 use parking_lot::RwLock;
+use std::sync::Arc;
+use tracing::{Metadata, Subscriber};
+use tracing_subscriber::filter::EnvFilter;
+use tracing_subscriber::fmt;
+use tracing_subscriber::layer::{Layer, SubscriberExt};
+use tracing_subscriber::{layer::Context, Registry};
 
 struct ReloadableFilter {
     filter: Arc<RwLock<EnvFilter>>,
@@ -18,7 +18,8 @@ impl<S: Subscriber> Layer<S> for ReloadableFilter {
     }
 }
 
-static SHARED_FILTER: once_cell::sync::OnceCell<Arc<RwLock<EnvFilter>>> = once_cell::sync::OnceCell::new();
+static SHARED_FILTER: once_cell::sync::OnceCell<Arc<RwLock<EnvFilter>>> =
+    once_cell::sync::OnceCell::new();
 static INIT: std::sync::Once = std::sync::Once::new();
 
 pub struct TelemetryGuard;
@@ -33,7 +34,8 @@ pub fn shutdown_telemetry() {
     opentelemetry::global::shutdown_tracer_provider();
 }
 
-static TRACER_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::trace::TracerProvider> = once_cell::sync::OnceCell::new();
+static TRACER_PROVIDER: once_cell::sync::OnceCell<opentelemetry_sdk::trace::TracerProvider> =
+    once_cell::sync::OnceCell::new();
 
 pub fn flush_telemetry() {
     if let Some(provider) = TRACER_PROVIDER.get() {
@@ -45,7 +47,7 @@ pub fn flush_telemetry() {
 
 pub fn init_tracing(service_name: &str) -> Result<TelemetryGuard, Box<dyn std::error::Error>> {
     let mut init_err: Option<Box<dyn std::error::Error>> = None;
-    
+
     INIT.call_once(|| {
         if let Err(e) = do_init_tracing(service_name) {
             init_err = Some(e);
@@ -55,7 +57,7 @@ pub fn init_tracing(service_name: &str) -> Result<TelemetryGuard, Box<dyn std::e
     if let Some(e) = init_err {
         return Err(e);
     }
-    
+
     Ok(TelemetryGuard)
 }
 
@@ -71,21 +73,23 @@ fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>>
     };
 
     // Check env var to enable Jaeger/OTLP
-    let enable_jaeger = std::env::var("JAEGER_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true";
+    let enable_jaeger =
+        std::env::var("JAEGER_ENABLED").unwrap_or_else(|_| "false".to_string()) == "true";
 
     if enable_jaeger {
         let provider = opentelemetry_sdk::trace::TracerProvider::builder()
             .with_batch_exporter(
-                opentelemetry_otlp::new_exporter().tonic().build_span_exporter()?,
-                opentelemetry_sdk::runtime::Tokio
+                opentelemetry_otlp::new_exporter()
+                    .tonic()
+                    .build_span_exporter()?,
+                opentelemetry_sdk::runtime::Tokio,
             )
-            .with_config(
-                opentelemetry_sdk::trace::config().with_resource(
-                    opentelemetry_sdk::Resource::new(vec![
-                        opentelemetry::KeyValue::new("service.name", service_name.to_string()),
-                    ]),
-                )
-            )
+            .with_config(opentelemetry_sdk::trace::config().with_resource(
+                opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                    "service.name",
+                    service_name.to_string(),
+                )]),
+            ))
             .build();
 
         let tracer = opentelemetry::trace::TracerProvider::tracer(&provider, "hyperstreamdb");
@@ -93,20 +97,16 @@ fn do_init_tracing(service_name: &str) -> Result<(), Box<dyn std::error::Error>>
         opentelemetry::global::set_tracer_provider(provider);
 
         let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
-        
-        let subscriber = Registry::default()
-            .with(filter_layer)
-            .with(telemetry);
+
+        let subscriber = Registry::default().with(filter_layer).with(telemetry);
 
         let _ = tracing::subscriber::set_global_default(subscriber);
     } else {
-         let subscriber = Registry::default()
-            .with(filter_layer)
-            .with(fmt::layer());
+        let subscriber = Registry::default().with(filter_layer).with(fmt::layer());
 
-         let _ = tracing::subscriber::set_global_default(subscriber);
+        let _ = tracing::subscriber::set_global_default(subscriber);
     }
-    
+
     Ok(())
 }
 

@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::core::table::Table;
-use hyperstreamdb::core::manifest::{PartitionSpec, PartitionField};
-use arrow::record_batch::RecordBatch;
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-use std::sync::Arc;
+use arrow::record_batch::RecordBatch;
 use futures::StreamExt;
+use hyperstreamdb::core::manifest::{PartitionField, PartitionSpec};
+use hyperstreamdb::core::table::Table;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
@@ -14,7 +14,7 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
     let table_name = "test_partitioned_writes";
     let uri = format!("file:///tmp/{}", table_name);
     let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
-    
+
     // Schema: id (int64), data (string)
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -25,15 +25,13 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
     // Source ID for "id" is 1 (first field)
     let spec = PartitionSpec {
         spec_id: 1,
-        fields: vec![
-            PartitionField {
-                source_ids: vec![1],
-                source_id: Some(1),
-                field_id: Some(1000),
-                name: "id_bucket".to_string(),
-                transform: "bucket[16]".to_string(),
-            }
-        ]
+        fields: vec![PartitionField {
+            source_ids: vec![1],
+            source_id: Some(1),
+            field_id: Some(1000),
+            name: "id_bucket".to_string(),
+            transform: "bucket[16]".to_string(),
+        }],
     };
 
     // 2. Create Table
@@ -43,7 +41,7 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
     // IDs 0..100
     let ids: Vec<i64> = (0..100).collect();
     let data: Vec<String> = ids.iter().map(|i| format!("val_{}", i)).collect();
-    
+
     let batch = RecordBatch::try_new(
         arrow_schema.clone(),
         vec![
@@ -51,7 +49,7 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
             Arc::new(StringArray::from(data)),
         ],
     )?;
-    
+
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
 
@@ -75,7 +73,11 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
     let mut count = 0;
     while let Some(batch) = stream.next().await {
         let b = batch?;
-        let id_col = b.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+        let id_col = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow::array::Int64Array>()
+            .unwrap();
         for i in 0..b.num_rows() {
             if id_col.value(i) == 10 {
                 panic!("Row with id=10 should have been deleted!");
@@ -83,14 +85,14 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
             count += 1;
         }
     }
-    
+
     assert_eq!(count, 99, "Row count should be 99");
-    
+
     // 7. Test Range Delete crossing partitions (if buckets allow)
     // Deleting 20..30.
     println!("Deleting 20..30");
     table.delete_async("id >= 20 AND id < 30").await?;
-    
+
     let mut count2 = 0;
     let mut stream2 = table.stream_all(None).await?;
     while let Some(batch) = stream2.next().await {

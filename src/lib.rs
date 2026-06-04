@@ -21,12 +21,10 @@ pub mod python_gpu_context;
 pub mod python_distance;
 
 // Re-export main types for convenience
-pub use crate::core::table::{Table, VectorSearchParams};
-pub use crate::core::index::VectorMetric;
-pub use crate::core::catalog::{CatalogType, create_catalog, create_catalog_async, Catalog};
+pub use crate::core::catalog::{create_catalog, create_catalog_async, Catalog, CatalogType};
 pub use crate::core::error::{HyperstreamError, Result};
-
-
+pub use crate::core::index::VectorMetric;
+pub use crate::core::table::{Table, VectorSearchParams};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
@@ -36,7 +34,10 @@ use pyo3::prelude::*;
 fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
-    m.add_function(wrap_pyfunction!(python_binding::create_catalog_from_config, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::create_catalog_from_config,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(python_binding::load_default_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::open_table, m)?)?;
     m.add_class::<python_binding::PyTable>()?;
@@ -48,23 +49,23 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyUnityCatalog>()?;
     m.add_class::<python_binding::PyJdbcCatalog>()?;
     m.add_class::<python_binding::PySession>()?;
-    
+
     m.add_class::<python_binding::PyDataFileInfo>()?;
     m.add_class::<python_binding::PySplit>()?;
     m.add_class::<python_binding::PyTableStatistics>()?;
     m.add_class::<python_binding::PyIndexCoverage>()?;
-    
+
     m.add_class::<python_binding::PyDataType>()?;
     m.add_class::<python_binding::PyField>()?;
     m.add_class::<python_binding::PyPartitionField>()?;
     m.add_class::<python_binding::PySchema>()?;
-    
+
     m.add_class::<python_binding::PyManifest>()?;
     m.add_class::<python_binding::PyManifestEntry>()?;
-    
+
     // Device API
     m.add_class::<python_gpu_context::PyDevice>()?;
-    
+
     // Distance API - Single-pair functions
     m.add_function(wrap_pyfunction!(python_distance::py_l2, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_cosine, m)?)?;
@@ -72,30 +73,36 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_distance::py_l1, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard, m)?)?;
-    
+
     // Distance API - Batch functions
     m.add_function(wrap_pyfunction!(python_distance::py_l2_batch, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_cosine_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(python_distance::py_inner_product_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_inner_product_batch,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_l1_batch, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_batch, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_batch, m)?)?;
-    
+
     // Sparse Vector API
     m.add_class::<python_distance::PySparseVector>()?;
     m.add_function(wrap_pyfunction!(python_distance::py_l2_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_cosine_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(python_distance::py_inner_product_sparse, m)?)?;
-    
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_inner_product_sparse,
+        m
+    )?)?;
+
     // Binary Vector API
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_packed, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_packed, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_auto, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_auto, m)?)?;
-    
+
     // Add version constant from build.rs
     m.add("__version__", VERSION)?;
-    
+
     Ok(())
 }
 
@@ -121,7 +128,8 @@ pub struct SegmentConfig {
     /// Per-column device override (e.g. "cpu", "gpu", "mps")
     pub column_devices: std::collections::HashMap<String, String>,
     pub default_device: Option<String>,
-    pub column_algorithms: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
+    pub column_algorithms:
+        std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
 }
 
 impl SegmentConfig {
@@ -154,21 +162,27 @@ impl SegmentConfig {
         self
     }
 
-    pub fn with_delete_files(mut self, delete_files: Vec<crate::core::manifest::DeleteFile>) -> Self {
+    pub fn with_delete_files(
+        mut self,
+        delete_files: Vec<crate::core::manifest::DeleteFile>,
+    ) -> Self {
         self.delete_files = delete_files;
         self
     }
-    
+
     pub fn with_index_files(mut self, index_files: Vec<crate::core::manifest::IndexFile>) -> Self {
         self.index_files = index_files;
         self
     }
 
-    pub fn with_partition_values(mut self, partition_values: std::collections::HashMap<String, serde_json::Value>) -> Self {
+    pub fn with_partition_values(
+        mut self,
+        partition_values: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
         self.partition_values = partition_values;
         self
     }
-    
+
     pub fn with_file_size(mut self, size: u64) -> Self {
         self.file_size = Some(size);
         self
@@ -189,7 +203,10 @@ impl SegmentConfig {
         self
     }
 
-    pub fn with_column_devices(mut self, column_devices: std::collections::HashMap<String, String>) -> Self {
+    pub fn with_column_devices(
+        mut self,
+        column_devices: std::collections::HashMap<String, String>,
+    ) -> Self {
         self.column_devices = column_devices;
         self
     }
@@ -204,7 +221,10 @@ impl SegmentConfig {
         self
     }
 
-    pub fn with_column_algorithms(mut self, algos: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>) -> Self {
+    pub fn with_column_algorithms(
+        mut self,
+        algos: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
+    ) -> Self {
         self.column_algorithms = algos;
         self
     }

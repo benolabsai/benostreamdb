@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use super::CatalogType;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
-use anyhow::{Result, Context};
 use std::fs;
-use super::CatalogType;
 
 #[derive(Debug, Deserialize)]
 pub struct CatalogConfig {
@@ -16,11 +16,11 @@ impl CatalogConfig {
     pub fn load_from_file(path: &str) -> Result<Self> {
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read catalog config file: {}", path))?;
-        
+
         // Use toml to deserialize
         let config: CatalogConfig = toml::from_str(&content)
             .with_context(|| format!("Failed to parse catalog config file: {}", path))?;
-            
+
         Ok(config)
     }
 

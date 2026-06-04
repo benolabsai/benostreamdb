@@ -1,21 +1,21 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use anyhow::Result;
-use std::sync::Arc;
-use object_store::ObjectStore;
-use tokio::runtime::Runtime;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
-use tracing;
-use arrow::record_batch::RecordBatch;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::array::Array;
 use crate::core::catalog::Catalog;
-use crate::core::storage::create_object_store;
+use crate::core::index::memory::InMemoryVectorIndex;
 use crate::core::manifest::ManifestManager;
 use crate::core::query::QueryConfig;
+use crate::core::storage::create_object_store;
 use crate::core::wal::WriteAheadLog;
-use crate::core::index::memory::InMemoryVectorIndex;
+use anyhow::Result;
+use arrow::array::Array;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
+use object_store::ObjectStore;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+use tokio::sync::Mutex;
+use tracing;
 
 use super::Table;
 
@@ -29,14 +29,17 @@ pub(crate) fn recover_wal_state(
 ) -> (Vec<RecordBatch>, Option<InMemoryVectorIndex>, SchemaRef) {
     let mut aligned_buffer = Vec::new();
     let mut total_rows = 0;
-    
+
     // 1. First pass: Collect batches and merge schema
     let mut batches = Vec::new();
     for batch_res in recovered_stream {
         match batch_res {
             Ok(batch) => {
                 // Safely merge schema
-                match arrow::datatypes::Schema::try_merge(vec![schema_val.as_ref().clone(), batch.schema().as_ref().clone()]) {
+                match arrow::datatypes::Schema::try_merge(vec![
+                    schema_val.as_ref().clone(),
+                    batch.schema().as_ref().clone(),
+                ]) {
                     Ok(s) => schema_val = Arc::new(s),
                     Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
                 }
@@ -63,7 +66,10 @@ pub(crate) fn recover_wal_state(
     // or type evolutions instead of fragile field count comparisons.
     let mut merged_schema = schema_val.as_ref().clone();
     for batch in &batches {
-        match arrow::datatypes::Schema::try_merge(vec![merged_schema.clone(), batch.schema().as_ref().clone()]) {
+        match arrow::datatypes::Schema::try_merge(vec![
+            merged_schema.clone(),
+            batch.schema().as_ref().clone(),
+        ]) {
             Ok(s) => merged_schema = s,
             Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
         }
@@ -93,7 +99,9 @@ pub(crate) fn recover_wal_state(
     // Look for an "embedding" column (the most common convention), supporting
     // both FixedSizeList and variable-length List arrays.
     let col_name = aligned_buffer.first().and_then(|b| {
-        b.schema().fields().iter()
+        b.schema()
+            .fields()
+            .iter()
             .find(|f| f.name() == "embedding")
             .map(|f| f.name().clone())
     });
@@ -102,15 +110,25 @@ pub(crate) fn recover_wal_state(
     if let Some(ref col_name) = col_name {
         if let Some(first) = aligned_buffer.first() {
             if let Some(col) = first.column_by_name(col_name) {
-                let dim = if let Some(fsl) = col.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+                let dim = if let Some(fsl) = col
+                    .as_any()
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()
+                {
                     Some(fsl.value_length() as usize)
                 } else if let Some(list) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
                     (0..list.len()).find_map(|i| {
-                        if list.is_null(i) { None } else {
-                            list.value(i).as_any().downcast_ref::<arrow::array::Float32Array>().map(|v| v.len())
+                        if list.is_null(i) {
+                            None
+                        } else {
+                            list.value(i)
+                                .as_any()
+                                .downcast_ref::<arrow::array::Float32Array>()
+                                .map(|v| v.len())
                         }
                     })
-                } else { None };
+                } else {
+                    None
+                };
 
                 if let Some(d) = dim {
                     let mut idx = InMemoryVectorIndex::new(d);
@@ -223,13 +241,13 @@ impl TableBuilder {
         }
 
         let store = create_object_store(&uri)?;
-        
+
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
         let (manifest, version) = manifest_manager.load_latest().await.unwrap_or_default();
         let schema_val = if version > 0 {
-             Table::load_initial_schema(store.clone(), &uri).await
+            Table::load_initial_schema(store.clone(), &uri).await
         } else {
-             Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
+            Arc::new(Schema::new(Vec::<arrow::datatypes::Field>::new()))
         };
         let partition_spec = Arc::new(manifest.partition_spec.clone());
 
@@ -238,8 +256,8 @@ impl TableBuilder {
             let path = uri.strip_prefix("file://").unwrap();
             std::path::PathBuf::from(path).join("_wal")
         } else {
-             let safe_uri = uri.replace("://", "_").replace("/", "_");
-             std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
+            let safe_uri = uri.replace("://", "_").replace("/", "_");
+            std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
         };
 
         if !wal_dir.exists() {
@@ -248,26 +266,25 @@ impl TableBuilder {
 
         let mut wal = WriteAheadLog::new(wal_dir);
         let _ = wal.spawn_worker();
-        
+
         // Replay WAL (Recovery)
         let recovered_stream = wal.replay_stream().unwrap_or_else(|e| {
-            tracing::warn!("WAL Recovery Warning: {}" , e);
+            tracing::warn!("WAL Recovery Warning: {}", e);
             Box::new(std::iter::empty())
         });
-        
+
         let (_, recovered_paths) = wal.replay().unwrap_or_else(|_| (vec![], vec![])); // For paths cleanup only
 
-        let (initial_buffer, initial_mem_index, schema_val) = recover_wal_state(
-            recovered_stream, schema_val,
-        );
+        let (initial_buffer, initial_mem_index, schema_val) =
+            recover_wal_state(recovered_stream, schema_val);
 
-        let table = Table { 
-            uri: uri.clone(), 
-            store, 
+        let table = Table {
+            uri: uri.clone(),
+            store,
             data_store: self.data_store,
             rt: self.runtime,
             query_config: self.query_config,
-            
+
             indexing: crate::core::table::TableIndexState {
                 index_all: self.index_all,
                 index_columns: Arc::new(parking_lot::RwLock::new(Vec::new())),
@@ -296,7 +313,7 @@ impl TableBuilder {
             partition_spec,
             label_pattern: self.label_pattern,
         };
-        
+
         table.sync_primary_key_from_schema_async().await.ok();
         let _ = table.infer_index_metadata_from_physical_async().await;
         Ok(table)

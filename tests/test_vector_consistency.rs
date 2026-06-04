@@ -1,17 +1,22 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::Result;
-use arrow::array::{Float32Array, FixedSizeListArray, Int32Array};
+use arrow::array::{FixedSizeListArray, Float32Array, Int32Array};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::datatypes::{Schema, Field, DataType};
-use hyperstreamdb::Table;
-use hyperstreamdb::core::table::VectorSearchParams;
 use hyperstreamdb::core::query::QueryConfig;
+use hyperstreamdb::core::table::VectorSearchParams;
+use hyperstreamdb::Table;
 use std::sync::Arc;
 
-async fn create_vector_batch(start_id: i32, num_rows: usize, dim: usize, val_offset: f32) -> RecordBatch {
+async fn create_vector_batch(
+    start_id: i32,
+    num_rows: usize,
+    dim: usize,
+    val_offset: f32,
+) -> RecordBatch {
     let id_array = Int32Array::from_iter_values(start_id..start_id + num_rows as i32);
-    
+
     let mut values = Vec::with_capacity(num_rows * dim);
     for i in 0..num_rows {
         for j in 0..dim {
@@ -23,28 +28,30 @@ async fn create_vector_batch(start_id: i32, num_rows: usize, dim: usize, val_off
         Arc::new(Field::new("item", DataType::Float32, true)),
         dim as i32,
         Arc::new(values_array),
-        None
-    ).unwrap();
+        None,
+    )
+    .unwrap();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
-        Field::new("embedding", DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            dim as i32
-        ), false),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dim as i32,
+            ),
+            false,
+        ),
     ]));
 
-    RecordBatch::try_new(schema, vec![
-        Arc::new(id_array),
-        Arc::new(vectors_array),
-    ]).unwrap()
+    RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(vectors_array)]).unwrap()
 }
 
 #[tokio::test]
 async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
-    
+
     let mut table = Table::new_async(uri.clone()).await?;
     let dim = 8;
     // 1. Write multiple segments to ensure parallel execution is possible
@@ -53,7 +60,7 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
         table.write_async(vec![batch]).await?;
         table.commit_async().await?;
     }
-    
+
     // Index all columns now that the table schema has been established
     table.index_all_columns_async().await?;
     // Wait for all background indexing tasks to complete
@@ -68,11 +75,15 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
 
     // 2. Search with parallelism = 1 (Sequential)
     let config_seq = QueryConfig::new().with_max_parallel_readers(1);
-    let results_seq = table.read_with_config_async(None, Some(vs_params.clone()), None, config_seq).await?;
+    let results_seq = table
+        .read_with_config_async(None, Some(vs_params.clone()), None, config_seq)
+        .await?;
 
     // 3. Search with parallelism = 4 (Parallel)
     let config_par = QueryConfig::new().with_max_parallel_readers(4);
-    let results_par = table.read_with_config_async(None, Some(vs_params), None, config_par).await?;
+    let results_par = table
+        .read_with_config_async(None, Some(vs_params), None, config_par)
+        .await?;
 
     // 4. Verify results are identical (after sorting by ID to compare batches)
     let collect_ids = |batches: Vec<RecordBatch>| {
@@ -91,7 +102,10 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     let ids_par = collect_ids(results_par);
 
     assert_eq!(ids_seq.len(), 10);
-    assert_eq!(ids_seq, ids_par, "Parallel and sequential search results must be identical");
+    assert_eq!(
+        ids_seq, ids_par,
+        "Parallel and sequential search results must be identical"
+    );
 
     Ok(())
 }

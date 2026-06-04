@@ -2,17 +2,17 @@
 //! The AnnT trait is implemented with macros for u32, u16, u8, f32, f64 and i32.  
 //! The macro declare_myapi_type!  produces struct HnswApif32 and so on.
 
-use std::ptr;
 use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::path::PathBuf;
+use std::ptr;
 
 use log;
 
 use crate::core::index::hnsw_rs::api::*;
-use crate::core::index::hnsw_rs::*;
 use crate::core::index::hnsw_rs::hnsw::*;
 use crate::core::index::hnsw_rs::hnswio::*;
+use crate::core::index::hnsw_rs::*;
 
 /// The export macro makes the macro global in crate and accessible via crate::core::index::hnsw_rs::declare_myapi_type!
 #[macro_export]
@@ -41,38 +41,41 @@ declare_myapi_type!(HnswApiu8, u8);
 /// To be able to return a vector from rust in a julia struct before converting to a julia Vector
 #[repr(C)]
 pub struct Vec_api<T> {
-    pub len : i64,
-    pub ptr : *const T,
+    pub len: i64,
+    pub ptr: *const T,
 }
 
 /// The basic Neighbour info returned by api
 #[repr(C)]
 pub struct Neighbour_api {
     /// id of neighbour
-    pub id  : usize,
+    pub id: usize,
     /// distance of data sent in request to this neighbour
-    pub d   : f32,
+    pub d: f32,
 }
 
 impl From<&Neighbour> for Neighbour_api {
-    fn from(neighbour : &Neighbour) -> Self {
-        Neighbour_api{ id : neighbour.d_id, d: neighbour.distance}
+    fn from(neighbour: &Neighbour) -> Self {
+        Neighbour_api {
+            id: neighbour.d_id,
+            d: neighbour.distance,
+        }
     }
 }
 
 /// The response to a neighbour search requests
 #[repr(C)]
 pub struct Neighbourhood_api {
-    pub nbgh : i64,
-    pub neighbours : *const Neighbour_api,
+    pub nbgh: i64,
+    pub neighbours: *const Neighbour_api,
 }
 
 #[repr(C)]
 pub struct Neighbour_api_parsearch_answer {
     /// The number of answers (o request), i.e size of both vectors nbgh and neighbours
-    pub nb_answer : usize,
+    pub nb_answer: usize,
     /// for each request, we get a Neighbourhood_api
-    pub neighbourhoods : *const Neighbourhood_api,
+    pub neighbourhoods: *const Neighbourhood_api,
 }
 
 //===================================== Macros =====================================
@@ -97,7 +100,7 @@ macro_rules! generate_insert(
 macro_rules! generate_parallel_insert(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *mut $api_name, nb_vec: usize, vec_len : usize, 
+        pub extern "C" fn $function_name(hnsw_api : *mut $api_name, nb_vec: usize, vec_len : usize,
                         datas : *mut *const $type_val, ids : *const usize) {
             log::trace!("entering parallel_insert type {:?}  , vec len is {:?}, nb_vec : {:?}", stringify!($type_val), vec_len, nb_vec);
             let data_ids : Vec<usize>;
@@ -121,18 +124,18 @@ macro_rules! generate_parallel_insert(
             }
             unsafe { (*hnsw_api).opaque.parallel_insert_data(&request); };
         }
-    )   
+    )
 );
 
 #[allow(unused_macros)]
 macro_rules! generate_search_neighbours(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *const $api_name, len:usize, data : *const $type_val, 
+        pub extern "C" fn $function_name(hnsw_api : *const $api_name, len:usize, data : *const $type_val,
                                 knbn : usize, ef_search : usize) ->  *const Neighbourhood_api {
             log::trace!("entering search_neighbours type {:?}, vec len is {:?}, id : {:?} ef_search {:?}", stringify!($type_val), len, knbn, ef_search);
             let data_v : Vec<$type_val>;
-            let neighbours : Vec<Neighbour>; 
+            let neighbours : Vec<Neighbour>;
             unsafe {
                 let slice = std::slice::from_raw_parts(data, len);
                 data_v = Vec::from(slice);
@@ -155,10 +158,10 @@ macro_rules! generate_search_neighbours(
 macro_rules! generate_parallel_search_neighbours(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *const $api_name, nb_vec : usize, vec_len :i64, 
+        pub extern "C" fn $function_name(hnsw_api : *const $api_name, nb_vec : usize, vec_len :i64,
                             data : *mut *const $type_val, knbn : usize, ef_search : usize) ->  *const Vec_api<Neighbourhood_api> {
             log::trace!("receiving parallel search request for type: {:?} with {:?} vectors", stringify!($type_val), nb_vec);
-            let neighbours : Vec<Vec<Neighbour> >; 
+            let neighbours : Vec<Vec<Neighbour> >;
             let mut data_v = Vec::<Vec<$type_val>>::with_capacity(nb_vec);
             unsafe {
                 let slice = std::slice::from_raw_parts(data, nb_vec);
@@ -210,7 +213,7 @@ macro_rules! generate_loadhnsw(
         #[no_mangle]
         pub extern "C" fn $function_name(flen : usize, name : *const u8)  -> *const $api_name {
             let  slice = unsafe { std::slice::from_raw_parts(name, flen)} ;
-            let filename = String::from_utf8_lossy(slice).into_owned(); 
+            let filename = String::from_utf8_lossy(slice).into_owned();
             let buffers = make_readers(&filename);
             let mut graph_in = buffers.0;
             let mut data_in = buffers.1;
@@ -218,7 +221,7 @@ macro_rules! generate_loadhnsw(
             let hnsw_loaded_res = load_hnsw::<$type_val, $type_dist>(&mut graph_in, &hnsw_description, &mut data_in);
             if let Ok(hnsw_loaded) = hnsw_loaded_res {
                 let api = <$api_name>::new(Box::new(hnsw_loaded));
-                return Box::into_raw(Box::new(api));  
+                return Box::into_raw(Box::new(api));
             }
             return ptr::null();
         }
@@ -228,104 +231,260 @@ macro_rules! generate_loadhnsw(
 //===================================== Type Implementations =====================================
 
 // f32
-generate_loadhnsw!(load_hnswdump_f32_DistL1, HnswApif32, f32, crate::core::index::hnsw_rs::DistL1);
-generate_loadhnsw!(load_hnswdump_f32_DistL2, HnswApif32, f32, crate::core::index::hnsw_rs::DistL2);
-generate_loadhnsw!(load_hnswdump_f32_DistCosine, HnswApif32, f32, crate::core::index::hnsw_rs::DistCosine);
-generate_loadhnsw!(load_hnswdump_f32_DistDot, HnswApif32, f32, crate::core::index::hnsw_rs::DistDot);
-generate_loadhnsw!(load_hnswdump_f32_DistJensenShannon, HnswApif32, f32, crate::core::index::hnsw_rs::DistJensenShannon);
-generate_loadhnsw!(load_hnswdump_f32_DistJeffreys, HnswApif32, f32, crate::core::index::hnsw_rs::DistJeffreys);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistL1,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistL1
+);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistL2,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistL2
+);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistCosine,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistCosine
+);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistDot,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistDot
+);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistJensenShannon,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistJensenShannon
+);
+generate_loadhnsw!(
+    load_hnswdump_f32_DistJeffreys,
+    HnswApif32,
+    f32,
+    crate::core::index::hnsw_rs::DistJeffreys
+);
 
 // i32
-generate_loadhnsw!(load_hnswdump_i32_DistL1, HnswApii32, i32, crate::core::index::hnsw_rs::DistL1);
-generate_loadhnsw!(load_hnswdump_i32_DistL2, HnswApii32, i32, crate::core::index::hnsw_rs::DistL2);
-generate_loadhnsw!(load_hnswdump_i32_DistHamming, HnswApii32, i32, crate::core::index::hnsw_rs::DistHamming);
+generate_loadhnsw!(
+    load_hnswdump_i32_DistL1,
+    HnswApii32,
+    i32,
+    crate::core::index::hnsw_rs::DistL1
+);
+generate_loadhnsw!(
+    load_hnswdump_i32_DistL2,
+    HnswApii32,
+    i32,
+    crate::core::index::hnsw_rs::DistL2
+);
+generate_loadhnsw!(
+    load_hnswdump_i32_DistHamming,
+    HnswApii32,
+    i32,
+    crate::core::index::hnsw_rs::DistHamming
+);
 
 // u32
-generate_loadhnsw!(load_hnswdump_u32_DistL1, HnswApiu32, u32, crate::core::index::hnsw_rs::DistL1);
-generate_loadhnsw!(load_hnswdump_u32_DistL2, HnswApiu32, u32, crate::core::index::hnsw_rs::DistL2);
-generate_loadhnsw!(load_hnswdump_u32_DistHamming, HnswApiu32, u32, crate::core::index::hnsw_rs::DistHamming);
-generate_loadhnsw!(load_hnswdump_u32_DistJaccard, HnswApiu32, u32, crate::core::index::hnsw_rs::DistJaccard);
+generate_loadhnsw!(
+    load_hnswdump_u32_DistL1,
+    HnswApiu32,
+    u32,
+    crate::core::index::hnsw_rs::DistL1
+);
+generate_loadhnsw!(
+    load_hnswdump_u32_DistL2,
+    HnswApiu32,
+    u32,
+    crate::core::index::hnsw_rs::DistL2
+);
+generate_loadhnsw!(
+    load_hnswdump_u32_DistHamming,
+    HnswApiu32,
+    u32,
+    crate::core::index::hnsw_rs::DistHamming
+);
+generate_loadhnsw!(
+    load_hnswdump_u32_DistJaccard,
+    HnswApiu32,
+    u32,
+    crate::core::index::hnsw_rs::DistJaccard
+);
 
 // u16
-generate_loadhnsw!(load_hnswdump_u16_DistL1, HnswApiu16, u16, crate::core::index::hnsw_rs::DistL1);
-generate_loadhnsw!(load_hnswdump_u16_DistL2, HnswApiu16, u16, crate::core::index::hnsw_rs::DistL2);
-generate_loadhnsw!(load_hnswdump_u16_DistHamming, HnswApiu16, u16, crate::core::index::hnsw_rs::DistHamming);
-generate_loadhnsw!(load_hnswdump_u16_DistLevenshtein, HnswApiu16, u16, crate::core::index::hnsw_rs::DistLevenshtein);
+generate_loadhnsw!(
+    load_hnswdump_u16_DistL1,
+    HnswApiu16,
+    u16,
+    crate::core::index::hnsw_rs::DistL1
+);
+generate_loadhnsw!(
+    load_hnswdump_u16_DistL2,
+    HnswApiu16,
+    u16,
+    crate::core::index::hnsw_rs::DistL2
+);
+generate_loadhnsw!(
+    load_hnswdump_u16_DistHamming,
+    HnswApiu16,
+    u16,
+    crate::core::index::hnsw_rs::DistHamming
+);
+generate_loadhnsw!(
+    load_hnswdump_u16_DistLevenshtein,
+    HnswApiu16,
+    u16,
+    crate::core::index::hnsw_rs::DistLevenshtein
+);
 
 // u8
-generate_loadhnsw!(load_hnswdump_u8_DistL1, HnswApiu8, u8, crate::core::index::hnsw_rs::DistL1);
-generate_loadhnsw!(load_hnswdump_u8_DistL2, HnswApiu8, u8, crate::core::index::hnsw_rs::DistL2);
-generate_loadhnsw!(load_hnswdump_u8_DistHamming, HnswApiu8, u8, crate::core::index::hnsw_rs::DistHamming);
-generate_loadhnsw!(load_hnswdump_u8_DistJaccard, HnswApiu8, u8, crate::core::index::hnsw_rs::DistJaccard);
+generate_loadhnsw!(
+    load_hnswdump_u8_DistL1,
+    HnswApiu8,
+    u8,
+    crate::core::index::hnsw_rs::DistL1
+);
+generate_loadhnsw!(
+    load_hnswdump_u8_DistL2,
+    HnswApiu8,
+    u8,
+    crate::core::index::hnsw_rs::DistL2
+);
+generate_loadhnsw!(
+    load_hnswdump_u8_DistHamming,
+    HnswApiu8,
+    u8,
+    crate::core::index::hnsw_rs::DistHamming
+);
+generate_loadhnsw!(
+    load_hnswdump_u8_DistJaccard,
+    HnswApiu8,
+    u8,
+    crate::core::index::hnsw_rs::DistJaccard
+);
 
 // NoData
-generate_loadhnsw!(load_hnswdump_NoData_DistNoDist, HnswApiNodata, NoData, crate::core::index::hnsw_rs::NoDist);
+generate_loadhnsw!(
+    load_hnswdump_NoData_DistNoDist,
+    HnswApiNodata,
+    NoData,
+    crate::core::index::hnsw_rs::NoDist
+);
 
 //===================================== Initialization functions =====================================
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_f32(max_nb_conn : usize, ef_const:usize, namelen: usize,  cdistname : *const u8) -> *const HnswApif32 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn init_hnsw_f32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+) -> *const HnswApif32 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice).into_owned();
     match dname.as_str() {
-        "DistL1" => { 
-            let h = Hnsw::<f32, DistL1 >::new(max_nb_conn, 10000, 16, ef_const, DistL1{});
+        "DistL1" => {
+            let h = Hnsw::<f32, DistL1>::new(max_nb_conn, 10000, 16, ef_const, DistL1 {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
         "DistL2" => {
-            let h = Hnsw::<f32, DistL2 >::new(max_nb_conn, 10000, 16, ef_const, DistL2{});
+            let h = Hnsw::<f32, DistL2>::new(max_nb_conn, 10000, 16, ef_const, DistL2 {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistDot" =>  {
-            let h = Hnsw::<f32, DistDot >::new(max_nb_conn, 10000, 16, ef_const, DistDot{});
+        "DistDot" => {
+            let h = Hnsw::<f32, DistDot>::new(max_nb_conn, 10000, 16, ef_const, DistDot {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistHellinger" =>  {
-            let h = Hnsw::<f32, DistHellinger >::new(max_nb_conn, 10000, 16, ef_const, DistHellinger{});
+        "DistHellinger" => {
+            let h =
+                Hnsw::<f32, DistHellinger>::new(max_nb_conn, 10000, 16, ef_const, DistHellinger {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistJeffreys" =>  {
-            let h = Hnsw::<f32, DistJeffreys>::new(max_nb_conn, 10000, 16, ef_const, DistJeffreys{});
+        "DistJeffreys" => {
+            let h =
+                Hnsw::<f32, DistJeffreys>::new(max_nb_conn, 10000, 16, ef_const, DistJeffreys {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistJensenShannon" =>  {
-            let h = Hnsw::<f32, DistJensenShannon>::new(max_nb_conn, 10000, 16, ef_const, DistJensenShannon{});
+        "DistJensenShannon" => {
+            let h = Hnsw::<f32, DistJensenShannon>::new(
+                max_nb_conn,
+                10000,
+                16,
+                ef_const,
+                DistJensenShannon {},
+            );
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        _   => ptr::null(),
+        _ => ptr::null(),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn new_hnsw_f32(max_nb_conn : usize, ef_const:usize, namelen: usize, cdistname : *const u8, max_elements: usize, max_layer: usize) -> *const HnswApif32 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn new_hnsw_f32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+    max_elements: usize,
+    max_layer: usize,
+) -> *const HnswApif32 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice);
     match dname.as_ref() {
-        "DistL1" => { 
-            let h = Hnsw::<f32, DistL1 >::new(max_nb_conn, max_elements, max_layer, ef_const, DistL1{});
+        "DistL1" => {
+            let h =
+                Hnsw::<f32, DistL1>::new(max_nb_conn, max_elements, max_layer, ef_const, DistL1 {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
         "DistL2" => {
-            let h = Hnsw::<f32, DistL2 >::new(max_nb_conn, max_elements, max_layer, ef_const, DistL2{});
+            let h =
+                Hnsw::<f32, DistL2>::new(max_nb_conn, max_elements, max_layer, ef_const, DistL2 {});
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistDot" =>  {
-            let h = Hnsw::<f32, DistDot >::new(max_nb_conn, max_elements, max_layer, ef_const, DistDot{});
+        "DistDot" => {
+            let h = Hnsw::<f32, DistDot>::new(
+                max_nb_conn,
+                max_elements,
+                max_layer,
+                ef_const,
+                DistDot {},
+            );
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistHellinger" =>  {
-            let h = Hnsw::<f32, DistHellinger >::new(max_nb_conn, max_elements, max_layer, ef_const, DistHellinger{});
+        "DistHellinger" => {
+            let h = Hnsw::<f32, DistHellinger>::new(
+                max_nb_conn,
+                max_elements,
+                max_layer,
+                ef_const,
+                DistHellinger {},
+            );
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistJeffreys" =>  {
-            let h = Hnsw::<f32, DistJeffreys>::new(max_nb_conn, max_elements, max_layer, ef_const, DistJeffreys{});
+        "DistJeffreys" => {
+            let h = Hnsw::<f32, DistJeffreys>::new(
+                max_nb_conn,
+                max_elements,
+                max_layer,
+                ef_const,
+                DistJeffreys {},
+            );
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        "DistJensenShannon" =>  {
-            let h = Hnsw::<f32, DistJensenShannon>::new(max_nb_conn, max_elements, max_layer, ef_const, DistJensenShannon{});
+        "DistJensenShannon" => {
+            let h = Hnsw::<f32, DistJensenShannon>::new(
+                max_nb_conn,
+                max_elements,
+                max_layer,
+                ef_const,
+                DistJensenShannon {},
+            );
             Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
         }
-        _   => ptr::null(),
+        _ => ptr::null(),
     }
 }
 
@@ -344,9 +503,13 @@ pub unsafe extern "C" fn drop_hnsw_u16(p: *const HnswApiu16) {
 }
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_ptrdist_f32(max_nb_conn : usize, ef_const:usize, c_func : extern "C" fn(*const f32, *const f32, u64) -> f32 ) -> *const HnswApif32 {
+pub extern "C" fn init_hnsw_ptrdist_f32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    c_func: extern "C" fn(*const f32, *const f32, u64) -> f32,
+) -> *const HnswApif32 {
     let c_dist = DistCFFI::<f32>::new(c_func);
-    let h = Hnsw::<f32, DistCFFI<f32> >::new(max_nb_conn, 10000, 16, ef_const, c_dist);
+    let h = Hnsw::<f32, DistCFFI<f32>>::new(max_nb_conn, 10000, 16, ef_const, c_dist);
     Box::into_raw(Box::new(HnswApif32::new(Box::new(h))))
 }
 
@@ -359,29 +522,35 @@ generate_file_dump!(file_dump_f32, HnswApif32, f32);
 
 // i32
 #[no_mangle]
-pub extern "C" fn init_hnsw_i32(max_nb_conn : usize, ef_const:usize, namelen: usize,  cdistname : *const u8) -> *const HnswApii32 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn init_hnsw_i32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+) -> *const HnswApii32 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice);
-    if dname == "DistL1" { 
-        let h = Hnsw::<i32, DistL1 >::new(max_nb_conn, 10000, 16, ef_const, DistL1{});
+    if dname == "DistL1" {
+        let h = Hnsw::<i32, DistL1>::new(max_nb_conn, 10000, 16, ef_const, DistL1 {});
+        return Box::into_raw(Box::new(HnswApii32::new(Box::new(h))));
+    } else if dname == "DistL2" {
+        let h = Hnsw::<i32, DistL2>::new(max_nb_conn, 10000, 16, ef_const, DistL2 {});
+        return Box::into_raw(Box::new(HnswApii32::new(Box::new(h))));
+    } else if dname == "DistHamming" {
+        let h = Hnsw::<i32, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming {});
         return Box::into_raw(Box::new(HnswApii32::new(Box::new(h))));
     }
-    else if dname == "DistL2" {
-        let h = Hnsw::<i32, DistL2 >::new(max_nb_conn, 10000, 16, ef_const, DistL2{});
-        return Box::into_raw(Box::new(HnswApii32::new(Box::new(h))));        
-    }
-    else if dname == "DistHamming" {
-        let h = Hnsw::<i32, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming{});
-        return Box::into_raw(Box::new(HnswApii32::new(Box::new(h))));         
-    } 
     ptr::null()
 }
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_ptrdist_i32(max_nb_conn : usize, ef_const:usize, 
-                c_func : extern "C" fn(*const i32, *const i32, u64) -> f32 ) -> *const HnswApii32 {
+pub extern "C" fn init_hnsw_ptrdist_i32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    c_func: extern "C" fn(*const i32, *const i32, u64) -> f32,
+) -> *const HnswApii32 {
     let c_dist = DistCFFI::<i32>::new(c_func);
-    let h = Hnsw::<i32, DistCFFI<i32> >::new(max_nb_conn, 10000, 16, ef_const, c_dist);
+    let h = Hnsw::<i32, DistCFFI<i32>>::new(max_nb_conn, 10000, 16, ef_const, c_dist);
     Box::into_raw(Box::new(HnswApii32::new(Box::new(h))))
 }
 
@@ -393,33 +562,38 @@ generate_file_dump!(file_dump_i32, HnswApii32, i32);
 
 // u32
 #[no_mangle]
-pub extern "C" fn init_hnsw_u32(max_nb_conn : usize, ef_const:usize, namelen: usize,  cdistname : *const u8) -> *const HnswApiu32 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn init_hnsw_u32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+) -> *const HnswApiu32 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice);
-    if dname == "DistL1" { 
-        let h = Hnsw::<u32, DistL1 >::new(max_nb_conn, 10000, 16, ef_const, DistL1{});
+    if dname == "DistL1" {
+        let h = Hnsw::<u32, DistL1>::new(max_nb_conn, 10000, 16, ef_const, DistL1 {});
+        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));
+    } else if dname == "DistL2" {
+        let h = Hnsw::<u32, DistL2>::new(max_nb_conn, 10000, 16, ef_const, DistL2 {});
+        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));
+    } else if dname == "DistJaccard" {
+        let h = Hnsw::<u32, DistJaccard>::new(max_nb_conn, 10000, 16, ef_const, DistJaccard {});
+        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));
+    } else if dname == "DistHamming" {
+        let h = Hnsw::<u32, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming {});
         return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));
     }
-    else if dname == "DistL2" {
-        let h = Hnsw::<u32, DistL2 >::new(max_nb_conn, 10000, 16, ef_const, DistL2{});
-        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h)))); 
-    }       
-    else if dname == "DistJaccard" {
-        let h = Hnsw::<u32, DistJaccard >::new(max_nb_conn, 10000, 16, ef_const, DistJaccard{});
-        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));         
-    }
-    else if dname == "DistHamming" {
-        let h = Hnsw::<u32, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming{});
-        return Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))));         
-    } 
     ptr::null()
 }
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_ptrdist_u32(max_nb_conn : usize, ef_const:usize, 
-                c_func : extern "C" fn(*const u32, *const u32, u64) -> f32 ) -> *const HnswApiu32 {
+pub extern "C" fn init_hnsw_ptrdist_u32(
+    max_nb_conn: usize,
+    ef_const: usize,
+    c_func: extern "C" fn(*const u32, *const u32, u64) -> f32,
+) -> *const HnswApiu32 {
     let c_dist = DistCFFI::<u32>::new(c_func);
-    let h = Hnsw::<u32, DistCFFI<u32> >::new(max_nb_conn, 10000, 16, ef_const, c_dist);
+    let h = Hnsw::<u32, DistCFFI<u32>>::new(max_nb_conn, 10000, 16, ef_const, c_dist);
     Box::into_raw(Box::new(HnswApiu32::new(Box::new(h))))
 }
 
@@ -431,64 +605,90 @@ generate_file_dump!(file_dump_u32, HnswApiu32, u32);
 
 // u16
 #[no_mangle]
-pub extern "C" fn init_hnsw_u16(max_nb_conn : usize, ef_const:usize, namelen: usize,  cdistname : *const u8) -> *const HnswApiu16 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
-    let dname = String::from_utf8_lossy(slice);
-    if dname == "DistL1" { 
-        let h = Hnsw::<u16, DistL1 >::new(max_nb_conn, 10000, 16, ef_const, DistL1{});
-        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistL2" {
-        let h = Hnsw::<u16, DistL2 >::new(max_nb_conn, 10000, 16, ef_const, DistL2{});
-        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));        
-    }
-    else if dname == "DistHamming" {
-        let h = Hnsw::<u16, DistHamming >::new(max_nb_conn, 10000, 16, ef_const, DistHamming{});
-        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));         
-    }
-    else if dname == "DistJaccard" {
-        let h = Hnsw::<u16, DistJaccard >::new(max_nb_conn, 10000, 16, ef_const, DistJaccard{});
-        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistLevenshtein" {
-        let h = Hnsw::<u16, DistLevenshtein >::new(max_nb_conn, 10000, 16, ef_const, DistLevenshtein{});
-        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    ptr::null()
-}
-
-#[no_mangle]
-pub extern "C" fn new_hnsw_u16(max_nb_conn : usize, ef_const:usize, namelen: usize, cdistname : *const u8, max_elements: usize, max_layer: usize) -> *const HnswApiu16 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn init_hnsw_u16(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+) -> *const HnswApiu16 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice);
     if dname == "DistL1" {
-        let h = Hnsw::<u16, DistL1 >::new(max_nb_conn, max_elements, max_layer, ef_const, DistL1{});
+        let h = Hnsw::<u16, DistL1>::new(max_nb_conn, 10000, 16, ef_const, DistL1 {});
         return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistL2" {
-        let h = Hnsw::<u16, DistL2 >::new(max_nb_conn, max_elements, max_layer, ef_const, DistL2{});
+    } else if dname == "DistL2" {
+        let h = Hnsw::<u16, DistL2>::new(max_nb_conn, 10000, 16, ef_const, DistL2 {});
         return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistHamming" {
-        let h = Hnsw::<u16, DistHamming >::new(max_nb_conn, max_elements, max_layer, ef_const, DistHamming{});
+    } else if dname == "DistHamming" {
+        let h = Hnsw::<u16, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming {});
         return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistJaccard" {
-        let h = Hnsw::<u16, DistJaccard >::new(max_nb_conn, max_elements, max_layer, ef_const, DistJaccard{});
+    } else if dname == "DistJaccard" {
+        let h = Hnsw::<u16, DistJaccard>::new(max_nb_conn, 10000, 16, ef_const, DistJaccard {});
         return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
-    }
-    else if dname == "DistLevenshtein" {
-        let h = Hnsw::<u16, DistLevenshtein >::new(max_nb_conn, max_elements, max_layer, ef_const, DistLevenshtein{});
+    } else if dname == "DistLevenshtein" {
+        let h =
+            Hnsw::<u16, DistLevenshtein>::new(max_nb_conn, 10000, 16, ef_const, DistLevenshtein {});
         return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
     }
     ptr::null()
 }
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_ptrdist_u16(max_nb_conn : usize, ef_const:usize, 
-                c_func : extern "C" fn(*const u16, *const u16, u64) -> f32 ) -> *const HnswApiu16 {
+pub extern "C" fn new_hnsw_u16(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+    max_elements: usize,
+    max_layer: usize,
+) -> *const HnswApiu16 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
+    let dname = String::from_utf8_lossy(slice);
+    if dname == "DistL1" {
+        let h = Hnsw::<u16, DistL1>::new(max_nb_conn, max_elements, max_layer, ef_const, DistL1 {});
+        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
+    } else if dname == "DistL2" {
+        let h = Hnsw::<u16, DistL2>::new(max_nb_conn, max_elements, max_layer, ef_const, DistL2 {});
+        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
+    } else if dname == "DistHamming" {
+        let h = Hnsw::<u16, DistHamming>::new(
+            max_nb_conn,
+            max_elements,
+            max_layer,
+            ef_const,
+            DistHamming {},
+        );
+        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
+    } else if dname == "DistJaccard" {
+        let h = Hnsw::<u16, DistJaccard>::new(
+            max_nb_conn,
+            max_elements,
+            max_layer,
+            ef_const,
+            DistJaccard {},
+        );
+        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
+    } else if dname == "DistLevenshtein" {
+        let h = Hnsw::<u16, DistLevenshtein>::new(
+            max_nb_conn,
+            max_elements,
+            max_layer,
+            ef_const,
+            DistLevenshtein {},
+        );
+        return Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))));
+    }
+    ptr::null()
+}
+
+#[no_mangle]
+pub extern "C" fn init_hnsw_ptrdist_u16(
+    max_nb_conn: usize,
+    ef_const: usize,
+    c_func: extern "C" fn(*const u16, *const u16, u64) -> f32,
+) -> *const HnswApiu16 {
     let c_dist = DistCFFI::<u16>::new(c_func);
-    let h = Hnsw::<u16, DistCFFI<u16> >::new(max_nb_conn, 10000, 16, ef_const, c_dist);
+    let h = Hnsw::<u16, DistCFFI<u16>>::new(max_nb_conn, 10000, 16, ef_const, c_dist);
     Box::into_raw(Box::new(HnswApiu16::new(Box::new(h))))
 }
 
@@ -500,33 +700,38 @@ generate_file_dump!(file_dump_u16, HnswApiu16, u16);
 
 // u8
 #[no_mangle]
-pub extern "C" fn init_hnsw_u8(max_nb_conn : usize, ef_const:usize, namelen: usize,  cdistname : *const u8) -> *const HnswApiu8 {
-    let  slice = unsafe { std::slice::from_raw_parts(cdistname, namelen)} ;
+pub extern "C" fn init_hnsw_u8(
+    max_nb_conn: usize,
+    ef_const: usize,
+    namelen: usize,
+    cdistname: *const u8,
+) -> *const HnswApiu8 {
+    let slice = unsafe { std::slice::from_raw_parts(cdistname, namelen) };
     let dname = String::from_utf8_lossy(slice);
-    if dname == "DistL1" { 
-        let h = Hnsw::<u8, DistL1 >::new(max_nb_conn, 10000, 16, ef_const, DistL1{});
+    if dname == "DistL1" {
+        let h = Hnsw::<u8, DistL1>::new(max_nb_conn, 10000, 16, ef_const, DistL1 {});
         return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));
-    }
-    else if dname == "DistL2" {
-        let h = Hnsw::<u8, DistL2 >::new(max_nb_conn, 10000, 16, ef_const, DistL2{});
-        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));        
-    }
-    else if dname == "DistHamming" {
-        let h = Hnsw::<u8, DistHamming >::new(max_nb_conn, 10000, 16, ef_const, DistHamming{});
-        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));         
-    }
-    else if dname == "DistJaccard" {
-        let h = Hnsw::<u8, DistJaccard >::new(max_nb_conn, 10000, 16, ef_const, DistJaccard{});
-        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));         
+    } else if dname == "DistL2" {
+        let h = Hnsw::<u8, DistL2>::new(max_nb_conn, 10000, 16, ef_const, DistL2 {});
+        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));
+    } else if dname == "DistHamming" {
+        let h = Hnsw::<u8, DistHamming>::new(max_nb_conn, 10000, 16, ef_const, DistHamming {});
+        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));
+    } else if dname == "DistJaccard" {
+        let h = Hnsw::<u8, DistJaccard>::new(max_nb_conn, 10000, 16, ef_const, DistJaccard {});
+        return Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))));
     }
     ptr::null()
 }
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_ptrdist_u8(max_nb_conn : usize, ef_const:usize, 
-                c_func : extern "C" fn(*const u8, *const u8, u64) -> f32 ) -> *const HnswApiu8 {
+pub extern "C" fn init_hnsw_ptrdist_u8(
+    max_nb_conn: usize,
+    ef_const: usize,
+    c_func: extern "C" fn(*const u8, *const u8, u64) -> f32,
+) -> *const HnswApiu8 {
     let c_dist = DistCFFI::<u8>::new(c_func);
-    let h = Hnsw::<u8, DistCFFI<u8> >::new(max_nb_conn, 10000, 16, ef_const, c_dist);
+    let h = Hnsw::<u8, DistCFFI<u8>>::new(max_nb_conn, 10000, 16, ef_const, c_dist);
     Box::into_raw(Box::new(HnswApiu8::new(Box::new(h))))
 }
 
@@ -540,45 +745,45 @@ generate_file_dump!(file_dump_u8, HnswApiu8, u8);
 
 #[repr(C)]
 pub struct DescriptionFFI {
-    pub dumpmode : u8,
-    pub max_nb_connection : u8,
-    pub nb_layer : u8,
+    pub dumpmode: u8,
+    pub max_nb_connection: u8,
+    pub nb_layer: u8,
     pub ef: usize,
     pub nb_point: usize,
-    pub data_dimension : usize,
+    pub data_dimension: usize,
     pub distname_len: usize,
-    pub distname : *const u8,
-    pub t_name_len : usize,
-    pub t_name : *const u8,
+    pub distname: *const u8,
+    pub t_name_len: usize,
+    pub t_name: *const u8,
 }
 
 impl DescriptionFFI {
     pub fn new() -> Self {
         DescriptionFFI {
-            dumpmode : 0,
-            max_nb_connection : 0,
-            nb_layer : 0,
-            ef : 0,
-            nb_point : 0,
-            data_dimension : 0,
-            distname_len : 0,
-            distname : ptr::null(),
-            t_name_len : 0,
-            t_name : ptr::null()
+            dumpmode: 0,
+            max_nb_connection: 0,
+            nb_layer: 0,
+            ef: 0,
+            nb_point: 0,
+            data_dimension: 0,
+            distname_len: 0,
+            distname: ptr::null(),
+            t_name_len: 0,
+            t_name: ptr::null(),
         }
     }
 }
 
 #[no_mangle]
-pub extern "C" fn load_hnsw_description(flen : usize, name : *const u8) -> *const DescriptionFFI {
-    let  slice = unsafe { std::slice::from_raw_parts(name, flen)} ;
-    let filename = String::from_utf8_lossy(slice).into_owned();   
+pub extern "C" fn load_hnsw_description(flen: usize, name: *const u8) -> *const DescriptionFFI {
+    let slice = unsafe { std::slice::from_raw_parts(name, flen) };
+    let filename = String::from_utf8_lossy(slice).into_owned();
     let fpath = PathBuf::from(filename);
     let fileres = OpenOptions::new().read(true).open(&fpath);
     let mut ffi_description = DescriptionFFI::new();
     match fileres {
         Ok(file) => {
-            let mut bufr = BufReader::with_capacity(10_000_000 , file);
+            let mut bufr = BufReader::with_capacity(10_000_000, file);
             let res = load_description(&mut bufr);
             if let Ok(description) = res {
                 let distname = description.distname.clone();
@@ -603,7 +808,7 @@ pub extern "C" fn load_hnsw_description(flen : usize, name : *const u8) -> *cons
                 return Box::into_raw(Box::new(ffi_description));
             }
             return ptr::null();
-        },
+        }
         Err(_) => ptr::null(),
     }
 }
@@ -614,16 +819,22 @@ pub fn make_readers(basename: &String) -> (BufReader<std::fs::File>, BufReader<s
     let graphpath = PathBuf::from(graphfname);
     let graphfileres = OpenOptions::new().read(true).open(&graphpath);
     if graphfileres.is_err() {
-        std::panic::panic_any(format!("make_readers : could not open file {:?}", graphpath.as_os_str()));            
+        std::panic::panic_any(format!(
+            "make_readers : could not open file {:?}",
+            graphpath.as_os_str()
+        ));
     }
     let graphfile = graphfileres.unwrap();
-     
+
     let mut datafname = basename.clone();
     datafname.push_str(".hnsw.data");
     let datapath = PathBuf::from(datafname);
     let datafileres = OpenOptions::new().read(true).open(&datapath);
     if datafileres.is_err() {
-        std::panic::panic_any(format!("make_readers: could not open file {:?}", datapath.as_os_str()));            
+        std::panic::panic_any(format!(
+            "make_readers: could not open file {:?}",
+            datapath.as_os_str()
+        ));
     }
     let datafile = datafileres.unwrap();
     (BufReader::new(graphfile), BufReader::new(datafile))

@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::index::Quantizer;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use crate::core::index::Quantizer;
 
 /// TurboQuant Implementation (FWHT + Scalar Quantization)
-/// 
-/// This is the high-performance quantization engine that leverages the 
+///
+/// This is the high-performance quantization engine that leverages the
 /// Fast Walsh-Hadamard Transform to provide outlier-robust scalar quantization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurboQuantEncoder {
@@ -20,7 +20,12 @@ pub struct TurboQuantEncoder {
 
 impl TurboQuantEncoder {
     pub fn new(dim: usize, bits: usize, offset: f32, scale: f32) -> Self {
-        Self { dim, bits, offset, scale }
+        Self {
+            dim,
+            bits,
+            offset,
+            scale,
+        }
     }
 
     /// Train the quantizer by finding the min/max values across a sample of rotated vectors.
@@ -39,10 +44,14 @@ impl TurboQuantEncoder {
                 rotated.resize(next_pow2, 0.0);
             }
             fwht(&mut rotated);
-            
+
             for &val in &rotated {
-                if val < global_min { global_min = val; }
-                if val > global_max { global_max = val; }
+                if val < global_min {
+                    global_min = val;
+                }
+                if val > global_max {
+                    global_max = val;
+                }
             }
         }
 
@@ -72,10 +81,13 @@ impl Quantizer for TurboQuantEncoder {
         fwht(&mut rotated);
 
         let max_val = ((1 << self.bits) - 1) as f32;
-        let quantized: Vec<u8> = rotated.iter().map(|&val| {
-            let q = ((val - self.offset) * self.scale).round();
-            q.clamp(0.0, max_val) as u8
-        }).collect();
+        let quantized: Vec<u8> = rotated
+            .iter()
+            .map(|&val| {
+                let q = ((val - self.offset) * self.scale).round();
+                q.clamp(0.0, max_val) as u8
+            })
+            .collect();
 
         if self.bits == 4 {
             // Pack two 4-bit nibbles into one byte
@@ -104,15 +116,16 @@ impl Quantizer for TurboQuantEncoder {
             bytes.to_vec()
         };
 
-        let mut rotated: Vec<f32> = decoded_bytes.iter().map(|&b| {
-            (b as f32 / self.scale) + self.offset
-        }).collect();
-        
+        let mut rotated: Vec<f32> = decoded_bytes
+            .iter()
+            .map(|&b| (b as f32 / self.scale) + self.offset)
+            .collect();
+
         // Invert FWHT (FWHT is self-inverse up to scaling by 1/N)
         fwht(&mut rotated);
         let n = rotated.len() as f32;
         rotated.iter_mut().for_each(|x| *x /= n);
-        
+
         // Truncate to original dimension
         rotated.truncate(self.dim);
         rotated
@@ -174,7 +187,7 @@ impl Quantizer for TurboQuantEncoder {
 pub fn fwht(data: &mut [f32]) {
     let n = data.len();
     if !n.is_power_of_two() {
-        return; 
+        return;
     }
 
     let mut h = 1;

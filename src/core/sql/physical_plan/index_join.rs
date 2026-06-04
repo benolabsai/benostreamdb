@@ -1,27 +1,28 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::collections::HashMap;
 
-use arrow::datatypes::{SchemaRef, DataType};
-use arrow::record_batch::RecordBatch;
-use arrow::array::{ArrayRef, Array};
+use arrow::array::{Array, ArrayRef};
 use arrow::compute::{concat_batches, take};
-use futures::{Stream, StreamExt, Future};
-use datafusion::physical_plan::{
-    ExecutionPlan, SendableRecordBatchStream, DisplayAs, DisplayFormatType, PlanProperties, RecordBatchStream
-};
-use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
-use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::execution::TaskContext;
+use arrow::datatypes::{DataType, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use datafusion::common::Result;
+use datafusion::execution::TaskContext;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
+    SendableRecordBatchStream,
+};
+use futures::{Future, Stream, StreamExt};
 
-use crate::core::table::Table;
 use crate::core::planner::QueryFilter;
+use crate::core::table::Table;
 use serde_json::Value;
 
 #[derive(Debug)]
@@ -61,7 +62,11 @@ impl HyperStreamIndexJoinExec {
 
 impl DisplayAs for HyperStreamIndexJoinExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "HyperStreamIndexJoinExec: on {} = {}", self.left_on, self.right_col)
+        write!(
+            f,
+            "HyperStreamIndexJoinExec: on {} = {}",
+            self.left_on, self.right_col
+        )
     }
 }
 
@@ -105,7 +110,7 @@ impl ExecutionPlan for HyperStreamIndexJoinExec {
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let left_stream = self.left.execute(partition, context)?;
-        
+
         Ok(Box::pin(IndexJoinStream {
             left_stream,
             right_table: self.right_table.clone(),
@@ -138,7 +143,12 @@ impl Stream for IndexJoinStream {
                         return Poll::Ready(res.transpose());
                     }
                     Poll::Ready(Err(e)) => {
-                        return Poll::Ready(Some(Err(datafusion::error::DataFusionError::Execution(format!("Join error: {}", e)))));
+                        return Poll::Ready(Some(Err(
+                            datafusion::error::DataFusionError::Execution(format!(
+                                "Join error: {}",
+                                e
+                            )),
+                        )));
                     }
                     Poll::Pending => {
                         self.current_future = Some(fut);
@@ -146,7 +156,7 @@ impl Stream for IndexJoinStream {
                     }
                 }
             }
-            
+
             // Poll left stream
             match self.left_stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(left_batch))) => {
@@ -156,7 +166,14 @@ impl Stream for IndexJoinStream {
                     let output_schema = self.output_schema.clone();
 
                     let fut = tokio::spawn(async move {
-                        process_join_batch(left_batch, right_table, left_on, right_col, output_schema).await
+                        process_join_batch(
+                            left_batch,
+                            right_table,
+                            left_on,
+                            right_col,
+                            output_schema,
+                        )
+                        .await
                     });
                     self.current_future = Some(fut);
                 }
@@ -187,11 +204,11 @@ async fn process_join_batch(
 
     // 2. Extract distinct keys for query
     let distinct_values = extract_distinct_values(&keys_array)?;
-    
+
     if distinct_values.is_empty() {
         return Ok(None);
     }
-    
+
     // 3. Query Right Table
     let filter = QueryFilter {
         column: right_col.clone(),
@@ -202,21 +219,31 @@ async fn process_join_batch(
         values: Some(distinct_values),
         negated: false,
     };
-    
-    let right_batches = table.read_filter_async(vec![filter], None, None).await
-        .map_err(|e| datafusion::error::DataFusionError::Execution(format!("HyperStream read error: {}", e)))?;
-        
+
+    let right_batches = table
+        .read_filter_async(vec![filter], None, None)
+        .await
+        .map_err(|e| {
+            datafusion::error::DataFusionError::Execution(format!("HyperStream read error: {}", e))
+        })?;
+
     if right_batches.is_empty() {
         return Ok(None);
     }
-    
+
     // Concatenate all right batches into one
     // We assume schema is consistent
     let right_schema = right_batches[0].schema();
     let right_batch_concat = concat_batches(&right_schema, &right_batches)?;
 
     // 4. Perform In-Memory Join using Indices
-    perform_join(&left_batch, &keys_array, &right_batch_concat, &right_col, &output_schema)
+    perform_join(
+        &left_batch,
+        &keys_array,
+        &right_batch_concat,
+        &right_col,
+        &output_schema,
+    )
 }
 
 fn extract_distinct_values(array: &ArrayRef) -> Result<Vec<Value>> {
@@ -224,33 +251,46 @@ fn extract_distinct_values(array: &ArrayRef) -> Result<Vec<Value>> {
     // Simplified: handle common types
     match array.data_type() {
         DataType::Int64 => {
-            let arr = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .unwrap();
             for i in 0..arr.len() {
                 if !arr.is_null(i) {
                     values.push(Value::Number(arr.value(i).into()));
                 }
             }
-        },
+        }
         DataType::Int32 => {
-            let arr = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
             for i in 0..arr.len() {
-                 if !arr.is_null(i) {
+                if !arr.is_null(i) {
                     values.push(Value::Number(arr.value(i).into()));
                 }
             }
-        },
+        }
         DataType::Utf8 => {
-            let arr = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let arr = array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
             for i in 0..arr.len() {
                 if !arr.is_null(i) {
                     values.push(Value::String(arr.value(i).to_string()));
                 }
             }
-        },
+        }
         _ => {}
     }
     // Dedup
-    values.sort_by(|a: &Value, b: &Value| a.as_string_repr().partial_cmp(&b.as_string_repr()).unwrap_or(std::cmp::Ordering::Equal));
+    values.sort_by(|a: &Value, b: &Value| {
+        a.as_string_repr()
+            .partial_cmp(&b.as_string_repr())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     values.dedup();
     Ok(values)
 }
@@ -277,13 +317,14 @@ fn perform_join(
     output_schema: &SchemaRef,
 ) -> Result<Option<RecordBatch>> {
     // 1. Build Index on Right Batch
-    let right_keys_arr = right.column_by_name(right_col)
-        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Right join col missing".into()))?;
-        
+    let right_keys_arr = right.column_by_name(right_col).ok_or_else(|| {
+        datafusion::error::DataFusionError::Execution("Right join col missing".into())
+    })?;
+
     // MultiMap: Key -> [indices]
     // Uses String representation for key to handle mix types easily in MVP
     let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
-    
+
     // Extract keys from right batch
     // Using string conversion is inefficient but safe generic approach for MVP
     let right_key_strings = array_to_strings(right_keys_arr);
@@ -292,61 +333,61 @@ fn perform_join(
             right_map.entry(key.clone()).or_default().push(idx);
         }
     }
-    
+
     // 2. Probe with Left Batch
     let left_key_strings = array_to_strings(left_keys);
-    
+
     // Builders for indices
     let mut left_indices_builder = arrow::array::UInt64Builder::new();
     let mut right_indices_builder = arrow::array::UInt64Builder::new();
-    
+
     for (l_idx, key_opt) in left_key_strings.iter().enumerate() {
         if let Some(key) = key_opt {
-             if let Some(r_indices) = right_map.get(key) {
-                 for &r_idx in r_indices {
-                     left_indices_builder.append_value(l_idx as u64);
-                     right_indices_builder.append_value(r_idx as u64);
-                 }
-             }
+            if let Some(r_indices) = right_map.get(key) {
+                for &r_idx in r_indices {
+                    left_indices_builder.append_value(l_idx as u64);
+                    right_indices_builder.append_value(r_idx as u64);
+                }
+            }
         }
     }
-    
+
     let left_indices = left_indices_builder.finish();
     let right_indices = right_indices_builder.finish();
-    
+
     if left_indices.is_empty() {
         return Ok(None);
     }
-    
+
     // 3. Interleave / Take
     // We cannot use interleave directly because we are combining two batches.
     // Use `take` on each column.
-    
+
     // Reconstruct Left columns
     let left_indices_arr = left_indices;
     let right_indices_arr = right_indices;
-    
+
     let mut output_columns = Vec::new();
-    
+
     // Take from Left
     for col in left.columns() {
         let taken = take(col, &left_indices_arr, None)?;
         output_columns.push(taken);
     }
-    
+
     // Take from Right
     for col in right.columns() {
         let taken = take(col, &right_indices_arr, None)?;
         output_columns.push(taken);
     }
-    
+
     // Verify column count matches schema
     if output_columns.len() != output_schema.fields().len() {
         // Mismatch usually due to key duplication or schema issue in creating IndexJoinExec
         // In simplest case: schema = Left fields + Right fields.
         // We just appended them in that order.
     }
-    
+
     let batch = RecordBatch::try_new(output_schema.clone(), output_columns)?;
     Ok(Some(batch))
 }
@@ -355,26 +396,49 @@ fn array_to_strings(arr: &ArrayRef) -> Vec<Option<String>> {
     let mut res = Vec::with_capacity(arr.len());
     match arr.data_type() {
         DataType::Int64 => {
-            let a = arr.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+            let a = arr
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .unwrap();
             for i in 0..a.len() {
-                if a.is_null(i) { res.push(None); } else { res.push(Some(a.value(i).to_string())); }
+                if a.is_null(i) {
+                    res.push(None);
+                } else {
+                    res.push(Some(a.value(i).to_string()));
+                }
             }
-        },
+        }
         DataType::Int32 => {
-            let a = arr.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+            let a = arr
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .unwrap();
             for i in 0..a.len() {
-                if a.is_null(i) { res.push(None); } else { res.push(Some(a.value(i).to_string())); }
+                if a.is_null(i) {
+                    res.push(None);
+                } else {
+                    res.push(Some(a.value(i).to_string()));
+                }
             }
-        },
+        }
         DataType::Utf8 => {
-            let a = arr.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+            let a = arr
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .unwrap();
             for i in 0..a.len() {
-                if a.is_null(i) { res.push(None); } else { res.push(Some(a.value(i).to_string())); }
+                if a.is_null(i) {
+                    res.push(None);
+                } else {
+                    res.push(Some(a.value(i).to_string()));
+                }
             }
-        },
+        }
         _ => {
-             // Fallback for debug: None
-            for _ in 0..arr.len() { res.push(None); }
+            // Fallback for debug: None
+            for _ in 0..arr.len() {
+                res.push(None);
+            }
         }
     }
     res

@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use arrow::record_batch::RecordBatch;
-use arrow::array::{Array, UInt64Array, Float32Array, Int32Array, Int64Array, Float64Array};
 use anyhow::Result;
-use std::sync::Arc;
+use arrow::array::{Array, Float32Array, Float64Array, Int32Array, Int64Array, UInt64Array};
+use arrow::record_batch::RecordBatch;
 use serde_json::Value;
+use std::sync::Arc;
 
 /// Apply Z-Order clustering to a RecordBatch
 pub fn apply_zorder(batch: &RecordBatch, columns: &[String]) -> Result<RecordBatch> {
@@ -13,7 +13,7 @@ pub fn apply_zorder(batch: &RecordBatch, columns: &[String]) -> Result<RecordBat
     }
 
     let (scores, _, _) = compute_zorder_scores(batch, columns)?;
-    
+
     // Sort batch by scores
     let indices = arrow::compute::sort_to_indices(&scores, None, None)?;
     let columns: Vec<Arc<dyn Array>> = batch
@@ -25,14 +25,17 @@ pub fn apply_zorder(batch: &RecordBatch, columns: &[String]) -> Result<RecordBat
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
-pub fn compute_zorder_scores(batch: &RecordBatch, columns: &[String]) -> Result<(UInt64Array, Vec<Value>, Vec<Value>)> {
+pub fn compute_zorder_scores(
+    batch: &RecordBatch,
+    columns: &[String],
+) -> Result<(UInt64Array, Vec<Value>, Vec<Value>)> {
     if columns.is_empty() {
         return Ok((UInt64Array::from(vec![0; batch.num_rows()]), vec![], vec![]));
     }
 
     let n_cols = columns.len();
     let bits_per_col = 64 / n_cols;
-    
+
     let mut normalized_cols = Vec::with_capacity(n_cols);
     let mut mins = Vec::with_capacity(n_cols);
     let mut maxs = Vec::with_capacity(n_cols);
@@ -77,7 +80,7 @@ pub fn apply_hilbert(batch: &RecordBatch, columns: &[String]) -> Result<RecordBa
     }
 
     let (scores, _, _) = compute_hilbert_scores(batch, columns)?;
-    
+
     // Sort batch by scores
     let indices = arrow::compute::sort_to_indices(&scores, None, None)?;
     let columns: Vec<Arc<dyn Array>> = batch
@@ -89,14 +92,17 @@ pub fn apply_hilbert(batch: &RecordBatch, columns: &[String]) -> Result<RecordBa
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
-pub fn compute_hilbert_scores(batch: &RecordBatch, columns: &[String]) -> Result<(UInt64Array, Vec<Value>, Vec<Value>)> {
+pub fn compute_hilbert_scores(
+    batch: &RecordBatch,
+    columns: &[String],
+) -> Result<(UInt64Array, Vec<Value>, Vec<Value>)> {
     if columns.is_empty() {
         return Ok((UInt64Array::from(vec![0; batch.num_rows()]), vec![], vec![]));
     }
 
     let n_cols = columns.len();
     let bits_per_col = 64 / n_cols;
-    
+
     let mut normalized_cols = Vec::with_capacity(n_cols);
     let mut mins = Vec::with_capacity(n_cols);
     let mut maxs = Vec::with_capacity(n_cols);
@@ -139,10 +145,10 @@ pub fn gray_code_interleave_index(n: usize, bits: usize, x: &[u64]) -> u64 {
                 q |= 1 << i;
             }
         }
-        
+
         p = q ^ (q >> 1);
         h = (h << n) | p;
-        
+
         m >>= 1;
     }
     h
@@ -150,7 +156,7 @@ pub fn gray_code_interleave_index(n: usize, bits: usize, x: &[u64]) -> u64 {
 
 fn normalize_to_u64(array: &Arc<dyn Array>, bits: usize) -> Result<(UInt64Array, Value, Value)> {
     let max_val = (1u64 << bits) - 1;
-    
+
     macro_rules! normalize_primitive {
         ($array_type:ty, $native_type:ty) => {{
             let arr = array.as_any().downcast_ref::<$array_type>().unwrap();
@@ -159,8 +165,12 @@ fn normalize_to_u64(array: &Arc<dyn Array>, bits: usize) -> Result<(UInt64Array,
             for i in 0..arr.len() {
                 if arr.is_valid(i) {
                     let v = arr.value(i);
-                    if v < min { min = v; }
-                    if v > max { max = v; }
+                    if v < min {
+                        min = v;
+                    }
+                    if v > max {
+                        max = v;
+                    }
                 }
             }
             let range = (max as f64 - min as f64);
@@ -178,7 +188,11 @@ fn normalize_to_u64(array: &Arc<dyn Array>, bits: usize) -> Result<(UInt64Array,
                     normalized.push(0);
                 }
             }
-            Ok((UInt64Array::from(normalized), Value::from(min), Value::from(max)))
+            Ok((
+                UInt64Array::from(normalized),
+                Value::from(min),
+                Value::from(max),
+            ))
         }};
     }
 
@@ -187,6 +201,9 @@ fn normalize_to_u64(array: &Arc<dyn Array>, bits: usize) -> Result<(UInt64Array,
         arrow::datatypes::DataType::Float32 => normalize_primitive!(Float32Array, f32),
         arrow::datatypes::DataType::Int64 => normalize_primitive!(Int64Array, i64),
         arrow::datatypes::DataType::Float64 => normalize_primitive!(Float64Array, f64),
-        _ => Err(anyhow::anyhow!("Unsupported type for clustering: {:?}", array.data_type())),
+        _ => Err(anyhow::anyhow!(
+            "Unsupported type for clustering: {:?}",
+            array.data_type()
+        )),
     }
 }

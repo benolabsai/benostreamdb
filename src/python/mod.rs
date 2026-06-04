@@ -1,20 +1,20 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-pub mod helpers;
-pub mod stats;
-pub mod schema;
-pub mod manifest;
-pub mod table;
-pub mod session;
 pub mod catalog;
+pub mod helpers;
+pub mod manifest;
+pub mod schema;
+pub mod session;
+pub mod stats;
+pub mod table;
 
-pub use helpers::*;
-pub use stats::*;
-pub use schema::*;
-pub use manifest::*;
-pub use table::*;
-pub use session::*;
 pub use catalog::*;
+pub use helpers::*;
+pub use manifest::*;
+pub use schema::*;
+pub use session::*;
+pub use stats::*;
+pub use table::*;
 
 use pyo3::prelude::*;
 

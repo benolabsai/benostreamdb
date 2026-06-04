@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::core::table::Table;
-use arrow::array::{Int32Array, StringArray, RecordBatch};
+use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
+use hyperstreamdb::core::table::Table;
 use std::sync::Arc;
-use tempfile::tempdir;
 use std::time::Instant;
+use tempfile::tempdir;
 
 /// Verifies that Primary Key duplicate checks remain fast (O(1) via index)
 /// regardless of how many segments the table has grown to.

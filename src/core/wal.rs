@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use anyhow::Result;
 use anyhow::Context;
+use anyhow::Result;
 use arrow::record_batch::RecordBatch;
 // use arrow::array::Array; // Unused
-use arrow::ipc::writer::StreamWriter;
-use arrow::ipc::reader::StreamReader;
 use arrow::datatypes::SchemaRef;
+use arrow::ipc::reader::StreamReader;
+use arrow::ipc::writer::StreamWriter;
 use std::fs::{File, OpenOptions};
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -81,7 +81,7 @@ impl WriteAheadLog {
         // Create a unique filename for this instance to avoid clobbering by other processes
         let id = uuid::Uuid::new_v4();
         let path = dir.join(format!("log_{}.arrow", id));
-        
+
         Self {
             dir,
             path,
@@ -110,19 +110,20 @@ impl WriteAheadLog {
         let path = self.path.clone();
         let mut writer_opt: Option<StreamWriter<File>> = self.writer.take();
         let config = self.config.clone();
-        
+
         tokio::spawn(async move {
             let mut pending_syncs = Vec::new();
             let mut batch_count = 0;
-            
+
             // Configurable sync batching: sync every N batches or every T milliseconds
             let sync_batch_size = config.sync_batch_size;
             let sync_interval_ms = config.sync_interval_ms;
-            
+
             loop {
                 // Wait for a message or a wait timeout to sync
-                let timeout = tokio::time::sleep(std::time::Duration::from_millis(sync_interval_ms));
-                
+                let timeout =
+                    tokio::time::sleep(std::time::Duration::from_millis(sync_interval_ms));
+
                 tokio::select! {
                     msg = rx.recv() => {
                         match msg {
@@ -154,7 +155,7 @@ impl WriteAheadLog {
                                     } else {
                                         pending_syncs.push(reply_tx);
                                         batch_count += 1;
-                                        
+
                                         // Sync if we've reached batch size threshold
                                         if batch_count >= sync_batch_size {
                                             // Use fdatasync for better performance (only syncs data, not metadata)
@@ -163,7 +164,7 @@ impl WriteAheadLog {
                                                 // Fallback to sync_all if fdatasync not available
                                                 let _ = writer.get_ref().sync_all();
                                             }
-                                            
+
                                             // Reply to all pending syncs
                                             for tx in pending_syncs.drain(..) {
                                                 let _ = tx.send(Ok(()));
@@ -194,7 +195,7 @@ impl WriteAheadLog {
                     }
                 }
             }
-            
+
             // Final cleanup when channel closes
             if let Some(mut writer) = writer_opt {
                 let _ = writer.finish();
@@ -211,10 +212,12 @@ impl WriteAheadLog {
     pub async fn append_async(&self, batch: RecordBatch) -> Result<()> {
         if let Some(tx) = &self.tx {
             let (reply_tx, reply_rx) = oneshot::channel();
-            tx.send(LogOp::Append(batch, reply_tx)).await
+            tx.send(LogOp::Append(batch, reply_tx))
+                .await
                 .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
-            
-            reply_rx.await
+
+            reply_rx
+                .await
                 .map_err(|_| anyhow::anyhow!("WAL worker dropped request"))?
         } else {
             // Fallback to sync? Or error?
@@ -232,7 +235,8 @@ impl WriteAheadLog {
             // but we intentionally drop reply_rx — the worker reply will silently fail,
             // which is fine because we don't need to wait for it.
             let (reply_tx, _reply_rx) = oneshot::channel();
-            tx.send(LogOp::Append(batch, reply_tx)).await
+            tx.send(LogOp::Append(batch, reply_tx))
+                .await
                 .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
             Ok(())
         } else {
@@ -269,13 +273,18 @@ impl WriteAheadLog {
             if file.metadata()?.len() == 0 {
                 continue;
             }
-            
+
             let reader = BufReader::new(file);
             let ipc_reader = StreamReader::try_new(reader, None)?;
             all_iterators.push(ipc_reader);
         }
 
-        Ok(Box::new(all_iterators.into_iter().flatten().map(|res| res.map_err(anyhow::Error::from))))
+        Ok(Box::new(
+            all_iterators
+                .into_iter()
+                .flatten()
+                .map(|res| res.map_err(anyhow::Error::from)),
+        ))
     }
 
     /// Replay all log files in the WAL directory and return all batches.
@@ -286,7 +295,7 @@ impl WriteAheadLog {
         for b in stream {
             batches.push(b?);
         }
-        
+
         // Return paths for cleanup (simplified for now)
         let mut paths = Vec::new();
         if self.dir.exists() {
@@ -321,18 +330,18 @@ impl WriteAheadLog {
         // Actually, IPC Stream format writes schema at the start.
         // But if we are appending to an existing file, we can't just create a new StreamWriter
         // because it writes a header every time.
-        
+
         // Strategy:
         // For simple WAL, we can just keep the file open.
         // If we close and reopen, we must be careful.
-        // BUT: Arrow IPC Stream format allows concatenating messages? 
+        // BUT: Arrow IPC Stream format allows concatenating messages?
         // Standard StreamWriter writes schema header.
-        
+
         // Better approach for crash recovery:
         // Always write to a NEW file for a new "session" or just overwrite if we flushed?
-        // Actually, if we are recovering, we read everything, put it in memory, 
+        // Actually, if we are recovering, we read everything, put it in memory,
         // and can effectively TRUNCATE the log and start fresh for new writes since they are now in memory.
-        
+
         // So:
         // 1. replay() reads existing data.
         // 2. truncate() clears the file (since data is now in memory).
@@ -346,11 +355,11 @@ impl WriteAheadLog {
     pub fn append(&mut self, batch: &RecordBatch) -> Result<()> {
         // Ensure writer exists
         self.ensure_writer(batch.schema())?;
-        
+
         if let Some(writer) = &mut self.writer {
             writer.write(batch)?;
             // Sync to disk for durability!
-            writer.get_ref().sync_all()?; 
+            writer.get_ref().sync_all()?;
         }
         Ok(())
     }
@@ -360,7 +369,7 @@ impl WriteAheadLog {
     pub fn truncate(&mut self) -> Result<()> {
         self.writer = None; // Drop writer
         if self.path.exists() {
-             std::fs::remove_file(&self.path)?;
+            std::fs::remove_file(&self.path)?;
         }
         Ok(())
     }
@@ -391,7 +400,7 @@ impl WriteAheadLog {
                 total_bytes += entry.metadata()?.len();
             }
         }
-        
+
         let threshold_bytes = self.config.compact_threshold_mb * 1024 * 1024;
         Ok(total_bytes > threshold_bytes)
     }
@@ -413,16 +422,14 @@ impl WriteAheadLog {
 
         // 3. Write to temp file
         let temp_path = self.path.with_extension("arrow.tmp");
-        let temp_file = File::create(&temp_path)
-            .context("Failed to create temp WAL file")?;
+        let temp_file = File::create(&temp_path).context("Failed to create temp WAL file")?;
         let mut temp_writer = StreamWriter::try_new(temp_file, &schema)?;
         temp_writer.write(&consolidated)?;
         temp_writer.finish()?;
         drop(temp_writer);
 
         // 4. Atomic replace
-        std::fs::rename(&temp_path, &self.path)
-            .context("Failed to replace WAL file")?;
+        std::fs::rename(&temp_path, &self.path).context("Failed to replace WAL file")?;
 
         // 5. Delete stale .arrow files from previous WAL instances.
         // Without this step, replay() would re-read the compacted data PLUS the old files,
@@ -441,7 +448,7 @@ impl WriteAheadLog {
 
         // 6. Reset writer (will be recreated on next append)
         self.writer = None;
-        
+
         tracing::info!("WAL: Compacted {} batches into 1 batch", batches.len());
         Ok(())
     }
@@ -456,9 +463,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn create_test_batch(start: i32, count: i32) -> RecordBatch {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
         let ids = Int32Array::from((start..start + count).collect::<Vec<i32>>());
         RecordBatch::try_new(schema, vec![Arc::new(ids)]).unwrap()
     }
@@ -468,32 +473,32 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("test_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         // Test 1: Create new WAL and append
         let mut wal = WriteAheadLog::new(&wal_dir);
         let batch1 = create_test_batch(0, 10);
         wal.append(&batch1)?;
-        
+
         // Test 2: Replay should return the batch
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].num_rows(), 10);
-        
+
         // Test 3: Append another batch
         let batch2 = create_test_batch(10, 10);
         wal.append(&batch2)?;
-        
+
         // Test 4: Replay should return both batches
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 2);
         assert_eq!(replayed[0].num_rows(), 10);
         assert_eq!(replayed[1].num_rows(), 10);
-        
+
         // Test 5: Truncate should clear the log
         wal.truncate()?;
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
-        
+
         Ok(())
     }
 
@@ -502,27 +507,27 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("test_compact_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let mut wal = WriteAheadLog::new(&wal_dir);
-        
+
         // Write multiple small batches
         for i in 0..5 {
             let batch = create_test_batch(i * 10, 10);
             wal.append(&batch)?;
         }
-        
+
         // Verify we have 5 batches
         let (before_compact, _) = wal.replay()?;
         assert_eq!(before_compact.len(), 5);
-        
+
         // Compact the WAL
         wal.compact()?;
-        
+
         // After compaction, should have 1 batch with all rows
         let (after_compact, _) = wal.replay()?;
         assert_eq!(after_compact.len(), 1);
         assert_eq!(after_compact[0].num_rows(), 50);
-        
+
         Ok(())
     }
 
@@ -531,7 +536,7 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("test_crash_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         // Simulate: Write some data and "crash" (drop the WAL)
         {
             let mut wal = WriteAheadLog::new(&wal_dir);
@@ -541,7 +546,7 @@ mod tests {
             wal.append(&batch2)?;
             // WAL goes out of scope here (simulating crash)
         }
-        
+
         // Simulate: Restart and replay
         {
             let wal = WriteAheadLog::new(&wal_dir);
@@ -550,7 +555,7 @@ mod tests {
             assert_eq!(recovered[0].num_rows(), 100);
             assert_eq!(recovered[1].num_rows(), 100);
         }
-        
+
         Ok(())
     }
 
@@ -559,11 +564,11 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("empty_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let wal = WriteAheadLog::new(&wal_dir);
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
-        
+
         Ok(())
     }
 
@@ -571,11 +576,11 @@ mod tests {
     fn test_wal_nonexistent_dir() -> Result<()> {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("nonexistent_wal");
-        
+
         let wal = WriteAheadLog::new(&wal_dir);
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 0);
-        
+
         Ok(())
     }
 
@@ -584,18 +589,18 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("large_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let mut wal = WriteAheadLog::new(&wal_dir);
-        
+
         // Write a large batch (100K rows)
         let large_batch = create_test_batch(0, 100_000);
         wal.append(&large_batch)?;
-        
+
         // Verify replay
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].num_rows(), 100_000);
-        
+
         Ok(())
     }
 
@@ -604,26 +609,26 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("should_compact_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let config = WalConfig {
             compact_threshold_mb: 100,
             ..Default::default()
         };
         let mut wal = WriteAheadLog::new(&wal_dir).with_config(config);
-        
+
         // Initially should not need compaction
         assert!(!wal.should_compact()?);
-        
+
         // Write many batches to exceed 100MB threshold
         // Each batch is ~400KB (100K i32 values), so we need ~250 batches
         for i in 0..260 {
             let batch = create_test_batch(i * 100_000, 100_000);
             wal.append(&batch)?;
         }
-        
+
         // Now should need compaction
         assert!(wal.should_compact()?);
-        
+
         Ok(())
     }
 
@@ -632,36 +637,32 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("multi_schema_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let mut wal = WriteAheadLog::new(&wal_dir);
-        
+
         // Write batch with one schema
-        let schema1 = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
-        let batch1 = RecordBatch::try_new(
-            schema1,
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
+        let schema1 = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch1 =
+            RecordBatch::try_new(schema1, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))])?;
         wal.append(&batch1)?;
-        
+
         // Truncate and start fresh
         wal.truncate()?;
-        
+
         // Write batch with different schema
-        let schema2 = Arc::new(Schema::new(vec![
-            Field::new("value", DataType::Int32, false),
-        ]));
-        let batch2 = RecordBatch::try_new(
-            schema2,
-            vec![Arc::new(Int32Array::from(vec![10, 20, 30]))],
-        )?;
+        let schema2 = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch2 =
+            RecordBatch::try_new(schema2, vec![Arc::new(Int32Array::from(vec![10, 20, 30]))])?;
         wal.append(&batch2)?;
-        
+
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
         assert_eq!(replayed[0].schema().field(0).name(), "value");
-        
+
         Ok(())
     }
 
@@ -670,9 +671,9 @@ mod tests {
         let temp_dir = tempdir()?;
         let wal_dir = temp_dir.path().join("compact_preserve_wal");
         std::fs::create_dir_all(&wal_dir)?;
-        
+
         let mut wal = WriteAheadLog::new(&wal_dir);
-        
+
         // Write specific data
         let expected_values: Vec<i32> = (0..100).collect();
         for chunk in expected_values.chunks(10) {
@@ -682,10 +683,10 @@ mod tests {
             )?;
             wal.append(&batch)?;
         }
-        
+
         // Compact
         wal.compact()?;
-        
+
         // Verify all data is preserved
         let (replayed, _) = wal.replay()?;
         assert_eq!(replayed.len(), 1);
@@ -694,10 +695,10 @@ mod tests {
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap();
-        
+
         let actual_values: Vec<i32> = (0..ids.len()).map(|i| ids.value(i)).collect();
         assert_eq!(actual_values, expected_values);
-        
+
         Ok(())
     }
 }

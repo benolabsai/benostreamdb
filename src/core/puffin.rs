@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use anyhow::{Result, Context};
-use std::io::{Read, Write, Seek, SeekFrom};
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom, Write};
 
 /// Puffin File Magic Bytes: PFA1
 pub const PUFFIN_MAGIC: [u8; 4] = [0x50, 0x46, 0x41, 0x31];
@@ -59,9 +59,9 @@ impl<W: Write + Seek> PuffinWriter<W> {
     ) -> Result<()> {
         let length = data.len() as i64;
         let offset = self.current_offset;
-        
+
         self.writer.write_all(data)?;
-        
+
         self.blobs.push(PuffinBlobMetadata {
             r#type: type_name,
             fields,
@@ -72,7 +72,7 @@ impl<W: Write + Seek> PuffinWriter<W> {
             compression_codec: None,
             properties,
         });
-        
+
         self.current_offset += length;
         Ok(())
     }
@@ -82,19 +82,19 @@ impl<W: Write + Seek> PuffinWriter<W> {
             blobs: self.blobs,
             properties: HashMap::new(),
         };
-        
+
         let footer_json = serde_json::to_string(&footer)?;
         let footer_bytes = footer_json.as_bytes();
         let footer_size = footer_bytes.len() as u32;
-        
+
         // Spec order: Payload, Size (4), Flags (4), Magic (4)
         self.writer.write_all(footer_bytes)?;
         self.writer.write_all(&footer_size.to_le_bytes())?;
-        
+
         let flags: u32 = 0; // Bit 0: 0 = uncompressed
         self.writer.write_all(&flags.to_le_bytes())?;
         self.writer.write_all(&PUFFIN_MAGIC)?;
-        
+
         self.writer.flush()?;
         Ok(())
     }
@@ -141,19 +141,22 @@ impl<R: Read + Seek> PuffinReader<R> {
 
         let footer: PuffinFooter = serde_json::from_slice(&footer_payload)
             .context("Failed to parse Puffin footer JSON")?;
-            
+
         Ok(Self {
             reader,
             header: footer,
         })
     }
-    
+
     pub fn footer(&self) -> &PuffinFooter {
         &self.header
     }
-    
+
     pub fn read_blob(&mut self, blob_idx: usize) -> Result<Vec<u8>> {
-        let meta = self.header.blobs.get(blob_idx)
+        let meta = self
+            .header
+            .blobs
+            .get(blob_idx)
             .context("Blob index out of range")?;
 
         self.reader.seek(SeekFrom::Start(meta.offset as u64))?;
@@ -182,18 +185,18 @@ impl<R: Read + Seek> PuffinReader<R> {
 pub const DELETION_VECTOR_TYPE: &str = "apache-datasketches-theta-v1";
 
 /// Read a deletion vector from a Puffin file and return the set of deleted row positions
-/// 
+///
 /// Deletion vectors in Iceberg v3 use RoaringBitmap format to efficiently store deleted positions
 pub fn read_deletion_vector_from_puffin<R: Read + Seek>(
     reader: &mut PuffinReader<R>,
     blob_idx: usize,
 ) -> Result<roaring::RoaringBitmap> {
     let data = reader.read_blob(blob_idx)?;
-    
+
     // Deletion vectors are stored as RoaringBitmap serialized format
     let bitmap = roaring::RoaringBitmap::deserialize_from(&data[..])
         .context("Failed to deserialize deletion vector RoaringBitmap")?;
-    
+
     Ok(bitmap)
 }
 
@@ -201,6 +204,6 @@ pub fn read_deletion_vector_from_puffin<R: Read + Seek>(
 pub fn read_deletion_vector_from_bytes(data: &[u8]) -> Result<roaring::RoaringBitmap> {
     let bitmap = roaring::RoaringBitmap::deserialize_from(data)
         .context("Failed to deserialize deletion vector RoaringBitmap")?;
-    
+
     Ok(bitmap)
 }

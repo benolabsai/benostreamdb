@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::Table;
-use arrow::array::{Int32Array, StringArray, Float64Array};
-use arrow::datatypes::{Schema, Field, DataType};
+use arrow::array::{Float64Array, Int32Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use hyperstreamdb::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -212,7 +212,9 @@ async fn test_merge_preserves_data_integrity() -> Result<(), Box<dyn std::error:
 
     // Query with filter
     // Cast id to bigint to match literal '2' (Int64)
-    let filtered = table.read_async(Some("cast(id as bigint) > 2"), None, None).await?;
+    let filtered = table
+        .read_async(Some("cast(id as bigint) > 2"), None, None)
+        .await?;
     let total_rows: usize = filtered.iter().map(|b| b.num_rows()).sum();
 
     assert_eq!(total_rows, 3); // IDs 3, 4, 5

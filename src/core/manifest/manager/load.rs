@@ -24,7 +24,7 @@ impl ManifestManager {
             if path.ends_with(".json") {
                 if let Some(filename) = path.split('/').last() {
                     if filename.starts_with('v') && filename.ends_with(".json") {
-                        if let Ok(ver) = filename[1..filename.len()-5].parse::<u64>() {
+                        if let Ok(ver) = filename[1..filename.len() - 5].parse::<u64>() {
                             if ver >= max_ver {
                                 max_ver = ver;
                                 latest_loc = Some(meta.location);
@@ -36,11 +36,11 @@ impl ManifestManager {
         }
 
         if let Some(loc) = latest_loc {
-             let manifest_bytes = self.store.get(&loc).await?.bytes().await?;
-             let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
-             Ok((manifest, max_ver))
+            let manifest_bytes = self.store.get(&loc).await?.bytes().await?;
+            let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
+            Ok((manifest, max_ver))
         } else {
-             Ok((Manifest::default(), 0))
+            Ok((Manifest::default(), 0))
         }
     }
 
@@ -50,10 +50,20 @@ impl ManifestManager {
         let cache_key = self.get_dir_cache_key();
 
         // 1. Check Version Cache (Fast Path)
-        if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE.get_with_metrics(&cache_key, "latest_version").await {
-            tracing::debug!("ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE", ver);
+        if let Some(ver) = crate::core::cache::LATEST_VERSION_CACHE
+            .get_with_metrics(&cache_key, "latest_version")
+            .await
+        {
+            tracing::debug!(
+                "ManifestManager::load_latest: Found version {} in LATEST_VERSION_CACHE",
+                ver
+            );
             if let Ok(manifest) = self.load_version(ver).await {
-                tracing::debug!("ManifestManager::load_latest: Cache hit v{} (entries={})", ver, manifest.entries.len());
+                tracing::debug!(
+                    "ManifestManager::load_latest: Cache hit v{} (entries={})",
+                    ver,
+                    manifest.entries.len()
+                );
                 return Ok((manifest, ver));
             }
         }
@@ -69,7 +79,7 @@ impl ManifestManager {
             // Expected format: v{N}.json
             if let Some(filename) = path_str.split('/').next_back() {
                 if filename.starts_with('v') && filename.ends_with(".json") {
-                    let ver_str = &filename[1..filename.len()-5]; // strip 'v' and '.json'
+                    let ver_str = &filename[1..filename.len() - 5]; // strip 'v' and '.json'
                     if let Ok(ver) = ver_str.parse::<u64>() {
                         if ver > max_ver {
                             max_ver = ver;
@@ -82,24 +92,38 @@ impl ManifestManager {
 
         // Update Version Cache
         if max_ver > 0 {
-            crate::core::cache::LATEST_VERSION_CACHE.insert(cache_key, max_ver).await;
+            crate::core::cache::LATEST_VERSION_CACHE
+                .insert(cache_key, max_ver)
+                .await;
         }
 
         if let Some(path) = latest_path {
-             tracing::debug!("ManifestManager::load_latest: Found version {} on disk at {:?}", max_ver, path);
-              return match self.load_version(max_ver).await {
-                 Ok(m) => {
-                     tracing::debug!("ManifestManager::load_latest: Successfully loaded v{} (entries={})", max_ver, m.entries.len());
-                     Ok((m, max_ver))
-                 },
-                 Err(e) => {
-                     tracing::error!("ManifestManager::load_latest: Failed to load v{} via load_version: {}", max_ver, e);
-                     // Fallback if somehow listing said it exists but we can't read it
-                     let bytes = self.store.get(&path).await?.bytes().await?;
-                     let manifest: Manifest = serde_json::from_slice(&bytes)?;
-                     Ok((manifest, max_ver))
-                 }
-             }
+            tracing::debug!(
+                "ManifestManager::load_latest: Found version {} on disk at {:?}",
+                max_ver,
+                path
+            );
+            return match self.load_version(max_ver).await {
+                Ok(m) => {
+                    tracing::debug!(
+                        "ManifestManager::load_latest: Successfully loaded v{} (entries={})",
+                        max_ver,
+                        m.entries.len()
+                    );
+                    Ok((m, max_ver))
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "ManifestManager::load_latest: Failed to load v{} via load_version: {}",
+                        max_ver,
+                        e
+                    );
+                    // Fallback if somehow listing said it exists but we can't read it
+                    let bytes = self.store.get(&path).await?.bytes().await?;
+                    let manifest: Manifest = serde_json::from_slice(&bytes)?;
+                    Ok((manifest, max_ver))
+                }
+            };
         } else {
             // No manifest found, return empty genesis
             Ok((Manifest::new(0, Vec::new(), None), 0))
@@ -120,7 +144,10 @@ impl ManifestManager {
         let cache_key = self.get_cache_key(&path);
 
         // 1. Check Data Cache
-        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE
+            .get_with_metrics(&cache_key, "manifest")
+            .await
+        {
             return Ok(manifest.as_ref().clone());
         }
 
@@ -129,7 +156,9 @@ impl ManifestManager {
         let manifest: Manifest = serde_json::from_slice(&bytes)?;
 
         // 3. Populate Cache
-        crate::core::cache::MANIFEST_CACHE.insert(cache_key, std::sync::Arc::new(manifest.clone())).await;
+        crate::core::cache::MANIFEST_CACHE
+            .insert(cache_key, std::sync::Arc::new(manifest.clone()))
+            .await;
 
         Ok(manifest)
     }
@@ -139,7 +168,10 @@ impl ManifestManager {
         let path = Path::from(path_str);
         let cache_key = format!("{}/{}", self.root_uri, path);
 
-        if let Some(list) = crate::core::cache::MANIFEST_LIST_CACHE.get_with_metrics(&cache_key, "manifest_list").await {
+        if let Some(list) = crate::core::cache::MANIFEST_LIST_CACHE
+            .get_with_metrics(&cache_key, "manifest_list")
+            .await
+        {
             return Ok(list.as_ref().clone());
         }
 
@@ -147,34 +179,39 @@ impl ManifestManager {
 
         if path_str.ends_with(".avro") {
             let iceberg_list = crate::core::iceberg::read_manifest_list(&bytes[..])?;
-            let manifest_files = iceberg_list.into_iter().map(|e| {
-                ManifestListEntry {
-                    manifest_path: e.manifest_path,
-                    manifest_length: e.manifest_length,
-                    partition_spec_id: e.partition_spec_id,
-                    content: e.content,
-                    sequence_number: e.sequence_number,
-                    min_sequence_number: e.min_sequence_number,
-                    added_snapshot_id: e.added_snapshot_id,
-                    added_files_count: e.added_files_count,
-                    existing_files_count: e.existing_files_count,
-                    deleted_files_count: e.deleted_files_count,
-                    added_rows_count: e.added_rows_count,
-                    existing_rows_count: e.existing_rows_count,
-                    deleted_rows_count: e.deleted_rows_count,
-                    partition_stats: HashMap::new(), // Stats not parsed yet
-                }
-            }).collect();
-            let list = ManifestList {
-                manifest_files,
-            };
-            crate::core::cache::MANIFEST_LIST_CACHE.insert(cache_key, std::sync::Arc::new(list.clone())).await;
+            let manifest_files = iceberg_list
+                .into_iter()
+                .map(|e| {
+                    ManifestListEntry {
+                        manifest_path: e.manifest_path,
+                        manifest_length: e.manifest_length,
+                        partition_spec_id: e.partition_spec_id,
+                        content: e.content,
+                        sequence_number: e.sequence_number,
+                        min_sequence_number: e.min_sequence_number,
+                        added_snapshot_id: e.added_snapshot_id,
+                        added_files_count: e.added_files_count,
+                        existing_files_count: e.existing_files_count,
+                        deleted_files_count: e.deleted_files_count,
+                        added_rows_count: e.added_rows_count,
+                        existing_rows_count: e.existing_rows_count,
+                        deleted_rows_count: e.deleted_rows_count,
+                        partition_stats: HashMap::new(), // Stats not parsed yet
+                    }
+                })
+                .collect();
+            let list = ManifestList { manifest_files };
+            crate::core::cache::MANIFEST_LIST_CACHE
+                .insert(cache_key, std::sync::Arc::new(list.clone()))
+                .await;
             return Ok(list);
         }
 
         let list: ManifestList = serde_json::from_slice(&bytes)?;
 
-        crate::core::cache::MANIFEST_LIST_CACHE.insert(cache_key, std::sync::Arc::new(list.clone())).await;
+        crate::core::cache::MANIFEST_LIST_CACHE
+            .insert(cache_key, std::sync::Arc::new(list.clone()))
+            .await;
         Ok(list)
     }
 
@@ -192,7 +229,9 @@ impl ManifestManager {
             let mut futures = futures::stream::FuturesUnordered::new();
 
             // Resolve schema for stats decoding
-            let schema = manifest.schemas.iter()
+            let schema = manifest
+                .schemas
+                .iter()
                 .find(|s| s.schema_id == manifest.current_schema_id)
                 .or(manifest.schemas.last())
                 .cloned();
@@ -207,9 +246,19 @@ impl ManifestManager {
                 futures.push(async move {
                     if entry_path.ends_with(".avro") {
                         if let Some(s) = table_schema {
-                             Self::load_avro_manifest_static(store, entry_path, s, table_spec, root_uri).await
+                            Self::load_avro_manifest_static(
+                                store, entry_path, s, table_spec, root_uri,
+                            )
+                            .await
                         } else {
-                             Self::load_avro_manifest_static(store, entry_path, Schema::default(), table_spec, root_uri).await
+                            Self::load_avro_manifest_static(
+                                store,
+                                entry_path,
+                                Schema::default(),
+                                table_spec,
+                                root_uri,
+                            )
+                            .await
                         }
                     } else {
                         Self::load_manifest_static(store, entry_path, root_uri).await
@@ -235,62 +284,102 @@ impl ManifestManager {
 
     /// Helper to load a manifest from an arbitrary path
     pub async fn load_manifest_from_path(&self, path_str: &str) -> Result<Manifest> {
-        Self::load_manifest_static(self.store.clone(), path_str.to_string(), self.root_uri.clone()).await
+        Self::load_manifest_static(
+            self.store.clone(),
+            path_str.to_string(),
+            self.root_uri.clone(),
+        )
+        .await
     }
 
-    pub async fn load_avro_manifest(&self, path_str: &str, schema: &Schema, spec: &PartitionSpec) -> Result<Manifest> {
-          Self::load_avro_manifest_static(self.store.clone(), path_str.to_string(), schema.clone(), spec.clone(), self.root_uri.clone()).await
+    pub async fn load_avro_manifest(
+        &self,
+        path_str: &str,
+        schema: &Schema,
+        spec: &PartitionSpec,
+    ) -> Result<Manifest> {
+        Self::load_avro_manifest_static(
+            self.store.clone(),
+            path_str.to_string(),
+            schema.clone(),
+            spec.clone(),
+            self.root_uri.clone(),
+        )
+        .await
     }
 
-    async fn load_avro_manifest_static(store: std::sync::Arc<dyn object_store::ObjectStore>, path_str: String, schema: Schema, spec: PartitionSpec, root_uri: String) -> Result<Manifest> {
-         let path = Path::from(path_str);
-         let cache_key = format!("{}/{}", root_uri, path);
-
-         if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
-             return Ok(manifest.as_ref().clone());
-         }
-
-         let bytes = store.get(&path).await?.bytes().await?;
-         let iceberg_entries = crate::core::iceberg::read_manifest(&bytes[..])?;
-
-         let mut data_entries = Vec::new();
-         let mut delete_files = Vec::new();
-
-         for ie in iceberg_entries {
-             if ie.status == 0 || ie.status == 1 { // EXISTING or ADDED
-                 match crate::core::iceberg::convert_iceberg_to_object(&ie, &schema, &spec)? {
-                     crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(me),
-                     crate::core::iceberg::IcebergManifestObject::Delete(df) => delete_files.push(df),
-                 }
-             }
-         }
-
-         // Simple linking of equality deletes to data files in same partition
-         for data in &mut data_entries {
-             for delete in &delete_files {
-                 if data.partition_values == delete.partition_values {
-                     data.delete_files.push(delete.clone());
-                 }
-             }
-         }
-
-         let manifest = Manifest::new(0, data_entries, None);
-         crate::core::cache::MANIFEST_CACHE.insert(cache_key, std::sync::Arc::new(manifest.clone())).await;
-         Ok(manifest)
-    }
-
-    async fn load_manifest_static(store: std::sync::Arc<dyn object_store::ObjectStore>, path_str: String, root_uri: String) -> Result<Manifest> {
+    async fn load_avro_manifest_static(
+        store: std::sync::Arc<dyn object_store::ObjectStore>,
+        path_str: String,
+        schema: Schema,
+        spec: PartitionSpec,
+        root_uri: String,
+    ) -> Result<Manifest> {
         let path = Path::from(path_str);
         let cache_key = format!("{}/{}", root_uri, path);
 
-        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE.get_with_metrics(&cache_key, "manifest").await {
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE
+            .get_with_metrics(&cache_key, "manifest")
+            .await
+        {
+            return Ok(manifest.as_ref().clone());
+        }
+
+        let bytes = store.get(&path).await?.bytes().await?;
+        let iceberg_entries = crate::core::iceberg::read_manifest(&bytes[..])?;
+
+        let mut data_entries = Vec::new();
+        let mut delete_files = Vec::new();
+
+        for ie in iceberg_entries {
+            if ie.status == 0 || ie.status == 1 {
+                // EXISTING or ADDED
+                match crate::core::iceberg::convert_iceberg_to_object(&ie, &schema, &spec)? {
+                    crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(me),
+                    crate::core::iceberg::IcebergManifestObject::Delete(df) => {
+                        delete_files.push(df)
+                    }
+                }
+            }
+        }
+
+        // Simple linking of equality deletes to data files in same partition
+        for data in &mut data_entries {
+            for delete in &delete_files {
+                if data.partition_values == delete.partition_values {
+                    data.delete_files.push(delete.clone());
+                }
+            }
+        }
+
+        let manifest = Manifest::new(0, data_entries, None);
+        crate::core::cache::MANIFEST_CACHE
+            .insert(cache_key, std::sync::Arc::new(manifest.clone()))
+            .await;
+        Ok(manifest)
+    }
+
+    async fn load_manifest_static(
+        store: std::sync::Arc<dyn object_store::ObjectStore>,
+        path_str: String,
+        root_uri: String,
+    ) -> Result<Manifest> {
+        let path = Path::from(path_str);
+        let cache_key = format!("{}/{}", root_uri, path);
+
+        if let Some(manifest) = crate::core::cache::MANIFEST_CACHE
+            .get_with_metrics(&cache_key, "manifest")
+            .await
+        {
             return Ok(manifest.as_ref().clone());
         }
 
         let bytes = store.get(&path).await?.bytes().await?;
         let manifest: Manifest = serde_json::from_slice(&bytes)?;
 
-        crate::core::cache::MANIFEST_CACHE.insert(cache_key, std::sync::Arc::new(manifest.clone())).await;
+        crate::core::cache::MANIFEST_CACHE
+            .insert(cache_key, std::sync::Arc::new(manifest.clone()))
+            .await;
         Ok(manifest)
     }
 
@@ -308,13 +397,15 @@ impl ManifestManager {
         let mut current = latest;
         while let Some(prev) = current.prev_version {
             // Safety break for now, though u64 prevents inf loops
-            if prev == 0 { break; }
+            if prev == 0 {
+                break;
+            }
 
             match self.load_version(prev).await {
                 Ok(m) => {
                     history.push(m.clone());
                     current = m;
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Broken manifest chain at v{}: {}", prev, e);
                     break;

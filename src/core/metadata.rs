@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::manifest::{PartitionSpec, Schema, SortOrder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::core::manifest::{Schema, PartitionSpec, SortOrder};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -28,12 +28,12 @@ pub struct Snapshot {
     pub summary: HashMap<String, String>,
     pub manifest_list: String,
     pub schema_id: Option<i32>,
-    
+
     // V3 Row Lineage (Iceberg spec v3 required)
     /// The first _row_id assigned to the first row in the first data file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_row_id: Option<i64>,
-    
+
     /// The upper bound of the number of rows with assigned row IDs
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added_rows: Option<i64>,
@@ -48,39 +48,43 @@ pub struct TableMetadata {
     pub last_sequence_number: i64,
     pub last_updated_ms: i64,
     pub last_column_id: i32,
-    
+
     // Schema
     pub current_schema_id: i32,
     pub schemas: Vec<Schema>,
-    
+
     // Partitioning
     pub default_spec_id: i32,
     pub partition_specs: Vec<PartitionSpec>,
-    
+
     // Sorting
     pub default_sort_order_id: i32,
     pub sort_orders: Vec<SortOrder>,
-    
+
     // Primary Key (Iceberg Identifier Fields)
-    #[serde(rename = "identifier-field-ids", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "identifier-field-ids",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub identifier_field_ids: Vec<i32>,
-    
+
     // Properties
     #[serde(default)]
     pub properties: HashMap<String, String>,
-    
+
     // Snapshots
     #[serde(default)]
     pub current_snapshot_id: Option<i64>,
     #[serde(default)]
     pub snapshots: Vec<Snapshot>,
-    
+
     #[serde(default)]
     pub snapshot_log: Vec<SnapshotLogEntry>,
-    
+
     #[serde(default)]
     pub metadata_log: Vec<MetadataLogEntry>,
-    
+
     // V3 Row Lineage (Iceberg spec v3 required)
     /// A long higher than all assigned row IDs; the next snapshot's first-row-id
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +145,12 @@ impl TableMetadata {
 
     /// Add a new schema
     pub fn add_schema(&mut self, schema: Schema) {
-        self.last_column_id = schema.fields.iter().map(|f| f.id).max().unwrap_or(self.last_column_id);
+        self.last_column_id = schema
+            .fields
+            .iter()
+            .map(|f| f.id)
+            .max()
+            .unwrap_or(self.last_column_id);
         self.current_schema_id = schema.schema_id;
         self.schemas.push(schema);
     }
@@ -153,21 +162,28 @@ impl TableMetadata {
     }
 
     /// Save metadata to ObjectStore as a new version `v<X>.metadata.json`
-    pub async fn save_to_store(&mut self, storage: &dyn object_store::ObjectStore, version: i32) -> anyhow::Result<String> {
+    pub async fn save_to_store(
+        &mut self,
+        storage: &dyn object_store::ObjectStore,
+        version: i32,
+    ) -> anyhow::Result<String> {
         let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
         let json = serde_json::to_vec(self)?;
-        
+
         storage.put(&path, json.into()).await?;
-        
+
         // Also update version-hint.text
         let hint_path = object_store::path::Path::from("metadata/version-hint.text");
         storage.put(&hint_path, version.to_string().into()).await?;
-        
+
         Ok(path.to_string())
     }
 
     /// Load metadata from ObjectStore
-    pub async fn load_from_store(storage: &dyn object_store::ObjectStore, path: &object_store::path::Path) -> anyhow::Result<Self> {
+    pub async fn load_from_store(
+        storage: &dyn object_store::ObjectStore,
+        path: &object_store::path::Path,
+    ) -> anyhow::Result<Self> {
         let res = storage.get(path).await?;
         let bytes = res.bytes().await?;
         let metadata: Self = serde_json::from_slice(&bytes)?;
@@ -181,7 +197,7 @@ impl TableMetadata {
         let bytes = res.bytes().await?;
         let version_str = String::from_utf8(bytes.to_vec())?;
         let version = version_str.trim().parse::<i32>()?;
-        
+
         let path = object_store::path::Path::from(format!("metadata/v{}.metadata.json", version));
         Self::load_from_store(storage, &path).await
     }

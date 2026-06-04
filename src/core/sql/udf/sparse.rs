@@ -1,13 +1,15 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use std::any::Any;
-use std::sync::Arc;
-use arrow::array::{Array, ArrayRef, Float32Array, FixedSizeListArray, ListBuilder, Float32Builder, ListArray};
+use crate::core::index::SparseVector;
+use arrow::array::{
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float32Builder, ListArray, ListBuilder,
+};
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
-use datafusion::logical_expr::{ScalarUDFImpl, Signature, Volatility, ColumnarValue};
+use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
-use crate::core::index::SparseVector;
+use std::any::Any;
+use std::sync::Arc;
 
 /// Helper macro to implement DynEq and DynHash for UDF structs
 macro_rules! impl_dyn_traits {
@@ -31,30 +33,68 @@ macro_rules! impl_dyn_traits {
 // --- VectorToSparseUDF ---
 
 #[derive(Debug)]
-pub struct VectorToSparseUDF { signature: Signature }
+pub struct VectorToSparseUDF {
+    signature: Signature,
+}
 impl_dyn_traits!(VectorToSparseUDF);
 impl VectorToSparseUDF {
     pub fn new() -> Self {
-        Self { signature: Signature::any(1, Volatility::Immutable) }
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
     }
 }
 impl ScalarUDFImpl for VectorToSparseUDF {
-    fn as_any(&self) -> &dyn Any { self }
-    fn name(&self) -> &str { "vector_to_sparse" }
-    fn signature(&self) -> &Signature { &self.signature }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "vector_to_sparse"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         // Return a struct type representing SparseVector
-        Ok(DataType::Struct(vec![
-            Arc::new(arrow::datatypes::Field::new("indices", DataType::List(Arc::new(arrow::datatypes::Field::new("item", DataType::UInt32, true))), true)),
-            Arc::new(arrow::datatypes::Field::new("values", DataType::List(Arc::new(arrow::datatypes::Field::new("item", DataType::Float32, true))), true)),
-            Arc::new(arrow::datatypes::Field::new("dim", DataType::UInt32, true)),
-        ].into()))
+        Ok(DataType::Struct(
+            vec![
+                Arc::new(arrow::datatypes::Field::new(
+                    "indices",
+                    DataType::List(Arc::new(arrow::datatypes::Field::new(
+                        "item",
+                        DataType::UInt32,
+                        true,
+                    ))),
+                    true,
+                )),
+                Arc::new(arrow::datatypes::Field::new(
+                    "values",
+                    DataType::List(Arc::new(arrow::datatypes::Field::new(
+                        "item",
+                        DataType::Float32,
+                        true,
+                    ))),
+                    true,
+                )),
+                Arc::new(arrow::datatypes::Field::new("dim", DataType::UInt32, true)),
+            ]
+            .into(),
+        ))
     }
-    fn invoke_with_args(&self, args: datafusion::logical_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion::logical_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let fixed_list = arr.as_any().downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected FixedSizeListArray".to_string()))?;
+                let fixed_list = arr
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "Expected FixedSizeListArray".to_string(),
+                        )
+                    })?;
 
                 let mut indices_builder = ListBuilder::new(arrow::array::UInt32Builder::new());
                 let mut values_builder = ListBuilder::new(Float32Builder::new());
@@ -62,8 +102,14 @@ impl ScalarUDFImpl for VectorToSparseUDF {
 
                 for i in 0..fixed_list.len() {
                     let value_array = fixed_list.value(i);
-                    let dense = value_array.as_any().downcast_ref::<Float32Array>()
-                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?;
+                    let dense = value_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| {
+                            datafusion::error::DataFusionError::Execution(
+                                "Expected Float32Array".to_string(),
+                            )
+                        })?;
 
                     // Use dense_to_sparse from distance module
                     let sparse = super::distance::dense_to_sparse(dense.values());
@@ -89,13 +135,38 @@ impl ScalarUDFImpl for VectorToSparseUDF {
                 let dim_array = Arc::new(dim_builder.finish()) as ArrayRef;
 
                 let struct_array = arrow::array::StructArray::from(vec![
-                    (Arc::new(arrow::datatypes::Field::new("indices", DataType::List(Arc::new(arrow::datatypes::Field::new("item", DataType::UInt32, true))), true)), indices_array),
-                    (Arc::new(arrow::datatypes::Field::new("values", DataType::List(Arc::new(arrow::datatypes::Field::new("item", DataType::Float32, true))), true)), values_array),
-                    (Arc::new(arrow::datatypes::Field::new("dim", DataType::UInt32, true)), dim_array),
+                    (
+                        Arc::new(arrow::datatypes::Field::new(
+                            "indices",
+                            DataType::List(Arc::new(arrow::datatypes::Field::new(
+                                "item",
+                                DataType::UInt32,
+                                true,
+                            ))),
+                            true,
+                        )),
+                        indices_array,
+                    ),
+                    (
+                        Arc::new(arrow::datatypes::Field::new(
+                            "values",
+                            DataType::List(Arc::new(arrow::datatypes::Field::new(
+                                "item",
+                                DataType::Float32,
+                                true,
+                            ))),
+                            true,
+                        )),
+                        values_array,
+                    ),
+                    (
+                        Arc::new(arrow::datatypes::Field::new("dim", DataType::UInt32, true)),
+                        dim_array,
+                    ),
                 ]);
 
                 Ok(ColumnarValue::Array(Arc::new(struct_array)))
-            },
+            }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
         }
     }
@@ -104,44 +175,100 @@ impl ScalarUDFImpl for VectorToSparseUDF {
 // --- SparseToVectorUDF ---
 
 #[derive(Debug)]
-pub struct SparseToVectorUDF { signature: Signature }
+pub struct SparseToVectorUDF {
+    signature: Signature,
+}
 impl_dyn_traits!(SparseToVectorUDF);
 impl SparseToVectorUDF {
     pub fn new() -> Self {
-        Self { signature: Signature::any(1, Volatility::Immutable) }
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
     }
 }
 impl ScalarUDFImpl for SparseToVectorUDF {
-    fn as_any(&self) -> &dyn Any { self }
-    fn name(&self) -> &str { "sparse_to_vector" }
-    fn signature(&self) -> &Signature { &self.signature }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn name(&self) -> &str {
+        "sparse_to_vector"
+    }
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         // Return variable-length list since we don't know dimension at compile time
-        Ok(DataType::List(Arc::new(arrow::datatypes::Field::new("item", DataType::Float32, true))))
+        Ok(DataType::List(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            DataType::Float32,
+            true,
+        ))))
     }
-    fn invoke_with_args(&self, args: datafusion::logical_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
+    fn invoke_with_args(
+        &self,
+        args: datafusion::logical_expr::ScalarFunctionArgs,
+    ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let struct_array = arr.as_any().downcast_ref::<arrow::array::StructArray>()
-                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected StructArray for sparse vector".to_string()))?;
+                let struct_array = arr
+                    .as_any()
+                    .downcast_ref::<arrow::array::StructArray>()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "Expected StructArray for sparse vector".to_string(),
+                        )
+                    })?;
 
-                let indices_list = struct_array.column(0).as_any().downcast_ref::<ListArray>()
-                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected ListArray for indices".to_string()))?;
-                let values_list = struct_array.column(1).as_any().downcast_ref::<ListArray>()
-                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected ListArray for values".to_string()))?;
-                let dim_array = struct_array.column(2).as_any().downcast_ref::<arrow::array::UInt32Array>()
-                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected UInt32Array for dim".to_string()))?;
+                let indices_list = struct_array
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "Expected ListArray for indices".to_string(),
+                        )
+                    })?;
+                let values_list = struct_array
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "Expected ListArray for values".to_string(),
+                        )
+                    })?;
+                let dim_array = struct_array
+                    .column(2)
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt32Array>()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "Expected UInt32Array for dim".to_string(),
+                        )
+                    })?;
 
                 let mut builder = ListBuilder::new(Float32Builder::new());
 
                 for i in 0..struct_array.len() {
                     let indices_arr = indices_list.value(i);
-                    let indices = indices_arr.as_any().downcast_ref::<arrow::array::UInt32Array>()
-                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected UInt32Array".to_string()))?;
+                    let indices = indices_arr
+                        .as_any()
+                        .downcast_ref::<arrow::array::UInt32Array>()
+                        .ok_or_else(|| {
+                            datafusion::error::DataFusionError::Execution(
+                                "Expected UInt32Array".to_string(),
+                            )
+                        })?;
 
                     let values_arr = values_list.value(i);
-                    let values = values_arr.as_any().downcast_ref::<Float32Array>()
-                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?;
+                    let values = values_arr
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| {
+                            datafusion::error::DataFusionError::Execution(
+                                "Expected Float32Array".to_string(),
+                            )
+                        })?;
 
                     let dim = dim_array.value(i) as usize;
 
@@ -160,7 +287,7 @@ impl ScalarUDFImpl for SparseToVectorUDF {
                 }
 
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            },
+            }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
         }
     }

@@ -4,24 +4,21 @@
 use std::any::Any;
 use std::sync::Arc;
 pub mod index_join;
-pub mod vector_scan;
 pub mod vector_merge;
-use datafusion::physical_plan::{
-    ExecutionPlan, 
-    SendableRecordBatchStream, 
-    DisplayAs, 
-    PlanProperties
-};
+pub mod vector_scan;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::execution::context::TaskContext;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::error::{Result, DataFusionError};
-use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::Partitioning;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+};
 
-use crate::core::table::{Table, VectorSearchParams};
 use crate::core::manifest::ManifestEntry;
+use crate::core::table::{Table, VectorSearchParams};
 
 #[derive(Debug)]
 pub struct HyperStreamExec {
@@ -31,8 +28,8 @@ pub struct HyperStreamExec {
     projection: Option<Vec<usize>>,
     filter: Option<String>,
     limit: Option<usize>,
-    base_schema: SchemaRef,  // Original table schema for projection
-    schema: SchemaRef,        // Projected schema
+    base_schema: SchemaRef, // Original table schema for projection
+    schema: SchemaRef,      // Projected schema
     properties: PlanProperties,
 }
 
@@ -52,8 +49,11 @@ impl HyperStreamExec {
                 // If projection is invalid, use base schema
                 base_schema.clone()
             } else {
-                Arc::new(base_schema.project(proj)
-                    .map_err(|e| DataFusionError::from(e))?)
+                Arc::new(
+                    base_schema
+                        .project(proj)
+                        .map_err(|e| DataFusionError::from(e))?,
+                )
             }
         } else {
             base_schema.clone()
@@ -95,8 +95,16 @@ impl DisplayAs for HyperStreamExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            datafusion::physical_plan::DisplayFormatType::Default | datafusion::physical_plan::DisplayFormatType::Verbose => {
-                write!(f, "HyperStreamExec: partitions={}, filter={:?}, projection={:?}, limit={:?}", self.partitions.len(), self.filter, self.projection, self.limit)
+            datafusion::physical_plan::DisplayFormatType::Default
+            | datafusion::physical_plan::DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "HyperStreamExec: partitions={}, filter={:?}, projection={:?}, limit={:?}",
+                    self.partitions.len(),
+                    self.filter,
+                    self.projection,
+                    self.limit
+                )
             }
             _ => Ok(()),
         }
@@ -134,7 +142,7 @@ impl ExecutionPlan for HyperStreamExec {
             self.projection.clone(),
             self.filter.clone(),
             self.limit,
-            self.base_schema.clone(),  // Use base schema for reprojection
+            self.base_schema.clone(), // Use base schema for reprojection
         )?))
     }
 
@@ -146,13 +154,14 @@ impl ExecutionPlan for HyperStreamExec {
         if partition >= self.partitions.len() && !self.partitions.is_empty() {
             return Err(DataFusionError::Internal(format!(
                 "HyperStreamExec invalid partition {} (count {})",
-                partition, self.partitions.len()
+                partition,
+                self.partitions.len()
             )));
         }
 
         let table = self.table.clone();
         let filter = self.filter.clone();
-        
+
         // If no partitions (empty table), return empty stream
         let entries = if self.partitions.is_empty() {
             Vec::new()
@@ -163,22 +172,23 @@ impl ExecutionPlan for HyperStreamExec {
         // Resolve usage of projection to column names
         let original_schema = table.arrow_schema();
         let column_names = if let Some(ref proj) = self.projection {
-             let names: Vec<String> = proj.iter()
-                 .map(|i| original_schema.field(*i).name().clone())
-                 .collect();
-             Some(names)
+            let names: Vec<String> = proj
+                .iter()
+                .map(|i| original_schema.field(*i).name().clone())
+                .collect();
+            Some(names)
         } else {
-             None
+            None
         };
-        
+
         // Pre-convert column names to &str slice
         let col_names_owned = column_names;
-        
+
         let expected_schema = self.schema.clone();
         let expected_schema_inner = expected_schema.clone();
-        use crate::core::planner::{QueryFilter, FilterExpr};
-        
-        let stream = async_stream::stream! {            
+        use crate::core::planner::{FilterExpr, QueryFilter};
+
+        let stream = async_stream::stream! {
             // For each segment in this partition
             for entry in entries {
                 let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
@@ -187,15 +197,15 @@ impl ExecutionPlan for HyperStreamExec {
                 // Apply filter parsing inside the loop or pre-parse?
                 // read_segment handles parsing if we pass QueryFilter.
                 // But here we have string filter.
-                // Better to parse once? 
+                // Better to parse once?
                 // Standard scan
-                let version = 1; 
+                let version = 1;
                 let query_filter = if let Some(ref f) = filter {
                      QueryFilter::parse_multi(f).into_iter().next()
                 } else {
                      None
                 };
-                
+
                 let stream = table.stream_segment(&entry, query_filter.as_ref(), version, col_slice).await;
                 match stream {
                     Ok(mut st) => {
@@ -219,7 +229,7 @@ impl ExecutionPlan for HyperStreamExec {
             if partition == 0 {
                 let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
                 let col_slice = col_refs.as_deref();
-                
+
                 let query_filter = if let Some(ref f) = filter {
                     use crate::core::planner::QueryFilter;
                     QueryFilter::parse(f)

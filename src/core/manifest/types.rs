@@ -2,17 +2,17 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use crate::core::cache::CacheExt;
+use anyhow::Result;
+use arrow::array::Array;
+use arrow::record_batch::RecordBatch;
+use chrono::Utc;
+use futures::StreamExt;
+use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use object_store::{path::Path, ObjectStore};
-use anyhow::Result;
-use futures::StreamExt;
-use chrono::Utc;
 use tracing;
-use arrow::record_batch::RecordBatch;
-use arrow::array::Array;
 
 pub type SegmentId = String;
 
@@ -34,7 +34,9 @@ pub struct IndexFile {
 #[serde(rename_all = "lowercase")]
 pub enum DeleteContent {
     Position,
-    Equality { equality_ids: Vec<i32> },
+    Equality {
+        equality_ids: Vec<i32>,
+    },
     /// V3 Deletion Vector: Reference to a Puffin file containing a deletion vector
     #[serde(rename = "deletion-vector")]
     DeletionVector {
@@ -64,11 +66,11 @@ pub struct PartitionField {
     /// For multi-column transforms like bucket(N, col1, col2), this contains multiple IDs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_ids: Vec<i32>,
-    
+
     /// Legacy single source_id for backward compatibility
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<i32>,
-    
+
     pub field_id: Option<i32>,
     pub name: String,
     pub transform: String, // e.g. "identity", "year", "month", "day", "bucket(256)"
@@ -76,7 +78,12 @@ pub struct PartitionField {
 
 impl PartitionField {
     /// Create a single-column partition field
-    pub fn new_single(source_id: i32, field_id: Option<i32>, name: String, transform: String) -> Self {
+    pub fn new_single(
+        source_id: i32,
+        field_id: Option<i32>,
+        name: String,
+        transform: String,
+    ) -> Self {
         Self {
             source_ids: vec![source_id],
             source_id: Some(source_id),
@@ -85,9 +92,14 @@ impl PartitionField {
             transform,
         }
     }
-    
+
     /// Create a multi-column partition field (e.g., composite bucketing)
-    pub fn new_multi(source_ids: Vec<i32>, field_id: Option<i32>, name: String, transform: String) -> Self {
+    pub fn new_multi(
+        source_ids: Vec<i32>,
+        field_id: Option<i32>,
+        name: String,
+        transform: String,
+    ) -> Self {
         Self {
             source_ids: source_ids.clone(),
             source_id: source_ids.first().copied(),
@@ -96,7 +108,7 @@ impl PartitionField {
             transform,
         }
     }
-    
+
     /// Get source IDs, handling both old and new format
     pub fn get_source_ids(&self) -> Vec<i32> {
         if !self.source_ids.is_empty() {
@@ -186,8 +198,12 @@ impl From<&ManifestValue> for Value {
             ManifestValue::String(s) => Value::String(s.clone()),
             ManifestValue::Int32(i) => Value::Number((*i).into()),
             ManifestValue::Int64(i) => Value::Number((*i).into()),
-            ManifestValue::Float32(f) => serde_json::Number::from_f64(*f as f64).map(Value::Number).unwrap_or(Value::Null),
-            ManifestValue::Float64(f) => serde_json::Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null),
+            ManifestValue::Float32(f) => serde_json::Number::from_f64(*f as f64)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
+            ManifestValue::Float64(f) => serde_json::Number::from_f64(*f)
+                .map(Value::Number)
+                .unwrap_or(Value::Null),
             ManifestValue::Boolean(b) => Value::Bool(*b),
             ManifestValue::Null => Value::Null,
         }
@@ -230,27 +246,45 @@ impl ManifestValue {
         use arrow::datatypes::DataType;
         match array.data_type() {
             DataType::Utf8 => {
-                let arr = array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .unwrap();
                 ManifestValue::String(arr.value(i).to_string())
             }
             DataType::Int32 => {
-                let arr = array.as_any().downcast_ref::<arrow::array::Int32Array>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int32Array>()
+                    .unwrap();
                 ManifestValue::Int32(arr.value(i))
             }
             DataType::Int64 => {
-                let arr = array.as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Int64Array>()
+                    .unwrap();
                 ManifestValue::Int64(arr.value(i))
             }
             DataType::Float32 => {
-                let arr = array.as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float32Array>()
+                    .unwrap();
                 ManifestValue::Float32(arr.value(i))
             }
             DataType::Float64 => {
-                let arr = array.as_any().downcast_ref::<arrow::array::Float64Array>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Float64Array>()
+                    .unwrap();
                 ManifestValue::Float64(arr.value(i))
             }
             DataType::Boolean => {
-                let arr = array.as_any().downcast_ref::<arrow::array::BooleanArray>().unwrap();
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::BooleanArray>()
+                    .unwrap();
                 ManifestValue::Boolean(arr.value(i))
             }
             _ => ManifestValue::Null, // Unsupported complex types for equality/stats
@@ -266,12 +300,12 @@ impl From<Value> for ManifestValue {
                 if n.is_i64() {
                     ManifestValue::Int64(n.as_i64().unwrap())
                 } else if n.is_f64() {
-                     ManifestValue::Float64(n.as_f64().unwrap())
+                    ManifestValue::Float64(n.as_f64().unwrap())
                 } else {
-                     // Fallback, treated as f64 or 0 if nan/inf (json doesn't have nan)
-                     ManifestValue::Float64(n.as_f64().unwrap_or(0.0))
+                    // Fallback, treated as f64 or 0 if nan/inf (json doesn't have nan)
+                    ManifestValue::Float64(n.as_f64().unwrap_or(0.0))
                 }
-            },
+            }
             Value::Bool(b) => ManifestValue::Boolean(b),
             Value::Null => ManifestValue::Null,
             _ => ManifestValue::String(val.to_string()), // Fallback for arrays/objects
@@ -398,17 +432,24 @@ impl std::fmt::Display for IndexAlgorithm {
     }
 }
 
-
 impl Default for IndexAlgorithm {
     fn default() -> Self {
         Self::hnsw_tq8()
     }
 }
 
-fn default_metric() -> String { "l2".to_string() }
-fn default_complexity() -> usize { 16 }
-fn default_quality() -> usize { 200 }
-fn default_compression() -> usize { 8 }
+fn default_metric() -> String {
+    "l2".to_string()
+}
+fn default_complexity() -> usize {
+    16
+}
+fn default_quality() -> usize {
+    200
+}
+fn default_compression() -> usize {
+    8
+}
 
 impl IndexAlgorithm {
     /// Create a standard HNSW index configuration.
@@ -453,8 +494,10 @@ impl IndexAlgorithm {
     pub fn with_metric(mut self, metric: impl Into<String>) -> Self {
         let m = metric.into();
         match &mut self {
-            Self::Hnsw { metric, .. } | Self::HnswPq { metric, .. } | 
-            Self::HnswTq4 { metric, .. } | Self::HnswTq8 { metric, .. } => *metric = m,
+            Self::Hnsw { metric, .. }
+            | Self::HnswPq { metric, .. }
+            | Self::HnswTq4 { metric, .. }
+            | Self::HnswTq8 { metric, .. } => *metric = m,
             _ => {}
         }
         self
@@ -462,8 +505,10 @@ impl IndexAlgorithm {
 
     pub fn with_complexity(mut self, complexity: usize) -> Self {
         match &mut self {
-            Self::Hnsw { complexity: c, .. } | Self::HnswPq { complexity: c, .. } | 
-            Self::HnswTq4 { complexity: c, .. } | Self::HnswTq8 { complexity: c, .. } => *c = complexity,
+            Self::Hnsw { complexity: c, .. }
+            | Self::HnswPq { complexity: c, .. }
+            | Self::HnswTq4 { complexity: c, .. }
+            | Self::HnswTq8 { complexity: c, .. } => *c = complexity,
             _ => {}
         }
         self
@@ -471,8 +516,10 @@ impl IndexAlgorithm {
 
     pub fn with_quality(mut self, quality: usize) -> Self {
         match &mut self {
-            Self::Hnsw { quality: q, .. } | Self::HnswPq { quality: q, .. } | 
-            Self::HnswTq4 { quality: q, .. } | Self::HnswTq8 { quality: q, .. } => *q = quality,
+            Self::Hnsw { quality: q, .. }
+            | Self::HnswPq { quality: q, .. }
+            | Self::HnswTq4 { quality: q, .. }
+            | Self::HnswTq8 { quality: q, .. } => *q = quality,
             _ => {}
         }
         self
@@ -511,53 +558,76 @@ pub struct Schema {
     #[serde(alias = "schema-id")]
     pub schema_id: i32,
     pub fields: Vec<SchemaField>,
-    #[serde(rename = "identifier-field-ids", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "identifier-field-ids",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub identifier_field_ids: Vec<i32>,
 }
 
 impl Schema {
     pub fn new(id: i32, fields: Vec<SchemaField>, identifier_field_ids: Vec<i32>) -> Self {
-        Self { schema_id: id, fields, identifier_field_ids }
+        Self {
+            schema_id: id,
+            fields,
+            identifier_field_ids,
+        }
     }
 
     pub fn to_arrow(&self) -> arrow::datatypes::Schema {
-        let fields: Vec<arrow::datatypes::Field> = self.fields.iter().map(|f| f.to_arrow()).collect();
+        let fields: Vec<arrow::datatypes::Field> =
+            self.fields.iter().map(|f| f.to_arrow()).collect();
         arrow::datatypes::Schema::new(fields)
     }
 
     pub fn from_arrow(schema: &arrow::datatypes::Schema, id: i32) -> Self {
-        let fields = schema.fields().iter().enumerate().map(|(i, f)| {
-            SchemaField::from_arrow_field(f, i as i32 + 1)
-        }).collect();
-        Self { schema_id: id, fields, identifier_field_ids: Vec::new() }
+        let fields = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(i, f)| SchemaField::from_arrow_field(f, i as i32 + 1))
+            .collect();
+        Self {
+            schema_id: id,
+            fields,
+            identifier_field_ids: Vec::new(),
+        }
     }
 }
 
 impl SchemaField {
     pub fn from_arrow_field(f: &arrow::datatypes::Field, id: i32) -> Self {
         use arrow::datatypes::DataType;
-        
+
         let mut nested_fields = Vec::new();
         let type_str = match f.data_type() {
             DataType::Struct(fields) => {
-                nested_fields = fields.iter().enumerate().map(|(i, sf)| {
-                    SchemaField::from_arrow_field(sf, id * 100 + i as i32 + 1) // Simple nested ID logic
-                }).collect();
+                nested_fields = fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, sf)| {
+                        SchemaField::from_arrow_field(sf, id * 100 + i as i32 + 1)
+                        // Simple nested ID logic
+                    })
+                    .collect();
                 "struct".to_string()
-            },
+            }
             DataType::List(field) => {
                 nested_fields.push(SchemaField::from_arrow_field(field, id * 100 + 1));
                 "list".to_string()
-            },
+            }
             DataType::Map(field, _) => {
                 // Arrow Map has a Struct field "entries" with "key" and "value"
                 if let DataType::Struct(fields) = field.data_type() {
-                    nested_fields = fields.iter().enumerate().map(|(i, sf)| {
-                        SchemaField::from_arrow_field(sf, id * 100 + i as i32 + 1)
-                    }).collect();
+                    nested_fields = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, sf)| SchemaField::from_arrow_field(sf, id * 100 + i as i32 + 1))
+                        .collect();
                 }
                 "map".to_string()
-            },
+            }
             DataType::FixedSizeBinary(len) => format!("fixed[{}]", len),
             DataType::Int32 => "int".to_string(),
             DataType::Int64 => "long".to_string(),
@@ -582,7 +652,7 @@ impl SchemaField {
                 } else {
                     format!("timestamp({}, none)", unit_str)
                 }
-            },
+            }
             DataType::Time32(unit) => {
                 let unit_str = match unit {
                     arrow::datatypes::TimeUnit::Second => "second",
@@ -590,7 +660,7 @@ impl SchemaField {
                     _ => "millisecond",
                 };
                 format!("time32({})", unit_str)
-            },
+            }
             DataType::Time64(unit) => {
                 let unit_str = match unit {
                     arrow::datatypes::TimeUnit::Microsecond => "microsecond",
@@ -598,11 +668,13 @@ impl SchemaField {
                     _ => "microsecond",
                 };
                 format!("time64({})", unit_str)
-            },
+            }
             dt => dt.to_string().to_lowercase(),
         };
 
-        let field_id = f.metadata().get("iceberg.id")
+        let field_id = f
+            .metadata()
+            .get("iceberg.id")
             .and_then(|id_str| id_str.parse::<i32>().ok())
             .unwrap_or(id);
 
@@ -619,113 +691,152 @@ impl SchemaField {
     }
 
     pub fn to_arrow(&self) -> arrow::datatypes::Field {
-         let dt = match self.type_str.to_lowercase().as_str() {
-             "int32" | "int" => arrow::datatypes::DataType::Int32,
-             "int64" | "long" => arrow::datatypes::DataType::Int64,
-             "utf8" | "string" => arrow::datatypes::DataType::Utf8,
-             "float32" | "float" => arrow::datatypes::DataType::Float32,
-             "float64" | "double" => arrow::datatypes::DataType::Float64,
-             "boolean" | "bool" => arrow::datatypes::DataType::Boolean,
-             "timestamp(microsecond, none)" => arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
-             "timestamp(nanosecond, none)" => arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
-             // Handle UTC timezone specifically if requested
-             "timestamp(microsecond, utc)" => arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into())),
-             "date" | "date32" => arrow::datatypes::DataType::Date32,
-             "date64" => arrow::datatypes::DataType::Date64,
-             "binary" => arrow::datatypes::DataType::Binary,
-             "largebinary" => arrow::datatypes::DataType::LargeBinary,
-             "largeutf8" => arrow::datatypes::DataType::LargeUtf8,
-             // Handle all timestamp variants: "timestamp", "timestamptz", "timestamp(unit, tz)"
-             s if s == "timestamp" || s == "timestamptz" || s.starts_with("timestamp(") => {
-                 if s == "timestamptz" {
-                     arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, Some("UTC".into()))
-                 } else if s == "timestamp" {
-                     arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
-                 } else {
-                     // Parse "timestamp(unit, tz_or_none)"
-                     let inner = s.trim_start_matches("timestamp(").trim_end_matches(')');
-                     let parts: Vec<&str> = inner.splitn(2, ',').map(|p| p.trim()).collect();
-                     let unit = match parts.first().map(|s| *s) {
-                         Some("second") => arrow::datatypes::TimeUnit::Second,
-                         Some("millisecond") => arrow::datatypes::TimeUnit::Millisecond,
-                         Some("nanosecond") => arrow::datatypes::TimeUnit::Nanosecond,
-                         _ => arrow::datatypes::TimeUnit::Microsecond,
-                     };
-                     let tz = parts.get(1).and_then(|t| {
-                         if *t == "none" { None } else { Some(t.to_string().into()) }
-                     });
-                     arrow::datatypes::DataType::Timestamp(unit, tz)
-                 }
-             },
-             s if s.contains("time32") => {
-                 if s.contains("millisecond") {
-                     arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Millisecond)
-                 } else {
-                     arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Second)
-                 }
-             },
-             s if s.contains("time64") => {
-                 if s.contains("nanosecond") {
-                     arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond)
-                 } else {
-                     arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
-                 }
-             },
-             s if s.contains("fixedsizelist") || s.contains("fixed_list") => {
-                 let dim = s.split(|c: char| !c.is_numeric())
+        let dt = match self.type_str.to_lowercase().as_str() {
+            "int32" | "int" => arrow::datatypes::DataType::Int32,
+            "int64" | "long" => arrow::datatypes::DataType::Int64,
+            "utf8" | "string" => arrow::datatypes::DataType::Utf8,
+            "float32" | "float" => arrow::datatypes::DataType::Float32,
+            "float64" | "double" => arrow::datatypes::DataType::Float64,
+            "boolean" | "bool" => arrow::datatypes::DataType::Boolean,
+            "timestamp(microsecond, none)" => {
+                arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None)
+            }
+            "timestamp(nanosecond, none)" => {
+                arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None)
+            }
+            // Handle UTC timezone specifically if requested
+            "timestamp(microsecond, utc)" => arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("UTC".into()),
+            ),
+            "date" | "date32" => arrow::datatypes::DataType::Date32,
+            "date64" => arrow::datatypes::DataType::Date64,
+            "binary" => arrow::datatypes::DataType::Binary,
+            "largebinary" => arrow::datatypes::DataType::LargeBinary,
+            "largeutf8" => arrow::datatypes::DataType::LargeUtf8,
+            // Handle all timestamp variants: "timestamp", "timestamptz", "timestamp(unit, tz)"
+            s if s == "timestamp" || s == "timestamptz" || s.starts_with("timestamp(") => {
+                if s == "timestamptz" {
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        Some("UTC".into()),
+                    )
+                } else if s == "timestamp" {
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    )
+                } else {
+                    // Parse "timestamp(unit, tz_or_none)"
+                    let inner = s.trim_start_matches("timestamp(").trim_end_matches(')');
+                    let parts: Vec<&str> = inner.splitn(2, ',').map(|p| p.trim()).collect();
+                    let unit = match parts.first().map(|s| *s) {
+                        Some("second") => arrow::datatypes::TimeUnit::Second,
+                        Some("millisecond") => arrow::datatypes::TimeUnit::Millisecond,
+                        Some("nanosecond") => arrow::datatypes::TimeUnit::Nanosecond,
+                        _ => arrow::datatypes::TimeUnit::Microsecond,
+                    };
+                    let tz = parts.get(1).and_then(|t| {
+                        if *t == "none" {
+                            None
+                        } else {
+                            Some(t.to_string().into())
+                        }
+                    });
+                    arrow::datatypes::DataType::Timestamp(unit, tz)
+                }
+            }
+            s if s.contains("time32") => {
+                if s.contains("millisecond") {
+                    arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Millisecond)
+                } else {
+                    arrow::datatypes::DataType::Time32(arrow::datatypes::TimeUnit::Second)
+                }
+            }
+            s if s.contains("time64") => {
+                if s.contains("nanosecond") {
+                    arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Nanosecond)
+                } else {
+                    arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond)
+                }
+            }
+            s if s.contains("fixedsizelist") || s.contains("fixed_list") => {
+                let dim = s
+                    .split(|c: char| !c.is_numeric())
                     .filter_map(|p| p.parse::<i32>().ok())
                     .next()
                     .unwrap_or(0);
-                 arrow::datatypes::DataType::FixedSizeList(
-                     Arc::new(arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Float32, true)),
-                     dim
-                 )
-             },
-             s if s.starts_with("fixed[") => {
-                 let len = s.trim_start_matches("fixed[").trim_end_matches(']')
-                    .parse::<i32>().unwrap_or(0);
-                 arrow::datatypes::DataType::FixedSizeBinary(len)
-             },
-             "struct" => {
-                 let arrow_fields = self.fields.iter().map(|f| f.to_arrow()).collect();
-                 arrow::datatypes::DataType::Struct(arrow_fields)
-             },
-             "list" => {
-                 let item_field = self.fields.first().map(|f| f.to_arrow())
-                    .unwrap_or(arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Utf8, true));
-                 arrow::datatypes::DataType::List(Arc::new(item_field))
-             },
-             "map" => {
-                 let key_field = self.fields.first().map(|f| f.to_arrow())
-                    .unwrap_or(arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false));
-                 let value_field = self.fields.get(1).map(|f| f.to_arrow())
-                    .unwrap_or(arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Utf8, true));
-                 
-                 arrow::datatypes::DataType::Map(
-                     Arc::new(arrow::datatypes::Field::new("entries", arrow::datatypes::DataType::Struct(vec![
-                         key_field, value_field
-                     ].into()), false)),
-                     false
-                 )
-             },
-             s if s == "decimal" || s.starts_with("decimal(") || s.starts_with("decimal128(") => {
-                 let parts: Vec<&str> = if s.starts_with("decimal(") {
-                     s.trim_start_matches("decimal(").trim_end_matches(')')
-                 } else {
-                     s.trim_start_matches("decimal128(").trim_end_matches(')')
-                 }
-                     .split(',')
-                     .map(|p| p.trim())
-                     .collect();
-                 let precision = parts.first().and_then(|p| p.parse::<u8>().ok()).unwrap_or(38);
-                 let scale = parts.get(1).and_then(|p| p.parse::<i8>().ok()).unwrap_or(10);
-                 arrow::datatypes::DataType::Decimal128(precision, scale)
-             },
-             _ => arrow::datatypes::DataType::Utf8
-         };
-         let mut f = arrow::datatypes::Field::new(&self.name, dt, !self.required);
-         f.set_metadata(std::collections::HashMap::from([("iceberg.id".to_string(), self.id.to_string())]));
-         f
+                arrow::datatypes::DataType::FixedSizeList(
+                    Arc::new(arrow::datatypes::Field::new(
+                        "item",
+                        arrow::datatypes::DataType::Float32,
+                        true,
+                    )),
+                    dim,
+                )
+            }
+            s if s.starts_with("fixed[") => {
+                let len = s
+                    .trim_start_matches("fixed[")
+                    .trim_end_matches(']')
+                    .parse::<i32>()
+                    .unwrap_or(0);
+                arrow::datatypes::DataType::FixedSizeBinary(len)
+            }
+            "struct" => {
+                let arrow_fields = self.fields.iter().map(|f| f.to_arrow()).collect();
+                arrow::datatypes::DataType::Struct(arrow_fields)
+            }
+            "list" => {
+                let item_field = self.fields.first().map(|f| f.to_arrow()).unwrap_or(
+                    arrow::datatypes::Field::new("item", arrow::datatypes::DataType::Utf8, true),
+                );
+                arrow::datatypes::DataType::List(Arc::new(item_field))
+            }
+            "map" => {
+                let key_field = self.fields.first().map(|f| f.to_arrow()).unwrap_or(
+                    arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
+                );
+                let value_field = self.fields.get(1).map(|f| f.to_arrow()).unwrap_or(
+                    arrow::datatypes::Field::new("value", arrow::datatypes::DataType::Utf8, true),
+                );
+
+                arrow::datatypes::DataType::Map(
+                    Arc::new(arrow::datatypes::Field::new(
+                        "entries",
+                        arrow::datatypes::DataType::Struct(vec![key_field, value_field].into()),
+                        false,
+                    )),
+                    false,
+                )
+            }
+            s if s == "decimal" || s.starts_with("decimal(") || s.starts_with("decimal128(") => {
+                let parts: Vec<&str> = if s.starts_with("decimal(") {
+                    s.trim_start_matches("decimal(").trim_end_matches(')')
+                } else {
+                    s.trim_start_matches("decimal128(").trim_end_matches(')')
+                }
+                .split(',')
+                .map(|p| p.trim())
+                .collect();
+                let precision = parts
+                    .first()
+                    .and_then(|p| p.parse::<u8>().ok())
+                    .unwrap_or(38);
+                let scale = parts
+                    .get(1)
+                    .and_then(|p| p.parse::<i8>().ok())
+                    .unwrap_or(10);
+                arrow::datatypes::DataType::Decimal128(precision, scale)
+            }
+            _ => arrow::datatypes::DataType::Utf8,
+        };
+        let mut f = arrow::datatypes::Field::new(&self.name, dt, !self.required);
+        f.set_metadata(std::collections::HashMap::from([(
+            "iceberg.id".to_string(),
+            self.id.to_string(),
+        )]));
+        f
     }
 }
 
@@ -740,7 +851,7 @@ pub struct Manifest {
     #[serde(default)]
     pub manifest_list_path: Option<String>,
     /// List of active entries (Directly in manifest for small tables, otherwise in ManifestList)
-    pub entries: Vec<ManifestEntry>, 
+    pub entries: Vec<ManifestEntry>,
     /// Pointer to previous version (for history/rollback)
     pub prev_version: Option<u64>,
     /// Explicit Schema Tracking (Iceberg-style)
@@ -790,9 +901,19 @@ impl Manifest {
             last_column_id: 0,
         }
     }
-    
-    pub fn new_with_schema(version: u64, entries: Vec<ManifestEntry>, prev_version: Option<u64>, schemas: Vec<Schema>, current_schema_id: i32) -> Self {
-        let last_id = schemas.iter().flat_map(|s| s.fields.iter().map(|f| f.id)).max().unwrap_or(0);
+
+    pub fn new_with_schema(
+        version: u64,
+        entries: Vec<ManifestEntry>,
+        prev_version: Option<u64>,
+        schemas: Vec<Schema>,
+        current_schema_id: i32,
+    ) -> Self {
+        let last_id = schemas
+            .iter()
+            .flat_map(|s| s.fields.iter().map(|f| f.id))
+            .max()
+            .unwrap_or(0);
         Self {
             version,
             format_version: 2,
@@ -813,14 +934,18 @@ impl Manifest {
     }
 
     pub fn new_with_spec(
-        version: u64, 
-        entries: Vec<ManifestEntry>, 
-        prev_version: Option<u64>, 
-        schema_list: Vec<Schema>, 
+        version: u64,
+        entries: Vec<ManifestEntry>,
+        prev_version: Option<u64>,
+        schema_list: Vec<Schema>,
         current_schema_id: i32,
-        partition_spec: PartitionSpec
+        partition_spec: PartitionSpec,
     ) -> Self {
-        let last_id = schema_list.iter().flat_map(|s| s.fields.iter().map(|f| f.id)).max().unwrap_or(0);
+        let last_id = schema_list
+            .iter()
+            .flat_map(|s| s.fields.iter().map(|f| f.id))
+            .max()
+            .unwrap_or(0);
         let spec_id = partition_spec.spec_id;
         Self {
             version,
@@ -859,12 +984,23 @@ impl PartitionSpec {
                     serde_json::Value::String(s) => s.clone(),
                     _ => val.to_string(),
                 };
-                
+
                 // Percent-encode special characters to be safe for filenames and match object_store Paths
                 let mut encoded = String::new();
                 for b in val_str.bytes() {
                     match b {
-                        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+                        b'a'..=b'z'
+                        | b'A'..=b'Z'
+                        | b'0'..=b'9'
+                        | b'-'
+                        | b'_'
+                        | b'.'
+                        | b'!'
+                        | b'~'
+                        | b'*'
+                        | b'\''
+                        | b'('
+                        | b')' => {
                             encoded.push(b as char);
                         }
                         _ => {
@@ -893,4 +1029,3 @@ impl ManifestValue {
         }
     }
 }
-

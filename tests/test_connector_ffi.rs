@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 #![cfg(feature = "java")]
 
-use hyperstreamdb::Table;
-use hyperstreamdb::core::ffi::HyperStreamSession;
-use arrow::datatypes::{DataType, Field, Schema};
 use arrow::array::{Int32Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use std::sync::Arc;
+use hyperstreamdb::core::ffi::HyperStreamSession;
+use hyperstreamdb::Table;
 use std::path::Path;
+use std::sync::Arc;
 
 async fn create_test_table(uri: &str, _row_count: usize) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create Schema
@@ -58,44 +58,53 @@ async fn test_connector_simulation() -> Result<(), Box<dyn std::error::Error>> {
 
     // Coordinator
     let table = Table::new_async(table_uri.to_string()).await?;
-    let splits = table.get_splits_async(1024).await?; 
-    
+    let splits = table.get_splits_async(1024).await?;
+
     println!("Got {} splits", splits.len());
     // Expect at least 2 splits (one per file/commit)
-    assert!(splits.len() >= 2, "Expected at least 2 splits for 2 segments");
+    assert!(
+        splits.len() >= 2,
+        "Expected at least 2 splits for 2 segments"
+    );
 
     // Worker Simulation
-    let (total_rows, seen_ids): (usize, std::collections::HashSet<i32>) = tokio::task::spawn_blocking(move || {
-        let mut total_rows = 0;
-        let mut seen_ids = std::collections::HashSet::new();
+    let (total_rows, seen_ids): (usize, std::collections::HashSet<i32>) =
+        tokio::task::spawn_blocking(move || {
+            let mut total_rows = 0;
+            let mut seen_ids = std::collections::HashSet::new();
 
-        for split in splits {
-            println!("Processing Split: {:?}", split);
-            let path = &split.file_path;
-            
-            // Note: In real Spark/Trino, this happens in a thread that is NOT a Tokio async runtime thread.
-            // Hence why HyperStreamSession uses its own RUNTIME.block_on internally.
-            // spawn_blocking moves us to a thread where blocking is allowed.
-            let mut session = HyperStreamSession::new(path).expect("Failed to create session");
-            
-            while let Some(batch) = session.next_batch() {
-                 println!("Read batch with {} rows", batch.num_rows());
-                 total_rows += batch.num_rows();
-                 
-                 let ids = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
-                 for i in 0..ids.len() {
-                     seen_ids.insert(ids.value(i));
-                 }
+            for split in splits {
+                println!("Processing Split: {:?}", split);
+                let path = &split.file_path;
+
+                // Note: In real Spark/Trino, this happens in a thread that is NOT a Tokio async runtime thread.
+                // Hence why HyperStreamSession uses its own RUNTIME.block_on internally.
+                // spawn_blocking moves us to a thread where blocking is allowed.
+                let mut session = HyperStreamSession::new(path).expect("Failed to create session");
+
+                while let Some(batch) = session.next_batch() {
+                    println!("Read batch with {} rows", batch.num_rows());
+                    total_rows += batch.num_rows();
+
+                    let ids = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap();
+                    for i in 0..ids.len() {
+                        seen_ids.insert(ids.value(i));
+                    }
+                }
             }
-        }
-        (total_rows, seen_ids)
-    }).await?;
+            (total_rows, seen_ids)
+        })
+        .await?;
 
     // Verification
     assert_eq!(total_rows, 5, "Total rows read should be 5");
     assert!(seen_ids.contains(&1));
     assert!(seen_ids.contains(&5));
-    
+
     println!("Connector Simulation Passed!");
     Ok(())
 }

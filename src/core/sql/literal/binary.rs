@@ -29,7 +29,7 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
     if trimmed.starts_with("B'") || trimmed.starts_with("b'") {
         if !trimmed.ends_with('\'') {
             return Err(DataFusionError::Plan(
-                "Binary literal must end with single quote: B'...'".to_string()
+                "Binary literal must end with single quote: B'...'".to_string(),
             ));
         }
 
@@ -39,9 +39,10 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
         // Validate that all characters are 0 or 1
         for (idx, ch) in binary_str.chars().enumerate() {
             if ch != '0' && ch != '1' {
-                return Err(DataFusionError::Plan(
-                    format!("Invalid binary digit at position {}: expected '0' or '1', got '{}'", idx, ch)
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid binary digit at position {}: expected '0' or '1', got '{}'",
+                    idx, ch
+                )));
             }
         }
 
@@ -50,9 +51,10 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
         // Validate bit count if expected_bits is provided
         if let Some(expected) = expected_bits {
             if bit_count != expected {
-                return Err(DataFusionError::Plan(
-                    format!("Binary literal bit count mismatch: expected {} bits, got {}", expected, bit_count)
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Binary literal bit count mismatch: expected {} bits, got {}",
+                    expected, bit_count
+                )));
             }
         }
 
@@ -74,7 +76,7 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
     else if trimmed.starts_with("'\\x") || trimmed.starts_with("'\\X") {
         if !trimmed.ends_with('\'') {
             return Err(DataFusionError::Plan(
-                "Hex literal must end with single quote: '\\x...'".to_string()
+                "Hex literal must end with single quote: '\\x...'".to_string(),
             ));
         }
 
@@ -86,18 +88,21 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
         let mut chars = hex_str.chars().peekable();
 
         while chars.peek().is_some() {
-            let high = chars.next().ok_or_else(|| {
-                DataFusionError::Plan("Incomplete hex byte".to_string())
-            })?;
+            let high = chars
+                .next()
+                .ok_or_else(|| DataFusionError::Plan("Incomplete hex byte".to_string()))?;
             let low = chars.next().ok_or_else(|| {
-                DataFusionError::Plan("Incomplete hex byte: hex digits must come in pairs".to_string())
+                DataFusionError::Plan(
+                    "Incomplete hex byte: hex digits must come in pairs".to_string(),
+                )
             })?;
 
             let hex_byte = format!("{}{}", high, low);
             let byte = u8::from_str_radix(&hex_byte, 16).map_err(|_| {
-                DataFusionError::Plan(
-                    format!("Invalid hex digit in '{}': expected 0-9, a-f, A-F", hex_byte)
-                )
+                DataFusionError::Plan(format!(
+                    "Invalid hex digit in '{}': expected 0-9, a-f, A-F",
+                    hex_byte
+                ))
             })?;
 
             bytes.push(byte);
@@ -107,17 +112,17 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
         if let Some(expected) = expected_bits {
             let actual_bits = bytes.len() * 8;
             if actual_bits != expected {
-                return Err(DataFusionError::Plan(
-                    format!("Binary literal bit count mismatch: expected {} bits, got {}", expected, actual_bits)
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Binary literal bit count mismatch: expected {} bits, got {}",
+                    expected, actual_bits
+                )));
             }
         }
 
         Ok(bytes)
-    }
-    else {
+    } else {
         Err(DataFusionError::Plan(
-            "Binary literal must be in format B'...' or '\\x...'".to_string()
+            "Binary literal must be in format B'...' or '\\x...'".to_string(),
         ))
     }
 }

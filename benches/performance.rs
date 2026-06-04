@@ -1,17 +1,26 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use hyperstreamdb::{SegmentConfig, core::{segment::HybridSegmentWriter, reader::HybridReader, compaction::{Compactor, CompactionOptions}, planner::FilterExpr, index::{VectorMetric, VectorValue}}};
+use arrow::array::{FixedSizeListArray, Float32Array, Int32Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::datatypes::{Schema, Field, DataType};
-use arrow::array::{Int32Array, Float32Array, StringArray, FixedSizeListArray};
-use std::sync::Arc;
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use hyperstreamdb::{
+    core::{
+        compaction::{CompactionOptions, Compactor},
+        index::{VectorMetric, VectorValue},
+        planner::FilterExpr,
+        reader::HybridReader,
+        segment::HybridSegmentWriter,
+    },
+    SegmentConfig,
+};
 use object_store::local::LocalFileSystem;
 use rand::prelude::*;
 use rand_distr::{Distribution, Normal, Zipf};
+use std::sync::Arc;
 
 /// Benchmark: Ingest throughput
 fn bench_ingest(c: &mut Criterion) {
     let mut group = c.benchmark_group("ingest");
-    
+
     for batch_size in [1_000, 10_000, 100_000] {
         group.bench_with_input(
             BenchmarkId::from_parameter(batch_size),
@@ -28,7 +37,7 @@ fn bench_ingest(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
@@ -38,27 +47,24 @@ fn bench_query_indexed(c: &mut Criterion) {
     let batch = create_test_batch(100_000);
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().to_str().unwrap();
-    let writer_config = SegmentConfig::new(path, "query_test")
-        .with_columns_to_index(vec!["id".to_string()]);
+    let writer_config =
+        SegmentConfig::new(path, "query_test").with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(writer_config);
     writer.write_batch(&batch).unwrap();
     writer.build_indexes(&batch, 0).unwrap();
     let entry = writer.to_manifest_entry();
-    
+
     // For Reader: Use relative path logic since store is rooted at tmp_dir
     // If we passed absolute path to reader config, it would be appended to store prefix
-    let reader_config = SegmentConfig::new("", "query_test")
-        .with_index_files(entry.index_files);
+    let reader_config = SegmentConfig::new("", "query_test").with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
-    
+
     let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
-    
+
     c.bench_function("query_indexed", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
-            .iter(|| async {
-                black_box(reader.query_index_first(&filter, None).await.unwrap())
-            });
+            .iter(|| async { black_box(reader.query_index_first(&filter, None).await.unwrap()) });
     });
 }
 
@@ -66,23 +72,23 @@ fn bench_query_indexed(c: &mut Criterion) {
 /// Simulates finding 10 nearest neighbors in a 100k vector segment
 fn bench_vector_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("vector_search");
-    
+
     // Setup: Create segment with vectors
     // Use a smaller size for bench setup to avoid timeout, or pre-generate?
     // Criterion setup is outside the measurement loop.
     let vec_dim = 128;
     let num_rows = 10_000; // Real world would be larger, but keeping it manageable for `cargo bench`
-    
+
     let batch = create_vector_batch(num_rows, vec_dim);
     let tmp_dir = tempfile::tempdir().unwrap();
     let base_path = tmp_dir.path().to_str().unwrap();
     let config = SegmentConfig::new(base_path, "vec_bench")
         .with_columns_to_index(vec!["embedding".to_string()]);
-    
+
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
     writer.build_indexes(&batch, 0).unwrap();
-    
+
     // Generate a random query vector
     let mut rng = rand::thread_rng();
     let normal = Normal::new(0.0, 1.0).unwrap();
@@ -90,24 +96,32 @@ fn bench_vector_search(c: &mut Criterion) {
     let query_val = VectorValue::Float32(query_vec);
 
     let entry = writer.to_manifest_entry();
-    let reader_config = SegmentConfig::new("", "vec_bench")
-        .with_index_files(entry.index_files);
+    let reader_config = SegmentConfig::new("", "vec_bench").with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(base_path).unwrap());
     let reader = HybridReader::new(reader_config, store, base_path);
-    
+
     for k in [10, 100] {
-        group.bench_with_input(
-            BenchmarkId::from_parameter(k),
-            &k,
-            |b, &k| {
-                b.to_async(tokio::runtime::Runtime::new().unwrap())
-                    .iter(|| async {
-                        black_box(reader.vector_search_index("embedding", &query_val, k, None, VectorMetric::L2, None, None).await.unwrap())
-                    });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(k), &k, |b, &k| {
+            b.to_async(tokio::runtime::Runtime::new().unwrap())
+                .iter(|| async {
+                    black_box(
+                        reader
+                            .vector_search_index(
+                                "embedding",
+                                &query_val,
+                                k,
+                                None,
+                                VectorMetric::L2,
+                                None,
+                                None,
+                            )
+                            .await
+                            .unwrap(),
+                    )
+                });
+        });
     }
-    
+
     group.finish();
 }
 
@@ -115,42 +129,54 @@ fn bench_vector_search(c: &mut Criterion) {
 /// Scenario: "Find images where category='security' AND similarity(vec) > X"
 fn bench_hybrid_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("hybrid_search");
-    
+
     let vec_dim = 128;
     let num_rows = 10_000;
-    
+
     // Create data with skewed category
     let batch = create_hybrid_batch(num_rows, vec_dim);
     let tmp_dir = tempfile::tempdir().unwrap();
     let base_path = tmp_dir.path().to_str().unwrap();
     let config = SegmentConfig::new(base_path, "hybrid_bench")
         .with_columns_to_index(vec!["embedding".to_string(), "id".to_string()]);
-    
+
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
     writer.build_indexes(&batch, 0).unwrap();
-    
+
     let mut rng = rand::thread_rng();
     let query_vec: Vec<f32> = (0..vec_dim).map(|_| rng.gen()).collect();
     let query_val = VectorValue::Float32(query_vec);
 
     let entry = writer.to_manifest_entry();
-    let reader_config = SegmentConfig::new("", "hybrid_bench")
-        .with_index_files(entry.index_files);
+    let reader_config = SegmentConfig::new("", "hybrid_bench").with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(base_path).unwrap());
     let reader = HybridReader::new(reader_config, store, base_path);
-    
+
     let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
 
     group.bench_function("hybrid_filter_50_percent", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
             .iter(|| async {
-                 // Pre-filter strategy (HybridReader way)
-                 let expr = FilterExpr::DataFusion(filter.to_expr());
-                 black_box(reader.vector_search_index("embedding", &query_val, 10, Some(&expr), VectorMetric::L2, None, None).await.unwrap())
+                // Pre-filter strategy (HybridReader way)
+                let expr = FilterExpr::DataFusion(filter.to_expr());
+                black_box(
+                    reader
+                        .vector_search_index(
+                            "embedding",
+                            &query_val,
+                            10,
+                            Some(&expr),
+                            VectorMetric::L2,
+                            None,
+                            None,
+                        )
+                        .await
+                        .unwrap(),
+                )
             });
     });
-    
+
     group.finish();
 }
 
@@ -159,24 +185,24 @@ fn bench_hybrid_search(c: &mut Criterion) {
 fn bench_high_selectivity(c: &mut Criterion) {
     // Generate data where only ONE id > 0
     let size = 100_000;
-    
+
     // Only index i == 50000 will be > 0 (set to 1). Others 0.
     // Writer config: "if v > 0 { insert }"
     let mut ids = vec![0; size];
     ids[50000] = 1;
     let ids_array = Int32Array::from(ids);
-    
+
     // Fill other cols
     let values_array = Int32Array::from(vec![0; size]);
     let categories: Vec<String> = (0..size).map(|_| "x".to_string()).collect();
     let cat_array = StringArray::from(categories);
-    
+
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("value", DataType::Int32, false),
         Field::new("category", DataType::Utf8, false),
     ]);
-    
+
     let batch = RecordBatch::try_new(
         Arc::new(schema),
         vec![
@@ -184,23 +210,24 @@ fn bench_high_selectivity(c: &mut Criterion) {
             Arc::new(values_array),
             Arc::new(cat_array),
         ],
-    ).unwrap();
+    )
+    .unwrap();
 
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().to_str().unwrap();
-    let config = SegmentConfig::new(path, "high_selectivity")
-        .with_columns_to_index(vec!["id".to_string()]);
+    let config =
+        SegmentConfig::new(path, "high_selectivity").with_columns_to_index(vec!["id".to_string()]);
     let writer = HybridSegmentWriter::new(config);
     writer.write_batch(&batch).unwrap();
     writer.build_indexes(&batch, 0).unwrap();
     let entry = writer.to_manifest_entry();
-    
+
     // For Reader: Use relative path logic
-    let reader_config = SegmentConfig::new("", "high_selectivity")
-        .with_index_files(entry.index_files);
+    let reader_config =
+        SegmentConfig::new("", "high_selectivity").with_index_files(entry.index_files);
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
-    
+
     let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
 
     c.bench_function("read_single_row_via_index", |b| {
@@ -216,40 +243,43 @@ fn bench_high_selectivity(c: &mut Criterion) {
 fn create_vector_batch(rows: usize, dim: usize) -> RecordBatch {
     let mut rng = rand::thread_rng();
     let normal = Normal::new(0.0, 1.0).unwrap();
-    
+
     let mut values = Vec::with_capacity(rows * dim);
     for _ in 0..rows {
         for _ in 0..dim {
             values.push(normal.sample(&mut rng));
         }
     }
-    
+
     let values_array = Float32Array::from(values);
     let vectors_array = FixedSizeListArray::try_new(
         Arc::new(Field::new("item", DataType::Float32, true)),
         dim as i32,
         Arc::new(values_array),
-        None
-    ).unwrap();
-    
-    let schema = Schema::new(vec![
-        Field::new("embedding", DataType::FixedSizeList(
+        None,
+    )
+    .unwrap();
+
+    let schema = Schema::new(vec![Field::new(
+        "embedding",
+        DataType::FixedSizeList(
             Arc::new(Field::new("item", DataType::Float32, true)),
-            dim as i32
-        ), false),
-    ]);
-    
+            dim as i32,
+        ),
+        false,
+    )]);
+
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(vectors_array)]).unwrap()
 }
 
 fn create_hybrid_batch(rows: usize, dim: usize) -> RecordBatch {
     let mut rng = rand::thread_rng();
-    
+
     // 1. ID Column (random integers 0..rows)
     // Use Zipf distribution to simulate skewed access patterns/metadata
     let zipf = Zipf::new(1000, 1.5).unwrap(); // Skewed distribution
     let ids: Vec<i32> = (0..rows).map(|_| zipf.sample(&mut rng) as i32).collect();
-    
+
     // 2. Vector Column
     let mut values = Vec::with_capacity(rows * dim);
     for _ in 0..rows {
@@ -262,24 +292,27 @@ fn create_hybrid_batch(rows: usize, dim: usize) -> RecordBatch {
         Arc::new(Field::new("item", DataType::Float32, true)),
         dim as i32,
         Arc::new(values_array),
-        None
-    ).unwrap();
-    
+        None,
+    )
+    .unwrap();
+
     let schema = Schema::new(vec![
         Field::new("id", DataType::Int32, false),
-        Field::new("embedding", DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Float32, true)),
-            dim as i32
-        ), false),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dim as i32,
+            ),
+            false,
+        ),
     ]);
-    
+
     RecordBatch::try_new(
-        Arc::new(schema), 
-        vec![
-            Arc::new(Int32Array::from(ids)),
-            Arc::new(vectors_array)
-        ]
-    ).unwrap()
+        Arc::new(schema),
+        vec![Arc::new(Int32Array::from(ids)), Arc::new(vectors_array)],
+    )
+    .unwrap()
 }
 
 fn create_test_batch(size: usize) -> RecordBatch {
@@ -288,11 +321,11 @@ fn create_test_batch(size: usize) -> RecordBatch {
         Field::new("value", DataType::Int32, false),
         Field::new("category", DataType::Utf8, false),
     ]);
-    
+
     let ids: Vec<i32> = (0..size as i32).collect();
     let values: Vec<i32> = (0..size as i32).map(|i| i * 2).collect();
     let categories: Vec<String> = (0..size).map(|i| format!("cat_{}", i % 10)).collect();
-    
+
     RecordBatch::try_new(
         Arc::new(schema),
         vec![
@@ -300,9 +333,9 @@ fn create_test_batch(size: usize) -> RecordBatch {
             Arc::new(Int32Array::from(values)),
             Arc::new(StringArray::from(categories)),
         ],
-    ).unwrap()
+    )
+    .unwrap()
 }
-
 
 /// Benchmark: Compaction
 /// Measures time to compact 10 small segments into 1
@@ -310,21 +343,21 @@ fn bench_compaction(c: &mut Criterion) {
     let mut group = c.benchmark_group("compaction");
     // Configure for throughput (MB/s)? Or just latency?
     // Latency is fine for now.
-    
+
     group.sample_size(10); // Compaction is slow, don't run 100 times
-    
+
     group.bench_function("compact_10_segments", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
             .iter_custom(|iters| async move {
                 let mut total_duration = std::time::Duration::new(0, 0);
-                
+
                 for _ in 0..iters {
                     // Setup per iteration (Costly setup, but necessary for destructive test)
                     // We need fresh segments every time because compaction changes them.
-                    
+
                     let tmp_dir = tempfile::tempdir().unwrap();
                     let path = tmp_dir.path().to_str().unwrap();
-                    
+
                     // Create 10 segments of 1000 rows each
                     for i in 0..10 {
                         let batch = create_test_batch(1000);
@@ -332,7 +365,7 @@ fn bench_compaction(c: &mut Criterion) {
                         let writer = HybridSegmentWriter::new(config);
                         writer.write_batch(&batch).unwrap();
                     }
-                    
+
                     let uri = format!("file://{}", path);
                     let options = CompactionOptions {
                         target_file_size_bytes: 100 * 1024 * 1024,
@@ -342,7 +375,7 @@ fn bench_compaction(c: &mut Criterion) {
                         clustering: None,
                     };
                     let compactor = Compactor::new(&uri, options).unwrap();
-                    
+
                     let start = std::time::Instant::now();
                     compactor.rewrite_data_files().await.unwrap();
                     total_duration += start.elapsed();
@@ -350,9 +383,17 @@ fn bench_compaction(c: &mut Criterion) {
                 total_duration
             });
     });
-    
+
     group.finish();
 }
 
-criterion_group!(benches, bench_ingest, bench_query_indexed, bench_vector_search, bench_hybrid_search, bench_high_selectivity, bench_compaction);
+criterion_group!(
+    benches,
+    bench_ingest,
+    bench_query_indexed,
+    bench_vector_search,
+    bench_hybrid_search,
+    bench_high_selectivity,
+    bench_compaction
+);
 criterion_main!(benches);

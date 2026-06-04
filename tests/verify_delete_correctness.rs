@@ -2,11 +2,11 @@
 
 use hyperstreamdb::core::table::Table;
 // use hyperstreamdb::core::manifest::Schema; // Unused
-use arrow::record_batch::RecordBatch;
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-use std::sync::Arc;
+use arrow::record_batch::RecordBatch;
 use futures::StreamExt;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
@@ -14,7 +14,7 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
     let table_name = "test_delete_correctness";
     let uri = format!("file:///tmp/{}", table_name);
     let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
-    
+
     // We used to define manifest schema here, but create_async takes Arrow schema
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -26,8 +26,7 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
     // 2. Insert Data (100 rows)
     let ids: Vec<i64> = (0..100).collect();
     let data: Vec<String> = ids.iter().map(|i| format!("val_{}", i)).collect();
-    
-    
+
     let batch = RecordBatch::try_new(
         arrow_schema.clone(),
         vec![
@@ -35,7 +34,7 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
             Arc::new(StringArray::from(data)),
         ],
     )?;
-    
+
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
 
@@ -50,10 +49,14 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
     // Verify Count
     let count = scan_count(&table).await?;
     assert_eq!(count, 99, "Count should be 99 after deleting 1 row");
-    
+
     // Verify ID 10 is gone
     let results = scan_all(&table).await?;
-    let ids = results.column(0).as_any().downcast_ref::<arrow::array::Int64Array>().unwrap();
+    let ids = results
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .unwrap();
     for i in 0..ids.len() {
         if ids.value(i) == 10 {
             panic!("ID 10 should have been deleted!");
@@ -78,7 +81,7 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
     // and write another delete file for it. This is wasteful but compliant.
     println!("Deleting ID = 10 AGAIN...");
     table.delete_async("id = 10").await?;
-    
+
     let count = scan_count(&table).await?;
     assert_eq!(count, 89, "Count should still be 89");
 
@@ -107,7 +110,7 @@ async fn scan_all(table: &Table) -> anyhow::Result<RecordBatch> {
         // But deletes might empty the table.
         // We can't easily reconstruction schema from empty vec unless we pass it.
         // Let's assume at least one batch if not empty, or handle gracefully.
-        // Actually arrow concat requires at least one batch or schema. 
+        // Actually arrow concat requires at least one batch or schema.
         // We can just return empty Result if expected.
         return Ok(RecordBatch::new_empty(Arc::new(ArrowSchema::empty()))); // Incomplete schema but safe for test check?
     }
@@ -119,7 +122,7 @@ async fn scan_all(table: &Table) -> anyhow::Result<RecordBatch> {
 async fn verify_delete_files_format(uri: &str, expected_min_count: usize) -> anyhow::Result<()> {
     let path = uri.strip_prefix("file://").unwrap();
     let mut count = 0;
-    
+
     use std::fs;
     for entry in fs::read_dir(path)? {
         let entry = entry?;
@@ -128,7 +131,7 @@ async fn verify_delete_files_format(uri: &str, expected_min_count: usize) -> any
             if name.starts_with("del-pos-") && name.ends_with(".avro") {
                 count += 1;
                 println!("Found valid position delete file: {}", name);
-                
+
                 // Optional: Read it with avro-rs to verify schema
                 let file = std::fs::File::open(&path)?;
                 let reader = apache_avro::Reader::new(file)?;
@@ -137,13 +140,20 @@ async fn verify_delete_files_format(uri: &str, expected_min_count: usize) -> any
                 // Simplified check
                 // println!("Schema: {:?}", schema);
             } else if name.ends_with(".roaring") {
-                return Err(anyhow::anyhow!("Found Legacy RoaringBitmap delete file! Violation: {}", name));
+                return Err(anyhow::anyhow!(
+                    "Found Legacy RoaringBitmap delete file! Violation: {}",
+                    name
+                ));
             }
         }
     }
-    
+
     if count < expected_min_count {
-        return Err(anyhow::anyhow!("Found {} delete files, expected at least {}", count, expected_min_count));
+        return Err(anyhow::anyhow!(
+            "Found {} delete files, expected at least {}",
+            count,
+            expected_min_count
+        ));
     }
     Ok(())
 }

@@ -2,7 +2,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_histogram, register_int_counter, register_int_counter_vec, register_int_gauge, Histogram, IntCounter, IntCounterVec, IntGauge,
+    register_histogram, register_int_counter, register_int_counter_vec, register_int_gauge,
+    Histogram, IntCounter, IntCounterVec, IntGauge,
 };
 
 lazy_static! {
@@ -12,7 +13,7 @@ lazy_static! {
         "Total number of rows ingested"
     )
     .unwrap();
-    
+
     /// Query latency in seconds
     pub static ref QUERY_LATENCY_SECONDS: Histogram = register_histogram!(
         "hyperstreamdb_query_latency_seconds",

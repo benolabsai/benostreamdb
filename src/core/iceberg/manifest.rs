@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::Result;
-use apache_avro::{Reader, types::Value as AvroValue};
+use apache_avro::{types::Value as AvroValue, Reader};
 use std::io::Read;
 
-use super::types::{IcebergManifestListEntry, IcebergManifestEntry, IcebergDataFile, IcebergManifestObject};
+use super::types::{
+    IcebergDataFile, IcebergManifestEntry, IcebergManifestListEntry, IcebergManifestObject,
+};
 use super::value::{avro_to_json, decode_iceberg_value};
 
 /// Read a manifest list (snap-*.avro) and return its entries
@@ -31,19 +33,71 @@ pub fn read_manifest_list<R: Read>(reader: R) -> Result<Vec<IcebergManifestListE
 
             for (name, val) in fields {
                 match name.as_str() {
-                    "manifest_path" => if let AvroValue::String(s) = val { manifest_path = s; },
-                    "manifest_length" => if let AvroValue::Long(s) = val { manifest_length = s; },
-                    "partition_spec_id" => if let AvroValue::Int(s) = val { partition_spec_id = s; },
-                    "added_snapshot_id" => if let AvroValue::Long(s) = val { added_snapshot_id = s; },
-                    "content" => if let AvroValue::Int(s) = val { content = s; },
-                    "sequence_number" => if let AvroValue::Long(s) = val { sequence_number = s; },
-                    "min_sequence_number" => if let AvroValue::Long(s) = val { min_sequence_number = s; },
-                    "added_data_files_count" => if let AvroValue::Int(s) = val { added_files_count = s; },
-                    "existing_data_files_count" => if let AvroValue::Int(s) = val { existing_files_count = s; },
-                    "deleted_data_files_count" => if let AvroValue::Int(s) = val { deleted_files_count = s; },
-                    "added_rows_count" => if let AvroValue::Long(s) = val { added_rows_count = s; },
-                    "existing_rows_count" => if let AvroValue::Long(s) = val { existing_rows_count = s; },
-                    "deleted_rows_count" => if let AvroValue::Long(s) = val { deleted_rows_count = s; },
+                    "manifest_path" => {
+                        if let AvroValue::String(s) = val {
+                            manifest_path = s;
+                        }
+                    }
+                    "manifest_length" => {
+                        if let AvroValue::Long(s) = val {
+                            manifest_length = s;
+                        }
+                    }
+                    "partition_spec_id" => {
+                        if let AvroValue::Int(s) = val {
+                            partition_spec_id = s;
+                        }
+                    }
+                    "added_snapshot_id" => {
+                        if let AvroValue::Long(s) = val {
+                            added_snapshot_id = s;
+                        }
+                    }
+                    "content" => {
+                        if let AvroValue::Int(s) = val {
+                            content = s;
+                        }
+                    }
+                    "sequence_number" => {
+                        if let AvroValue::Long(s) = val {
+                            sequence_number = s;
+                        }
+                    }
+                    "min_sequence_number" => {
+                        if let AvroValue::Long(s) = val {
+                            min_sequence_number = s;
+                        }
+                    }
+                    "added_data_files_count" => {
+                        if let AvroValue::Int(s) = val {
+                            added_files_count = s;
+                        }
+                    }
+                    "existing_data_files_count" => {
+                        if let AvroValue::Int(s) = val {
+                            existing_files_count = s;
+                        }
+                    }
+                    "deleted_data_files_count" => {
+                        if let AvroValue::Int(s) = val {
+                            deleted_files_count = s;
+                        }
+                    }
+                    "added_rows_count" => {
+                        if let AvroValue::Long(s) = val {
+                            added_rows_count = s;
+                        }
+                    }
+                    "existing_rows_count" => {
+                        if let AvroValue::Long(s) = val {
+                            existing_rows_count = s;
+                        }
+                    }
+                    "deleted_rows_count" => {
+                        if let AvroValue::Long(s) = val {
+                            deleted_rows_count = s;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -82,13 +136,21 @@ pub fn read_manifest<R: Read>(reader: R) -> Result<Vec<IcebergManifestEntry>> {
 
             for (name, val) in fields {
                 match name.as_str() {
-                    "status" => if let AvroValue::Int(s) = val { status = s; },
-                    "snapshot_id" => if let AvroValue::Long(s) = val { snapshot_id = Some(s); },
+                    "status" => {
+                        if let AvroValue::Int(s) = val {
+                            status = s;
+                        }
+                    }
+                    "snapshot_id" => {
+                        if let AvroValue::Long(s) = val {
+                            snapshot_id = Some(s);
+                        }
+                    }
                     "data_file" => {
                         if let AvroValue::Record(df_fields) = val {
                             data_file = Some(parse_data_file(df_fields)?);
                         }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -130,14 +192,36 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
 
     for (name, val) in fields {
         match name.as_str() {
-            "content" => if let AvroValue::Int(c) = val { content = c; },
-            "file_path" => if let AvroValue::String(s) = val { file_path = s; },
-            "file_format" => if let AvroValue::String(s) = val { file_format = s; },
-            "partition" => if let AvroValue::Record(p_fields) = val {
-                partition = p_fields.into_iter().map(|(_, v)| avro_to_json(v)).collect();
-            },
-            "record_count" => if let AvroValue::Long(c) = val { record_count = c; },
-            "file_size_in_bytes" => if let AvroValue::Long(s) = val { file_size_in_bytes = s; },
+            "content" => {
+                if let AvroValue::Int(c) = val {
+                    content = c;
+                }
+            }
+            "file_path" => {
+                if let AvroValue::String(s) = val {
+                    file_path = s;
+                }
+            }
+            "file_format" => {
+                if let AvroValue::String(s) = val {
+                    file_format = s;
+                }
+            }
+            "partition" => {
+                if let AvroValue::Record(p_fields) = val {
+                    partition = p_fields.into_iter().map(|(_, v)| avro_to_json(v)).collect();
+                }
+            }
+            "record_count" => {
+                if let AvroValue::Long(c) = val {
+                    record_count = c;
+                }
+            }
+            "file_size_in_bytes" => {
+                if let AvroValue::Long(s) = val {
+                    file_size_in_bytes = s;
+                }
+            }
             "column_sizes" => column_sizes = parse_map_int_long(val),
             "value_counts" => value_counts = parse_map_int_long(val),
             "null_value_counts" => null_value_counts = parse_map_int_long(val),
@@ -145,7 +229,11 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
             "lower_bounds" => lower_bounds = parse_map_int_bytes(val),
             "upper_bounds" => upper_bounds = parse_map_int_bytes(val),
             "equality_ids" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::Array(items) = inner {
                     let mut ids = Vec::new();
                     for item in items {
@@ -155,38 +243,58 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
                     }
                     equality_ids = Some(ids);
                 }
-            },
+            }
             // V3 Deletion Vector fields
             "referenced_data_file" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::String(s) = inner {
                     referenced_data_file = Some(s);
                 }
-            },
+            }
             "content_offset" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::Long(o) = inner {
                     content_offset = Some(o);
                 }
-            },
+            }
             "content_size_in_bytes" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::Long(s) = inner {
                     content_size_in_bytes = Some(s);
                 }
-            },
+            }
             "index_files" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::String(s) = inner {
                     index_files = Some(s);
                 }
-            },
+            }
             "file_checksum" => {
-                let inner = if let AvroValue::Union(_, b) = val { *b } else { val };
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
                 if let AvroValue::String(s) = inner {
                     file_checksum = Some(s);
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -222,8 +330,16 @@ fn parse_map_int_long(val: AvroValue) -> Option<std::collections::HashMap<i32, i
                 let mut value = 0;
                 for (k, v) in fields {
                     match k.as_str() {
-                        "key" => if let AvroValue::Int(i) = v { key = i; },
-                        "value" => if let AvroValue::Long(l) = v { value = l; },
+                        "key" => {
+                            if let AvroValue::Int(i) = v {
+                                key = i;
+                            }
+                        }
+                        "value" => {
+                            if let AvroValue::Long(l) = v {
+                                value = l;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -244,8 +360,16 @@ fn parse_map_int_bytes(val: AvroValue) -> Option<std::collections::HashMap<i32, 
                 let mut value = Vec::new();
                 for (k, v) in fields {
                     match k.as_str() {
-                        "key" => if let AvroValue::Int(i) = v { key = i; },
-                        "value" => if let AvroValue::Bytes(b) = v { value = b; },
+                        "key" => {
+                            if let AvroValue::Int(i) = v {
+                                key = i;
+                            }
+                        }
+                        "value" => {
+                            if let AvroValue::Bytes(b) = v {
+                                value = b;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -263,7 +387,7 @@ pub fn convert_iceberg_to_object(
     schema: &crate::core::manifest::Schema,
     partition_spec: &crate::core::manifest::PartitionSpec,
 ) -> Result<IcebergManifestObject> {
-    use crate::core::manifest::{ManifestEntry, DeleteFile, DeleteContent, ColumnStats};
+    use crate::core::manifest::{ColumnStats, DeleteContent, DeleteFile, ManifestEntry};
     use std::collections::HashMap;
 
     let df = &iceberg_entry.data_file;
@@ -279,22 +403,29 @@ pub fn convert_iceberg_to_object(
     if df.content == 0 {
         // Data File
         let mut column_stats = HashMap::new();
-        let field_map: HashMap<i32, &crate::core::manifest::SchemaField> = schema.fields.iter()
-            .map(|f| (f.id, f))
-            .collect();
+        let field_map: HashMap<i32, &crate::core::manifest::SchemaField> =
+            schema.fields.iter().map(|f| (f.id, f)).collect();
 
-        if let (Some(lowers), Some(uppers), Some(nulls)) = (&df.lower_bounds, &df.upper_bounds, &df.null_value_counts) {
+        if let (Some(lowers), Some(uppers), Some(nulls)) =
+            (&df.lower_bounds, &df.upper_bounds, &df.null_value_counts)
+        {
             for (id, lower_bytes) in lowers {
                 if let Some(field) = field_map.get(id) {
-                    let min_val = decode_iceberg_value(&serde_json::json!(field.type_str), lower_bytes);
-                    let max_val = uppers.get(id).map(|upper_bytes| decode_iceberg_value(&serde_json::json!(field.type_str), upper_bytes));
-                    let null_count = *nulls.get(id).unwrap_or(&0);
-                    column_stats.insert(field.name.clone(), ColumnStats {
-                        min: Some(min_val),
-                        max: max_val,
-                        null_count,
-                        ..Default::default()
+                    let min_val =
+                        decode_iceberg_value(&serde_json::json!(field.type_str), lower_bytes);
+                    let max_val = uppers.get(id).map(|upper_bytes| {
+                        decode_iceberg_value(&serde_json::json!(field.type_str), upper_bytes)
                     });
+                    let null_count = *nulls.get(id).unwrap_or(&0);
+                    column_stats.insert(
+                        field.name.clone(),
+                        ColumnStats {
+                            min: Some(min_val),
+                            max: max_val,
+                            null_count,
+                            ..Default::default()
+                        },
+                    );
                 }
             }
         }
@@ -321,7 +452,7 @@ pub fn convert_iceberg_to_object(
             DeleteContent::Position
         } else if df.content == 2 {
             DeleteContent::Equality {
-                equality_ids: df.equality_ids.clone().unwrap_or_default()
+                equality_ids: df.equality_ids.clone().unwrap_or_default(),
             }
         } else if df.content == 3 {
             // V3 Deletion Vector (content=3)
@@ -329,7 +460,7 @@ pub fn convert_iceberg_to_object(
             if let (Some(_ref_file), Some(offset), Some(size)) = (
                 df.referenced_data_file.clone(),
                 df.content_offset,
-                df.content_size_in_bytes
+                df.content_size_in_bytes,
             ) {
                 DeleteContent::DeletionVector {
                     puffin_file_path: df.file_path.clone(),

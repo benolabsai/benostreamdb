@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::index::gpu::{set_thread_gpu_context, ComputeContext};
+use crate::core::planner::VectorSearchParams;
 use anyhow::Result;
 use arrow::record_batch::RecordBatch;
-use crate::core::planner::VectorSearchParams;
-use crate::core::index::gpu::{set_thread_gpu_context, ComputeContext};
 
 use super::Table;
 
@@ -37,7 +37,12 @@ impl<'a> TableQuery<'a> {
         self
     }
 
-    pub fn vector_search(mut self, column: &str, query: crate::core::index::VectorValue, k: usize) -> Self {
+    pub fn vector_search(
+        mut self,
+        column: &str,
+        query: crate::core::index::VectorValue,
+        k: usize,
+    ) -> Self {
         self.vector_filter = Some(VectorSearchParams::new(column, query, k));
         self
     }
@@ -58,19 +63,29 @@ impl<'a> TableQuery<'a> {
     }
 
     pub async fn to_batches(self) -> Result<Vec<RecordBatch>> {
-        let cols_refs: Option<Vec<&str>> = self.columns.as_ref().map(|c| c.iter().map(|s| s.as_str()).collect());
+        let cols_refs: Option<Vec<&str>> = self
+            .columns
+            .as_ref()
+            .map(|c| c.iter().map(|s| s.as_str()).collect());
         let cols_slice: Option<&[&str]> = cols_refs.as_deref();
-        
+
         // Inject context if provided
         if let Some(ctx) = self.context {
             set_thread_gpu_context(Some(ctx));
         }
-        
+
         let mut config = self.table.query_config().clone();
         if let Some(k) = self.rrf_k {
-             config = config.with_rrf_k(k);
+            config = config.with_rrf_k(k);
         }
-        
-        self.table.read_with_config_async(self.filter_str.as_deref(), self.vector_filter, cols_slice, config).await
+
+        self.table
+            .read_with_config_async(
+                self.filter_str.as_deref(),
+                self.vector_filter,
+                cols_slice,
+                config,
+            )
+            .await
     }
 }

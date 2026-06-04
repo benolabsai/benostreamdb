@@ -3,24 +3,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::physical_plan::{
-    ExecutionPlan, 
-    SendableRecordBatchStream, 
-    DisplayAs, 
-    PlanProperties
-};
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::{DataFusionError, Result as DataFusionResult};
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::execution::context::TaskContext;
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::error::{Result as DataFusionResult, DataFusionError};
-use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::Partitioning;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+};
 
-use crate::core::table::{Table, VectorSearchParams};
 use crate::core::manifest::ManifestEntry;
-use crate::core::query::{VectorSearchRequest, execute_vector_search_with_config};
 use crate::core::planner::{FilterExpr, QueryFilter};
+use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
+use crate::core::table::{Table, VectorSearchParams};
 
 /// ExecutionPlan node that performs an HNSW Vector Search across a specific partition of segments.
 /// Returns a stream of RecordBatches that include a `distance` column.
@@ -57,9 +54,17 @@ impl VectorScanExec {
             base_schema.clone()
         };
 
-        let mut fields: Vec<datafusion::arrow::datatypes::Field> = projected_schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+        let mut fields: Vec<datafusion::arrow::datatypes::Field> = projected_schema
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
         if projected_schema.column_with_name("distance").is_none() {
-            fields.push(datafusion::arrow::datatypes::Field::new("distance", datafusion::arrow::datatypes::DataType::Float32, false));
+            fields.push(datafusion::arrow::datatypes::Field::new(
+                "distance",
+                datafusion::arrow::datatypes::DataType::Float32,
+                false,
+            ));
         }
         let scan_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields));
 
@@ -93,9 +98,15 @@ impl DisplayAs for VectorScanExec {
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
         match t {
-            datafusion::physical_plan::DisplayFormatType::Default | datafusion::physical_plan::DisplayFormatType::Verbose => {
-                write!(f, "VectorScanExec: column={}, metric={:?}, partitions={}", 
-                       self.vector_params.column, self.vector_params.metric, self.partitions.len())
+            datafusion::physical_plan::DisplayFormatType::Default
+            | datafusion::physical_plan::DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "VectorScanExec: column={}, metric={:?}, partitions={}",
+                    self.vector_params.column,
+                    self.vector_params.metric,
+                    self.partitions.len()
+                )
             }
             _ => Ok(()),
         }
@@ -146,14 +157,15 @@ impl ExecutionPlan for VectorScanExec {
         if partition >= self.partitions.len() && !self.partitions.is_empty() {
             return Err(DataFusionError::Internal(format!(
                 "VectorScanExec invalid partition {} (count {})",
-                partition, self.partitions.len()
+                partition,
+                self.partitions.len()
             )));
         }
 
         let table = self.table.clone();
         let filter = self.filter.clone();
         let vector_params = self.vector_params.clone();
-        
+
         let entries = if self.partitions.is_empty() {
             Vec::new()
         } else {
@@ -162,16 +174,20 @@ impl ExecutionPlan for VectorScanExec {
 
         let original_schema = table.arrow_schema();
         let column_names = if let Some(ref proj) = self.projection {
-             Some(proj.iter().map(|i| original_schema.field(*i).name().clone()).collect::<Vec<_>>())
+            Some(
+                proj.iter()
+                    .map(|i| original_schema.field(*i).name().clone())
+                    .collect::<Vec<_>>(),
+            )
         } else {
-             None
+            None
         };
-        
+
         let col_names_owned = column_names;
         let expected_schema = self.schema.clone();
         let expected_schema_inner = expected_schema.clone();
 
-        let stream = async_stream::stream! {            
+        let stream = async_stream::stream! {
             for entry in entries {
                 let filter_expr = if let Some(ref f) = filter {
                      let filters = QueryFilter::parse_multi(f);
@@ -179,7 +195,7 @@ impl ExecutionPlan for VectorScanExec {
                 } else {
                     None
                 };
-                
+
                 let mut request = VectorSearchRequest::new(
                     vector_params.column.clone(),
                     vector_params.query.clone(),
@@ -193,7 +209,7 @@ impl ExecutionPlan for VectorScanExec {
                 if let Some(ref proj_names) = col_names_owned {
                     request = request.with_columns(Some(proj_names.clone()));
                 }
-                
+
                 // Currently executes a single segment search.
                 // Wait, if it executes single segment, it uses query.rs's execute_vector_search_with_config
                 match execute_vector_search_with_config(

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
+use arrow::array::{Array, FixedSizeListArray, Float32Array, ListArray};
 use arrow::record_batch::RecordBatch;
-use arrow::array::{Array, Float32Array, FixedSizeListArray, ListArray};
 // use std::sync::Arc; // Unused
 
 #[cfg(target_arch = "x86_64")]
@@ -109,33 +109,42 @@ impl std::fmt::Debug for InMemoryVectorIndex {
 
 impl InMemoryVectorIndex {
     pub fn new(dim: usize) -> Self {
-        Self { 
+        Self {
             vectors: Vec::with_capacity(100_000 * dim),
-            count: 0, 
-            dim 
+            count: 0,
+            dim,
         }
     }
 
     /// Insert vectors from a batch.
-    pub fn insert_batch(&mut self, batch: &RecordBatch, column_name: &str, _start_row_id: usize) -> Result<()> {
-        let col = batch.column_by_name(column_name)
+    pub fn insert_batch(
+        &mut self,
+        batch: &RecordBatch,
+        column_name: &str,
+        _start_row_id: usize,
+    ) -> Result<()> {
+        let col = batch
+            .column_by_name(column_name)
             .context(format!("Column {} not found", column_name))?;
 
         if let Some(fsl) = col.as_any().downcast_ref::<FixedSizeListArray>() {
-            let values = fsl.values().as_any().downcast_ref::<Float32Array>()
+            let values = fsl
+                .values()
+                .as_any()
+                .downcast_ref::<Float32Array>()
                 .context("Expected Float32Array values in FixedSizeListArray")?;
-            
+
             // Respect slicing: only copy the range of the value array that belongs to this FSL slice
             let start_offset = fsl.offset() * self.dim;
             let len = fsl.len() * self.dim;
             let slice = &values.values()[start_offset..start_offset + len];
-            
+
             self.vectors.extend_from_slice(slice);
             self.count += fsl.len();
         } else if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
             for i in 0..list.len() {
                 if list.is_null(i) {
-                     self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                    self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                 } else {
                     let vector_array = list.value(i);
                     if let Some(vector) = vector_array.as_any().downcast_ref::<Float32Array>() {
@@ -149,21 +158,28 @@ impl InMemoryVectorIndex {
             }
             self.count += list.len();
         }
-        
+
         Ok(())
     }
 
-    pub fn search(&self, query: &crate::core::index::VectorValue, k: usize, filter: Option<&roaring::RoaringBitmap>) -> Vec<(usize, f32)> {
-        if self.count == 0 { return vec![]; }
-        
+    pub fn search(
+        &self,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+    ) -> Vec<(usize, f32)> {
+        if self.count == 0 {
+            return vec![];
+        }
+
         let query_f32 = match query {
             crate::core::index::VectorValue::Float32(v) => v,
             crate::core::index::VectorValue::Float16(v) => v,
             _ => return vec![], // For now, only f32/f16 supported in memory buffer
         };
-        
+
         use rayon::prelude::*;
-        
+
         // Brute-force L2 search using Rayon for parallelism and SIMD for distance
         let mut results: Vec<(usize, f32)> = (0..self.count)
             .into_par_iter()
@@ -178,7 +194,7 @@ impl InMemoryVectorIndex {
                 let start = i * self.dim;
                 let end = start + self.dim;
                 let vec = &self.vectors[start..end];
-                
+
                 let dist = l2_distance(vec, query_f32);
                 (i, dist)
             })
@@ -202,17 +218,17 @@ impl InMemoryVectorIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Field, Schema, DataType, Float32Type};
+    use arrow::datatypes::{DataType, Field, Float32Type, Schema};
     use std::sync::Arc;
 
     #[test]
     fn test_l2_distance_consistency() {
         let a = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
         let b = vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0];
-        
+
         let scalar = l2_distance_scalar(&a, &b);
         let simd = l2_distance(&a, &b);
-        
+
         assert!((scalar - simd).abs() < 1e-5);
     }
 
@@ -220,13 +236,15 @@ mod tests {
     fn test_memory_index_search() {
         let dim = 4;
         let mut index = InMemoryVectorIndex::new(dim);
-        
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("vec", DataType::FixedSizeList(
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "vec",
+            DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
-                dim as i32
-            ), true),
-        ]));
+                dim as i32,
+            ),
+            true,
+        )]));
 
         let v1 = vec![Some(1.0), Some(0.0), Some(0.0), Some(0.0)];
         let v2 = vec![Some(0.0), Some(1.0), Some(0.0), Some(0.0)];
@@ -234,7 +252,7 @@ mod tests {
 
         let array = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
             vec![Some(v1), Some(v2), Some(v3)],
-            dim as i32
+            dim as i32,
         );
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
@@ -252,13 +270,15 @@ mod tests {
     fn test_memory_index_sliced_array() {
         let dim = 4;
         let mut index = InMemoryVectorIndex::new(dim);
-        
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("vec", DataType::FixedSizeList(
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "vec",
+            DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
-                dim as i32
-            ), true),
-        ]));
+                dim as i32,
+            ),
+            true,
+        )]));
 
         let v1 = vec![Some(1.0), Some(0.0), Some(0.0), Some(0.0)];
         let v2 = vec![Some(0.0), Some(1.0), Some(0.0), Some(0.0)];
@@ -266,7 +286,7 @@ mod tests {
 
         let array = FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
             vec![Some(v1), Some(v2.clone()), Some(v3)],
-            dim as i32
+            dim as i32,
         );
 
         // Slice the array to only include v2
@@ -276,8 +296,9 @@ mod tests {
 
         assert_eq!(index.count, 1);
         assert_eq!(index.vectors.len(), dim);
-        
-        let query = crate::core::index::VectorValue::Float32(v2.into_iter().map(|x| x.unwrap()).collect());
+
+        let query =
+            crate::core::index::VectorValue::Float32(v2.into_iter().map(|x| x.unwrap()).collect());
         let results = index.search(&query, 1, None);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1, 0.0); // Exact match

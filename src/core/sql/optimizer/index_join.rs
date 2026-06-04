@@ -6,17 +6,17 @@
 
 use std::sync::Arc;
 
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
 use datafusion::error::Result;
+use datafusion::logical_expr::JoinType;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
 use datafusion::physical_plan::joins::HashJoinExec;
-use datafusion::logical_expr::JoinType;
-use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::physical_expr::expressions::Column;
 
-use crate::core::sql::physical_plan::HyperStreamExec;
 use crate::core::sql::physical_plan::index_join::HyperStreamIndexJoinExec;
+use crate::core::sql::physical_plan::HyperStreamExec;
 
 #[derive(Debug, Default)]
 pub struct IndexJoinOptimizerRule {}
@@ -76,11 +76,11 @@ impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
 
                         // Construct Custom Node
                         let new_node = Arc::new(HyperStreamIndexJoinExec::new(
-                             hash_join.left().clone(),
-                             hs_exec.table.clone(), // Access internal table (needs to be pub or accessor)
-                             left_col_ast.clone(),
-                             right_col_name.to_string(),
-                             hash_join.schema(),
+                            hash_join.left().clone(),
+                            hs_exec.table.clone(), // Access internal table (needs to be pub or accessor)
+                            left_col_ast.clone(),
+                            right_col_name.to_string(),
+                            hash_join.schema(),
                         ));
 
                         return Ok(Transformed::yes(new_node));
@@ -88,7 +88,8 @@ impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
                 }
             }
             Ok(Transformed::no(plan))
-        }).map(|t| t.data)
+        })
+        .map(|t| t.data)
     }
 
     fn name(&self) -> &str {

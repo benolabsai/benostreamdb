@@ -1,20 +1,20 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use moka::future::Cache;
-use once_cell::sync::Lazy;
-use std::sync::Arc;
-use crate::core::manifest::{Manifest, ManifestList};
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
-use roaring::RoaringBitmap;
-use std::time::Duration;
-use crate::core::index::hnsw_rs::hnsw::Hnsw;
 use crate::core::index::hnsw_rs::dist::DistL2;
-use arrow::record_batch::RecordBatch;
-use parquet::file::metadata::ParquetMetaData;
-use parquet::bloom_filter::Sbbf;
-use std::path::PathBuf;
-use object_store::ObjectStore;
+use crate::core::index::hnsw_rs::hnsw::Hnsw;
+use crate::core::manifest::{Manifest, ManifestList};
 use anyhow::Result;
+use arrow::record_batch::RecordBatch;
+use moka::future::Cache;
+use object_store::ObjectStore;
+use once_cell::sync::Lazy;
+use parquet::bloom_filter::Sbbf;
+use parquet::file::metadata::ParquetMetaData;
+use roaring::RoaringBitmap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 #[async_trait::async_trait]
 pub trait CacheExt<K, V> {
@@ -22,22 +22,25 @@ pub trait CacheExt<K, V> {
 }
 
 #[async_trait::async_trait]
-impl<K, V> CacheExt<K, V> for moka::future::Cache<K, V> 
-where 
+impl<K, V> CacheExt<K, V> for moka::future::Cache<K, V>
+where
     K: std::hash::Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static
+    V: Clone + Send + Sync + 'static,
 {
     async fn get_with_metrics(&self, key: &K, cache_name: &str) -> Option<V> {
         if let Some(val) = self.get(key).await {
-            crate::telemetry::metrics::CACHE_HITS_TOTAL.with_label_values(&[cache_name]).inc();
+            crate::telemetry::metrics::CACHE_HITS_TOTAL
+                .with_label_values(&[cache_name])
+                .inc();
             Some(val)
         } else {
-            crate::telemetry::metrics::CACHE_MISSES_TOTAL.with_label_values(&[cache_name]).inc();
+            crate::telemetry::metrics::CACHE_MISSES_TOTAL
+                .with_label_values(&[cache_name])
+                .inc();
             None
         }
     }
 }
-
 
 pub static DISK_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
     std::env::var("HYPERSTREAM_DISK_CACHE_DIR")
@@ -69,26 +72,31 @@ impl DiskCache {
 
     pub async fn get_bytes(&self, path: &str) -> Result<bytes::Bytes> {
         use sha2::{Digest, Sha256};
-        
+
         if let Some(cache_dir) = &self.cache_dir {
             let mut hasher = Sha256::new();
             hasher.update(path);
             let hash = format!("{:x}", hasher.finalize());
             let cache_path = cache_dir.join(&hash);
-            
+
             if tokio::fs::metadata(&cache_path).await.is_ok() {
                 if let Ok(b) = tokio::fs::read(&cache_path).await {
                     return Ok(bytes::Bytes::from(b));
                 }
             }
 
-            let b = self.store.get(&object_store::path::Path::from(path)).await?.bytes().await?;
-            
+            let b = self
+                .store
+                .get(&object_store::path::Path::from(path))
+                .await?
+                .bytes()
+                .await?;
+
             // Atomic write: write to unique temp file then rename
             let thread_id = format!("{:?}", std::thread::current().id());
             let temp_name = format!("{}.{}.{:?}.tmp", hash, std::process::id(), thread_id);
             let temp_path = cache_dir.join(temp_name);
-            
+
             use tokio::io::AsyncWriteExt;
             if let Ok(mut f) = tokio::fs::File::create(&temp_path).await {
                 if f.write_all(&b).await.is_ok() {
@@ -101,7 +109,10 @@ impl DiskCache {
 
             Ok(b)
         } else {
-            let res = self.store.get(&object_store::path::Path::from(path)).await
+            let res = self
+                .store
+                .get(&object_store::path::Path::from(path))
+                .await
                 .map_err(|e| anyhow::anyhow!(e))?;
             res.bytes().await.map_err(|e| anyhow::anyhow!(e))
         }
@@ -152,17 +163,18 @@ pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
         .unwrap_or_else(|_| "2".to_string())
         .parse()
         .unwrap_or(2);
-    
+
     // Allocate 10% of global cache to Byte Cache (max 512MB)
     let limit_bytes = (cache_gb * 1024 * 1024 * 1024 / 10).min(512 * 1024 * 1024);
     let max_kb = limit_bytes / 1024;
 
-    tracing::info!("Initializing Byte Cache with {} MB limit", limit_bytes / (1024 * 1024));
+    tracing::info!(
+        "Initializing Byte Cache with {} MB limit",
+        limit_bytes / (1024 * 1024)
+    );
 
     Cache::builder()
-        .weigher(|_key, value: &Arc<Vec<u8>>| -> u32 {
-            (value.len() / 1024) as u32
-        })
+        .weigher(|_key, value: &Arc<Vec<u8>>| -> u32 { (value.len() / 1024) as u32 })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 30)) // 30 mins
         .build()
@@ -183,18 +195,16 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
         .unwrap_or_else(|_| "2".to_string())
         .parse()
         .unwrap_or(2);
-    
+
     // Convert to KB to avoid u32 overflow in weigher (moka requirement)
     // u32::MAX KB = 4TB, which is plenty for a single item.
-    let max_kb = cache_gb * 1024 * 1024; 
+    let max_kb = cache_gb * 1024 * 1024;
 
     tracing::info!("Initializing HNSW-IVF Cache with {} GB limit", cache_gb);
 
     Cache::builder()
-        .weigher(|_key, value: &Arc<HnswIvfIndex>| -> u32 {
-            (value.size_in_bytes() / 1024) as u32
-        })
-        .max_capacity(max_kb) 
+        .weigher(|_key, value: &Arc<HnswIvfIndex>| -> u32 { (value.size_in_bytes() / 1024) as u32 })
+        .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 15)) // 15 mins idle
         .build()
 });
@@ -204,12 +214,15 @@ pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = La
         .unwrap_or_else(|_| "2".to_string())
         .parse()
         .unwrap_or(2);
-    
+
     // Allocate 25% of global cache to Inverted Index Cache
     let limit_bytes = cache_gb * 1024 * 1024 * 1024 / 4;
     let max_kb = limit_bytes / 1024;
 
-    tracing::info!("Initializing Inverted Index Cache with {} MB limit", limit_bytes / (1024 * 1024));
+    tracing::info!(
+        "Initializing Inverted Index Cache with {} MB limit",
+        limit_bytes / (1024 * 1024)
+    );
 
     Cache::builder()
         .weigher(|_key, value: &Arc<Vec<RecordBatch>>| -> u32 {
@@ -217,16 +230,17 @@ pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = La
             (bytes / 1024) as u32
         })
         .max_capacity(max_kb)
-        .time_to_idle(Duration::from_secs(60 * 15)) 
+        .time_to_idle(Duration::from_secs(60 * 15))
         .build()
 });
 
-pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>> = Lazy::new(|| {
-    Cache::builder()
-        .max_capacity(1000) // 1000 file footers (schema, row groups)
-        .time_to_idle(Duration::from_secs(60 * 30)) 
-        .build()
-});
+pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>> =
+    Lazy::new(|| {
+        Cache::builder()
+            .max_capacity(1000) // 1000 file footers (schema, row groups)
+            .time_to_idle(Duration::from_secs(60 * 30))
+            .build()
+    });
 
 pub static BLOOM_FILTER_CACHE: Lazy<Cache<String, Arc<Sbbf>>> = Lazy::new(|| {
     Cache::builder()
@@ -243,7 +257,7 @@ pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
         .unwrap_or_else(|_| "4".to_string())
         .parse()
         .unwrap_or(4);
-    
+
     let max_kb = cache_gb * 1024 * 1024;
 
     tracing::info!("Initializing Block Cache with {} GB limit", cache_gb);
@@ -260,8 +274,8 @@ pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Schema, Field, DataType};
     use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType, Field, Schema};
     use std::time::Duration as StdDuration;
     use tokio::time::sleep;
 
@@ -269,18 +283,18 @@ mod tests {
     async fn test_byte_cache_hit_miss() {
         let key = "test_byte_cache_key_1".to_string();
         let data = Arc::new(vec![1u8, 2, 3, 4, 5]);
-        
+
         // Miss
         assert!(BYTE_CACHE.get(&key).await.is_none());
-        
+
         // Insert
         BYTE_CACHE.insert(key.clone(), data.clone()).await;
-        
+
         // Hit
         let cached = BYTE_CACHE.get(&key).await;
         assert!(cached.is_some());
         assert_eq!(*cached.unwrap(), *data);
-        
+
         // Cleanup
         BYTE_CACHE.invalidate(&key).await;
     }
@@ -293,18 +307,18 @@ mod tests {
         bitmap.insert(5);
         bitmap.insert(100);
         let bitmap = Arc::new(bitmap);
-        
+
         // Miss
         assert!(INDEX_CACHE.get(&key).await.is_none());
-        
+
         // Insert
         INDEX_CACHE.insert(key.clone(), bitmap.clone()).await;
-        
+
         // Hit
         let cached = INDEX_CACHE.get(&key).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().len(), 3);
-        
+
         // Cleanup
         INDEX_CACHE.invalidate(&key).await;
     }
@@ -312,29 +326,34 @@ mod tests {
     #[tokio::test]
     async fn test_inverted_index_cache_hit_miss() {
         let key = "test_inverted_index_key_1".to_string();
-        
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("value", DataType::Int32, false),
-        ]));
-        
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         let batches = Arc::new(vec![batch]);
-        
+
         // Miss
         assert!(INVERTED_INDEX_CACHE.get(&key).await.is_none());
-        
+
         // Insert
-        INVERTED_INDEX_CACHE.insert(key.clone(), batches.clone()).await;
-        
+        INVERTED_INDEX_CACHE
+            .insert(key.clone(), batches.clone())
+            .await;
+
         // Hit
         let cached = INVERTED_INDEX_CACHE.get(&key).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().len(), 1);
-        
+
         // Cleanup
         INVERTED_INDEX_CACHE.invalidate(&key).await;
     }
@@ -350,18 +369,18 @@ mod tests {
 
         let key = "test_version_cache_key_1".to_string();
         let version = 42u64;
-        
+
         // Miss
         assert!(test_cache.get(&key).await.is_none());
-        
+
         // Insert
         test_cache.insert(key.clone(), version).await;
-        
+
         // Hit
         let cached = test_cache.get(&key).await;
         assert!(cached.is_some());
         assert_eq!(cached.unwrap(), version);
-        
+
         // Cleanup
         test_cache.invalidate(&key).await;
     }
@@ -369,46 +388,58 @@ mod tests {
     #[tokio::test]
     async fn test_cache_eviction_lru() {
         // Create a small cache for testing eviction
-        let test_cache: Cache<String, Arc<Vec<u8>>> = Cache::builder()
-            .max_capacity(3)
-            .build();
-        
+        let test_cache: Cache<String, Arc<Vec<u8>>> = Cache::builder().max_capacity(3).build();
+
         // Insert 3 items (at capacity)
-        test_cache.insert("key1".to_string(), Arc::new(vec![1])).await;
-        test_cache.insert("key2".to_string(), Arc::new(vec![2])).await;
-        test_cache.insert("key3".to_string(), Arc::new(vec![3])).await;
-        
+        test_cache
+            .insert("key1".to_string(), Arc::new(vec![1]))
+            .await;
+        test_cache
+            .insert("key2".to_string(), Arc::new(vec![2]))
+            .await;
+        test_cache
+            .insert("key3".to_string(), Arc::new(vec![3]))
+            .await;
+
         // Give cache time to process
         sleep(StdDuration::from_millis(200)).await;
         test_cache.run_pending_tasks().await;
-        
+
         // All 3 should be present
         assert!(test_cache.get("key1").await.is_some());
         assert!(test_cache.get("key2").await.is_some());
         assert!(test_cache.get("key3").await.is_some());
-        
+
         // Insert 4th and 5th items, should trigger evictions
-        test_cache.insert("key4".to_string(), Arc::new(vec![4])).await;
-        test_cache.insert("key5".to_string(), Arc::new(vec![5])).await;
-        
+        test_cache
+            .insert("key4".to_string(), Arc::new(vec![4]))
+            .await;
+        test_cache
+            .insert("key5".to_string(), Arc::new(vec![5]))
+            .await;
+
         // Give significant time for eviction to process
         sleep(StdDuration::from_millis(500)).await;
         test_cache.run_pending_tasks().await;
         sleep(StdDuration::from_millis(200)).await;
-        
+
         // Total entries should not exceed capacity
         let entry_count = test_cache.entry_count();
-        assert!(entry_count <= 3, "Cache exceeded capacity: {} > 3", entry_count);
+        assert!(
+            entry_count <= 3,
+            "Cache exceeded capacity: {} > 3",
+            entry_count
+        );
     }
 
     #[tokio::test]
     async fn test_cache_concurrent_access() {
         let key = "test_concurrent_key".to_string();
         let data = Arc::new(vec![1u8, 2, 3]);
-        
+
         // Insert initial data
         BYTE_CACHE.insert(key.clone(), data.clone()).await;
-        
+
         // Spawn multiple concurrent readers
         let mut handles = vec![];
         for i in 0..10 {
@@ -421,17 +452,17 @@ mod tests {
             });
             handles.push(handle);
         }
-        
+
         // Wait for all readers
         for handle in handles {
             handle.await.unwrap();
         }
-        
+
         // Verify data is still correct
         let final_data = BYTE_CACHE.get(&key).await;
         assert!(final_data.is_some());
         assert_eq!(*final_data.unwrap(), *data);
-        
+
         // Cleanup
         BYTE_CACHE.invalidate(&key).await;
     }
@@ -440,14 +471,14 @@ mod tests {
     async fn test_cache_invalidation() {
         let key = "test_invalidation_key".to_string();
         let data = Arc::new(vec![1u8, 2, 3]);
-        
+
         // Insert
         BYTE_CACHE.insert(key.clone(), data.clone()).await;
         assert!(BYTE_CACHE.get(&key).await.is_some());
-        
+
         // Invalidate
         BYTE_CACHE.invalidate(&key).await;
-        
+
         // Should be gone
         assert!(BYTE_CACHE.get(&key).await.is_none());
     }
@@ -457,20 +488,20 @@ mod tests {
         // Test that different tables/segments have unique cache keys
         let table1_key = "s3://bucket/table1/segment1.parquet".to_string();
         let table2_key = "s3://bucket/table2/segment1.parquet".to_string();
-        
+
         let data1 = Arc::new(vec![1u8]);
         let data2 = Arc::new(vec![2u8]);
-        
+
         BYTE_CACHE.insert(table1_key.clone(), data1.clone()).await;
         BYTE_CACHE.insert(table2_key.clone(), data2.clone()).await;
-        
+
         // Both should be cached independently
         let cached1 = BYTE_CACHE.get(&table1_key).await.unwrap();
         let cached2 = BYTE_CACHE.get(&table2_key).await.unwrap();
-        
+
         assert_eq!(*cached1, vec![1u8]);
         assert_eq!(*cached2, vec![2u8]);
-        
+
         // Cleanup
         BYTE_CACHE.invalidate(&table1_key).await;
         BYTE_CACHE.invalidate(&table2_key).await;

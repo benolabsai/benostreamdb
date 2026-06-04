@@ -2,7 +2,9 @@
 
 mod gpu_test_helpers;
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, ComputeBackend, ComputeContext, set_global_gpu_context};
+use hyperstreamdb::core::index::gpu::{
+    compute_distance, set_global_gpu_context, ComputeBackend, ComputeContext,
+};
 use rand::Rng;
 
 fn generate_random_vectors(n: usize, dim: usize) -> Vec<f32> {
@@ -37,7 +39,9 @@ fn assert_parity(
         dist_a.len(),
         dist_b.len(),
         "{} - Backend results length mismatch: {:?} vs {:?}",
-        label, backend_a, backend_b
+        label,
+        backend_a,
+        backend_b
     );
 
     for (i, (&a, &b)) in dist_a.iter().zip(dist_b.iter()).enumerate() {
@@ -45,17 +49,28 @@ fn assert_parity(
         assert!(
             diff < 1e-4, // Slightly looser tolerance for different backends
             "{} - Numerical divergence at index {} (backend {:?} vs {:?}): {} != {} (diff: {})",
-            label, i, backend_a, backend_b, a, b, diff
+            label,
+            i,
+            backend_a,
+            backend_b,
+            a,
+            b,
+            diff
         );
     }
-    
-    println!("{} - PASSED (backend {:?} vs {:?})", label, backend_a, backend_b);
+
+    println!(
+        "{} - PASSED (backend {:?} vs {:?})",
+        label, backend_a, backend_b
+    );
     Ok(())
 }
 
 #[test]
 fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() {
+        return Ok(());
+    }
     let dim = 128;
     let n_vectors = 100;
     let _query = generate_random_vectors(1, dim);
@@ -63,27 +78,55 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
 
     // Always test CPU (reference)
     let _ref_backend = ComputeBackend::Cpu;
- 
+
     // 1. Test CUDA if available at runtime
     #[cfg(not(target_os = "macos"))]
     if ComputeContext::from_backend(ComputeBackend::Cuda).is_ok() {
-        assert_parity("CUDA Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Cuda)?;
+        assert_parity(
+            "CUDA Parity",
+            &_query,
+            &_vectors,
+            dim,
+            _ref_backend,
+            ComputeBackend::Cuda,
+        )?;
     }
- 
+
     // 2. Test MPS if enabled
     #[cfg(target_os = "macos")]
     {
-        assert_parity("MPS Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Mps)?;
+        assert_parity(
+            "MPS Parity",
+            &_query,
+            &_vectors,
+            dim,
+            _ref_backend,
+            ComputeBackend::Mps,
+        )?;
     }
-     
+
     // 3. Test ROCm and Intel WGPU interfaces on Linux
     #[cfg(target_os = "linux")]
     {
         if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Rocm) {
-            assert_parity("ROCm Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Rocm)?;
+            assert_parity(
+                "ROCm Parity",
+                &_query,
+                &_vectors,
+                dim,
+                _ref_backend,
+                ComputeBackend::Rocm,
+            )?;
         }
         if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Intel) {
-            assert_parity("Intel Parity", &_query, &_vectors, dim, _ref_backend, ComputeBackend::Intel)?;
+            assert_parity(
+                "Intel Parity",
+                &_query,
+                &_vectors,
+                dim,
+                _ref_backend,
+                ComputeBackend::Intel,
+            )?;
         }
     }
 
@@ -92,30 +135,49 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
 
 #[test]
 fn test_l2_parity_different_dimensions() -> Result<()> {
-    if gpu_test_helpers::should_skip_gpu_tests() { return Ok(()); }
+    if gpu_test_helpers::should_skip_gpu_tests() {
+        return Ok(());
+    }
     // Test that the kernels handle non-power-of-two dimensions correctly
     let dims = vec![3, 64, 127, 1024]; // Reduced 1536 to 1024 for speed in parity tests
     let n_vectors = 10;
-    
+
     for dim in dims {
         let query = generate_random_vectors(1, dim);
         let vectors = generate_random_vectors(n_vectors, dim);
-        
+
         // CPU vs CPU (sanity check)
         assert_parity(
             &format!("CPU Sanity (dim={})", dim),
-            &query, &vectors, dim, 
-            ComputeBackend::Cpu, ComputeBackend::Cpu
+            &query,
+            &vectors,
+            dim,
+            ComputeBackend::Cpu,
+            ComputeBackend::Cpu,
         )?;
 
         // If specific backends are enabled, parity with CPU
         #[cfg(not(target_os = "macos"))]
         if ComputeContext::from_backend(ComputeBackend::Cuda).is_ok() {
-            assert_parity(&format!("CUDA dim={}", dim), &query, &vectors, dim, ComputeBackend::Cpu, ComputeBackend::Cuda)?;
+            assert_parity(
+                &format!("CUDA dim={}", dim),
+                &query,
+                &vectors,
+                dim,
+                ComputeBackend::Cpu,
+                ComputeBackend::Cuda,
+            )?;
         }
-        
+
         #[cfg(target_os = "macos")]
-        assert_parity(&format!("MPS dim={}", dim), &query, &vectors, dim, ComputeBackend::Cpu, ComputeBackend::Mps)?;
+        assert_parity(
+            &format!("MPS dim={}", dim),
+            &query,
+            &vectors,
+            dim,
+            ComputeBackend::Cpu,
+            ComputeBackend::Mps,
+        )?;
     }
 
     Ok(())

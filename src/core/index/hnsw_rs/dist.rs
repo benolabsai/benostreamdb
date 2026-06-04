@@ -35,8 +35,6 @@ impl<T: Send + Sync> Distance<T> for NoDist {
     }
 }
 
-
-
 /// L1 distance
 #[derive(Default, Clone, Copy)]
 pub struct DistL1;
@@ -111,10 +109,22 @@ implement_scalar!(DistL1, u8, |(a, b)| (*a as i32 - *b as i32).abs() as f32);
 
 // DistL2 for other types
 implement_scalar!(DistL2, f64, |(a, b)| ((a - b) * (a - b)) as f32);
-implement_scalar!(DistL2, i32, |(a, b)| { let d = (a - b) as f32; d * d });
-implement_scalar!(DistL2, u32, |(a, b)| { let d = (*a as i64 - *b as i64) as f32; d * d });
-implement_scalar!(DistL2, u16, |(a, b)| { let d = (*a as i32 - *b as i32) as f32; d * d });
-implement_scalar!(DistL2, u8, |(a, b)| { let d = (*a as i32 - *b as i32) as f32; d * d });
+implement_scalar!(DistL2, i32, |(a, b)| {
+    let d = (a - b) as f32;
+    d * d
+});
+implement_scalar!(DistL2, u32, |(a, b)| {
+    let d = (*a as i64 - *b as i64) as f32;
+    d * d
+});
+implement_scalar!(DistL2, u16, |(a, b)| {
+    let d = (*a as i32 - *b as i32) as f32;
+    d * d
+});
+implement_scalar!(DistL2, u8, |(a, b)| {
+    let d = (*a as i32 - *b as i32) as f32;
+    d * d
+});
 
 // DistHamming for other types
 implement_scalar!(DistHamming, i32, |(a, b)| if a != b { 1.0 } else { 0.0 });
@@ -144,16 +154,25 @@ impl Distance<u16> for DistLevenshtein {
     fn eval(&self, a: &[u16], b: &[u16]) -> f32 {
         let len_a = a.len();
         let len_b = b.len();
-        if len_a < len_b { return self.eval(b, a); }
-        if len_a == 0 { return len_b as f32; }
+        if len_a < len_b {
+            return self.eval(b, a);
+        }
+        if len_a == 0 {
+            return len_b as f32;
+        }
         let mut cur = vec![0; len_b + 1];
-        for i in 1..=len_b { cur[i] = i; }
+        for i in 1..=len_b {
+            cur[i] = i;
+        }
         for (i, ca) in a.iter().enumerate() {
             let mut pre = cur[0];
             cur[0] = i + 1;
             for (j, cb) in b.iter().enumerate() {
                 let tmp = cur[j + 1];
-                cur[j + 1] = std::cmp::min(tmp + 1, std::cmp::min(cur[j] + 1, pre + if ca == cb { 0 } else { 1 }));
+                cur[j + 1] = std::cmp::min(
+                    tmp + 1,
+                    std::cmp::min(cur[j] + 1, pre + if ca == cb { 0 } else { 1 }),
+                );
                 pre = tmp;
             }
         }
@@ -166,7 +185,11 @@ impl Distance<u16> for DistLevenshtein {
 pub struct DistHellinger;
 impl Distance<f32> for DistHellinger {
     fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
-        let dist = va.iter().zip(vb.iter()).map(|t| t.0.sqrt() * t.1.sqrt()).sum::<f32>();
+        let dist = va
+            .iter()
+            .zip(vb.iter())
+            .map(|t| t.0.sqrt() * t.1.sqrt())
+            .sum::<f32>();
         (1.0 - dist).max(0.0).sqrt()
     }
 }
@@ -179,8 +202,12 @@ impl Distance<f32> for DistJensenShannon {
         let mut dist = 0.0;
         for i in 0..va.len() {
             let mean = 0.5 * (va[i] + vb[i]);
-            if va[i] > 0. { dist += va[i] * (va[i]/mean).ln(); }
-            if vb[i] > 0. { dist += vb[i] * (vb[i]/mean).ln(); }
+            if va[i] > 0. {
+                dist += va[i] * (va[i] / mean).ln();
+            }
+            if vb[i] > 0. {
+                dist += vb[i] * (vb[i] / mean).ln();
+            }
         }
         (0.5 * dist).sqrt()
     }
@@ -208,7 +235,10 @@ pub struct DistPtr<T: Send + Sync, U: Send + Sync = T> {
 }
 impl<T: Send + Sync, U: Send + Sync> DistPtr<T, U> {
     pub fn new(f: fn(&[T], &[T]) -> f32) -> Self {
-        DistPtr { func: f, _marker: std::marker::PhantomData }
+        DistPtr {
+            func: f,
+            _marker: std::marker::PhantomData,
+        }
     }
 }
 impl<T: Send + Sync, U: Send + Sync> Distance<T> for DistPtr<T, U> {

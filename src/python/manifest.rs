@@ -20,7 +20,10 @@ pub struct PyManifestEntry {
 #[pymethods]
 impl PyManifestEntry {
     fn __repr__(&self) -> String {
-        format!("ManifestEntry(path={}, rows={})", self.file_path, self.record_count)
+        format!(
+            "ManifestEntry(path={}, rows={})",
+            self.file_path, self.record_count
+        )
     }
 }
 
@@ -44,7 +47,11 @@ pub struct PyManifest {
 #[pymethods]
 impl PyManifest {
     fn __repr__(&self) -> String {
-        format!("Manifest(version={}, entries={})", self.version, self.entries.len())
+        format!(
+            "Manifest(version={}, entries={})",
+            self.version,
+            self.entries.len()
+        )
     }
 
     /// Compatibility alias for 'entries'

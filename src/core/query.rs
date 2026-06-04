@@ -7,15 +7,14 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-use crate::core::reader::HybridReader;
-use crate::core::manifest::ManifestEntry;
-use crate::SegmentConfig;
-use crate::core::planner::FilterExpr;
 use crate::core::index::VectorMetric;
+use crate::core::manifest::ManifestEntry;
+use crate::core::planner::FilterExpr;
+use crate::core::reader::HybridReader;
+use crate::SegmentConfig;
 
 /// Configuration for query execution
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub struct QueryConfig {
     /// Maximum number of parallel segment readers.
     ///
@@ -45,12 +44,11 @@ pub struct QueryConfig {
     pub max_result_rows: Option<usize>,
 }
 
-
 impl QueryConfig {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Manually set max parallel readers (overrides auto-detection)
     pub fn with_max_parallel_readers(mut self, max: usize) -> Self {
         self.max_parallel_readers = Some(max.max(1)); // At least 1
@@ -88,7 +86,7 @@ impl QueryConfig {
     }
 
     /// Calculate optimal parallel readers based on available memory and segment size
-    /// 
+    ///
     /// Formula: max_parallel = (available_ram * 0.5) / memory_per_segment
     /// where memory_per_segment ≈ num_vectors × embedding_dim × 4 bytes × 1.5 (HNSW overhead)
     pub fn auto_detect_parallel_readers(
@@ -99,29 +97,29 @@ impl QueryConfig {
         if let Some(manual) = self.max_parallel_readers {
             return manual;
         }
-        
+
         // Get available system memory (fallback to 8GB if unavailable)
         let available_ram = get_available_memory_bytes().unwrap_or(8 * 1024 * 1024 * 1024);
-        
+
         // Reserve 50% of RAM for HNSW loading
         let ram_for_hnsw = available_ram / 2;
-        
+
         // Memory per segment: vectors × dims × 4 bytes × 1.5 (HNSW graph overhead)
         let bytes_per_vector = embedding_dim * 4;
         let memory_per_segment = (num_vectors_per_segment * bytes_per_vector * 3) / 2; // 1.5x factor
-        
+
         if memory_per_segment == 0 {
             return 4; // Fallback
         }
-        
+
         // Calculate max parallel, bounded by CPU count and minimum of 2
         let cpus = std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(4);
-        
+
         let max_by_memory = ram_for_hnsw / memory_per_segment;
-         // At least 2, at most 2x CPUs
-        
+        // At least 2, at most 2x CPUs
+
         max_by_memory.min(cpus * 2).max(2)
     }
 }
@@ -144,7 +142,7 @@ fn get_available_memory_bytes() -> Option<usize> {
             }
         }
     }
-    
+
     // Fallback: use sysinfo crate if available, or return None
     None
 }
@@ -197,9 +195,13 @@ pub fn merge_and_rerank_vector_results(
     }
 
     // Group by batch to minimize slicing operations, preserving distances
-    let mut batch_rows: std::collections::HashMap<usize, Vec<(usize, f32)>> = std::collections::HashMap::new();
+    let mut batch_rows: std::collections::HashMap<usize, Vec<(usize, f32)>> =
+        std::collections::HashMap::new();
     for (batch_idx, row_idx, distance) in all_rows {
-        batch_rows.entry(batch_idx).or_default().push((row_idx, distance));
+        batch_rows
+            .entry(batch_idx)
+            .or_default()
+            .push((row_idx, distance));
     }
 
     // Extract rows from each batch and add distance column
@@ -224,12 +226,21 @@ pub fn merge_and_rerank_vector_results(
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut fields: Vec<arrow::datatypes::Field> = batch.schema().fields().iter().map(|f| f.as_ref().clone()).collect();
+        let mut fields: Vec<arrow::datatypes::Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
 
         // Add distance column only if it doesn't already exist
         if batch.schema().column_with_name("distance").is_none() {
             columns.push(Arc::new(arrow::array::Float32Array::from(distances)));
-            fields.push(arrow::datatypes::Field::new("distance", arrow::datatypes::DataType::Float32, false));
+            fields.push(arrow::datatypes::Field::new(
+                "distance",
+                arrow::datatypes::DataType::Float32,
+                false,
+            ));
         }
 
         let schema_with_distance = Arc::new(arrow::datatypes::Schema::new(fields));
@@ -242,7 +253,7 @@ pub fn merge_and_rerank_vector_results(
 }
 
 /// Merge results using Reciprocal Rank Fusion (RRF)
-/// 
+///
 /// RRF formula: Score(d) = sum_{r in R} 1 / (k + rank(d, r))
 /// where k is a constant (usually 60) and rank is 1-indexed.
 ///
@@ -262,7 +273,7 @@ pub fn merge_and_rank_fusion(
 }
 
 /// Execute a vector search query across multiple segments IN PARALLEL
-/// 
+///
 /// Parameters for vector search execution
 #[derive(Clone, Debug)]
 pub struct VectorSearchRequest {
@@ -332,7 +343,6 @@ pub async fn execute_vector_search(
     execute_vector_search_with_config(entries, store, None, base_uri, request).await
 }
 
-
 /// Execute vector search with custom configuration
 pub async fn execute_vector_search_with_config(
     entries: Vec<ManifestEntry>,
@@ -358,18 +368,30 @@ pub async fn execute_vector_search_with_config(
         crate::core::index::VectorValue::Keyword(_) => 0, // Keyword search doesn't have a fixed vector dimension
     };
     let avg_rows_per_segment = if !entries.is_empty() {
-        entries.iter().map(|e| e.record_count as usize).sum::<usize>() / entries.len()
+        entries
+            .iter()
+            .map(|e| e.record_count as usize)
+            .sum::<usize>()
+            / entries.len()
     } else {
         10_000 // Default assumption
     };
 
-    let max_parallel = request.config.auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
+    let max_parallel = request
+        .config
+        .auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
 
-    tracing::debug!("Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)",
-             num_segments, avg_rows_per_segment / 1000, embedding_dim, max_parallel);
+    tracing::debug!(
+        "Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)",
+        num_segments,
+        avg_rows_per_segment / 1000,
+        embedding_dim,
+        max_parallel
+    );
 
     // Record planning duration
-    metrics::histogram!("hyperstreamdb.query.planning_duration").record(planning_start.elapsed().as_secs_f64());
+    metrics::histogram!("hyperstreamdb.query.planning_duration")
+        .record(planning_start.elapsed().as_secs_f64());
 
     // Semaphore to limit concurrent HNSW loads
     let semaphore = Arc::new(Semaphore::new(max_parallel));
@@ -393,7 +415,10 @@ pub async fn execute_vector_search_with_config(
 
             async move {
                 // Acquire semaphore permit (blocks if max_parallel reached)
-                let _permit = semaphore.acquire().await.map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
 
                 let file_path_str = entry.file_path.clone();
                 let segment_id = file_path_str
@@ -404,14 +429,18 @@ pub async fn execute_vector_search_with_config(
                     .unwrap_or(&file_path_str)
                     .to_string();
 
-                tracing::info!("Query execution: Entry {} has index files: {:?}", entry.file_path, entry.index_files);
+                tracing::info!(
+                    "Query execution: Entry {} has index files: {:?}",
+                    entry.file_path,
+                    entry.index_files
+                );
                 // Resolve partition-aware path for vector search
                 let path = std::path::Path::new(&file_path_str);
                 let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
                 let full_base_uri = if rel_parent.is_empty() {
-                     base_uri.clone()
+                    base_uri.clone()
                 } else {
-                     format!("{}/{}", base_uri, rel_parent)
+                    format!("{}/{}", base_uri, rel_parent)
                 };
 
                 let config = SegmentConfig::new(&full_base_uri, &segment_id)
@@ -423,8 +452,13 @@ pub async fn execute_vector_search_with_config(
                 let reader = HybridReader::new(config, store.clone(), &base_uri);
 
                 let target_schema = if let Some(cols) = &columns_clone {
-                    let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| Arc::new(arrow::datatypes::Schema::new(Vec::<arrow::datatypes::Field>::new())));
-                    let fields: Vec<arrow::datatypes::Field> = cols.iter()
+                    let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| {
+                        Arc::new(arrow::datatypes::Schema::new(
+                            Vec::<arrow::datatypes::Field>::new(),
+                        ))
+                    });
+                    let fields: Vec<arrow::datatypes::Field> = cols
+                        .iter()
                         .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
                         .collect();
                     Some(Arc::new(arrow::datatypes::Schema::new(fields)))
@@ -432,7 +466,17 @@ pub async fn execute_vector_search_with_config(
                     None
                 };
 
-                let results = reader.vector_search_index(&column, &query_clone, request.k, filter_ref.as_ref(), metric, ef_search_val, target_schema).await?;
+                let results = reader
+                    .vector_search_index(
+                        &column,
+                        &query_clone,
+                        request.k,
+                        filter_ref.as_ref(),
+                        metric,
+                        ef_search_val,
+                        target_schema,
+                    )
+                    .await?;
                 // Tag each result batch with its segment ID
                 let tagged: Vec<(String, RecordBatch, Vec<f32>)> = results
                     .into_iter()
@@ -448,8 +492,10 @@ pub async fn execute_vector_search_with_config(
     let search_futures_count = search_futures.len();
     tracing::info!("Vector search starting on {} entries", search_futures_count);
     let search_start = std::time::Instant::now();
-    let results: Vec<anyhow::Result<Vec<(String, RecordBatch, Vec<f32>)>>> = join_all(search_futures).await;
-    metrics::histogram!("hyperstreamdb.query.segment_search_duration").record(search_start.elapsed().as_secs_f64());
+    let results: Vec<anyhow::Result<Vec<(String, RecordBatch, Vec<f32>)>>> =
+        join_all(search_futures).await;
+    metrics::histogram!("hyperstreamdb.query.segment_search_duration")
+        .record(search_start.elapsed().as_secs_f64());
 
     // Collect successful results, gracefully skip segments that fail
     // (e.g. missing/corrupt index files) rather than failing the entire query.
@@ -469,8 +515,12 @@ pub async fn execute_vector_search_with_config(
         }
     }
 
-    tracing::info!("Vector search found {} total batches across all segments", all_results_with_distances.len());
-    metrics::histogram!("hyperstreamdb.query.execution_duration").record(total_start.elapsed().as_secs_f64());
+    tracing::info!(
+        "Vector search found {} total batches across all segments",
+        all_results_with_distances.len()
+    );
+    metrics::histogram!("hyperstreamdb.query.execution_duration")
+        .record(total_start.elapsed().as_secs_f64());
     merge_and_rerank_vector_results(all_results_with_distances, request.k, 0)
 }
 
@@ -488,7 +538,7 @@ mod tests {
     fn test_query_config_with_max_parallel_readers() {
         let config = QueryConfig::new().with_max_parallel_readers(8);
         assert_eq!(config.max_parallel_readers, Some(8));
-        
+
         // Test minimum of 1
         let config_zero = QueryConfig::new().with_max_parallel_readers(0);
         assert_eq!(config_zero.max_parallel_readers, Some(1));
@@ -497,35 +547,43 @@ mod tests {
     #[test]
     fn test_auto_detect_parallel_readers_small_segments() {
         let config = QueryConfig::new();
-        
+
         // Small segments (1K vectors, 128D)
         let max_parallel = config.auto_detect_parallel_readers(1_000, 128);
-        
+
         // Should allow many parallel readers for small segments
-        assert!(max_parallel >= 4, "Expected at least 4 parallel readers for small segments, got {}", max_parallel);
+        assert!(
+            max_parallel >= 4,
+            "Expected at least 4 parallel readers for small segments, got {}",
+            max_parallel
+        );
     }
 
     #[test]
     fn test_auto_detect_parallel_readers_large_segments() {
         let config = QueryConfig::new();
-        
+
         // Large segments (1M vectors, 1536D - like OpenAI embeddings)
         let max_parallel = config.auto_detect_parallel_readers(1_000_000, 1536);
-        
+
         // Should limit parallel readers for large segments
         assert!(max_parallel >= 1, "Should allow at least 1 reader");
-        assert!(max_parallel <= 16, "Should not exceed reasonable limit for large segments, got {}", max_parallel);
+        assert!(
+            max_parallel <= 16,
+            "Should not exceed reasonable limit for large segments, got {}",
+            max_parallel
+        );
     }
 
     #[test]
     fn test_auto_detect_respects_manual_override() {
         let config = QueryConfig::new().with_max_parallel_readers(2);
-        
+
         // Even with small segments, should respect manual override
-        let max_parallel = config.max_parallel_readers.unwrap_or_else(|| {
-            config.auto_detect_parallel_readers(1_000, 128)
-        });
-        
+        let max_parallel = config
+            .max_parallel_readers
+            .unwrap_or_else(|| config.auto_detect_parallel_readers(1_000, 128));
+
         assert_eq!(max_parallel, 2);
     }
 
@@ -533,7 +591,7 @@ mod tests {
     fn test_query_config_clone() {
         let config1 = QueryConfig::new().with_max_parallel_readers(4);
         let config2 = config1.clone();
-        
+
         assert_eq!(config1.max_parallel_readers, config2.max_parallel_readers);
     }
 
@@ -543,22 +601,16 @@ mod tests {
         use arrow::datatypes::{DataType, Field, Schema};
         use std::sync::Arc;
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
         // Batch 1: ids [1, 2], distances [0.5, 0.1]
-        let batch1 = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2]))],
-        )?;
+        let batch1 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
         let dist1 = vec![0.5, 0.1];
 
         // Batch 2: ids [3, 4], distances [0.3, 0.2]
-        let batch2 = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![3, 4]))],
-        )?;
+        let batch2 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 4]))])?;
         let dist2 = vec![0.3, 0.2];
 
         let results = vec![
@@ -575,14 +627,22 @@ mod tests {
 
         // Verify schema includes distance column
         for (_sid, batch) in &merged {
-            assert_eq!(batch.schema().fields().len(), 2, "Schema should have id and distance columns");
+            assert_eq!(
+                batch.schema().fields().len(),
+                2,
+                "Schema should have id and distance columns"
+            );
             assert_eq!(batch.schema().field(1).name(), "distance");
         }
 
         // Collect all IDs and sort them to verify we have exactly [2, 3, 4]
         let mut all_ids = Vec::new();
         for (_sid, batch) in merged {
-            let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            let id_col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
             for i in 0..batch.num_rows() {
                 all_ids.push(id_col.value(i));
             }
@@ -607,9 +667,7 @@ mod tests {
         use arrow::datatypes::{DataType, Field, Schema};
         use std::sync::Arc;
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
 
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -643,9 +701,9 @@ mod tests {
     #[cfg(test)]
     mod property_tests {
         use super::*;
-        use proptest::prelude::*;
         use arrow::array::Int32Array;
         use arrow::datatypes::{DataType, Field, Schema};
+        use proptest::prelude::*;
         use std::sync::Arc;
 
         proptest! {
@@ -803,14 +861,14 @@ mod tests {
                     std::cmp::min(k, num_rows - offset)
                 };
 
-                prop_assert_eq!(result_ids.len(), expected_count, 
-                    "Expected {} results (k={}, offset={}, total={}), got {}", 
+                prop_assert_eq!(result_ids.len(), expected_count,
+                    "Expected {} results (k={}, offset={}, total={}), got {}",
                     expected_count, k, offset, num_rows, result_ids.len());
 
                 // Verify IDs are in correct order (starting from offset)
                 if !result_ids.is_empty() {
                     let expected_ids: Vec<i32> = (offset as i32..(offset + result_ids.len()) as i32).collect();
-                    prop_assert_eq!(result_ids, expected_ids, 
+                    prop_assert_eq!(result_ids, expected_ids,
                         "IDs should be sequential starting from offset {}", offset);
                 }
             }

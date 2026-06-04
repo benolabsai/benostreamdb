@@ -87,7 +87,9 @@ pub enum IcebergManifestObject {
 #[derive(Debug, Clone)]
 pub enum DeleteContent {
     Position,
-    Equality { equality_ids: Vec<i32> },
+    Equality {
+        equality_ids: Vec<i32>,
+    },
     DeletionVector {
         puffin_file_path: String,
         content_offset: i64,

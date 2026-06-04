@@ -15,9 +15,15 @@ fn is_already_exists(err: &object_store::Error) -> bool {
 }
 
 impl ManifestManager {
-    pub async fn update_schema(&self, new_schemas: Vec<Schema>, new_schema_id: i32, last_column_id: Option<i32>) -> Result<Manifest> {
+    pub async fn update_schema(
+        &self,
+        new_schemas: Vec<Schema>,
+        new_schema_id: i32,
+        last_column_id: Option<i32>,
+    ) -> Result<Manifest> {
         let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        let dist_lock =
+            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
         dist_lock.acquire().await?;
 
         let max_retries = 10;
@@ -50,28 +56,32 @@ impl ManifestManager {
             let opts = PutOptions {
                 mode: PutMode::Create,
                 ..Default::default()
-              };
+            };
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Schema Update)", new_ver);
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = format!("{}/{}", self.root_uri, path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
                     let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                     // Conflict, retry
-                     if attempt >= max_retries {
-                         break;
-                     }
-                     attempt += 1;
-                     let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
-                     let jitter = rand::random::<u64>() % base_delay;
-                     tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
-                     continue;
+                    // Conflict, retry
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    attempt += 1;
+                    let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
+                    let jitter = rand::random::<u64>() % base_delay;
+                    tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
+                    continue;
                 }
                 Err(e) => {
                     let _ = dist_lock.release().await;
@@ -80,7 +90,10 @@ impl ManifestManager {
             }
         }
         let _ = dist_lock.release().await;
-        Err(anyhow::anyhow!("Failed to commit schema update after {} attempts", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to commit schema update after {} attempts",
+            max_retries
+        ))
     }
 
     /// Update the primary key (identifier fields) for the table.
@@ -114,17 +127,24 @@ impl ManifestManager {
 
             self.update_schema(schemas, new_schema_id, None).await
         } else {
-            Err(anyhow::anyhow!("No existing schema found to update identifier fields"))
+            Err(anyhow::anyhow!(
+                "No existing schema found to update identifier fields"
+            ))
         }
     }
 
     /// Update indexing specifications for columns
-    pub async fn update_index_specs(&self, column_indexes: HashMap<String, Vec<IndexAlgorithm>>) -> Result<Manifest> {
+    pub async fn update_index_specs(
+        &self,
+        column_indexes: HashMap<String, Vec<IndexAlgorithm>>,
+    ) -> Result<Manifest> {
         let max_retries = 10;
         let mut attempt = 0;
         loop {
             let (current_manifest, current_ver) = self.load_latest().await?;
-            let current_schema = current_manifest.schemas.last()
+            let current_schema = current_manifest
+                .schemas
+                .last()
                 .ok_or_else(|| anyhow::anyhow!("No schema found in manifest"))?;
 
             let mut new_fields = current_schema.fields.clone();
@@ -176,18 +196,24 @@ impl ManifestManager {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Index Spec Update)", new_ver);
                     let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                     attempt += 1;
-                     if attempt >= max_retries { break; }
-                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                     continue;
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             }
         }
         Err(anyhow::anyhow!("Failed to commit index spec update"))

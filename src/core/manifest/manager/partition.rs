@@ -47,18 +47,24 @@ impl ManifestManager {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{} (Partition Spec Update)", new_ver);
                     let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                     attempt += 1;
-                     if attempt >= max_retries { break; }
-                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                     continue;
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             }
         }
         Err(anyhow::anyhow!("Failed to commit partition spec update"))
@@ -66,9 +72,12 @@ impl ManifestManager {
 }
 
 impl PartitionSpec {
-    pub fn partition_batch(&self, batch: &RecordBatch) -> Result<Vec<(HashMap<String, Value>, RecordBatch)>> {
+    pub fn partition_batch(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<Vec<(HashMap<String, Value>, RecordBatch)>> {
         if self.fields.is_empty() {
-             return Ok(vec![(HashMap::new(), batch.clone())]);
+            return Ok(vec![(HashMap::new(), batch.clone())]);
         }
 
         // 1. Group row indices by partition key
@@ -77,7 +86,7 @@ impl PartitionSpec {
         for i in 0..batch.num_rows() {
             let mut key = Vec::with_capacity(self.fields.len());
             for field in &self.fields {
-                                // Determine source columns
+                // Determine source columns
                 let source_ids = field.get_source_ids();
                 let mut cols = Vec::new();
 
@@ -92,7 +101,8 @@ impl PartitionSpec {
                 if !found {
                     for id in &source_ids {
                         let idx = batch.schema().fields().iter().position(|f| {
-                            f.metadata().get("iceberg.id")
+                            f.metadata()
+                                .get("iceberg.id")
                                 .and_then(|id_str| id_str.parse::<i32>().ok())
                                 .map(|found_id| found_id == *id)
                                 .unwrap_or(false)
@@ -130,7 +140,8 @@ impl PartitionSpec {
                 .columns()
                 .iter()
                 .map(|col| {
-                    let taken = arrow::compute::take(col.as_ref(), &indices, None).unwrap_or_else(|_| col.clone());
+                    let taken = arrow::compute::take(col.as_ref(), &indices, None)
+                        .unwrap_or_else(|_| col.clone());
                     std::sync::Arc::new(taken) as std::sync::Arc<dyn arrow::array::Array>
                 })
                 .collect();

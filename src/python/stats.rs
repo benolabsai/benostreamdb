@@ -64,7 +64,7 @@ impl PySplit {
         length: u64,
         row_group_ids: Vec<usize>,
         index_file_path: Option<String>,
-        can_use_indexes: bool
+        can_use_indexes: bool,
     ) -> Self {
         Self {
             file_path,

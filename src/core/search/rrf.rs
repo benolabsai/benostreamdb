@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 /// A single search result entry from an index path
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,7 +42,8 @@ impl ReciprocalRankFusion {
             }
         }
 
-        let mut results: Vec<ScoredResult> = fused_scores.into_iter()
+        let mut results: Vec<ScoredResult> = fused_scores
+            .into_iter()
             .map(|((segment_id, row_id), score)| ScoredResult {
                 segment_id,
                 row_id,
@@ -51,12 +52,16 @@ impl ReciprocalRankFusion {
             .collect();
 
         // Sort by fused score descending
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-        
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         if results.len() > limit {
             results.truncate(limit);
         }
-        
+
         results
     }
 }

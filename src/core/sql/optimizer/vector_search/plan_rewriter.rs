@@ -10,13 +10,13 @@ use datafusion::error::Result;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 
-use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
 use crate::core::sql::physical_plan::vector_merge::VectorMergeExec;
+use crate::core::sql::physical_plan::vector_scan::VectorScanExec;
 use crate::core::table::VectorSearchParams;
 
-use crate::core::sql::optimizer::config::VectorSearchConfig;
 use super::plan_detection::DetectedKnnPattern;
 use super::sort_expr_parser::ParsedVectorSearch;
+use crate::core::sql::optimizer::config::VectorSearchConfig;
 
 /// Build an optimized vector search plan from a detected KNN pattern.
 ///
@@ -43,14 +43,18 @@ pub fn build_optimized_plan(
     );
 
     if search_config.limit_pushdown {
-        tracing::debug!("VectorSearchOptimizer: Pushing LIMIT+OFFSET {} to vector index layer", k_with_offset);
+        tracing::debug!(
+            "VectorSearchOptimizer: Pushing LIMIT+OFFSET {} to vector index layer",
+            k_with_offset
+        );
     }
 
     let mut vp = VectorSearchParams::new(
         &primary_search.column,
         primary_search.query_value.clone(),
         k_with_offset,
-    ).with_metric(primary_search.metric);
+    )
+    .with_metric(primary_search.metric);
 
     // Apply configuration parameters
     if let Some(ef) = search_config.ef_search {
@@ -64,7 +68,10 @@ pub fn build_optimized_plan(
 
     // FAST PATH OPTIMIZATION: For small result sets (limit < 100), use single-threaded execution (Iceberg v0.9.0+)
     if search_config.fast_path && pattern.limit < 100 {
-        tracing::debug!("VectorSearchOptimizer: Using fast path for small result set (limit={})", pattern.limit);
+        tracing::debug!(
+            "VectorSearchOptimizer: Using fast path for small result set (limit={})",
+            pattern.limit
+        );
     }
 
     // ROW GROUP SKIPPING: Statistics-based row group skipping (Iceberg v0.4.0+)

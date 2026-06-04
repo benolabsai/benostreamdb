@@ -4,11 +4,11 @@
 //! Extracts distance UDFs from sort expressions, detects metrics,
 //! and supports multi-vector queries.
 
-use datafusion::physical_expr::expressions::{Column, BinaryExpr, Literal};
-use datafusion::physical_expr::ScalarFunctionExpr;
 use datafusion::logical_expr::Operator;
-use datafusion::scalar::ScalarValue;
+use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::ScalarFunctionExpr;
+use datafusion::scalar::ScalarValue;
 
 use crate::core::index::{VectorMetric, VectorValue};
 
@@ -58,7 +58,9 @@ pub fn parse_vector_search_exprs(
 ///
 /// Returns `(metric, column_name, query_vector)` if this is a vector distance expression,
 /// or `None` if it's a regular sort expression.
-fn parse_single_sort_expr(sort_expr: &dyn PhysicalExpr) -> Option<(VectorMetric, String, VectorValue)> {
+fn parse_single_sort_expr(
+    sort_expr: &dyn PhysicalExpr,
+) -> Option<(VectorMetric, String, VectorValue)> {
     // Case 1: ScalarFunctionExpr (e.g., dist_l2, dist_cosine, dist_ip, etc.)
     if let Some(udf) = sort_expr.as_any().downcast_ref::<ScalarFunctionExpr>() {
         return parse_udf_expr(udf);
@@ -99,8 +101,15 @@ fn parse_udf_expr(udf: &ScalarFunctionExpr) -> Option<(VectorMetric, String, Vec
 
     // Extract vector from FixedSizeList
     if let ScalarValue::FixedSizeList(vec_arr) = scalar_expr.value() {
-        let f32_arr = vec_arr.values().as_any().downcast_ref::<arrow::array::Float32Array>()?;
-        return Some((m, col.name().to_string(), VectorValue::Float32(f32_arr.values().to_vec())));
+        let f32_arr = vec_arr
+            .values()
+            .as_any()
+            .downcast_ref::<arrow::array::Float32Array>()?;
+        return Some((
+            m,
+            col.name().to_string(),
+            VectorValue::Float32(f32_arr.values().to_vec()),
+        ));
     }
 
     None
@@ -134,13 +143,24 @@ fn parse_binary_expr(bin: &BinaryExpr) -> Option<(VectorMetric, String, VectorVa
 
     // Case 1: Dense Float32 vector
     if let ScalarValue::FixedSizeList(vec_arr) = literal.value() {
-        let f32_arr = vec_arr.values().as_any().downcast_ref::<arrow::array::Float32Array>()?;
-        return Some((m, col.name().to_string(), VectorValue::Float32(f32_arr.values().to_vec())));
+        let f32_arr = vec_arr
+            .values()
+            .as_any()
+            .downcast_ref::<arrow::array::Float32Array>()?;
+        return Some((
+            m,
+            col.name().to_string(),
+            VectorValue::Float32(f32_arr.values().to_vec()),
+        ));
     }
 
     // Case 2: Binary (Packed) vector
     if let ScalarValue::FixedSizeBinary(_, Some(bytes)) = literal.value() {
-        return Some((m, col.name().to_string(), VectorValue::Binary(bytes.clone())));
+        return Some((
+            m,
+            col.name().to_string(),
+            VectorValue::Binary(bytes.clone()),
+        ));
     }
 
     // Case 3: Sparse (Represented as Map or specialized Struct in future)

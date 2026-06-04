@@ -11,19 +11,13 @@ use std::fmt;
 #[derive(Debug)]
 pub enum HyperstreamError {
     /// I/O or object-store failure (S3, Azure, GCS, local fs).
-    Io {
-        source: std::io::Error,
-    },
+    Io { source: std::io::Error },
 
     /// Object store returned an error (not found, permission denied, etc.).
-    ObjectStore {
-        source: object_store::Error,
-    },
+    ObjectStore { source: object_store::Error },
 
     /// Arrow error (schema cast, array downcast, FFI, etc.).
-    Arrow {
-        source: arrow::error::ArrowError,
-    },
+    Arrow { source: arrow::error::ArrowError },
 
     /// DataFusion planning or execution error.
     DataFusion {
@@ -31,13 +25,9 @@ pub enum HyperstreamError {
     },
 
     /// Invalid URI or path for storage backend.
-    InvalidUri {
-        uri: String,
-        reason: String,
-    },
+    InvalidUri { uri: String, reason: String },
 
     // ─── Schema errors ───────────────────────────────────────────────
-
     /// Requested column does not exist in the table schema.
     ColumnNotFound {
         column: String,
@@ -45,61 +35,36 @@ pub enum HyperstreamError {
     },
 
     /// Duplicate column detected during schema merge.
-    DuplicateColumn {
-        column: String,
-    },
+    DuplicateColumn { column: String },
 
     /// Schema promotion failed (type incompatibility, unexpected deletion, etc.).
-    SchemaIncompatible {
-        reason: String,
-    },
+    SchemaIncompatible { reason: String },
 
     /// Table or schema not found in catalog.
-    TableNotFound {
-        namespace: String,
-        name: String,
-    },
+    TableNotFound { namespace: String, name: String },
 
     /// NULL value in a NOT NULL / primary key column.
-    NullConstraintViolation {
-        column: String,
-    },
+    NullConstraintViolation { column: String },
 
     // ─── Index errors ────────────────────────────────────────────────
-
     /// Vector index file not found at expected path.
-    IndexNotFound {
-        path: String,
-    },
+    IndexNotFound { path: String },
 
     /// Index build failed (empty vectors, unsupported type, etc.).
-    IndexBuildFailed {
-        index: String,
-        reason: String,
-    },
+    IndexBuildFailed { index: String, reason: String },
 
     /// GPU device not available or not enabled.
-    GpuNotAvailable {
-        requested: String,
-    },
+    GpuNotAvailable { requested: String },
 
     /// GPU compilation / pipeline creation failure.
-    GpuCompileFailed {
-        reason: String,
-    },
+    GpuCompileFailed { reason: String },
 
     /// Unsupported vector dimension or metric for the requested index.
-    UnsupportedVectorConfig {
-        detail: String,
-    },
+    UnsupportedVectorConfig { detail: String },
 
     // ─── Catalog errors ──────────────────────────────────────────────
-
     /// Catalog misconfiguration (missing URL, token, etc.).
-    CatalogConfig {
-        catalog: String,
-        reason: String,
-    },
+    CatalogConfig { catalog: String, reason: String },
 
     /// Catalog request failed (network, auth, server error).
     CatalogRequest {
@@ -109,88 +74,53 @@ pub enum HyperstreamError {
     },
 
     /// Branching not supported by this catalog type.
-    BranchNotSupported {
-        catalog: String,
-    },
+    BranchNotSupported { catalog: String },
 
     /// Unknown catalog type string.
-    UnknownCatalogType {
-        typ: String,
-    },
+    UnknownCatalogType { typ: String },
 
     // ─── Manifest errors ────────────────────────────────────────────
-
     /// Manifest version mismatch (file version != expected).
-    ManifestVersionMismatch {
-        expected: u64,
-        actual: u64,
-    },
+    ManifestVersionMismatch { expected: u64, actual: u64 },
 
     /// Manifest commit failed after all retries.
-    ManifestCommitFailed {
-        reason: String,
-    },
+    ManifestCommitFailed { reason: String },
 
     /// Manifest rollback failed.
-    ManifestRollbackFailed {
-        reason: String,
-    },
+    ManifestRollbackFailed { reason: String },
 
     // ─── Lock errors ────────────────────────────────────────────────
-
     /// Failed to acquire distributed lock after max retries.
-    LockAcquireFailed {
-        resource: String,
-        retries: u32,
-    },
+    LockAcquireFailed { resource: String, retries: u32 },
 
     // ─── Query / planner errors ─────────────────────────────────────
-
     /// Failed to parse or evaluate filter expression.
-    FilterError {
-        reason: String,
-    },
+    FilterError { reason: String },
 
     /// Physical expression creation failed.
-    PhysicalExprError {
-        reason: String,
-    },
+    PhysicalExprError { reason: String },
 
     // ─── Reader / scan errors ───────────────────────────────────────
-
     /// Segment not found in manifest.
-    SegmentNotFound {
-        segment_id: String,
-    },
+    SegmentNotFound { segment_id: String },
 
     /// Data integrity / checksum mismatch.
-    DataIntegrityCheckFailed {
-        segment_id: String,
-        reason: String,
-    },
+    DataIntegrityCheckFailed { segment_id: String, reason: String },
 
     /// Bitmap iterator exhausted (internal state corruption).
     BitmapExhausted,
 
     // ─── Write errors ───────────────────────────────────────────────
-
     /// Primary key uniqueness violation.
-    PrimaryKeyViolation {
-        key: String,
-    },
+    PrimaryKeyViolation { key: String },
 
     /// Write operation failed.
-    WriteFailed {
-        reason: String,
-    },
+    WriteFailed { reason: String },
 
     /// Merge/upsert operation failed.
-    MergeFailed {
-        reason: String,
-    },
+    MergeFailed { reason: String },
 
     // ─── WAL errors ─────────────────────────────────────────────────
-
     /// WAL file could not be opened.
     WalOpenError {
         path: String,
@@ -201,81 +131,49 @@ pub enum HyperstreamError {
     WalChannelClosed,
 
     /// WAL compaction failed.
-    WalCompactionFailed {
-        reason: String,
-    },
+    WalCompactionFailed { reason: String },
 
     // ─── Puffin errors ──────────────────────────────────────────────
-
     /// Puffin footer parse failure.
-    PuffinParseError {
-        reason: String,
-    },
+    PuffinParseError { reason: String },
 
     /// Puffin blob index out of range.
-    PuffinBlobOutOfRange {
-        requested: usize,
-        max: usize,
-    },
+    PuffinBlobOutOfRange { requested: usize, max: usize },
 
     /// Deletion vector deserialize failure.
-    DeletionVectorDeserialize {
-        reason: String,
-    },
+    DeletionVectorDeserialize { reason: String },
 
     // ─── Iceberg errors ─────────────────────────────────────────────
-
     /// Invalid Iceberg schema.
-    IcebergSchemaError {
-        reason: String,
-    },
+    IcebergSchemaError { reason: String },
 
     /// Iceberg equality-delete position mismatch.
-    IcebergDeleteError {
-        reason: String,
-    },
+    IcebergDeleteError { reason: String },
 
     // ─── License errors ─────────────────────────────────────────────
-
     /// Invalid license key format.
-    InvalidLicense {
-        reason: String,
-    },
+    InvalidLicense { reason: String },
 
     /// License has expired.
-    LicenseExpired {
-        expired_at: String,
-    },
+    LicenseExpired { expired_at: String },
 
     /// Enterprise feature requires valid license.
-    EnterpriseFeatureRequired {
-        feature: String,
-    },
+    EnterpriseFeatureRequired { feature: String },
 
     // ─── Embedding errors ───────────────────────────────────────────
-
     /// Embedding API returned invalid / unexpected response.
-    EmbeddingApiError {
-        reason: String,
-    },
+    EmbeddingApiError { reason: String },
 
     // ─── Concurrency / background task errors ───────────────────────
-
     /// Background task (indexer, compactor, etc.) failed.
-    BackgroundTaskFailed {
-        task: String,
-        reason: String,
-    },
+    BackgroundTaskFailed { task: String, reason: String },
 
     /// Semaphore or concurrency limit reached.
     ConcurrencyLimit,
 
     // ─── Catch-all ──────────────────────────────────────────────────
-
     /// Wrapped anyhow error for internal implementation details.
-    Internal {
-        source: anyhow::Error,
-    },
+    Internal { source: anyhow::Error },
 }
 
 // ─── Result type alias ────────────────────────────────────────────────────────
@@ -343,7 +241,10 @@ impl fmt::Display for HyperstreamError {
             }
 
             Self::ManifestVersionMismatch { expected, actual } => {
-                write!(f, "Manifest version mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "Manifest version mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::ManifestCommitFailed { reason } => {
                 write!(f, "Manifest commit failed: {reason}")
@@ -353,7 +254,10 @@ impl fmt::Display for HyperstreamError {
             }
 
             Self::LockAcquireFailed { resource, retries } => {
-                write!(f, "Failed to acquire lock on '{resource}' after {retries} retries")
+                write!(
+                    f,
+                    "Failed to acquire lock on '{resource}' after {retries} retries"
+                )
             }
 
             Self::FilterError { reason } => write!(f, "Filter error: {reason}"),
@@ -362,10 +266,10 @@ impl fmt::Display for HyperstreamError {
             Self::SegmentNotFound { segment_id } => {
                 write!(f, "Segment '{segment_id}' not found in manifest")
             }
-            Self::DataIntegrityCheckFailed {
-                segment_id,
-                reason,
-            } => write!(f, "Data integrity check failed for segment '{segment_id}': {reason}"),
+            Self::DataIntegrityCheckFailed { segment_id, reason } => write!(
+                f,
+                "Data integrity check failed for segment '{segment_id}': {reason}"
+            ),
             Self::BitmapExhausted => write!(f, "Bitmap iterator exhausted"),
 
             Self::PrimaryKeyViolation { key } => {
@@ -385,7 +289,10 @@ impl fmt::Display for HyperstreamError {
 
             Self::PuffinParseError { reason } => write!(f, "Puffin parse error: {reason}"),
             Self::PuffinBlobOutOfRange { requested, max } => {
-                write!(f, "Puffin blob index out of range: requested {requested}, max {max}")
+                write!(
+                    f,
+                    "Puffin blob index out of range: requested {requested}, max {max}"
+                )
             }
             Self::DeletionVectorDeserialize { reason } => {
                 write!(f, "Deletion vector deserialize error: {reason}")

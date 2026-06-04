@@ -2,13 +2,13 @@
 
 use datafusion::error::{DataFusionError, Result};
 
-pub mod dense;
 pub mod binary;
+pub mod dense;
 pub mod sparse;
 
 // Re-exports from submodules for backward compatibility
+pub use binary::{format_binary_vector, parse_binary_vector};
 pub use dense::parse_vector_literal;
-pub use binary::{parse_binary_vector, format_binary_vector};
 pub use sparse::parse_sparse_vector;
 
 /// Parser for pgvector-compatible vector literals
@@ -29,12 +29,18 @@ impl VectorLiteralParser {
     }
 
     /// Delegate to binary vector parsing
-    pub fn parse_binary(input: &str, expected_bits: Option<usize>) -> datafusion::error::Result<Vec<u8>> {
+    pub fn parse_binary(
+        input: &str,
+        expected_bits: Option<usize>,
+    ) -> datafusion::error::Result<Vec<u8>> {
         binary::parse_binary_vector(input, expected_bits)
     }
 
     /// Delegate to sparse vector parsing
-    pub fn parse_sparse(input: &str, dim: usize) -> datafusion::error::Result<crate::core::index::SparseVector> {
+    pub fn parse_sparse(
+        input: &str,
+        dim: usize,
+    ) -> datafusion::error::Result<crate::core::index::SparseVector> {
         sparse::parse_sparse_vector(input, dim)
     }
 }
@@ -49,9 +55,10 @@ impl VectorLiteralParser {
 /// * `Result<()>` - Ok if dimensions match, error otherwise
 pub fn validate_vector_dimensions(left_dim: usize, right_dim: usize) -> Result<()> {
     if left_dim != right_dim {
-        return Err(DataFusionError::Plan(
-            format!("Vector dimension mismatch: expected {}, got {}", left_dim, right_dim)
-        ));
+        return Err(DataFusionError::Plan(format!(
+            "Vector dimension mismatch: expected {}, got {}",
+            left_dim, right_dim
+        )));
     }
     Ok(())
 }
@@ -130,14 +137,20 @@ mod tests {
     fn test_parse_missing_opening_bracket() {
         let result = VectorLiteralParser::parse("1,2,3]");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be enclosed in brackets"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be enclosed in brackets"));
     }
 
     #[test]
     fn test_parse_missing_closing_bracket() {
         let result = VectorLiteralParser::parse("[1,2,3");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be enclosed in brackets"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be enclosed in brackets"));
     }
 
     #[test]
@@ -151,7 +164,10 @@ mod tests {
     fn test_parse_invalid_number() {
         let result = VectorLiteralParser::parse("[1, abc, 3]");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid number at position"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid number at position"));
     }
 
     #[test]
@@ -316,25 +332,37 @@ mod tests {
     fn test_parse_sparse_vector_missing_opening_brace() {
         let result = VectorLiteralParser::parse_sparse("1:0.5, 10:0.3}", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be enclosed in braces"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be enclosed in braces"));
     }
 
     #[test]
     fn test_parse_sparse_vector_missing_closing_brace() {
         let result = VectorLiteralParser::parse_sparse("{1:0.5, 10:0.3", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be enclosed in braces"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be enclosed in braces"));
     }
 
     #[test]
     fn test_parse_sparse_vector_invalid_format() {
         let result = VectorLiteralParser::parse_sparse("{1 0.5}", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("expected 'index:value'"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected 'index:value'"));
 
         let result = VectorLiteralParser::parse_sparse("{1:0.5:extra}", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("expected 'index:value'"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("expected 'index:value'"));
     }
 
     #[test]
@@ -355,7 +383,10 @@ mod tests {
     fn test_parse_sparse_vector_index_out_of_bounds() {
         let result = VectorLiteralParser::parse_sparse("{1000:0.5}", 1000);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exceeds dimension"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds dimension"));
     }
 
     #[test]
@@ -469,42 +500,60 @@ mod tests {
     fn test_parse_binary_invalid_digit() {
         let result = VectorLiteralParser::parse_binary("B'10210'", Some(5));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid binary digit"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid binary digit"));
     }
 
     #[test]
     fn test_parse_binary_missing_closing_quote() {
         let result = VectorLiteralParser::parse_binary("B'10110101", Some(8));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must end with single quote"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must end with single quote"));
     }
 
     #[test]
     fn test_parse_binary_bit_count_mismatch() {
         let result = VectorLiteralParser::parse_binary("B'10110101'", Some(16));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("bit count mismatch"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("bit count mismatch"));
     }
 
     #[test]
     fn test_parse_binary_hex_invalid_digit() {
         let result = VectorLiteralParser::parse_binary("'\\xGH'", Some(8));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid hex digit"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid hex digit"));
     }
 
     #[test]
     fn test_parse_binary_hex_incomplete_byte() {
         let result = VectorLiteralParser::parse_binary("'\\xB'", Some(8));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Incomplete hex byte"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Incomplete hex byte"));
     }
 
     #[test]
     fn test_parse_binary_invalid_format() {
         let result = VectorLiteralParser::parse_binary("10110101", Some(8));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be in format"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must be in format"));
     }
 
     #[test]
@@ -589,8 +638,8 @@ mod tests {
     #[cfg(feature = "proptest")]
     mod property_tests {
         use super::*;
-        use proptest::prelude::*;
         use arrow::array::Float32Array;
+        use proptest::prelude::*;
 
         proptest! {
             #![proptest_config(ProptestConfig::with_cases(100))]

@@ -8,29 +8,29 @@
 //! - [`schema`] — schema updates, identifier fields, index specs
 //! - [`partition`] — partition spec updates and batch partitioning
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use object_store::{path::Path, ObjectStore};
 use anyhow::Result;
 use futures::StreamExt;
+use object_store::{path::Path, ObjectStore};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::types::*;
 
 // ── Submodules ───────────────────────────────────────────────────────────────
-mod load;
 mod commit;
-mod schema;
+mod load;
 mod partition;
+mod schema;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 #[allow(unused_imports)]
-pub(crate) use load::*;
-#[allow(unused_imports)]
 pub(crate) use commit::*;
 #[allow(unused_imports)]
-pub(crate) use schema::*;
+pub(crate) use load::*;
 #[allow(unused_imports)]
 pub(crate) use partition::*;
+#[allow(unused_imports)]
+pub(crate) use schema::*;
 
 // ── ManifestManager struct ──────────────────────────────────────────────────
 #[derive(Clone)]
@@ -58,9 +58,9 @@ impl ManifestManager {
     pub fn new(store: Arc<dyn ObjectStore>, base_path: &str, root_uri: &str) -> Self {
         // Manifest directory is typically `_manifest/` under the table root
         let manifest_dir = if base_path.is_empty() {
-             Path::from("_manifest/")
+            Path::from("_manifest/")
         } else {
-             Path::from(format!("{}/_manifest/", base_path))
+            Path::from(format!("{}/_manifest/", base_path))
         };
 
         Self {

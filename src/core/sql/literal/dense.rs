@@ -1,9 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use datafusion::error::{DataFusionError, Result};
-use datafusion::scalar::ScalarValue;
 use arrow::array::Float32Array;
 use arrow::datatypes::{DataType, Field};
+use datafusion::error::{DataFusionError, Result};
+use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 
 /// Parse a dense vector literal string into a DataFusion ScalarValue
@@ -34,14 +34,14 @@ pub fn parse_vector_literal(input: &str) -> Result<ScalarValue> {
     // Check for opening bracket
     if !trimmed.starts_with('[') {
         return Err(DataFusionError::Plan(
-            "Vector literal must be enclosed in brackets: '[...]'".to_string()
+            "Vector literal must be enclosed in brackets: '[...]'".to_string(),
         ));
     }
 
     // Check for closing bracket
     if !trimmed.ends_with(']') {
         return Err(DataFusionError::Plan(
-            "Vector literal must be enclosed in brackets: '[...]'".to_string()
+            "Vector literal must be enclosed in brackets: '[...]'".to_string(),
         ));
     }
 
@@ -51,7 +51,7 @@ pub fn parse_vector_literal(input: &str) -> Result<ScalarValue> {
     // Handle empty vector
     if content.is_empty() {
         return Err(DataFusionError::Plan(
-            "Vector literal cannot be empty".to_string()
+            "Vector literal cannot be empty".to_string(),
         ));
     }
 
@@ -64,9 +64,10 @@ pub fn parse_vector_literal(input: &str) -> Result<ScalarValue> {
         match token.parse::<f32>() {
             Ok(val) => values.push(val),
             Err(_) => {
-                return Err(DataFusionError::Plan(
-                    format!("Invalid number at position {}: {}", idx, token)
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Invalid number at position {}: {}",
+                    idx, token
+                )));
             }
         }
     }

@@ -1,18 +1,17 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use super::distance::l2_distance_squared;
+use super::ivf::simple_kmeans;
 /// Product Quantization (PQ) Implementation
-/// 
+///
 /// PQ compresses high-dimensional vectors by splitting them into 'm' sub-vectors
 /// and quantizing each sub-vector space into a small codebook (usually 256 centroids).
-/// 
+///
 /// This allows:
 /// 1. Massive memory reduction (e.g., 1536 floats -> 64 bytes = 96x reduction)
 /// 2. Fast search using ADC (Asymmetric Distance Calculation) with lookup tables.
 use anyhow::Result;
-use super::distance::{l2_distance_squared};
-use super::ivf::simple_kmeans;
 use tracing;
-
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PqConfig {
@@ -37,32 +36,50 @@ pub struct PqEncoder {
 impl PqEncoder {
     pub fn train(vectors: &[Vec<f32>], config: PqConfig) -> Result<Self> {
         let sub_dim = config.dim / config.m;
-        tracing::info!("Training PQ: m={}, k={}, dim={}, sub_dim={}", config.m, config.k, config.dim, sub_dim);
+        tracing::info!(
+            "Training PQ: m={}, k={}, dim={}, sub_dim={}",
+            config.m,
+            config.k,
+            config.dim,
+            sub_dim
+        );
         use rayon::prelude::*;
 
-        let codebooks: Result<Vec<Vec<Vec<f32>>>> = (0..config.m).into_par_iter().map(|i| {
-            let start = i * sub_dim;
-            let end = (i + 1) * sub_dim;
-            
-            // Extract sub-vectors for this subspace (Still a copy, but parallel)
-            let sub_vectors: Vec<Vec<f32>> = vectors.iter()
-                .map(|v| v[start..end].to_vec())
-                .collect();
-            
-            // Train codebook for this subspace using ultra-fast mini-batch K-Means
-            let (centroids, _) = simple_kmeans(&sub_vectors, config.k, 5)?;
-            Ok(centroids)
-        }).collect();
+        let codebooks: Result<Vec<Vec<Vec<f32>>>> = (0..config.m)
+            .into_par_iter()
+            .map(|i| {
+                let start = i * sub_dim;
+                let end = (i + 1) * sub_dim;
 
-        let mut encoder = Self { config, codebooks: codebooks?, sdc_lut: Vec::new() };
+                // Extract sub-vectors for this subspace (Still a copy, but parallel)
+                let sub_vectors: Vec<Vec<f32>> =
+                    vectors.iter().map(|v| v[start..end].to_vec()).collect();
+
+                // Train codebook for this subspace using ultra-fast mini-batch K-Means
+                let (centroids, _) = simple_kmeans(&sub_vectors, config.k, 5)?;
+                Ok(centroids)
+            })
+            .collect();
+
+        let mut encoder = Self {
+            config,
+            codebooks: codebooks?,
+            sdc_lut: Vec::new(),
+        };
         encoder.init_lut();
         Ok(encoder)
     }
 
     /// Precompute the Symmetric Distance Computation (SDC) lookup table
     pub fn init_lut(&mut self) {
-        if !self.sdc_lut.is_empty() { return; }
-        tracing::debug!("Initializing PQ SDC LUT (m={}, k={})", self.config.m, self.config.k);
+        if !self.sdc_lut.is_empty() {
+            return;
+        }
+        tracing::debug!(
+            "Initializing PQ SDC LUT (m={}, k={})",
+            self.config.m,
+            self.config.k
+        );
         let mut sdc_lut = Vec::with_capacity(self.config.m * self.config.k * self.config.k);
         for i in 0..self.config.m {
             for c1 in 0..self.config.k {
@@ -81,13 +98,13 @@ impl PqEncoder {
         use std::arch::x86_64::*;
         let mut encoded = Vec::with_capacity(self.config.m);
         let sub_dim = self.config.dim / self.config.m;
-        
+
         for i in 0..self.config.m {
             let sub_vec = &vector[i * sub_dim..(i + 1) * sub_dim];
-            
+
             let mut min_dist = f32::MAX;
             let mut best_idx = 0;
-            
+
             // If sub_dim is a multiple of 8, we can use 256-bit AVX registers
             if sub_dim % 8 == 0 {
                 for (j, centroid) in self.codebooks[i].iter().enumerate() {
@@ -104,7 +121,7 @@ impl PqEncoder {
                     let mut res = [0.0f32; 8];
                     _mm256_storeu_ps(res.as_mut_ptr(), sum);
                     let dist: f32 = res.iter().sum();
-                    
+
                     if dist < min_dist {
                         min_dist = dist;
                         best_idx = j as u8;
@@ -131,16 +148,16 @@ impl PqEncoder {
                 return unsafe { self.encode_avx2(vector) };
             }
         }
-        
+
         let mut encoded = Vec::with_capacity(self.config.m);
         let sub_dim = self.config.dim / self.config.m;
-        
+
         for i in 0..self.config.m {
             let sub_vec = &vector[i * sub_dim..(i + 1) * sub_dim];
-            
+
             let mut min_dist = f32::MAX;
             let mut best_idx = 0;
-            
+
             for (j, centroid) in self.codebooks[i].iter().enumerate() {
                 let dist = l2_distance_squared(sub_vec, centroid);
                 if dist < min_dist {
@@ -162,7 +179,7 @@ impl PqEncoder {
             let start = i * sub_dim;
             let end = (i + 1) * sub_dim;
             let sub_query = &query[start..end];
-            
+
             let mut sub_lut = Vec::with_capacity(self.config.k);
             for centroid in &self.codebooks[i] {
                 sub_lut.push(l2_distance_squared(sub_query, centroid));
@@ -240,7 +257,7 @@ impl Distance<u8> for DistPqSdc {
                 return unsafe { pq_sdc_avx2(a, b, &self.pq.sdc_lut, self.pq.config.m) };
             }
         }
-        
+
         let mut dist = 0.0;
         let lut = &self.pq.sdc_lut;
         for i in 0..self.pq.config.m {
@@ -256,13 +273,19 @@ impl Distance<u8> for DistPqSdc {
 unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
     use std::arch::x86_64::*;
     let mut sum = _mm256_setzero_ps();
-    
+
     // Base offsets for 8 dimensions: [0*65536, 1*65536, 2*65536, ..., 7*65536]
     let base_offsets = _mm256_set_epi32(
-        7 * 65536, 6 * 65536, 5 * 65536, 4 * 65536,
-        3 * 65536, 2 * 65536, 1 * 65536, 0 * 65536,
+        7 * 65536,
+        6 * 65536,
+        5 * 65536,
+        4 * 65536,
+        3 * 65536,
+        2 * 65536,
+        1 * 65536,
+        0 * 65536,
     );
-    
+
     let mut i = 0;
     while i + 8 <= m {
         let a_ptr = a.as_ptr().add(i) as *const i64;
@@ -276,20 +299,20 @@ unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
 
         let a_shifted = _mm256_slli_epi32(a_32, 8);
         let combined = _mm256_or_si256(a_shifted, b_32);
-        
+
         let final_offsets = _mm256_add_epi32(combined, base_offsets);
 
         // Advance the LUT pointer by 8 dimensions * 65536 entries
         let current_lut = lut.as_ptr().add(i * 65536);
         let vals = _mm256_i32gather_ps::<4>(current_lut, final_offsets);
         sum = _mm256_add_ps(sum, vals);
-        
+
         i += 8;
     }
 
     let mut res = [0.0f32; 8];
     _mm256_storeu_ps(res.as_mut_ptr(), sum);
-    
+
     // Add remaining dimensions if m is not a multiple of 8
     let mut total = res.iter().sum::<f32>();
     while i < m {
@@ -297,6 +320,6 @@ unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
         total += lut[offset];
         i += 1;
     }
-    
+
     total
 }

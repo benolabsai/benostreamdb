@@ -6,11 +6,11 @@
 
 use std::sync::Arc;
 
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_expr::PhysicalExpr;
 
 use crate::core::manifest::ManifestEntry;
 use crate::core::sql::physical_plan::HyperStreamExec;
@@ -23,7 +23,10 @@ pub struct DetectedKnnPattern {
     /// The OFFSET value (number of results to skip)
     pub offset: usize,
     /// Sort expressions from the SortExec node
-    pub sort_exprs: Vec<(std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>, bool)>,
+    pub sort_exprs: Vec<(
+        std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+        bool,
+    )>,
     /// Optional filter predicate found between Sort and HyperStreamExec
     pub filter: Option<std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
     /// The HyperStreamExec node at the base of the pattern
@@ -71,7 +74,9 @@ pub fn detect_knn_pattern(plan: &dyn ExecutionPlan) -> Option<DetectedKnnPattern
 
     // Step 2: Check child is SortExec
     let sort_exec = limit_exec.input().as_any().downcast_ref::<SortExec>()?;
-    let sort_exprs: Vec<(Arc<dyn PhysicalExpr>, bool)> = sort_exec.expr().iter()
+    let sort_exprs: Vec<(Arc<dyn PhysicalExpr>, bool)> = sort_exec
+        .expr()
+        .iter()
         .map(|se| (se.expr.clone(), !se.options.descending))
         .collect();
 

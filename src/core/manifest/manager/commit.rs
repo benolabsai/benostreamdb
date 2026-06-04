@@ -3,14 +3,14 @@
 //! Manifest commit operations: optimistic concurrency, rollback, vacuum, and import.
 
 use anyhow::Result;
+use chrono::Utc;
 use futures::StreamExt;
 use object_store::{path::Path, ObjectStore};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use chrono::Utc;
 
 use super::super::types::*;
-use super::{ManifestManager, CommitMetadata};
+use super::{CommitMetadata, ManifestManager};
 
 fn is_already_exists(err: &object_store::Error) -> bool {
     err.to_string().contains("already exists")
@@ -25,17 +25,20 @@ impl ManifestManager {
         &self,
         add_entries: &[ManifestEntry],
         remove_paths: &[String],
-        metadata: CommitMetadata
+        metadata: CommitMetadata,
     ) -> Result<Manifest> {
         let cache_key = self.get_dir_cache_key();
-        let lock = COMMIT_LOCKS.entry(cache_key)
+        let lock = COMMIT_LOCKS
+            .entry(cache_key)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .value().clone();
+            .value()
+            .clone();
 
         let _guard = lock.lock().await;
 
         let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        let dist_lock =
+            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
         dist_lock.acquire().await?;
 
         let max_retries = 100;
@@ -44,7 +47,10 @@ impl ManifestManager {
 
             // 1. Calculate new state
             let all_entries = self.load_all_entries(&current_manifest).await?;
-            let mut active_map: HashMap<String, ManifestEntry> = all_entries.into_iter().map(|e| (e.file_path.clone(), e)).collect();
+            let mut active_map: HashMap<String, ManifestEntry> = all_entries
+                .into_iter()
+                .map(|e| (e.file_path.clone(), e))
+                .collect();
             let new_ver = current_ver + 1;
 
             // Hardened De-duplication
@@ -78,7 +84,11 @@ impl ManifestManager {
 
                 let writer = crate::core::iceberg::IcebergWriter::new();
                 let default_schema = crate::core::manifest::Schema::default();
-                let table_schema = current_manifest.schemas.last().unwrap_or(&default_schema).clone();
+                let table_schema = current_manifest
+                    .schemas
+                    .last()
+                    .unwrap_or(&default_schema)
+                    .clone();
                 let table_spec = current_manifest.partition_spec.clone();
                 let new_ver_i64 = new_ver as i64;
                 let store = self.store.clone();
@@ -89,7 +99,7 @@ impl ManifestManager {
                     &table_schema,
                     new_ver_i64,
                     new_ver_i64,
-                    crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES
+                    crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES,
                 )?;
 
                 for (chunk_idx, (bytes, file_count, row_count)) in chunks.into_iter().enumerate() {
@@ -140,17 +150,32 @@ impl ManifestManager {
             };
 
             // 3. Create new Manifest
-            let final_schemas = metadata.updated_schemas.as_ref().cloned().unwrap_or_else(|| current_manifest.schemas.clone());
-            let final_schema_id = metadata.updated_schema_id.unwrap_or(current_manifest.current_schema_id);
+            let final_schemas = metadata
+                .updated_schemas
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| current_manifest.schemas.clone());
+            let final_schema_id = metadata
+                .updated_schema_id
+                .unwrap_or(current_manifest.current_schema_id);
 
             let final_partition_spec = if let Some(specs) = &metadata.updated_partition_specs {
-                 specs.last().cloned().unwrap_or(current_manifest.partition_spec.clone())
+                specs
+                    .last()
+                    .cloned()
+                    .unwrap_or(current_manifest.partition_spec.clone())
             } else {
-                 current_manifest.partition_spec.clone()
+                current_manifest.partition_spec.clone()
             };
 
-            let final_sort_orders = metadata.updated_sort_orders.as_ref().cloned().unwrap_or_else(|| current_manifest.sort_orders.clone());
-            let final_default_sort_order_id = metadata.updated_default_sort_order_id.unwrap_or(current_manifest.default_sort_order_id);
+            let final_sort_orders = metadata
+                .updated_sort_orders
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| current_manifest.sort_orders.clone());
+            let final_default_sort_order_id = metadata
+                .updated_default_sort_order_id
+                .unwrap_or(current_manifest.default_sort_order_id);
 
             let mut new_manifest = Manifest::new_with_spec(
                 new_ver,
@@ -170,9 +195,9 @@ impl ManifestManager {
                 new_manifest.properties.extend(props.clone().into_iter());
             }
             if let Some(removals) = &metadata.removed_properties {
-                 for key in removals {
-                     new_manifest.properties.remove(key);
-                 }
+                for key in removals {
+                    new_manifest.properties.remove(key);
+                }
             }
 
             new_manifest.partition_specs = if let Some(specs) = &metadata.updated_partition_specs {
@@ -180,8 +205,12 @@ impl ManifestManager {
             } else {
                 current_manifest.partition_specs.clone()
             };
-            new_manifest.default_spec_id = metadata.updated_default_spec_id.unwrap_or(current_manifest.default_spec_id);
-            new_manifest.last_column_id = metadata.updated_last_column_id.unwrap_or(current_manifest.last_column_id);
+            new_manifest.default_spec_id = metadata
+                .updated_default_spec_id
+                .unwrap_or(current_manifest.default_spec_id);
+            new_manifest.last_column_id = metadata
+                .updated_last_column_id
+                .unwrap_or(current_manifest.last_column_id);
 
             new_manifest.manifest_list_path = manifest_list_path;
 
@@ -202,19 +231,29 @@ impl ManifestManager {
                     tracing::info!("Committed Manifest: {}", path);
                     // 5. Update Caches
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
-                    crate::core::cache::LATEST_VERSION_CACHE.insert(dir_key, new_ver).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .insert(dir_key, new_ver)
+                        .await;
 
                     // Cache the new manifest file eagerly
                     let file_key = format!("{}/{}", self.root_uri, path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
 
                     let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
                     if attempt % 10 == 0 || attempt > 90 {
-                        tracing::debug!("Conflict committing Manifest v{} (attempt {}), retrying...", new_ver, attempt + 1);
+                        tracing::debug!(
+                            "Conflict committing Manifest v{} (attempt {}), retrying...",
+                            new_ver,
+                            attempt + 1
+                        );
                     }
                     let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
                     let jitter = rand::random::<u64>() % base_delay;
@@ -229,13 +268,17 @@ impl ManifestManager {
         }
 
         let _ = dist_lock.release().await;
-        Err(anyhow::anyhow!("Failed to commit manifest after {} attempts due to concurrent updates", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to commit manifest after {} attempts due to concurrent updates",
+            max_retries
+        ))
     }
 
     /// Commit a set of imported entries (merges with current state)
     pub async fn commit_imported_entries(&self, entries: Vec<ManifestEntry>) -> Result<Manifest> {
         let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock = crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
+        let dist_lock =
+            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
         dist_lock.acquire().await?;
 
         let max_retries = 10;
@@ -245,7 +288,8 @@ impl ManifestManager {
             let all_existing = self.load_all_entries(&current_manifest).await?;
 
             // Merge entries, avoid duplicates, favor NEW entries for the SAME file_path
-            let mut entry_map: HashMap<String, ManifestEntry> = all_existing.into_iter()
+            let mut entry_map: HashMap<String, ManifestEntry> = all_existing
+                .into_iter()
                 .map(|e| (e.file_path.clone(), e))
                 .collect();
 
@@ -285,18 +329,32 @@ impl ManifestManager {
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    tracing::info!("Imported {} external entries into Manifest v{}", entries.len(), new_ver);
+                    tracing::info!(
+                        "Imported {} external entries into Manifest v{}",
+                        entries.len(),
+                        new_ver
+                    );
                     let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
                     let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
                     attempt += 1;
-                    if attempt >= max_retries { break; }
-                    tracing::warn!("Manifest conflict during entry import. Retrying attempt {}/{}", attempt, max_retries);
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tracing::warn!(
+                        "Manifest conflict during entry import. Retrying attempt {}/{}",
+                        attempt,
+                        max_retries
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
                     continue;
                 }
@@ -307,7 +365,10 @@ impl ManifestManager {
             }
         }
         let _ = dist_lock.release().await;
-        Err(anyhow::anyhow!("Failed to commit imported entries after {} attempts", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to commit imported entries after {} attempts",
+            max_retries
+        ))
     }
 
     /// Atomically commit a full manifest (optimistic concurrency)
@@ -317,7 +378,11 @@ impl ManifestManager {
         loop {
             let (_, current_ver) = self.load_latest().await?;
             if manifest.version != current_ver + 1 {
-                return Err(anyhow::anyhow!("Manifest version mismatch: expected {}, got {}", current_ver + 1, manifest.version));
+                return Err(anyhow::anyhow!(
+                    "Manifest version mismatch: expected {}, got {}",
+                    current_ver + 1,
+                    manifest.version
+                ));
             }
 
             let filename = format!("v{}.json", manifest.version);
@@ -334,21 +399,30 @@ impl ManifestManager {
                 Ok(_) => {
                     tracing::info!("Committed Manifest v{}", manifest.version);
                     let dir_key = self.get_dir_cache_key();
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = self.get_cache_key(&path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(manifest.clone()))
+                        .await;
                     return Ok(());
                 }
                 Err(e) if is_already_exists(&e) => {
-                     attempt += 1;
-                     if attempt >= max_retries { break; }
-                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                     continue;
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             }
         }
-        Err(anyhow::anyhow!("Failed to commit manifest after {} attempts", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to commit manifest after {} attempts",
+            max_retries
+        ))
     }
 
     /// Rollback the table state to a previous manifest version
@@ -381,23 +455,36 @@ impl ManifestManager {
 
             match self.store.put_opts(&path, bytes.into(), opts).await {
                 Ok(_) => {
-                    tracing::info!("Rolled back Manifest to v{} (from snapshot {})", new_ver, version);
+                    tracing::info!(
+                        "Rolled back Manifest to v{} (from snapshot {})",
+                        new_ver,
+                        version
+                    );
                     let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
-                    crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
                     let file_key = format!("{}/{}", self.root_uri, path);
-                    crate::core::cache::MANIFEST_CACHE.insert(file_key, Arc::new(new_manifest.clone())).await;
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                     attempt += 1;
-                     if attempt >= max_retries { break; }
-                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                     continue;
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
                 }
-                Err(e) => return Err(e.into())
+                Err(e) => return Err(e.into()),
             }
         }
-        Err(anyhow::anyhow!("Failed to rollback after {} attempts", max_retries))
+        Err(anyhow::anyhow!(
+            "Failed to rollback after {} attempts",
+            max_retries
+        ))
     }
 
     /// Delete old manifest files and any data/index files NOT referenced by the latest N versions.
@@ -416,7 +503,9 @@ impl ManifestManager {
         let mut active_files = HashSet::new();
         let mut manifest_files_to_keep = HashSet::new();
 
-        let start_ver = latest_ver.saturating_sub(retention_versions as u64 - 1).max(1);
+        let start_ver = latest_ver
+            .saturating_sub(retention_versions as u64 - 1)
+            .max(1);
 
         for v in start_ver..=latest_ver {
             let m = match self.load_version(v).await {
@@ -466,17 +555,19 @@ impl ManifestManager {
             }
 
             // check if it's a data file we should care about
-            let is_data_file = path_str.ends_with(".parquet") ||
-                              path_str.ends_with(".hnsw") ||
-                              path_str.ends_with(".idx") ||
-                              path_str.ends_with(".tmp");
+            let is_data_file = path_str.ends_with(".parquet")
+                || path_str.ends_with(".hnsw")
+                || path_str.ends_with(".idx")
+                || path_str.ends_with(".tmp");
 
             if is_data_file {
                 // If it's not in the active set, delete it
                 if !active_files.contains(&path_str) {
                     // Small safety: don't delete very young .tmp files (leeway for active writers)
                     if path_str.ends_with(".tmp") {
-                        let age = Utc::now() - chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0).unwrap_or(Utc::now());
+                        let age = Utc::now()
+                            - chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0)
+                                .unwrap_or(Utc::now());
                         if age.num_minutes() < 60 {
                             continue;
                         }

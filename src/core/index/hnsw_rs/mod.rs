@@ -6,14 +6,14 @@
 // for logging (debug mostly, switched at compile time in cargo.toml)
 use lazy_static::lazy_static;
 
-pub mod hnsw;
 pub mod dist;
+pub mod hnsw;
 pub use dist::*;
-pub mod hnswio;
-pub mod prelude;
 pub mod api;
-pub mod libext;
 pub mod flatten;
+pub mod hnswio;
+pub mod libext;
+pub mod prelude;
 
 lazy_static! {
     static ref LOG: u64 = {

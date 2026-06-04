@@ -29,7 +29,9 @@ pub fn decode_iceberg_value(
     let type_str = if let Some(s) = type_json.as_str() {
         s
     } else if let Some(obj) = type_json.as_object() {
-        obj.get("type").and_then(|t| t.as_str()).unwrap_or("unknown")
+        obj.get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown")
     } else {
         "unknown"
     };
@@ -44,28 +46,36 @@ pub fn decode_iceberg_value(
         }
         "int" | "date" => {
             if bytes.len() >= 4 {
-                ManifestValue::Int32(i32::from_le_bytes(bytes[0..4].try_into().unwrap_or_default()))
+                ManifestValue::Int32(i32::from_le_bytes(
+                    bytes[0..4].try_into().unwrap_or_default(),
+                ))
             } else {
                 ManifestValue::Null
             }
         }
         "long" | "timestamp" | "timestamptz" => {
             if bytes.len() >= 8 {
-                ManifestValue::Int64(i64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()))
+                ManifestValue::Int64(i64::from_le_bytes(
+                    bytes[0..8].try_into().unwrap_or_default(),
+                ))
             } else {
                 ManifestValue::Null
             }
         }
         "float" => {
             if bytes.len() >= 4 {
-                ManifestValue::Float32(f32::from_le_bytes(bytes[0..4].try_into().unwrap_or_default()))
+                ManifestValue::Float32(f32::from_le_bytes(
+                    bytes[0..4].try_into().unwrap_or_default(),
+                ))
             } else {
                 ManifestValue::Null
             }
         }
         "double" => {
             if bytes.len() >= 8 {
-                ManifestValue::Float64(f64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()))
+                ManifestValue::Float64(f64::from_le_bytes(
+                    bytes[0..8].try_into().unwrap_or_default(),
+                ))
             } else {
                 ManifestValue::Null
             }
@@ -122,7 +132,7 @@ pub fn parse_avro_value_bytes_with_type(
         if let Ok(s) = std::str::from_utf8(bytes) {
             ManifestValue::String(s.to_string())
         } else {
-             ManifestValue::String(base64::engine::general_purpose::STANDARD.encode(bytes))
+            ManifestValue::String(base64::engine::general_purpose::STANDARD.encode(bytes))
         }
     }
 }
@@ -144,8 +154,8 @@ pub fn json_to_avro_value(v: &serde_json::Value) -> AvroValue {
             } else {
                 AvroValue::Null
             }
-        },
+        }
         serde_json::Value::String(s) => AvroValue::String(s.clone()),
-        _ => AvroValue::Null
+        _ => AvroValue::Null,
     }
 }
