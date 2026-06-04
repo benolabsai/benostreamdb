@@ -789,7 +789,7 @@ pub fn py_jaccard_batch<'py>(
 /// >>> print(sparse.dim)
 /// 100
 /// >>> dense = sparse.to_dense()  # Convert to dense representation
-/// >>> print(dense[5])
+/// >>> print(dense\[5\])
 /// 2.0
 #[pyclass(name = "SparseVector")]
 pub struct PySparseVector {
@@ -1152,8 +1152,8 @@ fn pack_binary_vector(values: &[f32]) -> Vec<u8> {
 /// >>> import hyperstreamdb as hdb
 /// >>> import numpy as np
 /// >>> # Two binary vectors: 10110101 and 10101100
-/// >>> a = np.array([0b10110101], dtype=np.uint8)
-/// >>> b = np.array([0b10101100], dtype=np.uint8)
+/// >>> a = np.array(\[0b10110101\], dtype=np.uint8)
+/// >>> b = np.array(\[0b10101100\], dtype=np.uint8)
 /// >>> distance = hdb.hamming_packed(a, b)
 /// >>> print(distance)
 /// 3
@@ -1279,8 +1279,8 @@ pub fn py_hamming_auto(
 /// --------
 /// >>> import hyperstreamdb as hdb
 /// >>> import numpy as np
-/// >>> a = np.array([0b10110101], dtype=np.uint8)
-/// >>> b = np.array([0b10101100], dtype=np.uint8)
+/// >>> a = np.array(\[0b10110101\], dtype=np.uint8)
+/// >>> b = np.array(\[0b10101100\], dtype=np.uint8)
 /// >>> distance = hdb.jaccard_packed(a, b)
 /// >>> print(f"{distance:.3f}")
 /// 0.429

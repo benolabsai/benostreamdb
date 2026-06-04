@@ -14,10 +14,8 @@ pub use nessie::PyNessieCatalog;
 pub use rest::PyRestCatalog;
 pub use unity::PyUnityCatalog;
 
-use pyo3::create_exception;
 use pyo3::prelude::*;
 
-use super::helpers::TOKIO_RUNTIME;
 use super::table::PyTable;
 use crate::core::catalog::{CatalogConfig, CatalogType};
 

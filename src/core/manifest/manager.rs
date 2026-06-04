@@ -3,10 +3,10 @@
 //! ManifestManager: coordinates loading, committing, schema evolution, and partition management.
 //!
 //! Submodules:
-//! - [`load`] — loading manifests, entries, and walking history
-//! - [`commit`] — optimistic concurrency commits, rollback, vacuum, import
-//! - [`schema`] — schema updates, identifier fields, index specs
-//! - [`partition`] — partition spec updates and batch partitioning
+//! - `load` — loading manifests, entries, and walking history
+//! - `commit` — optimistic concurrency commits, rollback, vacuum, import
+//! - `schema` — schema updates, identifier fields, index specs
+//! - `partition` — partition spec updates and batch partitioning
 
 use anyhow::Result;
 use futures::StreamExt;

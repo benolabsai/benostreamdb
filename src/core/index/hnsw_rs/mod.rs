@@ -16,7 +16,7 @@ pub mod libext;
 pub mod prelude;
 
 lazy_static! {
-    static ref LOG: u64 = { init_log() };
+    static ref LOG: u64 = init_log();
 }
 
 // install a logger facility

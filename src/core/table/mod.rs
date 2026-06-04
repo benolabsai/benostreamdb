@@ -2124,6 +2124,7 @@ impl Table {
     }
 
     /// Check if any keys in the batch already exist in the table (Primary Key Enforcement)
+    #[allow(dead_code)]
     async fn check_primary_key_uniqueness_async(
         &self,
         batch: &RecordBatch,
@@ -3150,6 +3151,7 @@ impl Table {
         Ok(result)
     }
 
+    #[allow(dead_code)]
     fn get_vector_column_for_shuffling(&self, batch: &RecordBatch) -> Option<String> {
         // Use first index column if it's a vector
         let index_cols = self.indexing.index_columns.read();
@@ -3176,6 +3178,7 @@ impl Table {
             .map(|f| f.name().clone())
     }
 
+    #[allow(dead_code)]
     async fn shuffle_batch_by_centroids(
         &self,
         batch: &RecordBatch,
