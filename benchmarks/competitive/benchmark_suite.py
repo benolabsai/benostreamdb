@@ -167,7 +167,8 @@ class CompetitiveBenchmark:
             except Exception as e:
                 print(f"  (Device selection failed: {e}. Falling back.)")
 
-            table.add_index_columns(["embedding"])
+            # Remove legacy add_index_columns - we explicitly want to measure raw ingest
+            # without triggering background HNSW builds, matching LanceDB's behavior.
             
             # Add embedding column
             metadata['embedding'] = list(vectors)
@@ -213,6 +214,9 @@ class CompetitiveBenchmark:
         with tempfile.TemporaryDirectory() as tmpdir:
             uri = f"file://{tmpdir}/test_table"
             table = hdb.Table(uri)
+            
+            # Explicitly configure vector index since index_all=False by default now
+            table.add_index("embedding", "hnsw")
             
             metadata['embedding'] = list(vectors)
             table.write_pandas(metadata)
@@ -328,6 +332,9 @@ class CompetitiveBenchmark:
         with tempfile.TemporaryDirectory() as tmpdir:
             uri = f"file://{tmpdir}/test_table"
             table = hdb.Table(uri)
+            
+            # Explicitly configure vector index
+            table.add_index("embedding", "hnsw")
             
             metadata['embedding'] = list(vectors)
             table.write_pandas(metadata)
