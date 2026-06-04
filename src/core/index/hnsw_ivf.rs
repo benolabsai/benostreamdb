@@ -345,6 +345,7 @@ impl HnswIvfIndex {
 
     /// Search for k nearest neighbors
     pub fn search(&self, query: &VectorValue, k: usize, n_probe: usize, filter: Option<&roaring::RoaringBitmap>) -> Result<Vec<(usize, f32)>> {
+        let t_start = std::time::Instant::now();
         let query_f32 = match query {
             VectorValue::Float32(v) => v,
             VectorValue::Float16(v) => v,
@@ -380,10 +381,14 @@ impl HnswIvfIndex {
         cluster_distances.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         
         let clusters_to_search: Vec<usize> = cluster_distances.iter().take(n_probe).map(|(i, _)| *i).collect();
+        let t_coarse = t_start.elapsed();
+        let t_fine_start = std::time::Instant::now();
 
-        // Step 2: Search HNSW graphs in selected clusters in parallel (fine search)
+        // Step 2: Search HNSW graphs in selected clusters sequentially (fine search)
+        // Avoid into_par_iter() here to prevent Rayon thread pool contention,
+        // since queries are already parallelized across segments in query.rs
         let mut candidates: Vec<(usize, f32)> = clusters_to_search
-            .into_par_iter()
+            .into_iter()
             .flat_map(|cluster_id| {
                 if let Some((hnsw, row_id_mapping)) = self.cluster_graphs.get(&cluster_id) {
                     let cluster_k = if filter.is_some() { k * 4 } else { k * 2 };
@@ -428,9 +433,11 @@ impl HnswIvfIndex {
             .collect();
 
         // Step 3: Merge and return top-k
-        candidates.par_sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
         candidates.dedup_by_key(|x| x.0);  // Remove duplicates
         candidates.truncate(k);
+        let t_fine = t_fine_start.elapsed();
+        println!("Search Profile -> Coarse: {:?}, Fine: {:?}", t_coarse, t_fine);
         Ok(candidates)
     }
 

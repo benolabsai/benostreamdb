@@ -14,8 +14,15 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     let uri = format!("file://{}", path);
 
     // 1. Setup Table
-    let table = Table::new_async(uri.clone()).await?;
+    let mut table = Table::new_async(uri.clone()).await?;
     table.set_autocommit(false);
+    table.add_index("embedding".to_string(), hyperstreamdb::core::manifest::IndexAlgorithm::Hnsw {
+        metric: "l2".to_string(),
+        complexity: 16,
+        quality: 200,
+        build_device: None,
+        search_device: None,
+    }).await?;
     
     // Schema with Vector for Indexing
     let schema = Arc::new(Schema::new(vec![
@@ -59,7 +66,14 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     // Drop the table and reopen
     drop(table);
     
-    let table2 = Table::new_async(uri.clone()).await?;
+    let mut table2 = Table::new_async(uri.clone()).await?;
+    table2.add_index("embedding".to_string(), hyperstreamdb::core::manifest::IndexAlgorithm::Hnsw {
+        metric: "l2".to_string(),
+        complexity: 16,
+        quality: 200,
+        build_device: None,
+        search_device: None,
+    }).await?;
     
     // Check if data was recovered from WAL
     assert_eq!(table2.write_buffer_row_count(), 2, "Should have recovered 2 rows from WAL");

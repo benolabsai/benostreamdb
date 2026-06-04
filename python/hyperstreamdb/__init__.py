@@ -544,15 +544,15 @@ class Table:
         """
         return self.to_arrow(filter, vector_filter, columns, device=device, **kwargs)
 
-    def vector_search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, device: Optional[Any] = None, **kwargs):
+    def vector_search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """Backward compatibility alias for to_pandas with vector filter."""
         vf = {"column": column, "query": query, "k": k}
         vf.update(kwargs)
-        return self.to_pandas(filter=filter, vector_filter=vf, device=device)
+        return self.to_pandas(filter=filter, vector_filter=vf, columns=columns, device=device)
 
-    def search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, device: Optional[Any] = None, **kwargs):
+    def search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """Alias for vector_search."""
-        return self.vector_search(column, query, k, filter, device, **kwargs)
+        return self.vector_search(column, query, k, filter, columns, device, **kwargs)
 
     def filter(self, expr: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, **kwargs) -> 'Query':
         """

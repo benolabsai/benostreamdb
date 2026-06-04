@@ -229,7 +229,7 @@ class CompetitiveBenchmark:
             
             # Warm-up query
             try:
-                _ = table.search('embedding', query_vector.tolist(), k=k)
+                _ = table.search('embedding', query_vector.tolist(), k=k, columns=["id"])
             except Exception as e:
                 print(f"  ⚠ Warm-up failed: {e}")
                 print(f"  ⚠ Skipping vector search benchmark (index not available)")
@@ -240,7 +240,7 @@ class CompetitiveBenchmark:
             for _ in range(10):
                 start = time.time()
                 try:
-                    results = table.search('embedding', query_vector.tolist(), k=k)
+                    results = table.search('embedding', query_vector.tolist(), k=k, columns=["id"])
                     latencies.append((time.time() - start) * 1000)
                 except Exception as e:
                     print(f"  ⚠ Search failed: {e}")
@@ -286,7 +286,7 @@ class CompetitiveBenchmark:
             
             # Warm-up query
             try:
-                _ = table.search('embedding', query_vector.tolist(), k=k)
+                _ = table.search('embedding', query_vector.tolist(), k=k, columns=["id"])
             except Exception as e:
                 print(f"  ⚠ Warm-up failed: {e}")
                 print(f"  ⚠ Skipping PQ search benchmark (index not available)")
@@ -297,7 +297,7 @@ class CompetitiveBenchmark:
             for _ in range(10):
                 start = time.time()
                 try:
-                    results = table.search('embedding', query_vector.tolist(), k=k)
+                    results = table.search('embedding', query_vector.tolist(), k=k, columns=["id"])
                     latencies.append((time.time() - start) * 1000)
                 except Exception as e:
                     print(f"  ⚠ Search failed: {e}")
@@ -529,7 +529,7 @@ class CompetitiveBenchmark:
             latencies = []
             for _ in range(10):
                 start = time.time()
-                results = table.search(query_vector).limit(k).to_pandas()
+                results = table.search(query_vector).limit(k).select(["id"]).to_pandas()
                 latencies.append((time.time() - start) * 1000)
             
             avg_latency = np.mean(latencies)

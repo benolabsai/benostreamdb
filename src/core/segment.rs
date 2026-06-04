@@ -279,7 +279,7 @@ impl HybridSegmentWriter {
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .set_dictionary_enabled(false)
             .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
-            .set_data_page_size_limit(1024 * 1024); // 1MB pages for better random access
+            .set_data_page_size_limit(8192); // 8KB pages for highly granular random access
         
         // Enable Bloom Filters for Primary Keys if defined
         for pk in &self.primary_key {

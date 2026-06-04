@@ -86,7 +86,8 @@ async fn test_wal_truncate_after_commit() -> Result<()> {
     
     // 3. Write more, DON'T commit, then check WAL recovery again
     {
-         let table = Table::new_async(uri.clone()).await?;
+         let mut table = Table::new_async(uri.clone()).await?;
+         table.set_autocommit(false);
          let batch = create_simple_batch(11, 5).await;
          table.write_async(vec![batch]).await?;
     }
