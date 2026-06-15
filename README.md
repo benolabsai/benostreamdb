@@ -402,7 +402,7 @@ python tests/integration/test_nyc_taxi.py
 
   **Performance Targets:**
   - **Scalar Ingest**: >10K rows/sec ✅
-  - **Vector Ingest (768D)**: >4,000 rows/sec ✅ (April 2026)
+  - **Vector Ingest (768D)**: >22,000 rows/sec ✅ (v0.5.0)
   - **Query (indexed)**: <100ms p99 ⏱️
   - **Vector search**: <50ms for k=10 on 10M vectors ⏱️
   - **Compaction**: <5min for 10GB ⏱️

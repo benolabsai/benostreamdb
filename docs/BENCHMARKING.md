@@ -90,17 +90,19 @@ Following a major optimization of the HNSW-IVF indexing pipeline, HyperStreamDB 
 4. **Runtime SIMD Dispatch:** Automatic AVX2/FMA detection at runtime ensures peak performance even on generic binary builds.
 
 ### Throughput Comparison (768-Dimensional Vectors)
-Measurements taken on a 32-core Linux environment with 10k row batches.
+Measurements taken on Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz benchmarking environment.
 
-| Feature | Baseline (Jan 2026) | **Optimized (April 2026)** | Speedup |
+| Feature | Baseline (Jan 2026) | **Optimized (v0.5.0)** | Speedup |
 | :--- | :---: | :---: | :---: |
-| **Ingestion Throughput** | 360 rows/sec | **4,013 rows/sec** | **11.1x** |
-| **Indexing Latency (10k rows)** | 27.8s | **1.8s** | **15.4x** |
+| **Ingestion Throughput (10k)** | 360 rows/sec | **6,834 rows/sec** | **19.0x** |
+| **Ingestion Throughput (100k)** | - | **22,999 rows/sec** | **-** |
+| **Indexing Latency (10k rows)** | 27.8s | **1.46s** | **19.0x** |
 | **Write Availability** | Blocking | **Instant (Async)** | ∞ |
 
 ### Competitive Landscape: HyperStreamDB vs LanceDB
 While LanceDB is a highly mature engine, HyperStreamDB's native Iceberg integration and parallel HNSW construction provide comparable performance for local-first vector workloads.
 
-- **HyperStreamDB (768D)**: **4,013 rows/sec** (on multi-core CPU)
+- **HyperStreamDB (768D, 100k)**: **22,999 rows/sec** (on Intel i5 CPU)
+- **LanceDB (768D, 100k)**: **45,427 rows/sec** (on Intel i5 CPU)
 
-**Last Updated**: April 3, 2026
+**Last Updated**: June 2026
