@@ -418,7 +418,7 @@ python tests/integration/test_nyc_taxi.py
   - **Memory**: 128GB Unified Memory
   - **OS**: macOS (Arm64)
   - **Optimizations**: `target-cpu=native` (NEON SIMD)
-  - **Results (100K vectors, 768D)**:
+  - **Results (100K vectors, 768D) [OUT OF DATE - Pre-v0.5.0]**:
     - **Vector Ingest**: 16,707 rows/sec (CPU) ✅
     - **Vector Search (k=10)**: 819ms (CPU / NEON) ✅
     - **Vector Search (k=10)**: 860ms (MPS GPU) ⏱️
