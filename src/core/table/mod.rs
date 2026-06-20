@@ -1189,8 +1189,25 @@ impl Table {
         tracing::info!("Importing Iceberg Snapshot {}...", snapshot_id);
 
         // Load Manifest List
-        let ml_path_str = snapshot.manifest_list.trim_start_matches("file://");
-        let ml_path = object_store::path::Path::from(ml_path_str);
+        let ml_path_str_clean = if let Ok(url) = url::Url::parse(&snapshot.manifest_list) {
+            let path = url.path();
+            if let Ok(loc_url) = url::Url::parse(&meta.location) {
+                let loc_path = format!("{}/metadata/", loc_url.path().trim_end_matches('/'));
+                if path.starts_with(&loc_path) {
+                    path.strip_prefix(&loc_path).unwrap().to_string()
+                } else {
+                    path.trim_start_matches('/').to_string()
+                }
+            } else {
+                path.trim_start_matches('/').to_string()
+            }
+        } else {
+            snapshot
+                .manifest_list
+                .trim_start_matches("file://")
+                .to_string()
+        };
+        let ml_path = object_store::path::Path::from(ml_path_str_clean.as_str());
         // If ml_path_str is absolute and store is relative, we might need more effort.
         // But for local files, object_store handles absolute paths if rooted correctly.
         // However, a better way is to make it relative to the store.
@@ -1203,8 +1220,25 @@ impl Table {
 
         for ml_entry in manifest_list {
             // Load Manifest
-            let m_path_str = ml_entry.manifest_path.trim_start_matches("file://");
-            let m_path = object_store::path::Path::from(m_path_str);
+            let m_path_str_clean = if let Ok(url) = url::Url::parse(&ml_entry.manifest_path) {
+                let path = url.path();
+                if let Ok(loc_url) = url::Url::parse(&meta.location) {
+                    let loc_path = format!("{}/metadata/", loc_url.path().trim_end_matches('/'));
+                    if path.starts_with(&loc_path) {
+                        path.strip_prefix(&loc_path).unwrap().to_string()
+                    } else {
+                        path.trim_start_matches('/').to_string()
+                    }
+                } else {
+                    path.trim_start_matches('/').to_string()
+                }
+            } else {
+                ml_entry
+                    .manifest_path
+                    .trim_start_matches("file://")
+                    .to_string()
+            };
+            let m_path = object_store::path::Path::from(m_path_str_clean.as_str());
             let ret = iceberg_store.get(&m_path).await?;
             let bytes = ret.bytes().await?;
             let manifest = crate::core::iceberg::read_manifest(&bytes[..])?;

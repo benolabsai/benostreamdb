@@ -236,7 +236,7 @@ class Table:
     def register_external(cls, uri: str, iceberg_metadata_uri: str, device: Optional[Any] = None) -> 'Table':
         """Register an existing Iceberg table."""
         uri = _resolve_uri(uri)
-        return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri, device=device))
+        return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri), device=device)
 
     def define_embedding(self, column: str, function: Union[str, EmbeddingFunction], vector_column: Optional[str] = None):
         """

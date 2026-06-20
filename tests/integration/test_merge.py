@@ -23,6 +23,7 @@ def test_merge_pruning():
     # We must explicitly cast to int32 because our Rust writer expects Int32 for the index implementation
     df_a["id"] = df_a["id"].astype("int32")
     table.write_pandas(df_a)
+    table.commit()
     print("Written Segment A")
 
     # 2. Write Segment B (IDs 10-19)
@@ -32,6 +33,7 @@ def test_merge_pruning():
     })
     df_b["id"] = df_b["id"].astype("int32")
     table.write_pandas(df_b)
+    table.commit()
     print("Written Segment B")
 
     # 3. Write Segment C (IDs 20-29)
@@ -41,6 +43,7 @@ def test_merge_pruning():
     })
     df_c["id"] = df_c["id"].astype("int32")
     table.write_pandas(df_c)
+    table.commit()
     print("Written Segment C")
     
     # Verify files exist

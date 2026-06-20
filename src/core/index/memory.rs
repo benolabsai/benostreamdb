@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::{Context, Result};
-use arrow::array::{Array, FixedSizeListArray, Float32Array, ListArray};
+use arrow::array::{Array, FixedSizeListArray, Float32Array, LargeListArray, ListArray};
 use arrow::record_batch::RecordBatch;
 // use std::sync::Arc; // Unused
 
@@ -127,19 +127,33 @@ impl InMemoryVectorIndex {
             .column_by_name(column_name)
             .context(format!("Column {} not found", column_name))?;
 
+        tracing::trace!(
+            "insert_batch: column_name={}, datatype={:?}, len={}",
+            column_name,
+            col.data_type(),
+            col.len()
+        );
+
         if let Some(fsl) = col.as_any().downcast_ref::<FixedSizeListArray>() {
-            let values = fsl
-                .values()
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .context("Expected Float32Array values in FixedSizeListArray")?;
-
-            // Respect slicing: only copy the range of the value array that belongs to this FSL slice
-            let start_offset = fsl.offset() * self.dim;
-            let len = fsl.len() * self.dim;
-            let slice = &values.values()[start_offset..start_offset + len];
-
-            self.vectors.extend_from_slice(slice);
+            let values = fsl.values();
+            if let Some(f32_values) = values.as_any().downcast_ref::<Float32Array>() {
+                // Respect slicing: only copy the range of the value array that belongs to this FSL slice
+                let start_offset = fsl.offset() * self.dim;
+                let len = fsl.len() * self.dim;
+                let slice = &f32_values.values()[start_offset..start_offset + len];
+                self.vectors.extend_from_slice(slice);
+            } else if let Some(f64_values) =
+                values.as_any().downcast_ref::<arrow::array::Float64Array>()
+            {
+                let start_offset = fsl.offset() * self.dim;
+                let len = fsl.len() * self.dim;
+                let slice = &f64_values.values()[start_offset..start_offset + len];
+                self.vectors.extend(slice.iter().map(|&x| x as f32));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "Expected Float32Array or Float64Array values in FixedSizeListArray"
+                ));
+            }
             self.count += fsl.len();
         } else if let Some(list) = col.as_any().downcast_ref::<ListArray>() {
             for i in 0..list.len() {
@@ -151,12 +165,76 @@ impl InMemoryVectorIndex {
                         if vector.len() == self.dim {
                             self.vectors.extend_from_slice(vector.values());
                         } else {
+                            tracing::warn!(
+                                "insert_batch: vector len {} != dim {}",
+                                vector.len(),
+                                self.dim
+                            );
                             self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                         }
+                    } else if let Some(vector) = vector_array
+                        .as_any()
+                        .downcast_ref::<arrow::array::Float64Array>()
+                    {
+                        if vector.len() == self.dim {
+                            self.vectors
+                                .extend(vector.values().iter().map(|&x| x as f32));
+                        } else {
+                            tracing::warn!(
+                                "insert_batch: vector len {} != dim {}",
+                                vector.len(),
+                                self.dim
+                            );
+                            self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                        }
+                    } else {
+                        tracing::warn!("insert_batch: failed to downcast vector_array to Float32Array/Float64Array, type={:?}", vector_array.data_type());
+                        self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
                     }
                 }
             }
             self.count += list.len();
+        } else if let Some(list) = col.as_any().downcast_ref::<LargeListArray>() {
+            for i in 0..list.len() {
+                if list.is_null(i) {
+                    self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                } else {
+                    let vector_array = list.value(i);
+                    if let Some(vector) = vector_array.as_any().downcast_ref::<Float32Array>() {
+                        if vector.len() == self.dim {
+                            self.vectors.extend_from_slice(vector.values());
+                        } else {
+                            tracing::warn!(
+                                "insert_batch: vector len {} != dim {}",
+                                vector.len(),
+                                self.dim
+                            );
+                            self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                        }
+                    } else if let Some(vector) = vector_array
+                        .as_any()
+                        .downcast_ref::<arrow::array::Float64Array>()
+                    {
+                        if vector.len() == self.dim {
+                            self.vectors
+                                .extend(vector.values().iter().map(|&x| x as f32));
+                        } else {
+                            tracing::warn!(
+                                "insert_batch: vector len {} != dim {}",
+                                vector.len(),
+                                self.dim
+                            );
+                            self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                        }
+                    } else {
+                        tracing::warn!("insert_batch: failed to downcast vector_array to Float32Array/Float64Array, type={:?}", vector_array.data_type());
+                        self.vectors.extend(std::iter::repeat_n(0.0, self.dim));
+                    }
+                }
+            }
+            self.count += list.len();
+        } else {
+            tracing::warn!("insert_batch: column did not match any supported list array type!");
         }
 
         Ok(())

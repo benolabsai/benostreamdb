@@ -165,7 +165,8 @@ impl ManifestManager {
 
     /// Load a manifest list from a specific path
     pub async fn load_manifest_list(&self, path_str: &str) -> Result<ManifestList> {
-        let path = Path::from(path_str);
+        let filename = path_str.split('/').next_back().unwrap_or(path_str);
+        let path = self.manifest_dir.child(filename);
         let cache_key = format!("{}/{}", self.root_uri, path);
 
         if let Some(list) = crate::core::cache::MANIFEST_LIST_CACHE
@@ -237,7 +238,12 @@ impl ManifestManager {
                 .cloned();
 
             for entry in list.manifest_files {
-                let entry_path = entry.manifest_path.clone();
+                let filename = entry
+                    .manifest_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&entry.manifest_path);
+                let entry_path = self.manifest_dir.child(filename).to_string();
                 let table_spec = manifest.partition_spec.clone();
                 let table_schema = schema.clone();
                 let store = self.store.clone();

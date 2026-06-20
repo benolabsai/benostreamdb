@@ -464,12 +464,13 @@ impl Table {
                             .iter()
                             .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }));
                         if matches_col {
-                            println!(
+                            tracing::debug!(
                                 "Smart Trigger Check: Column '{}' has BM25 index: {}",
-                                f.name, has_index
+                                f.name,
+                                has_index
                             );
                             if !has_index {
-                                println!("  Found indexes: {:?}", f.indexes);
+                                tracing::debug!("  Found indexes: {:?}", f.indexes);
                             }
                         }
                         matches_col && has_index
@@ -618,8 +619,20 @@ impl Table {
                             result_rows.iter().collect::<Vec<&RecordBatch>>(),
                         )?;
 
+                        let projected_batch = if let Some(cols) = columns {
+                            let indices: Vec<usize> = cols
+                                .iter()
+                                .filter_map(|name| mem_batch.schema().index_of(name).ok())
+                                .collect();
+                            mem_batch.project(&indices).unwrap_or(mem_batch.clone())
+                        } else {
+                            mem_batch.clone()
+                        };
+
+                        let projected_schema = projected_batch.schema();
+
                         // Append _distance column to match disk search schema
-                        let mut new_fields = schema.fields().to_vec();
+                        let mut new_fields = projected_schema.fields().to_vec();
                         new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
                             "distance",
                             arrow::datatypes::DataType::Float32,
@@ -628,7 +641,7 @@ impl Table {
                         let new_schema =
                             std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
 
-                        let mut new_columns = mem_batch.columns().to_vec();
+                        let mut new_columns = projected_batch.columns().to_vec();
                         let distance_array = arrow::array::Float32Array::from(
                             memory_hits
                                 .iter()
@@ -726,15 +739,37 @@ impl Table {
         {
             let buffer = self.write_buffer.read();
             if !buffer.is_empty() {
+                let table_schema = self.arrow_schema();
+                // Align batches to the full evolved schema first
+                let mut aligned_buffer = Vec::with_capacity(buffer.len());
+                for b in buffer.iter() {
+                    let aligned = if b.schema() != table_schema {
+                        let mut cols = Vec::with_capacity(table_schema.fields().len());
+                        for field in table_schema.fields() {
+                            let col = if let Some(c) = b.column_by_name(field.name()) {
+                                c.clone()
+                            } else {
+                                arrow::array::new_null_array(field.data_type(), b.num_rows())
+                            };
+                            cols.push(col);
+                        }
+                        RecordBatch::try_new(table_schema.clone(), cols)
+                            .unwrap_or_else(|_| b.clone())
+                    } else {
+                        b.clone()
+                    };
+                    aligned_buffer.push(aligned);
+                }
+
                 if let Some(ref e) = expr_arc {
                     let planner = QueryPlanner::new();
-                    for batch in buffer.iter() {
+                    for batch in aligned_buffer.iter() {
                         let batch_to_scan = if let Some(cols) = columns {
                             let indices: Vec<usize> = cols
                                 .iter()
                                 .filter_map(|name| batch.schema().index_of(name).ok())
                                 .collect();
-                            batch.project(&indices).unwrap_or(batch.clone())
+                            batch.project(&indices).unwrap_or_else(|_| batch.clone())
                         } else {
                             batch.clone()
                         };
@@ -746,7 +781,7 @@ impl Table {
                         }
                     }
                 } else {
-                    for batch in buffer.iter() {
+                    for batch in aligned_buffer.iter() {
                         if let Some(cols) = columns {
                             let indices: Vec<usize> = cols
                                 .iter()

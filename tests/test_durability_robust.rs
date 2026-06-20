@@ -26,6 +26,7 @@ async fn test_wal_crash_recovery_uncommitted() -> Result<()> {
 
         // write_async appends to WAL and memory buffer
         table.write_async(vec![batch]).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
         // We drop the table here. Memory buffer is lost, but WAL should persist.
         // In a real crash, the process would terminate.
@@ -86,6 +87,7 @@ async fn test_wal_truncate_after_commit() -> Result<()> {
         table.set_autocommit(false);
         let batch = create_simple_batch(11, 5).await;
         table.write_async(vec![batch]).await?;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     {

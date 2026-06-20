@@ -34,6 +34,7 @@ mod tests {
             ],
         )?;
         table.write_async(vec![batch]).await?;
+        table.commit_async().await?;
 
         // 3. Delete Rows (ID = 2 and ID = 4)
         // This should generate a Position Delete File

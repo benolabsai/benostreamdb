@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use anyhow::{Context, Result};
+use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
@@ -384,7 +385,23 @@ impl Table {
         let memory_index = self.indexing.memory_index.clone();
         // Only use explicitly configured index columns — do NOT auto-detect by column name.
         // Auto-detecting "embedding" caused silent 15s HNSW builds on every write.
-        let target_col = self.indexing.index_columns.read().first().cloned();
+        let mut target_col = self.indexing.index_columns.read().first().cloned();
+        if target_col.is_none() && self.indexing.index_all {
+            if let Some(first) = batches.first() {
+                target_col = first
+                    .schema()
+                    .fields()
+                    .iter()
+                    .find(|f| {
+                        matches!(
+                            f.data_type(),
+                            arrow::datatypes::DataType::List(_)
+                                | arrow::datatypes::DataType::FixedSizeList(_, _)
+                        )
+                    })
+                    .map(|f| f.name().clone());
+            }
+        }
 
         // 0. Primary Key Uniqueness Check (if defined)
         let primary_keys = self.get_primary_key();
@@ -444,6 +461,19 @@ impl Table {
                                 {
                                     let dim = fsl.value_length() as usize;
                                     *idx_lock = Some(InMemoryVectorIndex::new(dim));
+                                } else if let Some(list) =
+                                    col.as_any().downcast_ref::<arrow::array::ListArray>()
+                                {
+                                    let mut dim = 0;
+                                    for i in 0..list.len() {
+                                        if !list.is_null(i) {
+                                            dim = list.value(i).len();
+                                            break;
+                                        }
+                                    }
+                                    if dim > 0 {
+                                        *idx_lock = Some(InMemoryVectorIndex::new(dim));
+                                    }
                                 }
                                 // Time32 Not Supported
                                 /*
