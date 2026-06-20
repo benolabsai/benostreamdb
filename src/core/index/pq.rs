@@ -283,7 +283,7 @@ unsafe fn pq_sdc_avx2(a: &[u8], b: &[u8], lut: &[f32], m: usize) -> f32 {
         3 * 65536,
         2 * 65536,
         65536,
-        0 * 65536,
+        0,
     );
 
     let mut i = 0;

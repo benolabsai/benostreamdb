@@ -84,7 +84,7 @@ pub struct Neighbour_api_parsearch_answer {
 macro_rules! generate_insert(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *mut $api_name, len:usize, data : *const $type_val, id : usize) {
+        pub unsafe extern "C" fn $function_name(hnsw_api : *mut $api_name, len:usize, data : *const $type_val, id : usize) {
             log::trace!("entering insert, type {:?} vec len is {:?}, id : {:?} ", stringify!($type_val), len, id);
             let data_v : Vec<$type_val>;
             unsafe {
@@ -100,7 +100,7 @@ macro_rules! generate_insert(
 macro_rules! generate_parallel_insert(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *mut $api_name, nb_vec: usize, vec_len : usize,
+        pub unsafe extern "C" fn $function_name(hnsw_api : *mut $api_name, nb_vec: usize, vec_len : usize,
                         datas : *mut *const $type_val, ids : *const usize) {
             log::trace!("entering parallel_insert type {:?}  , vec len is {:?}, nb_vec : {:?}", stringify!($type_val), vec_len, nb_vec);
             let data_ids : Vec<usize>;
@@ -131,7 +131,7 @@ macro_rules! generate_parallel_insert(
 macro_rules! generate_search_neighbours(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *const $api_name, len:usize, data : *const $type_val,
+        pub unsafe extern "C" fn $function_name(hnsw_api : *const $api_name, len:usize, data : *const $type_val,
                                 knbn : usize, ef_search : usize) ->  *const Neighbourhood_api {
             log::trace!("entering search_neighbours type {:?}, vec len is {:?}, id : {:?} ef_search {:?}", stringify!($type_val), len, knbn, ef_search);
             let data_v : Vec<$type_val>;
@@ -158,7 +158,7 @@ macro_rules! generate_search_neighbours(
 macro_rules! generate_parallel_search_neighbours(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *const $api_name, nb_vec : usize, vec_len :i64,
+        pub unsafe extern "C" fn $function_name(hnsw_api : *const $api_name, nb_vec : usize, vec_len :i64,
                             data : *mut *const $type_val, knbn : usize, ef_search : usize) ->  *const Vec_api<Neighbourhood_api> {
             log::trace!("receiving parallel search request for type: {:?} with {:?} vectors", stringify!($type_val), nb_vec);
             let neighbours : Vec<Vec<Neighbour> >;
@@ -198,7 +198,7 @@ macro_rules! generate_parallel_search_neighbours(
 macro_rules! generate_file_dump(
     ($function_name:ident, $api_name:ty, $type_val:ty) => (
     #[no_mangle]
-        pub extern "C" fn $function_name(hnsw_api : *const $api_name, namelen : usize, filename :*const u8) -> i64 {
+        pub unsafe extern "C" fn $function_name(hnsw_api : *const $api_name, namelen : usize, filename :*const u8) -> i64 {
             let slice = unsafe { std::slice::from_raw_parts(filename, namelen) } ;
             let fstring  = String::from_utf8_lossy(slice).into_owned();
             let res =  unsafe { (*hnsw_api).opaque.file_dump(&fstring) } ;
@@ -211,7 +211,7 @@ macro_rules! generate_file_dump(
 macro_rules! generate_loadhnsw(
     ($function_name:ident, $api_name:ty, $type_val:ty, $type_dist : ty) => (
         #[no_mangle]
-        pub extern "C" fn $function_name(flen : usize, name : *const u8)  -> *const $api_name {
+        pub unsafe extern "C" fn $function_name(flen : usize, name : *const u8)  -> *const $api_name {
             let  slice = unsafe { std::slice::from_raw_parts(name, flen)} ;
             let filename = String::from_utf8_lossy(slice).into_owned();
             let buffers = make_readers(&filename);
@@ -377,7 +377,7 @@ generate_loadhnsw!(
 //===================================== Initialization functions =====================================
 
 #[no_mangle]
-pub extern "C" fn init_hnsw_f32(
+pub unsafe extern "C" fn init_hnsw_f32(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -423,7 +423,7 @@ pub extern "C" fn init_hnsw_f32(
 }
 
 #[no_mangle]
-pub extern "C" fn new_hnsw_f32(
+pub unsafe extern "C" fn new_hnsw_f32(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -522,7 +522,7 @@ generate_file_dump!(file_dump_f32, HnswApif32, f32);
 
 // i32
 #[no_mangle]
-pub extern "C" fn init_hnsw_i32(
+pub unsafe extern "C" fn init_hnsw_i32(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -562,7 +562,7 @@ generate_file_dump!(file_dump_i32, HnswApii32, i32);
 
 // u32
 #[no_mangle]
-pub extern "C" fn init_hnsw_u32(
+pub unsafe extern "C" fn init_hnsw_u32(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -605,7 +605,7 @@ generate_file_dump!(file_dump_u32, HnswApiu32, u32);
 
 // u16
 #[no_mangle]
-pub extern "C" fn init_hnsw_u16(
+pub unsafe extern "C" fn init_hnsw_u16(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -634,7 +634,7 @@ pub extern "C" fn init_hnsw_u16(
 }
 
 #[no_mangle]
-pub extern "C" fn new_hnsw_u16(
+pub unsafe extern "C" fn new_hnsw_u16(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -700,7 +700,7 @@ generate_file_dump!(file_dump_u16, HnswApiu16, u16);
 
 // u8
 #[no_mangle]
-pub extern "C" fn init_hnsw_u8(
+pub unsafe extern "C" fn init_hnsw_u8(
     max_nb_conn: usize,
     ef_const: usize,
     namelen: usize,
@@ -781,7 +781,10 @@ impl DescriptionFFI {
 }
 
 #[no_mangle]
-pub extern "C" fn load_hnsw_description(flen: usize, name: *const u8) -> *const DescriptionFFI {
+pub unsafe extern "C" fn load_hnsw_description(
+    flen: usize,
+    name: *const u8,
+) -> *const DescriptionFFI {
     let slice = unsafe { std::slice::from_raw_parts(name, flen) };
     let filename = String::from_utf8_lossy(slice).into_owned();
     let fpath = PathBuf::from(filename);
