@@ -34,6 +34,23 @@ impl PyTable {
         Ok(PyTable { table, device })
     }
 
+    pub fn load_from_catalog(
+        uri: &str,
+        catalog: Arc<dyn crate::core::catalog::Catalog>,
+        namespace: &str,
+        table_name: &str,
+        device: Option<Py<PyDevice>>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut table = TOKIO_RUNTIME.block_on(
+            Table::builder(uri.to_string())
+                .with_runtime(TOKIO_RUNTIME.clone())
+                .with_catalog(catalog, namespace, table_name)
+                .build_async(),
+        )?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable { table, device })
+    }
+
     pub fn create_internal(
         uri: &str,
         schema: arrow::datatypes::SchemaRef,

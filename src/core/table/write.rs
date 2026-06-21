@@ -597,7 +597,7 @@ impl Table {
         std::fs::create_dir_all(base_path)?;
 
         let mut all_new_entries = Vec::new();
-        let mut all_generated_files: Vec<String> = Vec::new();
+        let mut files_to_upload: Vec<(String, String)> = Vec::new();
         let index_cols = self.indexing.index_columns.read().clone();
         let index_all_flag = self.indexing.index_all;
 
@@ -680,7 +680,19 @@ impl Table {
                 }
             }
 
-            all_generated_files.extend(generated_files);
+            for local_path in generated_files {
+                let filename = local_path
+                    .split('/')
+                    .last()
+                    .unwrap_or(&local_path)
+                    .to_string();
+                let remote_path = if hive_path.is_empty() {
+                    filename
+                } else {
+                    format!("{}/{}", hive_path, filename)
+                };
+                files_to_upload.push((local_path, remote_path));
+            }
             all_new_entries.push(entry.clone());
 
             // 2. Queue index building asynchronously (if needed)
@@ -740,6 +752,7 @@ impl Table {
                         // In commit path, we typically have ONE batch per segment write
                         index_writer.build_indexes(&batch_for_indexing, 0)?;
                         index_writer.finish_indexing().await?;
+                        index_writer.upload_to_store().await?;
                         let files = index_writer.get_generated_files();
                         let updated_entry_info = index_writer.to_manifest_entry();
                         Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
@@ -949,35 +962,33 @@ impl Table {
             }
         }
 
-        // 3. Upload data files asynchronously if remote
+        // 3. Upload data files synchronously if remote
         if self.uri.contains("://") && !self.uri.starts_with("file://") {
             let store_clone = self.store.clone();
-            let files_to_upload = all_generated_files;
-            let handle = tokio::spawn(async move {
-                for file_path in files_to_upload {
-                    let local_path = std::path::Path::new(file_path.as_str());
-                    if let Ok(mut file) = tokio::fs::File::open(&local_path).await {
-                        let remote_path = object_store::path::Path::from(file_path.as_str());
-                        // Stream file to object store directly (Fixes OOM issue)
-                        if let Ok(mut upload) = store_clone.put_multipart(&remote_path).await {
-                            use tokio::io::AsyncReadExt;
-                            let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
-                            loop {
-                                if let Ok(n) = file.read(&mut buf).await {
-                                    if n == 0 {
-                                        break;
-                                    }
-                                    let _ = upload.put_part(buf[..n].to_vec().into()).await;
-                                } else {
+            for (local_path_str, remote_path_str) in files_to_upload {
+                let local_path = std::path::Path::new(&local_path_str);
+                if let Ok(mut file) = tokio::fs::File::open(&local_path).await {
+                    let remote_path = object_store::path::Path::from(remote_path_str);
+                    // Stream file to object store directly (Fixes OOM issue)
+                    if let Ok(mut upload) = store_clone.put_multipart(&remote_path).await {
+                        use tokio::io::AsyncReadExt;
+                        let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
+                        loop {
+                            if let Ok(n) = file.read(&mut buf).await {
+                                if n == 0 {
                                     break;
                                 }
+                                let _ = upload.put_part(buf[..n].to_vec().into()).await;
+                            } else {
+                                break;
                             }
-                            let _ = upload.complete().await;
                         }
+                        let _ = upload.complete().await;
                     }
+                    // Cleanup local staging file
+                    let _ = tokio::fs::remove_file(&local_path).await;
                 }
-            });
-            self.background_tasks.lock().await.push(handle);
+            }
         }
 
         // 5. Truncate WAL (Durability Checkpoint)

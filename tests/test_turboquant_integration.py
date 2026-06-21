@@ -32,12 +32,16 @@ def test_turboquant_indexing(table):
         for i in range(n)
     ]
     table.insert(data)
+    table.commit()
     
     # 2. Add HNSW_TQ8 index explicitly using new intuitive names
     table.add_index("embedding", {"type": "hnsw_tq8", "complexity": 16, "quality": 200})
     
     # 3. Add HNSW_TQ4 index explicitly
     table.add_index("embedding", {"type": "hnsw_tq4", "complexity": 16})
+    
+    # Wait for the background index build tasks to complete
+    table.wait_for_background_tasks()
     
     # 2. Search using TQ8 (Default)
     query = embeddings[0].tolist()

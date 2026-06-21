@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -189,6 +189,9 @@ harness = false
 [[bench]]
 name = "bench_table"
 harness = false
+
+[profile.dev]
+debug = 0
 
 # ─── Release profiles ──────────────────────────────────────────────────────
 

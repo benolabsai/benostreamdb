@@ -208,6 +208,7 @@ async fn test_recovered_evolved_wal() -> anyhow::Result<()> {
         )?;
         table.write_async(vec![batch1]).await?;
         assert_eq!(table.write_buffer_row_count(), 2);
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
     // Evolved Write (Schema B: id, name)
@@ -231,6 +232,7 @@ async fn test_recovered_evolved_wal() -> anyhow::Result<()> {
         table.write_async(vec![batch2]).await?;
         assert_eq!(table.write_buffer_row_count(), 4);
         assert_eq!(table.arrow_schema().fields().len(), 2);
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     }
 
     // Reopen and Recover everything

@@ -47,15 +47,14 @@ impl PyNessieCatalog {
             .block_on(async { self.client.load_table(&branch, &table_name).await })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
-        // Return a Table instance pointing to the location
-        // Note: Table::new expects the root path (uri).
-        // If metadata.location is full path to `metadata.json`, we might need to adjust.
-        // Assuming metadata.location is the table root for now, or we need to parse it.
-        // Standard Iceberg: metadata_location is path to specific json file.
-        // HyperStream Table::new takes a root URI.
-        // We'll pass the location directly.
-        PyTable::new_internal(&metadata.location, None)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+        PyTable::load_from_catalog(
+            &metadata.location,
+            self.client.clone(),
+            &branch,
+            &table_name,
+            None,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
     fn create_branch(&self, branch_name: String, source_ref: Option<String>) -> PyResult<()> {

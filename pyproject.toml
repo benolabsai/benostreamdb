@@ -40,6 +40,7 @@ dev = [
     "pytest-asyncio>=0.21",
     "maturin>=1.7",
     "boto3>=1.26.0",
+    "pyiceberg[sql-sqlite]>=0.6.0",
 ]
 # Hardware acceleration extras
 all_gpu = []

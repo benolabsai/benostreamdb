@@ -34,6 +34,7 @@ impl HiveMetastoreClient {
             .ok_or_else(|| anyhow!("Could not resolve Hive Metastore address: {}", addr_str))?;
 
         let client = hive_metastore::ThriftHiveMetastoreClientBuilder::new("hms")
+            .make_codec(volo_thrift::codec::default::DefaultMakeCodec::buffered())
             .address(addr)
             .build();
 
@@ -58,13 +59,44 @@ impl Catalog for HiveMetastoreClient {
             crate::Table::create_async(loc.to_string(), schema.clone()).await?;
         }
 
+        fn arrow_to_hive_type(dt: &arrow::datatypes::DataType) -> String {
+            match dt {
+                arrow::datatypes::DataType::Boolean => "boolean".to_string(),
+                arrow::datatypes::DataType::Int8 | arrow::datatypes::DataType::UInt8 => {
+                    "tinyint".to_string()
+                }
+                arrow::datatypes::DataType::Int16 | arrow::datatypes::DataType::UInt16 => {
+                    "smallint".to_string()
+                }
+                arrow::datatypes::DataType::Int32 | arrow::datatypes::DataType::UInt32 => {
+                    "int".to_string()
+                }
+                arrow::datatypes::DataType::Int64 | arrow::datatypes::DataType::UInt64 => {
+                    "bigint".to_string()
+                }
+                arrow::datatypes::DataType::Float32 => "float".to_string(),
+                arrow::datatypes::DataType::Float64 => "double".to_string(),
+                arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
+                    "string".to_string()
+                }
+                arrow::datatypes::DataType::Binary
+                | arrow::datatypes::DataType::LargeBinary
+                | arrow::datatypes::DataType::FixedSizeBinary(_) => "binary".to_string(),
+                arrow::datatypes::DataType::Date32 | arrow::datatypes::DataType::Date64 => {
+                    "date".to_string()
+                }
+                arrow::datatypes::DataType::Timestamp(_, _) => "timestamp".to_string(),
+                _ => "string".to_string(),
+            }
+        }
+
         // 2. Extract columns from Arrow schema for Hive
         let columns: Vec<FieldSchema> = schema
             .fields()
             .iter()
             .map(|f| FieldSchema {
                 name: Some(FastStr::new(f.name())),
-                r#type: Some(FastStr::new(f.data_type().to_string())),
+                r#type: Some(FastStr::new(arrow_to_hive_type(f.data_type()))),
                 comment: None,
             })
             .collect();

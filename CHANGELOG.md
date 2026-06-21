@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.3] - 2026-06-21
+
+### Added
+- Unified catalog table loading logic (`load_from_catalog`) across Glue, Hive, Nessie, and REST catalog wrappers in python bindings.
+- Explicit commit-time flushing and background synchronization in integration tests (`test_turboquant_integration.py` and `test_wikipedia.py`).
+
+### Changed
+- Fixed remote path routing in `flush_async` to correctly construct relative remote paths for staged files instead of using local staging paths.
+- Upload data files synchronously relative to commit operation to avoid read-after-write race conditions in remote catalogs.
+- Fixed a missing file upload call in the background indexing task for vector indexes.
+
+### Fixed
+- Clippy compiler warnings and errors in HNSW/PQ modules.
+
+---
+
+## [0.5.2] - 2026-06-15
+
+### Changed
+- Bumped version to 0.5.2.
+- Resolved write buffer schema alignment & list array indexing bugs.
+
+---
+
+## [0.5.1] - 2026-06-07
+
+### Changed
+- Optimized vector search.
+- Fixed WAL tests.
+
+---
+
 ## [0.5.0] - 2026-06-03
 
 ### Added
@@ -292,7 +324,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/rla3rd/hyperstreamdb/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/rla3rd/hyperstreamdb/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/rla3rd/hyperstreamdb/compare/v0.3.2...v0.3.3

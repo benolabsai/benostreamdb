@@ -12,6 +12,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Limit parallel compilation/linking jobs to avoid running out of memory/disk space on the runner
+  CARGO_BUILD_JOBS: 2
   # Reduce disk usage by disabling incremental compilation and heavy debug info
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -101,7 +103,7 @@ jobs:
       - name: Install maturin and build
         if: steps.filter.outputs.code == 'true'
         run: |
-          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis requests
+          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis requests "pyiceberg[sql-sqlite]"
           maturin build --features python
           pip install target/wheels/hyperstreamdb-*.whl
 

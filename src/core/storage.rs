@@ -28,7 +28,7 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
     } else {
         let url = Url::parse(uri).context("Invalid URI")?;
         match url.scheme() {
-            "s3" => {
+            "s3" | "s3a" => {
                 let bucket = url.host_str().context("Missing bucket in S3 URI")?;
 
                 let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
@@ -42,7 +42,13 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
                 }
 
                 let s3 = builder.build().context("Failed to build S3 store")?;
-                output_store = Arc::new(s3);
+                let path = url.path().trim_start_matches('/');
+                if !path.is_empty() {
+                    output_store =
+                        Arc::new(object_store::prefix::PrefixStore::new(s3, path.to_string()));
+                } else {
+                    output_store = Arc::new(s3);
+                }
             }
             "az" | "abfs" => {
                 let container = url.host_str().context("Missing container in Azure URI")?;
@@ -51,7 +57,15 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
                     .with_container_name(container)
                     .build()
                     .context("Failed to build Azure store")?;
-                output_store = Arc::new(azure);
+                let path = url.path().trim_start_matches('/');
+                if !path.is_empty() {
+                    output_store = Arc::new(object_store::prefix::PrefixStore::new(
+                        azure,
+                        path.to_string(),
+                    ));
+                } else {
+                    output_store = Arc::new(azure);
+                }
             }
             "gs" | "gcs" => {
                 let bucket = url.host_str().context("Missing bucket in GCS URI")?;
@@ -60,7 +74,15 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
                     .with_bucket_name(bucket)
                     .build()
                     .context("Failed to build GCS store")?;
-                output_store = Arc::new(gcs);
+                let path = url.path().trim_start_matches('/');
+                if !path.is_empty() {
+                    output_store = Arc::new(object_store::prefix::PrefixStore::new(
+                        gcs,
+                        path.to_string(),
+                    ));
+                } else {
+                    output_store = Arc::new(gcs);
+                }
             }
             "http" | "https" => {
                 let http = HttpBuilder::new()

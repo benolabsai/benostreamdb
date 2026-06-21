@@ -52,9 +52,14 @@ impl PyGlueCatalog {
             .block_on(async { self.client.load_table(&database, &table_name).await })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
-        // Return a Table instance pointing to the location
-        PyTable::new_internal(&metadata.location, None)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+        PyTable::load_from_catalog(
+            &metadata.location,
+            self.client.clone(),
+            &database,
+            &table_name,
+            None,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
     fn table_exists(&self, database: String, table_name: String) -> PyResult<bool> {

@@ -59,6 +59,9 @@ def test_wikipedia_hybrid_queries():
         arrow_table = pq.read_table(pq_file)
         table.write_arrow(arrow_table)
         total_rows += len(arrow_table)
+        
+    table.commit()
+    table.wait_for_background_tasks()
     
     ingest_time = time.time() - start_ingest
     ingest_rate = total_rows / ingest_time

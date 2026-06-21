@@ -41,8 +41,9 @@ def test_s3_with_minio():
     os.environ["AWS_ENDPOINT_URL"] = "http://localhost:9000"
     os.environ["AWS_REGION"] = "us-east-1"
     
+    import time
     # Create table on MinIO
-    table_uri = "s3://test-bucket/hyperstream-test"
+    table_uri = f"s3://test-bucket/hyperstream-test-{int(time.time())}"
     
     try:
         table = hdb.Table(table_uri)
@@ -82,8 +83,9 @@ def test_azure_with_azurite():
     os.environ["AZURE_STORAGE_ACCESS_KEY"] = "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw=="
     os.environ["AZURE_STORAGE_USE_EMULATOR"] = "true"
     
+    import time
     # Create table on Azurite
-    table_uri = "az://test-container/hyperstream-test"
+    table_uri = f"az://test-container/hyperstream-test-{int(time.time())}"
     
     try:
         table = hdb.Table(table_uri)
@@ -150,6 +152,7 @@ def test_local_filesystem_comprehensive():
         )
         
         table.write_arrow(batch2)
+        table.commit()
         
         # Test 3: Read all data
         df = table.to_pandas()
@@ -163,7 +166,7 @@ def test_local_filesystem_comprehensive():
         # Test 5: Verify files created
         table_path = Path(tmp_dir) / "test_table"
         assert table_path.exists()
-        parquet_files = list(table_path.glob("*.parquet"))
+        parquet_files = list(table_path.glob("**/*.parquet"))
         assert len(parquet_files) > 0
         
         print(f"✓ Local filesystem test passed ({len(parquet_files)} files created)")

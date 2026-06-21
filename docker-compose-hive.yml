@@ -1,0 +1,104 @@
+version: "3.8"
+
+services:
+  # ---------------------
+  # 1. MinIO (S3 compatibility)
+  # ---------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=admin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - hive_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # MinIO Setup (Creates buckets for testing)
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    networks:
+      - hive_net
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set minio http://minio:9000 admin admin123;
+      mc mb minio/warehouse --ignore-existing;
+      mc mb minio/hyperstream --ignore-existing;
+      mc policy set public minio/warehouse;
+      mc policy set public minio/hyperstream;
+      exit 0;
+      "
+
+  # ---------------------
+  # 2. Hive Metastore Catalog (Derby backed standalone)
+  # ---------------------
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: hive-metastore
+    user: root
+    environment:
+      - SERVICE_NAME=metastore
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./hive-config/hive-site.xml:/opt/hive/conf/hive-site.xml
+    entrypoint: >
+      /bin/sh -c "
+      ln -sf /opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.3.6.jar /opt/hive/lib/ &&
+      ln -sf /opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.12.367.jar /opt/hive/lib/ &&
+      /entrypoint.sh
+      "
+    networks:
+      - hive_net
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9083"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------
+  # 3. Trino (with HyperStreamDB Connector)
+  # ---------------------
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount the Trino configurations (contains catalogs: iceberg_hive, hyperstreamdb, memory, etc.)
+      - ./trino-config:/etc/trino
+      # Mount our compiled HyperStreamDB Trino connector plugin
+      - ./trino-hyperstream/target/trino-hyperstream-0.1.0-SNAPSHOT:/usr/lib/trino/plugin/hyperstream
+    environment:
+      - TRINO_ENV=dev
+      - TRINO_S3_ACCESS_KEY=admin
+      - TRINO_S3_SECRET_KEY=admin123
+    entrypoint: ["/bin/bash", "/etc/trino/entrypoint.sh"]
+    networks:
+      - hive_net
+    depends_on:
+      minio:
+        condition: service_healthy
+      hive-metastore:
+        condition: service_healthy
+
+volumes:
+  minio_data:
+
+networks:
+  hive_net:
+    driver: bridge
