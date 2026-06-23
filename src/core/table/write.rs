@@ -852,6 +852,12 @@ impl Table {
             (None, None)
         };
 
+        let (final_sort_orders, final_sort_order_id) = if let Some(order) = self.get_sort_order() {
+            (Some(vec![order.clone()]), Some(order.order_id))
+        } else {
+            (None, None)
+        };
+
         // Final commit for all data segments (with possible schema update)
         let commit_metadata = crate::core::manifest::CommitMetadata {
             updated_schemas: final_schemas,
@@ -860,8 +866,8 @@ impl Table {
             updated_default_spec_id: None,
             updated_properties: None,
             removed_properties: None,
-            updated_sort_orders: None,
-            updated_default_sort_order_id: None,
+            updated_sort_orders: final_sort_orders,
+            updated_default_sort_order_id: final_sort_order_id,
             updated_last_column_id: None,
             is_fast_append: false,
         };
@@ -896,7 +902,16 @@ impl Table {
         let meta_store = meta_store_arc.as_ref();
 
         let mut table_meta = match TableMetadata::load_latest(meta_store).await {
-            Ok(meta) => meta,
+            Ok(mut meta) => {
+                if should_update_schema {
+                    if let Some(schema) = new_manifest.schemas.last() {
+                        meta.add_schema(schema.clone());
+                    }
+                }
+                meta.sort_orders = new_manifest.sort_orders.clone();
+                meta.default_sort_order_id = new_manifest.default_sort_order_id;
+                meta
+            }
             Err(_) => {
                 // Initialize skeleton if not found
                 TableMetadata::new(

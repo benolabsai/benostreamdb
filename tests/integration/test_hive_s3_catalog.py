@@ -10,6 +10,22 @@ HIVE_METASTORE_URL = "thrift://localhost:9083"
 
 def test_hive_s3_catalog_integration():
     """Verify that PyHiveCatalog can create a table on S3 (MinIO), write data, and query it back."""
+    import socket
+
+    # 0. Check if Hive Metastore is running
+    try:
+        with socket.create_connection(("localhost", 9083), timeout=1.0):
+            pass
+    except Exception as e:
+        pytest.skip(f"Hive Metastore not running on port 9083: {e}")
+
+    # Check if MinIO S3 is running
+    try:
+        with socket.create_connection(("localhost", 9000), timeout=1.0):
+            pass
+    except Exception as e:
+        pytest.skip(f"MinIO S3 not running on port 9000: {e}")
+
     # Set S3 / MinIO environment variables for the Rust object store client
     os.environ["AWS_ENDPOINT_URL"] = "http://localhost:9000"
     os.environ["AWS_ACCESS_KEY_ID"] = "admin"

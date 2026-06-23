@@ -22,6 +22,40 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  lint:
+    name: Rust Lint & Format
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "lint"
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets
+
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: cargo audit
+
   check:
     name: Run Tests
     runs-on: ubuntu-22.04
@@ -118,7 +152,7 @@ jobs:
             --ignore=tests/python/test_prefilter.py
 
   linux:
-    needs: [check]
+    needs: [check, lint, audit]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: true
@@ -171,7 +205,7 @@ jobs:
           path: dist
 
   macos:
-    needs: [check]
+    needs: [check, lint, audit]
     runs-on: macos-latest
     strategy:
       fail-fast: true
@@ -212,7 +246,7 @@ jobs:
           path: dist
 
   sdist:
-    needs: [check]
+    needs: [check, lint, audit]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

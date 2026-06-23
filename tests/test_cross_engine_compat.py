@@ -111,11 +111,38 @@ class TestV2Features:
         df = pd.DataFrame({"a": [3, 1, 2], "b": [6, 4, 5]})
         table.set_sort_order(["a"], ascending=[True])
         table.write_pandas(df)
+        table.commit()
         
         # Verify sort order in manifest
-        # (This would check the manifest JSON file)
         manifest_path = Path(table_path) / "_manifest"
         assert manifest_path.exists()
+
+        # Load v1.json to verify sort order metadata
+        import json
+        v1_path = manifest_path / "v1.json"
+        assert v1_path.exists()
+        with open(v1_path) as f:
+            v1_data = json.load(f)
+        
+        # Check sort_orders field in v1.json
+        assert len(v1_data.get("sort_orders", [])) > 0
+        sort_order = v1_data["sort_orders"][0]
+        assert len(sort_order.get("fields", [])) > 0
+        field = sort_order["fields"][0]
+        assert field.get("source-id") == 1
+        assert field.get("direction") == "asc"
+
+        # Load metadata/v1.metadata.json
+        meta_path = Path(table_path) / "metadata" / "v1.metadata.json"
+        assert meta_path.exists()
+        with open(meta_path) as f:
+            meta_data = json.load(f)
+        assert len(meta_data.get("sort-orders", [])) > 0
+        meta_sort_order = meta_data["sort-orders"][0]
+        assert len(meta_sort_order.get("fields", [])) > 0
+        meta_field = meta_sort_order["fields"][0]
+        assert meta_field.get("source-id") == 1
+        assert meta_field.get("direction") == "asc"
     
     def test_partition_evolution_metadata(self):
         """Verify partition spec evolution is tracked"""
