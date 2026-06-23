@@ -12,7 +12,7 @@ Before contributing, please read [STEERING.md](STEERING.md) for our development 
 
 ### Prerequisites
 
-- **Rust** (stable, 1.75+) — install via [rustup](https://rustup.rs/)
+- **Rust** (stable, 1.80+) — install via [rustup](https://rustup.rs/)
 - **Python** (3.10–3.14) — for binding development and testing
 - **Docker** — for integration tests against MinIO and Nessie
 - **Cargo** and **maturin** — for building Python wheels

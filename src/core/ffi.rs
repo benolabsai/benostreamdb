@@ -1,5 +1,4 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
-#![cfg(feature = "java")]
 
 use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jlong, jstring};

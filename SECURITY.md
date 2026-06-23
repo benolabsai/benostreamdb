@@ -4,8 +4,9 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| v0.1.x  | :white_check_mark: |
-| < v0.1  | :x:                |
+| v0.5.x  | :white_check_mark: |
+| v0.4.x  | :white_check_mark: (security fixes only) |
+| < v0.4  | :x:                |
 
 ## Reporting a Vulnerability
 
@@ -17,19 +18,13 @@ We take the security of HyperStreamDB seriously. If you discover a security vuln
 
 ### How to Report
 
-1. **Email**: Send a detailed report to `security@hyperstreamdb.io` (placeholder — replace with actual address)
+1. **Email**: Send a detailed report to `security@hyperstreamdb.com`
 2. **Encryption**: For sensitive findings, encrypt your report using the PGP key below
 3. **Include**: Steps to reproduce, impact assessment, and any proof-of-concept code
 
 ### PGP Key
 
-```
------BEGIN PGP PUBLIC KEY BLOCK-----
-[mPlaceholder: Replace with actual PGP public key fingerprint]
-Key ID: 0xXXXXXXXXXXXXXXXX
-Fingerprint: XX XX XX XX XX  XX XX XX XX  XX XX  XX XX XX XX  XX XX XX XX
------END PGP PUBLIC KEY BLOCK-----
-```
+PGP key will be published at [https://hyperstreamdb.com/.well-known/security.txt](https://hyperstreamdb.com/.well-known/security.txt) once the public key infrastructure is provisioned.
 
 ### Scope
 
@@ -70,7 +65,7 @@ We will:
 
 ### Bug Bounty
 
-HyperStreamDB participates in a bug bounty program through [platform placeholder — e.g., HackerOne, Bugcrowd].
+HyperStreamDB plans to participate in a bug bounty program. Details will be announced on the project website.
 
 - **Critical** (RCE, data exfiltration): Up to $10,000
 - **High** (authentication bypass, SQL injection): Up to $5,000
@@ -96,4 +91,4 @@ _Bounty program details and eligibility will be published at the referenced plat
 
 ---
 
-_Last updated: May 2026_
+_Last updated: June 2026_

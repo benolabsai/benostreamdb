@@ -69,14 +69,7 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 ### Installation
 
 **Standard Install (CPU + WGPU/Vulkan):**
-The default package includes automatic high-performance hardware detection for Apple Metal, Intel Graphics/XPU, and AMD ROCm via **WGPU**.
-
-```bash
-pip install hyperstreamdb
-```
-
-**GPU Support:**
-The standard package includes automatic detection for all hardware (NVIDIA CUDA, AMD ROCm, Intel XPU, and Apple Metal).
+The default package includes automatic high-performance hardware detection for NVIDIA CUDA, Apple Metal, Intel Graphics/XPU, and AMD ROCm.
 
 ```bash
 pip install hyperstreamdb
@@ -437,8 +430,8 @@ python tests/integration/test_nyc_taxi.py
 
 ### Phase 3: Production Hardening
 
-- [ ] Schema evolution support
-- [ ] Partition evolution
+- [x] Schema evolution support
+- [x] Partition evolution
 - [ ] Distributed locking (DynamoDB)
 - [ ] CLI tools (`hyperstream compact`, `vacuum`)
 - [ ] Prometheus metrics
@@ -575,21 +568,33 @@ pytest tests/
 ```
 hyperstreamdb/
 ├── src/
-│   ├── lib.rs              # Main library
-│   ├── segment.rs          # Hybrid segment writer
-│   ├── reader.rs           # Index-aware reader
-│   ├── manifest.rs         # Manifest management
-│   ├── compaction.rs       # Compaction engine
-│   ├── maintenance.rs      # Vacuum/GC
-│   ├── python_binding.rs   # PyO3 bindings
-│   └── storage.rs          # Multi-cloud storage
-├── spark-hyperstream/      # Spark connector (Java)
-├── trino-hyperstream/      # Trino connector (Java)
+│   ├── lib.rs                  # Main library & PyO3 module registration
+│   ├── core/
+│   │   ├── table/              # Table API (read, write, schema, fluent query)
+│   │   ├── reader/             # Index-aware Parquet reader
+│   │   ├── manifest/           # Manifest management (Iceberg/Avro)
+│   │   ├── index/              # HNSW, inverted, bitmap indexes
+│   │   ├── catalog/            # REST, Nessie, Glue, Hive, Unity catalogs
+│   │   ├── sql/                # DataFusion integration & pgvector operators
+│   │   ├── planner/            # Query planner & optimizer
+│   │   ├── iceberg/            # Iceberg V2/V3 metadata & schema
+│   │   ├── compaction.rs       # Compaction engine
+│   │   ├── maintenance.rs      # Vacuum/GC
+│   │   ├── storage.rs          # Multi-cloud storage (S3, GCS, Azure, local)
+│   │   ├── wal.rs              # Write-Ahead Log
+│   │   ├── ffi.rs              # JNI bindings (Spark/Trino)
+│   │   └── error.rs            # Structured error types
+│   ├── python_binding.rs       # PyO3 bindings
+│   ├── python_distance.rs      # Vector distance API
+│   └── python_gpu_context.rs   # GPU device management
+├── hyperstreamdb-enterprise/    # Enterprise extensions (TurboQuant, SIMD)
+├── spark-hyperstream/          # Spark connector (Java)
+├── trino-hyperstream/          # Trino connector (Java)
 ├── tests/
-│   ├── data/               # Test datasets
-│   ├── integration/        # Integration tests
-│   └── benchmarks/         # Performance tests
-└── benches/                # Criterion benchmarks
+│   ├── integration/            # Infrastructure integration tests
+│   ├── benchmarks/             # Performance benchmarks
+│   └── python/                 # Python binding tests
+└── benches/                    # Criterion benchmarks
 ```
 
 ## 📈 Roadmap
@@ -614,16 +619,15 @@ hyperstreamdb/
 - [x] Multi-backend GPU support (CUDA, ROCm, Metal, XPU)
 - [x] Sparse and binary vector operations
 
-### 🔄 In Progress
+### 📝 In Progress
 - [ ] Spark/Trino connectors
-- [ ] Schema evolution
-- [ ] Partition evolution
+- [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 
 ### 📋 Planned
 - [ ] Distributed locking (DynamoDB/Zookeeper)
 - [ ] CLI tools (`hyperstream admin`)
-- [ ] Prometheus metrics
-- [ ] **REST Gateway** (OpenAPI for JS/Frontend RAG integration)
+- [ ] Prometheus metrics & Grafana dashboards
+- [ ] Apache Polaris catalog support (OAuth2)
 
 ## 🤝 Contributing
 
