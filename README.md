@@ -44,12 +44,7 @@ import hyperstreamdb as hdb
 
 # Create table with sort order (V2)
 table = hdb.Table("s3://bucket/table")
-table.set_sort_order(["timestamp", "user_id"], ascending=[False, True])
-
-# Evolve partition spec (V2)
-table.set_partition_spec([
-    {"source_id": 1, "field_id": 1000, "name": "date", "transform": "day"}
-])
+table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
 
 # V3 tables automatically include row lineage
 # _row_id (UUID) and _last_updated_sequence_number are added when format_version >= 3
@@ -150,69 +145,31 @@ df = pd.DataFrame({
     "id": [1, 2, 3],
     "embedding": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
 })
-table.insert(df) # Convenient alias for write_pandas
+table.write_pandas(df)
+table.commit()
 
 # Create high-performance vector index (TQ8 - 4x compression)
 table.add_index("embedding", "hnsw_tq8")
 
-# Query with filters (uses indexes!) - Fluent API
-results = table.query().filter("id > 1").execute()
+# Query with filters (uses indexes!)
+results = table.to_pandas(filter="id > 1")
 
-# Vector search - Fluent API
+# Vector search
 query_vec = [0.15, 0.25]
-results = table.query().vector_search(query_vec, column="embedding", k=10).execute()
+results = table.to_pandas(
+    vector_filter={"column": "embedding", "query": query_vec, "k": 10}
+)
 
-# Hybrid query (scalar + vector) - Fluent API
-results = (table.query()
-                .filter("category = 'science'")
-                .vector_search(query_vec, column="embedding", k=10)
-                .execute())
-
-# Alternative: Traditional API still supported
+# Hybrid query (scalar + vector)
 results = table.to_pandas(
     filter="category = 'science'",
-    vector_filter={"embedding": query_vec, "k": 10}
+    vector_filter={"column": "embedding", "query": query_vec, "k": 10}
 )
 ```
 
 ## 🔄 Fluent Query API
 
-HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:
-
-### Python Fluent API
-
-```python
-import hyperstreamdb as hdb
-
-table = hdb.Table("s3://bucket/my-table")
-
-# Method chaining with filters
-results = (table.query()
-                .filter("age > 25")
-                .filter("status = 'active'")  # Automatically combines with AND
-                .execute())
-
-# Vector search with fluent API
-query_embedding = [0.1, 0.2, 0.3, 0.4]
-results = (table.query()
-                .vector_search(query_embedding, column="embedding", k=10)
-                .execute())
-
-# Combine scalar filtering with vector search
-results = (table.query()
-                .filter("category = 'documents'")
-                .vector_search(query_embedding, column="content_vec", k=5)
-                .select(['title', 'score'])
-                .execute())
-
-# Complex hybrid queries
-results = (table.query()
-                .filter("published_date > '2024-01-01'")
-                .filter("author IN ('smith', 'jones')")
-                .vector_search(query_embedding, column="embedding", k=20)
-                .select(['title', 'author', 'score'])
-                .execute())
-```
+HyperStreamDB features a fluent query API in Rust with method chaining. Python uses the `to_pandas()` API with filter and vector_filter arguments.
 
 ### Rust Fluent API
 
@@ -337,11 +294,11 @@ session = hdb.Session()
 session.register("users", table)
 
 # Optional: Enable GPU acceleration for SQL queries
-ctx = hdb.GPUContext.auto_detect()
-hdb.set_thread_gpu_context(ctx)
+device = hdb.Device.auto_detect()
+device.activate()
 
-# Simple SQL
-results = table.sql("SELECT * FROM t WHERE id > 100")
+# Simple SQL (via table — registers as table 't')
+results = table.execute_sql("SELECT * FROM t WHERE id > 100")
 
 # Vector similarity search with pgvector operators (GPU-accelerated)
 results = session.sql("""
@@ -363,7 +320,6 @@ results = session.sql("""
 
 # Maintenance
 table.compact()
-table.expire_snapshots(retain_last=10)
 ```
 
 ## 📊 Real-World Testing Plan
