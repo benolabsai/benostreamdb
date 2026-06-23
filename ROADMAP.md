@@ -481,6 +481,12 @@ docs/
 - [ ] Feature: "Universal Indexing" for Hudi & Delta Lake (XTable-style compatibility)
 - [ ] Apache Polaris Integration: Add OAuth2 client credentials auth support to REST catalog for Apache Polaris compliance
 
+### Index-Accelerated Engine Integrations
+- [ ] **Arrow Flight SQL Gateway**: Build a unified, high-performance Arrow Flight SQL server enabling any JDBC/ODBC-compatible engine (Doris, StarRocks, Dremio) to leverage HyperStreamDB's index-accelerated query execution.
+- [ ] **DuckDB Extension**: Develop a native `duckdb_hyperstream` extension in Rust/C++ to enable local DuckDB instances to scan tables using HyperStreamDB's indexes.
+- [ ] **StarRocks/Doris C++ UDFs**: Create native UDFs for vector index search (`hyperstream_knn`) to run high-performance KNN queries inside MPP databases.
+- [ ] **Trino Connector Predicate Pushdown**: Enhance the Trino connector to resolve filter predicates against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
+
 ### Multi-Column Indexes & Composite Search
 - [ ] **Composite Scalar Indexes**: Pre-computed roaring bitmaps for common multi-column filters (e.g. `(city, zip)`).
 - [ ] **Multi-Vector Search**: Simultaneous ranking across multiple embedding columns with combined scoring.
