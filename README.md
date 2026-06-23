@@ -388,7 +388,7 @@ python tests/integration/test_nyc_taxi.py
 
 - [x] Schema evolution support
 - [x] Partition evolution
-- [ ] Distributed locking (DynamoDB)
+- [ ] Pluggable Distributed Locking (Redis/etcd)
 - [ ] CLI tools (`hyperstream compact`, `vacuum`)
 - [ ] Prometheus metrics
 - [ ] Error handling & retries
@@ -580,7 +580,7 @@ hyperstreamdb/
 - [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 
 ### 📋 Planned
-- [ ] Distributed locking (DynamoDB/Zookeeper)
+- [ ] Pluggable Distributed Locking (Redis/etcd)
 - [ ] CLI tools (`hyperstream admin`)
 - [ ] Prometheus metrics & Grafana dashboards
 - [ ] Apache Polaris catalog support (OAuth2)
