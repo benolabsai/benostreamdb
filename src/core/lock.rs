@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use tokio::sync::oneshot;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LockPayload {
@@ -16,6 +17,45 @@ pub struct FileBasedLock {
     path: Path,
     owner: String,
     ttl_seconds: u64,
+    clock_skew_ms: u64,
+}
+
+pub struct LockGuard {
+    store: Arc<dyn ObjectStore>,
+    path: Path,
+    owner: String,
+    abort_tx: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        if let Some(tx) = self.abort_tx.take() {
+            let _ = tx.send(());
+        }
+        let store = self.store.clone();
+        let path = self.path.clone();
+        let owner = self.owner.clone();
+        
+        tokio::spawn(async move {
+            match store.get(&path).await {
+                Ok(res) => {
+                    if let Ok(bytes) = res.bytes().await {
+                        if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
+                            if payload.owner == owner {
+                                let _ = store.delete(&path).await;
+                            } else {
+                                tracing::warn!(
+                                    "Lock release skipped: lock is now owned by '{}', not '{}'.",
+                                    payload.owner, owner
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(_) => {} // Already deleted
+            }
+        });
+    }
 }
 
 impl FileBasedLock {
@@ -25,10 +65,16 @@ impl FileBasedLock {
             path,
             owner: Uuid::new_v4().to_string(),
             ttl_seconds,
+            clock_skew_ms: 5000, // 5 seconds default NTP drift allowance
         }
     }
 
-    pub async fn try_acquire(&self) -> Result<bool> {
+    pub fn with_clock_skew(mut self, ms: u64) -> Self {
+        self.clock_skew_ms = ms;
+        self
+    }
+
+    pub async fn try_acquire(&self) -> Result<Option<LockGuard>> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let payload = LockPayload {
             owner: self.owner.clone(),
@@ -46,7 +92,7 @@ impl FileBasedLock {
             .put_opts(&self.path, bytes.clone().into(), opts.clone())
             .await
         {
-            Ok(_) => Ok(true),
+            Ok(_) => Ok(Some(self.spawn_heartbeat())),
             Err(object_store::Error::AlreadyExists { .. }) => {
                 // Check if expired
                 match self.store.get(&self.path).await {
@@ -56,7 +102,12 @@ impl FileBasedLock {
                         if let Ok(current_payload) =
                             serde_json::from_slice::<LockPayload>(&current_bytes)
                         {
-                            if now > current_payload.expires_at {
+                            let current_time_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)?
+                                .as_millis() as u64;
+                            let expires_ms = (current_payload.expires_at * 1000) + self.clock_skew_ms;
+                            
+                            if current_time_ms > expires_ms {
                                 // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
                                 let update_opts = PutOptions {
                                     mode: PutMode::Update(UpdateVersion {
@@ -71,7 +122,7 @@ impl FileBasedLock {
                                     .put_opts(&self.path, bytes.clone().into(), update_opts)
                                     .await
                                 {
-                                    Ok(_) => return Ok(true),
+                                    Ok(_) => return Ok(Some(self.spawn_heartbeat())),
                                     Err(object_store::Error::NotImplemented)
                                     | Err(object_store::Error::NotSupported { .. }) => {
                                         // SAFETY NOTE: This fallback path has a TOCTOU (time-of-check-time-of-use)
@@ -93,28 +144,77 @@ impl FileBasedLock {
                                             .put_opts(&self.path, bytes.clone().into(), opts)
                                             .await
                                         {
-                                            Ok(_) => return Ok(true),
-                                            Err(_) => return Ok(false),
+                                            Ok(_) => return Ok(Some(self.spawn_heartbeat())),
+                                            Err(_) => return Ok(None),
                                         }
                                     }
-                                    Err(_) => return Ok(false),
+                                    Err(_) => return Ok(None),
                                 }
                             }
                         }
                     }
                     Err(_) => {} // File deleted between our PutMode::Create and get
                 }
-                Ok(false)
+                Ok(None)
             }
             Err(e) => Err(e.into()),
         }
     }
 
-    pub async fn acquire(&self) -> Result<()> {
+    fn spawn_heartbeat(&self) -> LockGuard {
+        let (tx, mut rx) = oneshot::channel();
+        let store = self.store.clone();
+        let path = self.path.clone();
+        let owner = self.owner.clone();
+        let ttl_seconds = self.ttl_seconds;
+
+        // Heartbeat wakes up at TTL/2 to renew
+        let interval_ms = (ttl_seconds * 1000) / 2;
+        
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut rx => {
+                        // Drop guard signaled cancellation
+                        break;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(interval_ms)) => {
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        let payload = LockPayload {
+                            owner: owner.clone(),
+                            expires_at: now + ttl_seconds,
+                        };
+                        if let Ok(bytes) = serde_json::to_vec(&payload) {
+                            // Fetch meta to do an atomic PutMode::Update if supported
+                            if let Ok(get_res) = store.get(&path).await {
+                                let update_opts = PutOptions {
+                                    mode: PutMode::Update(UpdateVersion {
+                                        e_tag: get_res.meta.e_tag,
+                                        version: get_res.meta.version,
+                                    }),
+                                    ..Default::default()
+                                };
+                                let _ = store.put_opts(&path, bytes.into(), update_opts).await;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        LockGuard {
+            store: self.store.clone(),
+            path: self.path.clone(),
+            owner: self.owner.clone(),
+            abort_tx: Some(tx),
+        }
+    }
+
+    pub async fn acquire(&self) -> Result<LockGuard> {
         let max_retries = 100;
         for attempt in 0..max_retries {
-            if self.try_acquire().await? {
-                return Ok(());
+            if let Some(guard) = self.try_acquire().await? {
+                return Ok(guard);
             }
             let base_delay = 50 * (2u64.pow(attempt.min(6) as u32));
             let jitter = rand::random::<u64>() % base_delay;
@@ -124,32 +224,6 @@ impl FileBasedLock {
             "Failed to acquire distributed lock after {} attempts",
             max_retries
         ))
-    }
-
-    pub async fn release(&self) -> Result<()> {
-        match self.store.get(&self.path).await {
-            Ok(res) => {
-                let bytes = res.bytes().await?;
-                if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
-                    if payload.owner == self.owner {
-                        self.store.delete(&self.path).await.map_err(|e| {
-                            anyhow::anyhow!("Failed to delete lock file during release: {}", e)
-                        })?;
-                    } else {
-                        // Lock was stolen by another owner — caller should know
-                        tracing::warn!(
-                            "Lock release skipped: lock is now owned by '{}', not '{}'. Lock may have been stolen.",
-                            payload.owner, self.owner
-                        );
-                    }
-                }
-            }
-            Err(_) => {
-                // Lock file already gone — idempotent release is fine
-                tracing::debug!("Lock file already removed during release (idempotent).");
-            }
-        }
-        Ok(())
     }
 }
 
@@ -163,24 +237,30 @@ mod tests {
     async fn test_lock_acquire_and_release() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let path = Path::from("test.lock");
-        let lock = FileBasedLock::new(store.clone(), path.clone(), 30);
+        
+        {
+            let lock = FileBasedLock::new(store.clone(), path.clone(), 30);
+            let _guard = lock.try_acquire().await.unwrap().expect("Should acquire lock");
+            
+            assert!(
+                FileBasedLock::new(store.clone(), path.clone(), 30)
+                    .try_acquire()
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "Second acquire should fail"
+            );
+        } // guard drops here
 
-        assert!(lock.try_acquire().await.unwrap(), "Should acquire lock");
-        assert!(
-            !FileBasedLock::new(store.clone(), path.clone(), 30)
-                .try_acquire()
-                .await
-                .unwrap(),
-            "Second acquire should fail"
-        );
-
-        lock.release().await.unwrap();
+        // Give the spawned drop task a tiny bit of time to execute
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         assert!(
             FileBasedLock::new(store.clone(), path.clone(), 30)
                 .try_acquire()
                 .await
-                .unwrap(),
+                .unwrap()
+                .is_some(),
             "Should acquire after release"
         );
     }
@@ -191,14 +271,16 @@ mod tests {
         let path = Path::from("test_expire.lock");
 
         // Lock with 0 TTL (expires immediately)
-        let lock1 = FileBasedLock::new(store.clone(), path.clone(), 0);
-        assert!(lock1.try_acquire().await.unwrap());
+        let lock1 = FileBasedLock::new(store.clone(), path.clone(), 0).with_clock_skew(0);
+        let _guard = lock1.try_acquire().await.unwrap().expect("Should acquire");
 
-        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        // Even though we have a guard, the heartbeat sleeps for TTL/2 (0ms), so it tries to renew
+        // but the expiration is immediate. We sleep past the TTL + clock_skew.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let lock2 = FileBasedLock::new(store.clone(), path.clone(), 30);
+        let lock2 = FileBasedLock::new(store.clone(), path.clone(), 30).with_clock_skew(0);
         assert!(
-            lock2.try_acquire().await.unwrap(),
+            lock2.try_acquire().await.unwrap().is_some(),
             "Should steal expired lock"
         );
     }

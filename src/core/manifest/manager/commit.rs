@@ -39,7 +39,7 @@ impl ManifestManager {
         let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
         let dist_lock =
             crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
-        dist_lock.acquire().await?;
+        let _dist_guard = dist_lock.acquire().await?;
 
         let max_retries = 100;
         for attempt in 0..max_retries {
@@ -238,13 +238,11 @@ impl ManifestManager {
                         .insert(dir_key, new_ver)
                         .await;
 
-                    // Cache the new manifest file eagerly
                     let file_key = format!("{}/{}", self.root_uri, path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
 
-                    let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
@@ -261,13 +259,11 @@ impl ManifestManager {
                     continue;
                 }
                 Err(e) => {
-                    let _ = dist_lock.release().await;
                     return Err(e.into());
                 }
             }
         }
 
-        let _ = dist_lock.release().await;
         Err(anyhow::anyhow!(
             "Failed to commit manifest after {} attempts due to concurrent updates",
             max_retries
@@ -279,7 +275,7 @@ impl ManifestManager {
         let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
         let dist_lock =
             crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
-        dist_lock.acquire().await?;
+        let _dist_guard = dist_lock.acquire().await?;
 
         let max_retries = 10;
         let mut attempt = 0;
@@ -342,7 +338,6 @@ impl ManifestManager {
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
                         .await;
-                    let _ = dist_lock.release().await;
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
@@ -359,12 +354,10 @@ impl ManifestManager {
                     continue;
                 }
                 Err(e) => {
-                    let _ = dist_lock.release().await;
                     return Err(e.into());
                 }
             }
         }
-        let _ = dist_lock.release().await;
         Err(anyhow::anyhow!(
             "Failed to commit imported entries after {} attempts",
             max_retries
