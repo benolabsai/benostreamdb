@@ -578,9 +578,15 @@ impl ComputeContext {
             ComputeBackend::Cuda => {
                 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
                 {
-                    let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0)))
-                        .map_err(|_| anyhow::anyhow!("CUDA backend panicked during initialization (missing library?)"))?
-                        .map_err(|e| anyhow::anyhow!("CUDA error: {}", e))?;
+                    let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        CudaBackend::new(0)
+                    }))
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "CUDA backend panicked during initialization (missing library?)"
+                        )
+                    })?
+                    .map_err(|e| anyhow::anyhow!("CUDA error: {}", e))?;
                     Some(std::sync::Arc::new(b))
                 }
                 #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
@@ -668,7 +674,9 @@ impl ComputeContext {
 
     fn do_auto_detect() -> Self {
         #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
-        if let Ok(Ok(b)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0))) {
+        if let Ok(Ok(b)) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0)))
+        {
             return Self {
                 backend: ComputeBackend::Cuda,
                 device_id: 0,
