@@ -42,10 +42,10 @@ impl HybridReader {
             .position(|c| c.name() == column)
             .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in Parquet schema", column))?;
 
-        // Split Block Bloom Filters (SBBF) are used in Parquet.
         use parquet::bloom_filter::Sbbf;
 
         let mut possible = false;
+        let mut checked_any_bloom_filter = false;
         let pq_path_str = self.config.parquet_path.clone().unwrap_or_default();
         if pq_path_str.is_empty() {
             return Ok(true);
@@ -64,6 +64,7 @@ impl HybridReader {
             let col_meta = rg_meta.column(col_idx);
 
             if let Some(offset) = col_meta.bloom_filter_offset() {
+                checked_any_bloom_filter = true;
                 let cache_key = format!("{}/{}:{}", self.root_uri, pq_path_str, offset);
 
                 let sbbf = if let Some(cached) = crate::core::cache::BLOOM_FILTER_CACHE
@@ -197,6 +198,11 @@ impl HybridReader {
                 }
             }
         }
+
+        if !checked_any_bloom_filter {
+            return Ok(true);
+        }
+
         Ok(possible)
     }
 
