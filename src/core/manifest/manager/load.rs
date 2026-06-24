@@ -341,7 +341,7 @@ impl ManifestManager {
             if ie.status == 0 || ie.status == 1 {
                 // EXISTING or ADDED
                 match crate::core::iceberg::convert_iceberg_to_object(&ie, &schema, &spec)? {
-                    crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(me),
+                    crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(*me),
                     crate::core::iceberg::IcebergManifestObject::Delete(df) => {
                         delete_files.push(df)
                     }

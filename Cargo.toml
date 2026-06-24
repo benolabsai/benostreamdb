@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -41,14 +41,14 @@ enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
 proptest = []
-observability = ["dep:metrics-exporter-prometheus", "dep:axum"]
+observability = ["dep:metrics-exporter-prometheus"]
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
 pollster = ["dep:pollster"]
 cuda = ["dep:cudarc"]
 metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
-axum = ["dep:axum"]
+
 
 [dependencies]
 # core columnar memory format
@@ -74,7 +74,7 @@ futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 # rest api (user requested)
-axum = { version = "0.7", optional = true }
+axum = "0.7"
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace"] }
 

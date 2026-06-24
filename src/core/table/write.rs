@@ -683,7 +683,7 @@ impl Table {
             for local_path in generated_files {
                 let filename = local_path
                     .split('/')
-                    .last()
+                    .next_back()
                     .unwrap_or(&local_path)
                     .to_string();
                 let remote_path = if hive_path.is_empty() {

@@ -436,7 +436,7 @@ pub fn convert_iceberg_to_object(
             Vec::new()
         };
 
-        Ok(IcebergManifestObject::Data(ManifestEntry {
+        Ok(IcebergManifestObject::Data(Box::new(ManifestEntry {
             file_path: df.file_path.clone(),
             file_size_bytes: df.file_size_in_bytes,
             record_count: df.record_count,
@@ -445,7 +445,7 @@ pub fn convert_iceberg_to_object(
             index_files,
             file_checksum: df.file_checksum.clone(),
             ..Default::default()
-        }))
+        })))
     } else {
         // Delete File
         let content = if df.content == 1 {

@@ -1,3 +1,4 @@
+#![allow(clippy::missing_safety_doc)]
 //! This file contains lib to call hnsw from julia (or any language providing a C api)
 //! The AnnT trait is implemented with macros for u32, u16, u8, f32, f64 and i32.  
 //! The macro declare_myapi_type!  produces struct HnswApif32 and so on.

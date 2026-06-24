@@ -648,7 +648,7 @@ async fn update_table(
                                                         // ADDED or EXISTING
                                                         match hyperstreamdb::core::iceberg::convert_iceberg_to_object(&ie, s, &current_manifest.partition_spec) {
                                                              Ok(hyperstreamdb::core::iceberg::IcebergManifestObject::Data(me)) => {
-                                                                 snapshot_data_entries.push(me);
+                                                                 snapshot_data_entries.push(*me);
                                                              },
                                                              Ok(hyperstreamdb::core::iceberg::IcebergManifestObject::Delete(df)) => {
                                                                  snapshot_delete_entries.push(df);

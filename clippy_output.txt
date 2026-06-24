@@ -1,0 +1,502 @@
+    Checking hyperstreamdb v0.5.3 (/home/ralbright/projects/hyperstreamdb)
+warning: large size difference between variants
+  --> src/core/iceberg/types.rs:81:1
+   |
+81 | / pub enum IcebergManifestObject {
+82 | |     Data(crate::core::manifest::ManifestEntry),
+   | |     ------------------------------------------ the largest variant contains at least 336 bytes
+83 | |     Delete(crate::core::manifest::DeleteFile),
+   | |     ----------------------------------------- the second-largest variant contains at least 128 bytes
+84 | | }
+   | |_^ the entire enum is at least 336 bytes
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#large_enum_variant
+   = note: `#[warn(clippy::large_enum_variant)]` on by default
+help: consider boxing the large fields or introducing indirection in some other way to reduce the total size of the enum
+   |
+82 -     Data(crate::core::manifest::ManifestEntry),
+82 +     Data(Box<crate::core::manifest::ManifestEntry>),
+   |
+
+warning: the loop variable `i` is only used to index `va`
+   --> src/core/index/hnsw_rs/dist.rs:144:18
+    |
+144 |         for i in 0..va.len() {
+    |                  ^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+    = note: `#[warn(clippy::needless_range_loop)]` on by default
+help: consider using an iterator
+    |
+144 -         for i in 0..va.len() {
+144 +         for <item> in &mut va {
+    |
+
+warning: the loop variable `i` is used to index `cur`
+   --> src/core/index/hnsw_rs/dist.rs:164:18
+    |
+164 |         for i in 1..=len_b {
+    |                  ^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+    |
+164 -         for i in 1..=len_b {
+164 +         for (i, <item>) in cur.iter_mut().enumerate().take(len_b + 1).skip(1) {
+    |
+
+warning: non-canonical implementation of `partial_cmp` on an `Ord` type
+   --> src/core/index/hnsw_rs/hnsw.rs:238:1
+    |
+238 | /  impl<T: Clone + Send + Sync> PartialOrd for PointWithOrder<T> {
+239 | |      fn partial_cmp(&self, other: &PointWithOrder<T>) -> Option<Ordering> {
+    | | __________________________________________________________________________-
+240 | ||         self.dist_to_ref.partial_cmp(&other.dist_to_ref)
+241 | ||     } // end cmp
+    | ||_____- help: change this to: `{ Some(self.cmp(other)) }`
+242 | |  } // end impl PartialOrd
+    | |__^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#non_canonical_partial_ord_impl
+    = note: `#[warn(clippy::non_canonical_partial_ord_impl)]` on by default
+
+warning: unneeded late initialization
+    --> src/core/index/hnsw_rs/hnsw.rs:1187:21
+     |
+1187 |                     let threshold_shrinking: usize;
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_late_init
+     = note: `#[warn(clippy::needless_late_init)]` on by default
+help: move the declaration `threshold_shrinking` here and remove the assignments from the branches
+     |
+1187 ~                     
+1188 ~                     let threshold_shrinking: usize = if l_n > 0 {
+1189 ~                         self.max_nb_connection
+1190 |                     } else {
+1191 ~                         2 * self.max_nb_connection
+1192 ~                     };
+     |
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+    --> src/core/index/hnsw_rs/hnsw.rs:1347:36
+     |
+1347 |     fn search_general(&self, data: &Vec<T>, knbn: usize, ef_arg: usize) -> Vec<Neighbour> {
+     |                                    ^^^^^^^ help: change this to: `&[T]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+     = note: `#[warn(clippy::ptr_arg)]` on by default
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+    --> src/core/index/hnsw_rs/hnsw.rs:1478:16
+     |
+1478 |         datas: &Vec<Vec<T>>,
+     |                ^^^^^^^^^^^^ help: change this to: `&[Vec<T>]`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: the loop variable `i` is used to index `req_res`
+    --> src/core/index/hnsw_rs/hnsw.rs:1495:18
+     |
+1495 |         for i in 0..req_res.len() {
+     |                  ^^^^^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+     |
+1495 -         for i in 0..req_res.len() {
+1495 +         for (i, <item>) in req_res.iter().enumerate() {
+     |
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+  --> src/core/index/hnsw_rs/api.rs:18:37
+   |
+18 |     fn insert_data(&mut self, data: &Vec<Self::Val>, id: usize);
+   |                                     ^^^^^^^^^^^^^^^ help: change this to: `&[Self::Val]`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+  --> src/core/index/hnsw_rs/api.rs:20:39
+   |
+20 |     fn search_neighbours(&self, data: &Vec<Self::Val>, knbn: usize, ef_s: usize) -> Vec<Neighbour>;
+   |                                       ^^^^^^^^^^^^^^^ help: change this to: `&[Self::Val]`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+  --> src/core/index/hnsw_rs/api.rs:22:46
+   |
+22 |     fn parallel_insert_data(&mut self, data: &Vec<(&Vec<Self::Val>, usize)>);
+   |                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: change this to: `&[(&Vec<Self::Val>, usize)]`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: writing `&Vec` instead of `&[_]` involves a new object where a slice will do
+  --> src/core/index/hnsw_rs/api.rs:26:15
+   |
+26 |         data: &Vec<Vec<Self::Val>>,
+   |               ^^^^^^^^^^^^^^^^^^^^ help: change this to: `&[Vec<Self::Val>]`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: writing `&String` instead of `&str` involves a new object where a slice will do
+  --> src/core/index/hnsw_rs/api.rs:33:35
+   |
+33 |     fn file_dump(&self, filename: &String) -> Result<i32, String>;
+   |                                   ^^^^^^^ help: change this to: `&str`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+
+warning: non-canonical implementation of `partial_cmp` on an `Ord` type
+  --> src/core/index/hnsw_rs/flatten.rs:26:1
+   |
+26 | /  impl PartialOrd for Neighbour {
+27 | |      fn partial_cmp(&self, other: &Neighbour) -> Option<Ordering> {
+   | | __________________________________________________________________-
+28 | ||         self.distance.partial_cmp(&other.distance)
+29 | ||     } // end cmp
+   | ||_____- help: change this to: `{ Some(self.cmp(other)) }`
+30 | |  } // end impl PartialOrd
+   | |__^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#non_canonical_partial_ord_impl
+
+warning: this loop could be written as a `while let` loop
+   --> src/core/index/hnsw_rs/flatten.rs:115:9
+    |
+115 | /         loop {
+116 | |             if let Some(point) = ptiter.next() {
+117 | |                 //    println!("point : {:?}", _point.p_id);
+118 | |                 let res_insert = hash_t.insert(point.get_origin_id(), flatten_point(&point));
+...   |
+126 | |         } // end while
+    | |_________^ help: try: `while let Some(point) = ptiter.next() { .. }`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#while_let_loop
+    = note: `#[warn(clippy::while_let_loop)]` on by default
+
+warning: doc list item overindented
+   --> src/core/index/hnsw_rs/hnswio.rs:240:5
+    |
+240 | ///      for each neighbour dump of its identity (: usize) and then distance (): u32) to point dumped.
+    |     ^^^^^ help: try using `    ` (4 spaces)
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#doc_overindented_list_items
+    = note: `#[warn(clippy::doc_overindented_list_items)]` on by default
+
+warning: this lifetime isn't used in the function definition
+   --> src/core/index/hnsw_rs/hnswio.rs:248:15
+    |
+248 | fn dump_point<'a, T: Serialize + Clone + Sized + Send + Sync, W: Write>(
+    |               ^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#extra_unused_lifetimes
+    = note: `#[warn(clippy::extra_unused_lifetimes)]` on by default
+
+warning: the loop variable `l` is used to index `neighborhood`
+   --> src/core/index/hnsw_rs/hnswio.rs:269:14
+    |
+269 |     for l in 0..neighborhood.len() {
+    |              ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+    |
+269 -     for l in 0..neighborhood.len() {
+269 +     for (l, <item>) in neighborhood.iter().enumerate() {
+    |
+
+warning: unneeded late initialization
+   --> src/core/index/hnsw_rs/hnswio.rs:394:5
+    |
+394 |     let v: Vec<T>;
+    |     ^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_late_init
+help: move the declaration `v` here and remove the assignments from the branches
+    |
+394 ~     
+395 ~     let v: Vec<T> = if std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>() {
+396 ~         bincode::deserialize(&v_serialized).unwrap()
+397 |     } else {
+398 ~         Vec::<T>::new()
+399 ~     };
+    |
+
+warning: the loop variable `l` is used to index `neighbours`
+   --> src/core/index/hnsw_rs/hnswio.rs:547:18
+    |
+547 |         for l in 0..neighbours.len() {
+    |                  ^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+    |
+547 -         for l in 0..neighbours.len() {
+547 +         for (l, <item>) in neighbours.iter().enumerate() {
+    |
+
+warning: writing `&String` instead of `&str` involves a new object where a slice will do
+   --> src/core/index/hnsw_rs/libext.rs:826:31
+    |
+826 | pub fn make_readers(basename: &String) -> (BufReader<std::fs::File>, BufReader<std::fs::File>) {
+    |                               ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#ptr_arg
+help: change this to
+    |
+826 ~ pub fn make_readers(basename: &str) -> (BufReader<std::fs::File>, BufReader<std::fs::File>) {
+827 ~     let mut graphfname = basename.to_owned();
+828 |     graphfname.push_str(".hnsw.graph");
+...
+838 |
+839 ~     let mut datafname = basename.to_owned();
+    |
+
+warning: the loop variable `i` is only used to index `centroid_distances`
+   --> src/core/index/ivf.rs:111:18
+    |
+111 |         for i in 0..n_probes.min(self.n_lists) {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator
+    |
+111 -         for i in 0..n_probes.min(self.n_lists) {
+111 +         for <item> in centroid_distances.iter().take(n_probes.min(self.n_lists)) {
+    |
+
+warning: the loop variable `i` is used to index `bytes`
+   --> src/core/index/pq.rs:210:18
+    |
+210 |         for i in 0..self.config.m {
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+    |
+210 -         for i in 0..self.config.m {
+210 +         for (i, <item>) in bytes.iter().enumerate().take(self.config.m) {
+    |
+
+warning: the loop variable `i` is used to index `encoded`
+   --> src/core/index/pq.rs:220:18
+    |
+220 |         for i in 0..self.config.m {
+    |                  ^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+    |
+220 -         for i in 0..self.config.m {
+220 +         for (i, <item>) in encoded.iter().enumerate().take(self.config.m) {
+    |
+
+warning: the loop variable `i` is only used to index `vectors`
+  --> src/core/index/turboquant.rs:39:18
+   |
+39 |         for i in 0..sample_size {
+   |                  ^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator
+   |
+39 -         for i in 0..sample_size {
+39 +         for <item> in vectors.iter().take(sample_size) {
+   |
+
+warning: the loop variable `i` is used to index `batch_distances`
+    --> src/core/reader/scan.rs:1307:34
+     |
+1307 |                         for i in 0..prev_rows {
+     |                                  ^^^^^^^^^^^^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#needless_range_loop
+help: consider using an iterator and enumerate()
+     |
+1307 -                         for i in 0..prev_rows {
+1307 +                         for (i, <item>) in batch_distances.iter().enumerate().take(prev_rows) {
+     |
+
+warning: this `let...else` may be rewritten with the `?` operator
+  --> src/core/sql/optimizer/vector_search/sort_expr_parser.rs:90:5
+   |
+90 | /     let Some(m) = metric else {
+91 | |         return None;
+92 | |     };
+   | |______^ help: replace it with: `let m = metric?;`
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#question_mark
+   = note: `#[warn(clippy::question_mark)]` on by default
+
+warning: this `let...else` may be rewritten with the `?` operator
+   --> src/core/sql/optimizer/vector_search/sort_expr_parser.rs:137:5
+    |
+137 | /     let Some(m) = metric else {
+138 | |         return None;
+139 | |     };
+    | |______^ help: replace it with: `let m = metric?;`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#question_mark
+
+warning: this `if let` can be collapsed into the outer `if let`
+   --> src/core/sql/mod.rs:216:33
+    |
+216 | / ...                   if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) =
+217 | | ...                       scalar
+218 | | ...                   {
+219 | | ...                       tracing::info!("SQL BM25 Pushdown: Triggering keyword search for '{}' on column '{}'", query_str, col);
+...   |
+225 | | ...                       bm25_params = Some(params);
+226 | | ...                   }
+    | |_______________________^
+    |
+help: the outer pattern can be modified to include the inner pattern
+   --> src/core/sql/mod.rs:215:76
+    |
+215 | ...                   if let datafusion::logical_expr::Expr::Literal(scalar, _) = &*b.right {
+    |                                                                      ^^^^^^ replace this binding
+216 | ...                       if let datafusion::scalar::ScalarValue::Utf8(Some(query_str)) =
+    |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ with this pattern
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#collapsible_match
+    = note: `#[warn(clippy::collapsible_match)]` on by default
+
+warning: this loop could be written as a `while let` loop
+    --> src/core/table/write.rs:991:25
+     |
+ 991 | /                         loop {
+ 992 | |                             if let Ok(n) = file.read(&mut buf).await {
+ 993 | |                                 if n == 0 {
+ 994 | |                                     break;
+...    |
+1000 | |                         }
+     | |_________________________^ help: try: `while let Ok(n) = file.read(&mut buf).await { .. }`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#while_let_loop
+
+warning: this `MutexGuard` is held across an await point
+   --> src/core/table/mod.rs:253:13
+    |
+253 |         let mut pk = self.primary_key.write();
+    |             ^^^^^^
+    |
+    = help: consider using an async-aware `Mutex` type or ensuring the `MutexGuard` is dropped before calling `await`
+note: these are all the await points this lock is held through
+   --> src/core/table/mod.rs:258:64
+    |
+258 |         let (new_manifest, _) = manifest_manager.load_latest().await?;
+    |                                                                ^^^^^
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#await_holding_lock
+    = note: `#[warn(clippy::await_holding_lock)]` on by default
+
+warning: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+  --> src/core/lock.rs:40:13
+   |
+40 | /             match store.get(&path).await {
+41 | |                 Ok(res) => {
+42 | |                     if let Ok(bytes) = res.bytes().await {
+43 | |                         if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
+...  |
+55 | |                 Err(_) => {} // Already deleted
+56 | |             }
+   | |_____________^
+   |
+   = note: you might want to preserve the comments from inside the `match`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#single_match
+   = note: `#[warn(clippy::single_match)]` on by default
+help: try
+   |
+40 ~             if let Ok(res) = store.get(&path).await {
+41 +                 if let Ok(bytes) = res.bytes().await {
+42 +                     if let Ok(payload) = serde_json::from_slice::<LockPayload>(&bytes) {
+43 +                         if payload.owner == owner {
+44 +                             let _ = store.delete(&path).await;
+45 +                         } else {
+46 +                             tracing::warn!(
+47 +                                 "Lock release skipped: lock is now owned by '{}', not '{}'.",
+48 +                                 payload.owner, owner
+49 +                             );
+50 +                         }
+51 +                     }
+52 +                 }
+53 +             }
+   |
+
+warning: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`
+   --> src/core/lock.rs:98:17
+    |
+ 98 | /                 match self.store.get(&self.path).await {
+ 99 | |                     Ok(get_res) => {
+100 | |                         let meta = get_res.meta.clone();
+101 | |                         let current_bytes = get_res.bytes().await?;
+...   |
+156 | |                     Err(_) => {} // File deleted between our PutMode::Create and get
+157 | |                 }
+    | |_________________^
+    |
+    = note: you might want to preserve the comments from inside the `match`
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.92.0/index.html#single_match
+help: try
+    |
+ 98 ~                 if let Ok(get_res) = self.store.get(&self.path).await {
+ 99 +                     let meta = get_res.meta.clone();
+100 +                     let current_bytes = get_res.bytes().await?;
+101 +                     if let Ok(current_payload) =
+102 +                         serde_json::from_slice::<LockPayload>(&current_bytes)
+103 +                     {
+104 +                         let current_time_ms = SystemTime::now()
+105 +                             .duration_since(UNIX_EPOCH)?
+106 +                             .as_millis() as u64;
+107 +                         let expires_ms = (current_payload.expires_at * 1000) + self.clock_skew_ms;
+108 +                         
+109 +                         if current_time_ms > expires_ms {
+110 +                             // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
+111 +                             let update_opts = PutOptions {
+112 +                                 mode: PutMode::Update(UpdateVersion {
+113 +                                     e_tag: meta.e_tag,
+114 +                                     version: meta.version,
+115 +                                 }),
+116 +                                 ..Default::default()
+117 +                             };
+118 + 
+119 +                             match self
+120 +                                 .store
+121 +                                 .put_opts(&self.path, bytes.clone().into(), update_opts)
+122 +                                 .await
+123 +                             {
+124 +                                 Ok(_) => return Ok(Some(self.spawn_heartbeat())),
+125 +                                 Err(object_store::Error::NotImplemented)
+126 +                                 | Err(object_store::Error::NotSupported { .. }) => {
+127 +                                     // SAFETY NOTE: This fallback path has a TOCTOU (time-of-check-time-of-use)
+128 ~                                     // race condition. The delete → sleep → create_exclusive sequence is NOT atomic.
+129 +                                     // Two concurrent callers can both delete the expired lock and race to re-create it.
+130 +                                     // The random jitter reduces but does not eliminate this risk.
+131 +                                     // This is inherent to stores without conditional-update (CAS) support (e.g., LocalFileSystem).
+132 +                                     // For production distributed locking, use S3/GCS/Azure which support PutMode::Update.
+133 +                                     tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
+134 +                                     let _ = self.store.delete(&self.path).await;
+135 +                                     let jitter = rand::random::<u64>() % 50;
+136 +                                     tokio::time::sleep(std::time::Duration::from_millis(
+137 +                                         jitter,
+138 +                                     ))
+139 +                                     .await;
+140 + 
+141 +                                     match self
+142 +                                         .store
+143 +                                         .put_opts(&self.path, bytes.clone().into(), opts)
+144 +                                         .await
+145 +                                     {
+146 +                                         Ok(_) => return Ok(Some(self.spawn_heartbeat())),
+147 +                                         Err(_) => return Ok(None),
+148 +                                     }
+149 +                                 }
+150 +                                 Err(_) => return Ok(None),
+151 +                             }
+152 +                         }
+153 +                     }
+154 +                 }
+    |
+
+warning: `hyperstreamdb` (lib) generated 33 warnings
+    Finished `dev` profile [unoptimized] target(s) in 8.07s

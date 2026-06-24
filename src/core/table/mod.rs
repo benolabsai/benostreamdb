@@ -250,8 +250,10 @@ impl Table {
         manifest_manager.update_identifier_fields(field_ids).await?;
 
         // Update in-memory state
-        let mut pk = self.primary_key.write();
-        *pk = columns;
+        {
+            let mut pk = self.primary_key.write();
+            *pk = columns;
+        }
 
         // Update in-memory schema ref (it's slightly stale now, but will refresh on next use)
         // or we could force a reload.
@@ -1291,7 +1293,7 @@ impl Table {
                         &iceberg_spec,
                     ) {
                         Ok(crate::core::iceberg::IcebergManifestObject::Data(me)) => {
-                            data_entries.push(me);
+                            data_entries.push(*me);
                         }
                         Ok(crate::core::iceberg::IcebergManifestObject::Delete(df)) => {
                             delete_files.push(df);

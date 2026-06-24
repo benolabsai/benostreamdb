@@ -1,3 +1,4 @@
+#![allow(clippy::empty_docs)]
 //#![feature(portable_simd)]
 // prededing line to uncomment to get std::simd by using
 // packed_simd_2 = { version = "0.3", optional = true}
