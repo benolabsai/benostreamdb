@@ -237,7 +237,7 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
 ///  1. The value MAGICPOINT
 ///  2. its identity ( a usize  rank in original data , hash value or else , and PointId)
 ///  3. for each layer dump of the number of neighbours followed by :
-///      for each neighbour dump of its identity (: usize) and then distance (): u32) to point dumped.
+///     for each neighbour dump of its identity (: usize) and then distance (): u32) to point dumped.
 ///
 /// identity of a point is in full mode the triplet origin_id (: usize), layer (: u8) rank_in_layer (: u32)
 ///                           light mode only origin_id (: usize)
@@ -245,7 +245,7 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
 ///  1. The value MAGICDATAP (u32)
 ///  2. origin_id as a u64
 ///  3. The vector of data (the length is known from Description)
-fn dump_point<'a, T: Serialize + Clone + Sized + Send + Sync, W: Write>(
+fn dump_point<T: Serialize + Clone + Sized + Send + Sync, W: Write>(
     point: &Point<T>,
     mode: DumpMode,
     graphout: &mut io::BufWriter<W>,

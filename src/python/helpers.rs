@@ -296,7 +296,7 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
 #[pyo3(signature = (level="INFO"))]
 pub fn init_logging(level: &str) -> PyResult<()> {
     crate::telemetry::tracing::update_log_level(level)
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
     let guard = crate::telemetry::tracing::init_tracing("hyperstreamdb")
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Box::leak(Box::new(guard));
@@ -417,6 +417,8 @@ pub fn validate_record_batch(obj: &Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
+/// # Safety
+/// This function is unsafe because it interprets FFI arrays from C without bounds or type checking guarantees.
 pub unsafe fn import_record_batch_from_c(
     array: FFI_ArrowArray,
     schema: &FFI_ArrowSchema,

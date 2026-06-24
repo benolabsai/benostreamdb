@@ -447,10 +447,7 @@ impl GpuBackend for WgpuBackend {
 
         fn as_u8_slice<T>(data: &[T]) -> &[u8] {
             unsafe {
-                std::slice::from_raw_parts(
-                    data.as_ptr() as *const u8,
-                    data.len() * std::mem::size_of::<T>(),
-                )
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
             }
         }
 
@@ -539,7 +536,7 @@ impl GpuBackend for WgpuBackend {
             });
             cpass.set_pipeline(&self.pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);
-            let workgroups = (num_vectors + 63) / 64;
+            let workgroups = num_vectors.div_ceil(64);
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
 
@@ -820,7 +817,7 @@ pub fn compute_distance(
     metric: VectorMetric,
 ) -> Result<Vec<f32>> {
     let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
-    let n = if dim > 0 { vectors.len() / dim } else { 0 };
+    let n = vectors.len().checked_div(dim).unwrap_or(0);
     if n < GPU_DISPATCH_THRESHOLD && context.backend != ComputeBackend::Cpu {
         return compute_cpu(query, vectors, dim, metric);
     }
@@ -855,7 +852,7 @@ pub fn compute_kmeans_assignment(
 }
 
 fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f32>> {
-    let n = if d > 0 { v.len() / d } else { 0 };
+    let n = v.len().checked_div(d).unwrap_or(0);
     let mut dists = Vec::with_capacity(n);
     for i in 0..n {
         let span = &v[i * d..(i + 1) * d];

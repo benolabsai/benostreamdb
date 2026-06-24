@@ -209,3 +209,5 @@ strip = "debuginfo"         # Keep symbols for crash backtraces, strip DWARF fro
 inherits = "release"
 lto = "fat"                 # Cross-crate LTO for max performance (slower builds)
 codegen-units = 1           # Single unit for LTO effectiveness
+[profile.test]
+debug = 0

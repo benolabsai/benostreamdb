@@ -108,7 +108,7 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
     // 3. Test ROCm and Intel WGPU interfaces on Linux
     #[cfg(target_os = "linux")]
     {
-        if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Rocm) {
+        if ComputeContext::from_backend(ComputeBackend::Rocm).is_ok() {
             assert_parity(
                 "ROCm Parity",
                 &_query,
@@ -118,7 +118,7 @@ fn test_l2_parity_cpu_vs_other_backends() -> Result<()> {
                 ComputeBackend::Rocm,
             )?;
         }
-        if let Ok(_) = ComputeContext::from_backend(ComputeBackend::Intel) {
+        if ComputeContext::from_backend(ComputeBackend::Intel).is_ok() {
             assert_parity(
                 "Intel Parity",
                 &_query,
