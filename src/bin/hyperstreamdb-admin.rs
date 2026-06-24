@@ -13,7 +13,9 @@ fn parse_size(s: &str) -> Result<u64, String> {
         }
     }
 
-    let num = num_str.parse::<f64>().map_err(|_| format!("Invalid number in size: {}", s))?;
+    let num = num_str
+        .parse::<f64>()
+        .map_err(|_| format!("Invalid number in size: {}", s))?;
 
     let multiplier = match unit_str.as_str() {
         "" | "B" => 1.0,
@@ -21,7 +23,12 @@ fn parse_size(s: &str) -> Result<u64, String> {
         "MB" | "M" => 1024.0 * 1024.0,
         "GB" | "G" => 1024.0 * 1024.0 * 1024.0,
         "TB" | "T" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return Err(format!("Unknown unit in size: {}. Use B, KB, MB, GB, or TB.", unit_str)),
+        _ => {
+            return Err(format!(
+                "Unknown unit in size: {}. Use B, KB, MB, GB, or TB.",
+                unit_str
+            ))
+        }
     };
 
     Ok((num * multiplier) as u64)
@@ -69,7 +76,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Compact { uri, target_file_size } => {
+        Commands::Compact {
+            uri,
+            target_file_size,
+        } => {
             tracing::info!("Starting compaction on table: {}", uri);
             let table = hyperstreamdb::Table::new_async(uri.clone()).await?;
             let opts = hyperstreamdb::core::compaction::CompactionOptions {
@@ -79,11 +89,17 @@ async fn main() -> anyhow::Result<()> {
             table.rewrite_data_files_async(Some(opts)).await?;
             println!("Compaction completed successfully for {}", uri);
         }
-        Commands::Vacuum { uri, retain_versions } => {
+        Commands::Vacuum {
+            uri,
+            retain_versions,
+        } => {
             tracing::info!("Starting vacuum on table: {}", uri);
             let table = hyperstreamdb::Table::new_async(uri.clone()).await?;
             let deleted = table.vacuum_async(*retain_versions).await?;
-            println!("Vacuum completed for {}. Deleted {} unreferenced files.", uri, deleted);
+            println!(
+                "Vacuum completed for {}. Deleted {} unreferenced files.",
+                uri, deleted
+            );
         }
     }
 

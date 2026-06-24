@@ -11,10 +11,10 @@ pub fn init_metrics_exporter() -> anyhow::Result<()> {
 
     let builder = PrometheusBuilder::new();
     let addr: SocketAddr = "0.0.0.0:9090".parse()?;
-    
+
     // Install the global metrics recorder
     builder.with_http_listener(addr).install()?;
-    
+
     tracing::info!("Metrics exporter started at http://{}", addr);
     Ok(())
 }

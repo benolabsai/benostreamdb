@@ -201,7 +201,8 @@ impl Compactor {
                     crate::core::manifest::CommitMetadata::default(),
                 )
                 .await?;
-            metrics::counter!("hyperstreamdb_data_files_compacted").increment(all_old_paths.len() as u64);
+            metrics::counter!("hyperstreamdb_data_files_compacted")
+                .increment(all_old_paths.len() as u64);
         }
 
         Ok(())

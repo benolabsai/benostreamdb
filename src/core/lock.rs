@@ -3,8 +3,8 @@ use object_store::{path::Path, ObjectStore, PutMode, PutOptions, UpdateVersion};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
 use tokio::sync::oneshot;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LockPayload {
@@ -35,7 +35,7 @@ impl Drop for LockGuard {
         let store = self.store.clone();
         let path = self.path.clone();
         let owner = self.owner.clone();
-        
+
         tokio::spawn(async move {
             match store.get(&path).await {
                 Ok(res) => {
@@ -46,7 +46,8 @@ impl Drop for LockGuard {
                             } else {
                                 tracing::warn!(
                                     "Lock release skipped: lock is now owned by '{}', not '{}'.",
-                                    payload.owner, owner
+                                    payload.owner,
+                                    owner
                                 );
                             }
                         }
@@ -102,11 +103,11 @@ impl FileBasedLock {
                         if let Ok(current_payload) =
                             serde_json::from_slice::<LockPayload>(&current_bytes)
                         {
-                            let current_time_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)?
-                                .as_millis() as u64;
-                            let expires_ms = (current_payload.expires_at * 1000) + self.clock_skew_ms;
-                            
+                            let current_time_ms =
+                                SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
+                            let expires_ms =
+                                (current_payload.expires_at * 1000) + self.clock_skew_ms;
+
                             if current_time_ms > expires_ms {
                                 // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
                                 let update_opts = PutOptions {
@@ -170,7 +171,7 @@ impl FileBasedLock {
 
         // Heartbeat wakes up at TTL/2 to renew
         let interval_ms = (ttl_seconds * 1000) / 2;
-        
+
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -237,11 +238,15 @@ mod tests {
     async fn test_lock_acquire_and_release() {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let path = Path::from("test.lock");
-        
+
         {
             let lock = FileBasedLock::new(store.clone(), path.clone(), 30);
-            let _guard = lock.try_acquire().await.unwrap().expect("Should acquire lock");
-            
+            let _guard = lock
+                .try_acquire()
+                .await
+                .unwrap()
+                .expect("Should acquire lock");
+
             assert!(
                 FileBasedLock::new(store.clone(), path.clone(), 30)
                     .try_acquire()

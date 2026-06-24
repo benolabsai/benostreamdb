@@ -1,1 +1,7 @@
-[advisories]\nignore = [\n    "RUSTSEC-2026-0104",\n    "RUSTSEC-2026-0099",\n    "RUSTSEC-2026-0098",\n    "RUSTSEC-2026-0097"\n]
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0097"
+]
