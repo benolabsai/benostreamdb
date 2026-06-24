@@ -201,6 +201,7 @@ impl Compactor {
                     crate::core::manifest::CommitMetadata::default(),
                 )
                 .await?;
+            metrics::counter!("hyperstreamdb_data_files_compacted").increment(all_old_paths.len() as u64);
         }
 
         Ok(())
@@ -330,6 +331,7 @@ impl Compactor {
             if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
                 main_parquet_path = remote_path_str;
                 main_parquet_size = file_size;
+                metrics::counter!("hyperstreamdb_compaction_bytes_written").increment(file_size);
             } else if file_name.ends_with(".inv.parquet") {
                 // Inverted index file
                 let parts: Vec<&str> = file_name.split('.').collect();

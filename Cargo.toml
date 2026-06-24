@@ -41,11 +41,14 @@ enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
 proptest = []
+observability = ["dep:metrics-exporter-prometheus", "dep:axum"]
 
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
 pollster = ["dep:pollster"]
 cuda = ["dep:cudarc"]
+metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
+axum = ["dep:axum"]
 
 [dependencies]
 # core columnar memory format
@@ -71,7 +74,7 @@ futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 # rest api (user requested)
-axum = "0.7"
+axum = { version = "0.7", optional = true }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace"] }
 
@@ -140,6 +143,7 @@ regex = "1.10"
 sha2 = "0.10"
 wgpu = { version = "0.20.0", optional = true }
 pollster = { version = "0.4.0", optional = true }
+metrics-exporter-prometheus = { version = "0.18.3", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }

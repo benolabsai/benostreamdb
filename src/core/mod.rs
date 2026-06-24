@@ -28,3 +28,4 @@ pub mod embeddings;
 pub mod license;
 pub mod lock;
 pub mod search;
+pub mod telemetry;

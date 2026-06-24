@@ -246,6 +246,7 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
+                    metrics::counter!("hyperstreamdb_manifest_commit_retries_total").increment(1);
                     if attempt % 10 == 0 || attempt > 90 {
                         tracing::debug!(
                             "Conflict committing Manifest v{} (attempt {}), retrying...",
