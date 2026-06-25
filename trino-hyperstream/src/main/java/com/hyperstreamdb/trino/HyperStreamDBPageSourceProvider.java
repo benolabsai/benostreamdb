@@ -4,6 +4,11 @@ import io.trino.spi.connector.*;
 import java.util.List;
 
 public class HyperStreamDBPageSourceProvider implements ConnectorPageSourceProvider {
+    private final String gpuDevice;
+
+    public HyperStreamDBPageSourceProvider(String gpuDevice) {
+        this.gpuDevice = gpuDevice;
+    }
 
     @Override
     public ConnectorPageSource createPageSource(
@@ -15,6 +20,6 @@ public class HyperStreamDBPageSourceProvider implements ConnectorPageSourceProvi
             DynamicFilter dynamicFilter) {
 
         HyperStreamDBSplit hSplit = (HyperStreamDBSplit) split;
-        return new HyperStreamDBPageSource(hSplit, columns);
+        return new HyperStreamDBPageSource(hSplit, columns, gpuDevice);
     }
 }

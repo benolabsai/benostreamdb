@@ -7,6 +7,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 public class HyperStreamDBSplitManager implements ConnectorSplitManager {
+    private final String gpuDevice;
+
+    public HyperStreamDBSplitManager(String gpuDevice) {
+        this.gpuDevice = gpuDevice;
+    }
 
     // Load the generic library.
     // In production, use JNA or proper OS-specific loading.
@@ -40,6 +45,11 @@ public class HyperStreamDBSplitManager implements ConnectorSplitManager {
         String uri = "s3://default/" + tableHandle.getSchemaName() + "/" + tableName;
 
         System.out.println("HyperStreamDBSplitManager: Computing splits for " + uri);
+        
+        // Configure GPU backend before computing splits
+        if (HyperStreamDBJNIBridge.isLoaded()) {
+            HyperStreamDBJNIBridge.setGpuContext(gpuDevice);
+        }
 
         try {
             // Default 64MB split size

@@ -42,7 +42,30 @@ impl Quantizer for TurboQuantEncoder {
         codes
     }
 
-    fn compute_lut(&self, query: &[f32]) -> Box<[f32]> {
+    fn decode(&self, _bytes: &[u8]) -> Vec<f32> {
+        unimplemented!("Not implemented for enterprise encoder")
+    }
+
+    fn distance_adc(&self, query: &[f32], encoded: &[u8]) -> f32 {
+        let lut = self.compute_lut(query);
+        self.distance_from_lut(&lut, encoded)
+    }
+
+    fn name(&self) -> String {
+        self.quantizer_type().to_string()
+    }
+
+    fn bits(&self) -> usize {
+        self.config.bits
+    }
+
+    fn dim(&self) -> usize {
+        self.config.dim
+    }
+}
+
+impl TurboQuantEncoder {
+    pub fn compute_lut(&self, query: &[f32]) -> Box<[f32]> {
         let mut rotated_query = query.to_vec();
         turboquant::fwht_portable(&mut rotated_query);
         
@@ -62,7 +85,7 @@ impl Quantizer for TurboQuantEncoder {
         lut.into_boxed_slice()
     }
 
-    fn distance_from_lut(&self, lut: &[f32], encoded: &[u8]) -> f32 {
+    pub fn distance_from_lut(&self, lut: &[f32], encoded: &[u8]) -> f32 {
         let mut dist = 0.0;
         let k = 1 << self.config.bits;
         for (i, &code) in encoded.iter().enumerate() {
@@ -71,7 +94,7 @@ impl Quantizer for TurboQuantEncoder {
         dist
     }
 
-    fn quantizer_type(&self) -> &str {
+    pub fn quantizer_type(&self) -> &str {
         "turboquant"
     }
 }

@@ -39,13 +39,19 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
     // Updated signature: returns 1 for success/has_more, 0 for done/empty
     private native long readBatch(long handle, long outArrayPtr, long outSchemaPtr);
 
-    public HyperStreamDBPageSource(HyperStreamDBSplit split, List<ColumnHandle> columns) {
+    private final String gpuDevice;
+
+    public HyperStreamDBPageSource(HyperStreamDBSplit split, List<ColumnHandle> columns, String gpuDevice) {
         this.split = split;
         this.columns = columns;
+        this.gpuDevice = gpuDevice;
         this.allocator = new RootAllocator();
 
         System.out.println("HyperStreamDBPageSource: Opening session for " + split.getPath());
         try {
+            if (HyperStreamDBJNIBridge.isLoaded()) {
+                HyperStreamDBJNIBridge.setGpuContext(this.gpuDevice);
+            }
             this.nativeHandle = openSession(split.getPath());
         } catch (UnsatisfiedLinkError e) {
             System.err.println("JNI openSession not found. using mock handle.");

@@ -20,10 +20,16 @@ public class HyperStreamDBConnectorFactory implements ConnectorFactory {
 
     @Override
     public Connector create(String catalogName, Map<String, String> config, ConnectorContext context) {
-        return new HyperStreamDBConnector();
+        String gpuDevice = config.getOrDefault("hyperstream.gpu-device", "auto");
+        return new HyperStreamDBConnector(gpuDevice);
     }
 
     private static class HyperStreamDBConnector implements Connector {
+        private final String gpuDevice;
+
+        public HyperStreamDBConnector(String gpuDevice) {
+            this.gpuDevice = gpuDevice;
+        }
         @Override
         public ConnectorMetadata getMetadata(ConnectorSession session, ConnectorTransactionHandle transactionHandle) {
             return new HyperStreamDBMetadata();
@@ -31,12 +37,12 @@ public class HyperStreamDBConnectorFactory implements ConnectorFactory {
 
         @Override
         public ConnectorSplitManager getSplitManager() {
-            return new HyperStreamDBSplitManager();
+            return new HyperStreamDBSplitManager(gpuDevice);
         }
 
         @Override
         public ConnectorPageSourceProvider getPageSourceProvider() {
-            return new HyperStreamDBPageSourceProvider();
+            return new HyperStreamDBPageSourceProvider(gpuDevice);
         }
 
         @Override

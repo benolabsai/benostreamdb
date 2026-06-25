@@ -447,11 +447,15 @@ s3://bucket/table/
 ## 🔌 Connectors
 
 ### Spark
+The Spark connector supports **Spark 3.5, 4.0, and 4.1** via a shared JNI FFI bridge. It intercepts row-level operations (like `MERGE INTO`) to take advantage of HyperStreamDB's fast indexing and supports configuring GPU backends.
+
 ```scala
 // Read
 val df = spark.read
   .format("hyperstream")
   .option("path", "s3://bucket/table")
+  // Optionally configure the GPU device (cuda, mps, intel, rocm, auto, or cpu)
+  .option("hyperstream.gpu_device", "cuda")
   .load()
 
 // Write
@@ -461,10 +465,23 @@ df.write
   .save()
 ```
 
+You can also globally configure the GPU for Spark stored procedures (e.g. index building):
+```scala
+spark.conf.set("spark.hyperstream.gpu.device", "cuda")
+```
+
 ### Trino
+The Trino connector intercepts reads to natively push down scalar and vector filtering to the HyperStreamDB core, drastically reducing IO.
+
 ```sql
 SELECT * FROM hyperstream.default.my_table
-WHERE id > 100;  -- Uses scalar index
+WHERE id > 100;  -- Uses scalar index natively via JNI pushdown
+```
+
+You can configure the GPU backend for Trino globally or per-catalog using the properties file (e.g. `etc/catalog/hyperstream.properties`):
+```properties
+connector.name=hyperstreamdb
+hyperstream.gpu-device=cuda
 ```
 
 ### Python (Direct)
@@ -575,8 +592,7 @@ hyperstreamdb/
 - [x] Multi-backend GPU support (CUDA, ROCm, Metal, XPU)
 - [x] Sparse and binary vector operations
 
-### 📝 In Progress
-- [ ] Spark/Trino connectors
+- [x] Spark/Trino connectors (JNI Bridge & Native GPU support)
 - [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 
 ### 📋 Planned

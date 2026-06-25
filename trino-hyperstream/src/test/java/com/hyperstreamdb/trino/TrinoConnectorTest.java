@@ -241,7 +241,7 @@ public class TrinoConnectorTest {
 
     @Test
     public void testSplitManagerGetSplitsReturnsSource() {
-        HyperStreamDBSplitManager splitManager = new HyperStreamDBSplitManager();
+        HyperStreamDBSplitManager splitManager = new HyperStreamDBSplitManager("auto");
         HyperStreamDBTableHandle tableHandle = new HyperStreamDBTableHandle("default", "test_table");
 
         var splitSource = splitManager.getSplits(null, null, tableHandle, null, null);
@@ -252,7 +252,7 @@ public class TrinoConnectorTest {
 
     @Test
     public void testPageSourceProviderCreate() {
-        HyperStreamDBPageSourceProvider provider = new HyperStreamDBPageSourceProvider();
+        HyperStreamDBPageSourceProvider provider = new HyperStreamDBPageSourceProvider("auto");
         HyperStreamDBSplit split = new HyperStreamDBSplit("seg_001", "/tmp/test.parquet", "all");
         HyperStreamDBTableHandle tableHandle = new HyperStreamDBTableHandle("default", "test_table");
         List<ColumnHandle> columns = List.of(

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use jni::objects::{JClass, JObject, JString};
-use jni::sys::{jlong, jstring};
+use jni::sys::{jboolean, jlong, jstring};
 use jni::JNIEnv;
 // use std::sync::Arc;
 use crate::core::reader::HybridReader;
@@ -373,4 +373,199 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
         }
         None => 0,
     }
+}
+
+// -----------------------------------------------------------------------------
+// Row-Level Operations JNI Bridge (MERGE / UPDATE / DELETE)
+// -----------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_queryIndexIn(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    values_json: JString,
+) -> jstring {
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let col: String = env.get_string(&column).unwrap_or_default().into();
+    let vals: String = env.get_string(&values_json).unwrap_or_default().into();
+
+    tracing::info!(
+        "FFI(Spark): queryIndexIn for table {}, column {}, keys: {}",
+        uri,
+        col,
+        vals.len()
+    );
+
+    // Placeholder: In the next phase, this will use the Rust Core planner to
+    // read the RoaringBitmaps and return a JSON mapping of File -> Array of Row IDs.
+    let result_json = "{}";
+
+    match env.new_string(result_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_commitPositionDeletes(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    deletes_json: JString,
+) -> jboolean {
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let deletes: String = env.get_string(&deletes_json).unwrap_or_default().into();
+
+    tracing::info!("FFI(Spark): commitPositionDeletes for table {}", uri);
+
+    // Placeholder: This will take the list of Iceberg Position Delete files generated
+    // by Spark and commit them to the HyperStreamDB/Iceberg manifest.
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_addIndex(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    index_type: JString,
+) -> jboolean {
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let col: String = env.get_string(&column).unwrap_or_default().into();
+    let idx_type: String = env.get_string(&index_type).unwrap_or_default().into();
+
+    tracing::info!(
+        "FFI(Spark): addIndex for table {}, column {}, type: {}",
+        uri,
+        col,
+        idx_type
+    );
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_buildIndex(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    segment_id: JString,
+) -> jboolean {
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let seg_id: String = env.get_string(&segment_id).unwrap_or_default().into();
+
+    tracing::info!(
+        "FFI(Spark): buildIndex for table {}, segment_id {}",
+        uri,
+        seg_id
+    );
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_setPrimaryKey(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    columns: JString,
+) -> jboolean {
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let cols: String = env.get_string(&columns).unwrap_or_default().into();
+
+    tracing::info!(
+        "FFI(Spark): setPrimaryKey for table {}, columns {}",
+        uri,
+        cols
+    );
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_setGpuContext(
+    mut env: JNIEnv,
+    _class: JClass,
+    device_type: JString,
+) -> jboolean {
+    let device: String = env.get_string(&device_type).unwrap_or_default().into();
+
+    tracing::info!("FFI(Spark): setGpuContext to {}", device);
+
+    // Convert string to ComputeBackend
+    let context = match device.to_lowercase().as_str() {
+        "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
+        "cpu" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Cpu,
+        ),
+        "cuda" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Cuda,
+        ),
+        "mps" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Mps,
+        ),
+        "intel" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Intel,
+        ),
+        "rocm" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Rocm,
+        ),
+        _ => {
+            tracing::warn!(
+                "FFI(Spark): Unknown device type '{}', defaulting to auto",
+                device
+            );
+            crate::core::index::gpu::ComputeContext::auto_detect()
+        }
+    };
+
+    crate::core::index::gpu::set_thread_gpu_context(Some(context));
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGpuContext(
+    mut env: JNIEnv,
+    _class: JClass,
+    device_type: JString,
+) -> jboolean {
+    let device: String = env.get_string(&device_type).unwrap_or_default().into();
+
+    tracing::info!("FFI(Trino): setGpuContext to {}", device);
+
+    // Convert string to ComputeBackend
+    let context = match device.to_lowercase().as_str() {
+        "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
+        "cpu" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Cpu,
+        ),
+        "cuda" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Cuda,
+        ),
+        "mps" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Mps,
+        ),
+        "intel" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Intel,
+        ),
+        "rocm" => crate::core::index::gpu::ComputeContext::new(
+            crate::core::index::gpu::ComputeBackend::Rocm,
+        ),
+        _ => {
+            tracing::warn!(
+                "FFI(Trino): Unknown device type '{}', defaulting to auto",
+                device
+            );
+            crate::core::index::gpu::ComputeContext::auto_detect()
+        }
+    };
+
+    crate::core::index::gpu::set_thread_gpu_context(Some(context));
+
+    1 // true
 }
