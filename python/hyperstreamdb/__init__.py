@@ -485,7 +485,8 @@ class Table:
             device: Optional compute device (GPU/CPU)
             **kwargs: Extra params (merged into vector_filter if present)
         
-        Example:
+        Example::
+
             # Vector search with cosine metric
             df = table.to_pandas(vector_filter={
                 "column": "embedding",
@@ -645,7 +646,8 @@ class Table:
         Update indexing specifications for multiple columns at once.
         Supports both simple strings and advanced configuration dictionaries.
         
-        Example:
+        Example::
+
             table.set_index_columns({
                 "embedding": IndexType.HNSW,
                 "content": ["hnsw", "bm25"],

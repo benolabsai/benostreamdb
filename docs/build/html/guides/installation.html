@@ -1,0 +1,922 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="HyperStreamDB Comprehensive Guide" href="comprehensive_guide.html"><link rel="prev" title="Welcome to HyperStreamDB" href="../index.html">
+        <link rel="prefetch" href="../_static/logo.png" as="image">
+        <link rel="prefetch" href="../_static/logo.png" as="image">
+
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>Installation - HyperStreamDB 0.5.5 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon no-toc" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  <div class="sidebar-logo-container">
+    <img class="sidebar-logo only-light" src="../_static/logo.png" alt="Light Logo"/>
+    <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
+  </div>
+  
+  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Getting Started</span></p>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#gpu-acceleration-optional">GPU Acceleration (Optional)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#pgvector-sql-compatibility">pgvector SQL Compatibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#basic-usage">Basic Usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#fluent-query-api">🔄 Fluent Query API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#sql-queries-full-datafusion-support-with-pgvector-syntax">SQL queries (full DataFusion support with pgvector syntax)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#optional-enable-gpu-acceleration-for-sql-queries">Optional: Enable GPU acceleration for SQL queries</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#simple-sql">Simple SQL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#maintenance">Maintenance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="comprehensive_guide.html">HyperStreamDB Comprehensive Guide</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="python_vector_api.html">Python Vector Distance API Reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="concurrency.html">Concurrency and Atomic Commits</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">API Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../api/python.html">Python API Reference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api/rust.html">Rust API Reference</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Roadmap</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../roadmap.html">Project Roadmap</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/guides/installation.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon no-toc" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="installation">
+<h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Install from source</span>
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/rla3rd/hyperstreamdb
+<span class="nb">cd</span><span class="w"> </span>hyperstreamdb
+
+<span class="c1"># Build Python bindings (CPU + AMD/Intel/Apple GPU backends)</span>
+pip<span class="w"> </span>install<span class="w"> </span>maturin
+maturin<span class="w"> </span>develop
+
+<span class="c1"># Build with NVIDIA CUDA support (requires NVIDIA driver)</span>
+maturin<span class="w"> </span>develop<span class="w"> </span>--features<span class="w"> </span>cuda
+
+<span class="c1"># Or install from PyPI (coming soon)</span>
+pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+
+<span class="c1"># Windows Users</span>
+<span class="c1"># HyperStreamDB is optimized for Linux/POSIX environments.</span>
+<span class="c1"># Windows users should use WSL2 (Windows Subsystem for Linux).</span>
+</pre></div>
+</div>
+</section>
+<section id="gpu-acceleration-optional">
+<h1>GPU Acceleration (Optional)<a class="headerlink" href="#gpu-acceleration-optional" title="Link to this heading">¶</a></h1>
+<p>For GPU-accelerated vector operations, install the appropriate backend:</p>
+<p><strong>GPU Support (NVIDIA/AMD/Intel/Apple):</strong>
+Hardware acceleration is now part of the base package.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+<span class="c1"># Verify: nvidia-smi / rocm-smi / clinfo</span>
+</pre></div>
+</div>
+<p><strong>AMD ROCm:</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Ubuntu</span>
+wget<span class="w"> </span>https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_5.7.50700-1_all.deb
+sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>./amdgpu-install_5.7.50700-1_all.deb
+sudo<span class="w"> </span>amdgpu-install<span class="w"> </span>--usecase<span class="o">=</span>rocm
+<span class="c1"># Verify: rocm-smi</span>
+</pre></div>
+</div>
+<p><strong>Apple Metal:</strong></p>
+<ul class="simple">
+<li><p>Included with macOS 12.3+ on Apple Silicon (M1, M2, M3, M4, M5)</p></li>
+<li><p>No additional installation required</p></li>
+</ul>
+<p><strong>Intel XPU / Graphics:</strong>
+Intel Arc, Data Center GPUs, and Iris Xe graphics are supported natively on Linux via WGPU.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Verify Vulkan/WGPU support</span>
+vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>vendor
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="#docs/PYTHON_VECTOR_API.md"><span class="xref myst">Python Vector API Documentation</span></a> for detailed GPU setup instructions.</p>
+</section>
+<section id="pgvector-sql-compatibility">
+<h1>pgvector SQL Compatibility<a class="headerlink" href="#pgvector-sql-compatibility" title="Link to this heading">¶</a></h1>
+<p>HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Use familiar pgvector operators</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">content</span><span class="p">,</span><span class="w"> </span>
+<span class="w">       </span><span class="n">embedding</span><span class="w"> </span><span class="o">&lt;-&gt;</span><span class="w"> </span><span class="s1">&#39;[0.1, 0.2, 0.3]&#39;</span><span class="p">::</span><span class="n">vector</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">l2_distance</span><span class="p">,</span>
+<span class="w">       </span><span class="n">embedding</span><span class="w"> </span><span class="o">&lt;=&gt;</span><span class="w"> </span><span class="s1">&#39;[0.1, 0.2, 0.3]&#39;</span><span class="p">::</span><span class="n">vector</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">cosine_distance</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">documents</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">category</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;science&#39;</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">l2_distance</span>
+<span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+
+<span class="c1">-- All six distance operators supported</span>
+<span class="c1">-- &lt;-&gt;  L2 (Euclidean)</span>
+<span class="c1">-- &lt;=&gt;  Cosine  </span>
+<span class="c1">-- &lt;#&gt;  Inner Product</span>
+<span class="c1">-- &lt;+&gt;  L1 (Manhattan)</span>
+<span class="c1">-- &lt;~&gt;  Hamming</span>
+<span class="c1">-- &lt;%&gt;  Jaccard</span>
+</pre></div>
+</div>
+<p>See <a class="reference internal" href="#docs/PGVECTOR_SQL_GUIDE.md"><span class="xref myst">pgvector SQL Guide</span></a> for complete documentation.</p>
+</section>
+<section id="basic-usage">
+<h1>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading">¶</a></h1>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+
+<span class="c1"># Create table</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+
+<span class="c1"># Write data (Pandas/PyArrow)</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
+    <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
+    <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;hello&quot;</span><span class="p">,</span> <span class="s2">&quot;world&quot;</span><span class="p">,</span> <span class="s2">&quot;test&quot;</span><span class="p">],</span>
+    <span class="s2">&quot;embedding&quot;</span><span class="p">:</span> <span class="p">[[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">],</span> <span class="p">[</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">]]</span>
+<span class="p">})</span>
+<span class="n">table</span><span class="o">.</span><span class="n">write_pandas</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
+
+<span class="c1"># Query with filters (uses indexes!) - Fluent API</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;id &gt; 1&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+
+<span class="c1"># Vector search - Fluent API</span>
+<span class="n">query_vec</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.15</span><span class="p">,</span> <span class="mf">0.25</span><span class="p">]</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span><span class="o">.</span><span class="n">vector_search</span><span class="p">(</span><span class="n">query_vec</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+
+<span class="c1"># Hybrid query (scalar + vector) - Fluent API</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;category = &#39;science&#39;&quot;</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">vector_search</span><span class="p">(</span><span class="n">query_vec</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">execute</span><span class="p">())</span>
+
+<span class="c1"># Alternative: Traditional API still supported</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span>
+    <span class="nb">filter</span><span class="o">=</span><span class="s2">&quot;category = &#39;science&#39;&quot;</span><span class="p">,</span>
+    <span class="n">vector_filter</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;embedding&quot;</span><span class="p">:</span> <span class="n">query_vec</span><span class="p">,</span> <span class="s2">&quot;k&quot;</span><span class="p">:</span> <span class="mi">10</span><span class="p">}</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="fluent-query-api">
+<h1>🔄 Fluent Query API<a class="headerlink" href="#fluent-query-api" title="Link to this heading">¶</a></h1>
+<p>HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:</p>
+<section id="python-fluent-api">
+<h2>Python Fluent API<a class="headerlink" href="#python-fluent-api" title="Link to this heading">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+
+<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+
+<span class="c1"># Method chaining with filters</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;age &gt; 25&quot;</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;status = &#39;active&#39;&quot;</span><span class="p">)</span>  <span class="c1"># Automatically combines with AND</span>
+                <span class="o">.</span><span class="n">execute</span><span class="p">())</span>
+
+<span class="c1"># Vector search with fluent API</span>
+<span class="n">query_embedding</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.1</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">]</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">vector_search</span><span class="p">(</span><span class="n">query_embedding</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">execute</span><span class="p">())</span>
+
+<span class="c1"># Combine scalar filtering with vector search</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;category = &#39;documents&#39;&quot;</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">vector_search</span><span class="p">(</span><span class="n">query_embedding</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="s2">&quot;content_vec&quot;</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s1">&#39;title&#39;</span><span class="p">,</span> <span class="s1">&#39;score&#39;</span><span class="p">])</span>
+                <span class="o">.</span><span class="n">execute</span><span class="p">())</span>
+
+<span class="c1"># Complex hybrid queries</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;published_date &gt; &#39;2024-01-01&#39;&quot;</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;author IN (&#39;smith&#39;, &#39;jones&#39;)&quot;</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">vector_search</span><span class="p">(</span><span class="n">query_embedding</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">select</span><span class="p">([</span><span class="s1">&#39;title&#39;</span><span class="p">,</span> <span class="s1">&#39;author&#39;</span><span class="p">,</span> <span class="s1">&#39;score&#39;</span><span class="p">])</span>
+                <span class="o">.</span><span class="n">execute</span><span class="p">())</span>
+</pre></div>
+</div>
+</section>
+<section id="rust-fluent-api">
+<h2>Rust Fluent API<a class="headerlink" href="#rust-fluent-api" title="Link to this heading">¶</a></h2>
+<p>The same fluent interface is available in native Rust:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">hyperstreamdb</span><span class="p">::{</span><span class="n">Table</span><span class="p">,</span><span class="w"> </span><span class="n">VectorValue</span><span class="p">};</span>
+
+<span class="cp">#[tokio::main]</span>
+<span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">anyhow</span><span class="p">::</span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Table</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span>
+<span class="w">    </span><span class="c1">// Method chaining</span>
+<span class="w">    </span><span class="kd">let</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">table</span>
+<span class="w">        </span><span class="p">.</span><span class="n">query</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="n">filter</span><span class="p">(</span><span class="s">&quot;age &gt; 25&quot;</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">vector_search</span><span class="p">(</span><span class="s">&quot;embedding&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">VectorValue</span><span class="p">::</span><span class="n">Float32</span><span class="p">(</span><span class="n">query_vec</span><span class="p">),</span><span class="w"> </span><span class="mi">10</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">select</span><span class="p">(</span><span class="fm">vec!</span><span class="p">[</span><span class="s">&quot;name&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;score&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">()])</span>
+<span class="w">        </span><span class="p">.</span><span class="n">to_batches</span><span class="p">()</span>
+<span class="w">        </span><span class="p">.</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+<span class="w">    </span>
+<span class="w">    </span><span class="fm">println!</span><span class="p">(</span><span class="s">&quot;Found {} result batches&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">results</span><span class="p">.</span><span class="n">len</span><span class="p">());</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(())</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="benefits">
+<h2>Benefits<a class="headerlink" href="#benefits" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Method Chaining</strong>: Intuitive, readable query construction</p></li>
+<li><p><strong>Type Safe</strong>: Compile-time validation in Rust, runtime validation in Python</p></li>
+<li><p><strong>Performance</strong>: Same underlying optimized execution as traditional APIs</p></li>
+<li><p><strong>Interoperable</strong>: Mix with SQL queries and traditional <code class="docutils literal notranslate"><span class="pre">to_pandas()</span></code> calls</p></li>
+<li><p><strong>GPU Acceleration</strong>: Automatic GPU context propagation for vector operations</p></li>
+</ul>
+</section>
+<section id="python-vector-distance-api-with-gpu-acceleration">
+<h2>Python Vector Distance API with GPU Acceleration<a class="headerlink" href="#python-vector-distance-api-with-gpu-acceleration" title="Link to this heading">¶</a></h2>
+<p>HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+<span class="c1"># GPU-accelerated batch distance computation</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>  <span class="c1"># Auto-detect CUDA/ROCm/Metal/XPU</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using GPU backend: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># Create query and database vectors</span>
+<span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">100000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+
+<span class="c1"># Compute distances on GPU (10x+ faster for large databases)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+
+<span class="c1"># Find top-k nearest neighbors</span>
+<span class="n">k</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="n">top_k_indices</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argsort</span><span class="p">(</span><span class="n">distances</span><span class="p">)[:</span><span class="n">k</span><span class="p">]</span>
+
+<span class="c1"># Single-pair distance computation</span>
+<span class="n">vec1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">])</span>
+<span class="n">vec2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">])</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+
+<span class="c1"># Sparse vector support for high-dimensional sparse data</span>
+<span class="n">sparse1</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+    <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
+    <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+    <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
+<span class="p">)</span>
+<span class="n">sparse2</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+    <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">5</span><span class="p">,</span> <span class="mi">50</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
+    <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+    <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
+<span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
+
+<span class="c1"># Binary vector operations (bit-packed for efficiency)</span>
+<span class="n">binary1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">packbits</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">))</span>
+<span class="n">binary2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">packbits</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">))</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><strong>Supported GPU Backends:</strong></p>
+<ul class="simple">
+<li><p><strong>CUDA</strong> - NVIDIA GPUs (Linux, Windows via WSL2)</p></li>
+<li><p><strong>ROCm</strong> - AMD GPUs (Linux)</p></li>
+<li><p><strong>Metal (MPS)</strong> - Apple Silicon (macOS)</p></li>
+<li><p><strong>Intel XPU</strong> - Intel Graphics (Native Linux via WGPU)</p></li>
+<li><p><strong>CPU</strong> - Fallback for all platforms</p></li>
+</ul>
+<p><strong>Supported Distance Metrics:</strong></p>
+<ul class="simple">
+<li><p>L2 (Euclidean), Cosine, Inner Product, L1 (Manhattan), Hamming, Jaccard</p></li>
+</ul>
+<p>See <a class="reference internal" href="#docs/PYTHON_VECTOR_API.md"><span class="xref myst">Python Vector API Documentation</span></a> for complete API reference and GPU installation instructions</p>
+</section>
+</section>
+<section id="sql-queries-full-datafusion-support-with-pgvector-syntax">
+<h1>SQL queries (full DataFusion support with pgvector syntax)<a class="headerlink" href="#sql-queries-full-datafusion-support-with-pgvector-syntax" title="Link to this heading">¶</a></h1>
+<p>import hyperstreamdb as hdb
+session = hdb.Session()
+session.register(“users”, table)</p>
+</section>
+<section id="optional-enable-gpu-acceleration-for-sql-queries">
+<h1>Optional: Enable GPU acceleration for SQL queries<a class="headerlink" href="#optional-enable-gpu-acceleration-for-sql-queries" title="Link to this heading">¶</a></h1>
+<p>ctx = hdb.GPUContext.auto_detect()
+hdb.set_thread_gpu_context(ctx)</p>
+</section>
+<section id="simple-sql">
+<h1>Simple SQL<a class="headerlink" href="#simple-sql" title="Link to this heading">¶</a></h1>
+<p>results = table.sql(“SELECT * FROM t WHERE id &gt; 100”)</p>
+</section>
+<section id="vector-similarity-search-with-pgvector-operators-gpu-accelerated">
+<h1>Vector similarity search with pgvector operators (GPU-accelerated)<a class="headerlink" href="#vector-similarity-search-with-pgvector-operators-gpu-accelerated" title="Link to this heading">¶</a></h1>
+<p>results = session.sql(“””
+SELECT id, content,
+embedding &lt;-&gt; ‘[0.1, 0.2, 0.3]’::vector AS distance
+FROM documents
+WHERE category = ‘science’
+ORDER BY distance
+LIMIT 10
+“””)</p>
+</section>
+<section id="joins-uses-index-nested-loop-join-optimization">
+<h1>Joins (uses Index Nested Loop Join optimization)<a class="headerlink" href="#joins-uses-index-nested-loop-join-optimization" title="Link to this heading">¶</a></h1>
+<p>results = session.sql(“””
+SELECT u.name, o.amount
+FROM users u
+JOIN orders o ON u.id = o.user_id
+WHERE u.category = ‘premium’
+“””)</p>
+</section>
+<section id="maintenance">
+<h1>Maintenance<a class="headerlink" href="#maintenance" title="Link to this heading">¶</a></h1>
+<p>table.compact()
+table.expire_snapshots(retain_last=10)</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
+## 📊 Real-World Testing Plan
+
+### Phase 1: Core Stability (Current)
+
+**Test Datasets:**
+- ✅ NYC Taxi (1.5B rows, ~200GB) - Scalar filtering
+- ✅ Synthetic Embeddings (10M vectors, 768-dim) - Vector search
+- 🔄 Wikipedia + Embeddings (100M docs) - Hybrid queries
+
+**Download Test Data:**
+```bash
+# NYC Taxi dataset
+./tests/data/download_nyc_taxi.sh
+
+# Generate synthetic embeddings
+python tests/data/generate_embeddings.py
+</pre></div>
+</div>
+<p><strong>Run Benchmarks:</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Rust benchmarks</span>
+cargo<span class="w"> </span>bench
+
+<span class="c1"># Integration tests</span>
+python<span class="w"> </span>tests/integration/test_nyc_taxi.py
+</pre></div>
+</div>
+<p><strong>Performance Targets:</strong></p>
+<ul class="simple">
+<li><p><strong>Scalar Ingest</strong>: &gt;10K rows/sec ✅</p></li>
+<li><p><strong>Vector Ingest (768D)</strong>: &gt;4,000 rows/sec ✅ (April 2026)</p></li>
+<li><p><strong>Query (indexed)</strong>: &lt;100ms p99 ⏱️</p></li>
+<li><p><strong>Vector search</strong>: &lt;50ms for k=10 on 10M vectors ⏱️</p></li>
+<li><p><strong>Compaction</strong>: &lt;5min for 10GB ⏱️</p></li>
+</ul>
+<p><strong>Benchmarking Environment: Lenovo T480</strong></p>
+<ul class="simple">
+<li><p><strong>System</strong>: Lenovo T480</p></li>
+<li><p><strong>CPU</strong>: Intel(R) Core(TM) i5-8350U CPU &#64; 1.70GHz</p></li>
+<li><p><strong>RAM</strong>: 64GB</p></li>
+<li><p><strong>OS</strong>: Linux</p></li>
+</ul>
+<p><strong>Benchmarking Environment: Apple M4 Max</strong></p>
+<ul class="simple">
+<li><p><strong>System</strong>: MacBook Pro (M4 Max, 16-core CPU, 40-core GPU)</p></li>
+<li><p><strong>Memory</strong>: 128GB Unified Memory</p></li>
+<li><p><strong>OS</strong>: macOS (Arm64)</p></li>
+<li><p><strong>Optimizations</strong>: <code class="docutils literal notranslate"><span class="pre">target-cpu=native</span></code> (NEON SIMD)</p></li>
+<li><p><strong>Results (100K vectors, 768D) [OUT OF DATE - Pre-v0.5.0]</strong>:</p>
+<ul>
+<li><p><strong>Vector Ingest</strong>: 16,707 rows/sec (CPU) ✅</p></li>
+<li><p><strong>Vector Search (k=10)</strong>: 819ms (CPU / NEON) ✅</p></li>
+<li><p><strong>Vector Search (k=10)</strong>: 860ms (MPS GPU) ⏱️</p></li>
+</ul>
+</li>
+</ul>
+<section id="phase-2-nessie-integration-next">
+<h2>Phase 2: Nessie Integration (Next)<a class="headerlink" href="#phase-2-nessie-integration-next" title="Link to this heading">¶</a></h2>
+<p><strong>Catalog Strategy:</strong></p>
+<ul class="simple">
+<li><p>✅ Use Nessie REST v2 (don’t build custom catalog)</p></li>
+<li><p>Implement Rust client for Iceberg REST Catalog API</p></li>
+<li><p>Support Git-like branching for tables</p></li>
+</ul>
+<p><strong>Why Nessie?</strong></p>
+<ul class="simple">
+<li><p>Iceberg-standard protocol</p></li>
+<li><p>Multi-table transactions</p></li>
+<li><p>Battle-tested (Netflix, Apple, Dremio)</p></li>
+</ul>
+</section>
+<section id="phase-3-production-hardening">
+<h2>Phase 3: Production Hardening<a class="headerlink" href="#phase-3-production-hardening" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>[ ] Schema evolution support</p></li>
+<li><p>[ ] Partition evolution</p></li>
+<li><p>[ ] Distributed locking (DynamoDB)</p></li>
+<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">hyperstream</span> <span class="pre">compact</span></code>, <code class="docutils literal notranslate"><span class="pre">vacuum</span></code>)</p></li>
+<li><p>[ ] Prometheus metrics</p></li>
+<li><p>[ ] Error handling &amp; retries</p></li>
+</ul>
+</section>
+<section id="architecture">
+<h2>🏗️ Architecture<a class="headerlink" href="#architecture" title="Link to this heading">¶</a></h2>
+<section id="overlay-indexing">
+<h3>Overlay Indexing<a class="headerlink" href="#overlay-indexing" title="Link to this heading">¶</a></h3>
+<p>HyperStreamDB stores indexes as <strong>sidecar files</strong> alongside Parquet data:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>s3://bucket/table/
+├── data/
+│   ├── segment_001.parquet                   # Main Data (Parquet)
+│   ├── segment_001.id.inv.parquet           # Scalar index (Inverted Parquet)
+│   ├── segment_001.emb.centroids.parquet    # Vector index centroids
+│   └── segment_001.emb.cluster_0.hnsw.graph # Vector index graph (HNSW)
+├── _manifest/
+│   ├── v1.avro                              # Manifest (Iceberg/Avro)
+│   └── v2.avro
+└── _metadata/
+    └── v1.metadata.json
+</pre></div>
+</div>
+</section>
+<section id="manifest-format">
+<h3>Manifest Format<a class="headerlink" href="#manifest-format" title="Link to this heading">¶</a></h3>
+<p><strong>Apache Iceberg V2/V3 compliant</strong> (Avro encoding):</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;timestamp_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1705512000000</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;entries&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;segment_001.parquet&quot;</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;file_size_bytes&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">104857600</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;record_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1000000</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">&quot;index_files&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;segment_001.id.inv.parquet&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;index_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;scalar&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;column_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;id&quot;</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">&quot;file_path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;segment_001.embedding.cluster_0.hnsw.graph&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;index_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;vector&quot;</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">&quot;column_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;embedding&quot;</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">]</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;prev_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="connectors">
+<h2>🔌 Connectors<a class="headerlink" href="#connectors" title="Link to this heading">¶</a></h2>
+<section id="spark">
+<h3>Spark<a class="headerlink" href="#spark" title="Link to this heading">¶</a></h3>
+<div class="highlight-scala notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read</span>
+<span class="kd">val</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">spark</span><span class="p">.</span><span class="n">read</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">load</span><span class="p">()</span>
+
+<span class="c1">// Write</span>
+<span class="n">df</span><span class="p">.</span><span class="n">write</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">save</span><span class="p">()</span>
+</pre></div>
+</div>
+</section>
+<section id="trino">
+<h3>Trino<a class="headerlink" href="#trino" title="Link to this heading">¶</a></h3>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">hyperstream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">my_table</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w">  </span><span class="c1">-- Uses scalar index</span>
+</pre></div>
+</div>
+</section>
+<section id="python-direct">
+<h3>Python (Direct)<a class="headerlink" href="#python-direct" title="Link to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># No Spark needed for local/notebook work</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">query</span><span class="p">()</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+<span class="c1"># Or using traditional API: df = hdb.Table(&quot;s3://bucket/table&quot;).to_pandas()</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="building-connectors">
+<h2>🔨 Building Connectors<a class="headerlink" href="#building-connectors" title="Link to this heading">¶</a></h2>
+<p>The Spark and Trino connectors require building shaded “fat” JARs that bundle the native Rust core.</p>
+<section id="matrix-build">
+<h3>Matrix Build<a class="headerlink" href="#matrix-build" title="Link to this heading">¶</a></h3>
+<p>We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/4.0):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./build-connectors.sh
+</pre></div>
+</div>
+</section>
+<section id="hardware-acceleration">
+<h3>Hardware Acceleration<a class="headerlink" href="#hardware-acceleration" title="Link to this heading">¶</a></h3>
+<ul>
+<li><p><strong>Standard</strong>: Build with CPU + Intel Graphics/XPU support (default).</p></li>
+<li><p><strong>CUDA</strong>: Build for NVIDIA GPUs:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>./build-connectors.sh<span class="w"> </span>--cuda
+</pre></div>
+</div>
+</li>
+</ul>
+</section>
+<section id="portable-toolchain">
+<h3>Portable Toolchain<a class="headerlink" href="#portable-toolchain" title="Link to this heading">¶</a></h3>
+<p>The build script automatically downloads a project-local Maven and JDK 21 if they are missing from your system, ensuring a consistent build environment.</p>
+</section>
+<section id="artifacts">
+<h3>Artifacts<a class="headerlink" href="#artifacts" title="Link to this heading">¶</a></h3>
+<p>Final JARs and ZIPs are collected in the <code class="docutils literal notranslate"><span class="pre">connector-artifacts/</span></code> directory.</p>
+</section>
+</section>
+<section id="development">
+<h2>🧪 Development<a class="headerlink" href="#development" title="Link to this heading">¶</a></h2>
+<section id="build-test">
+<h3>Build &amp; Test<a class="headerlink" href="#build-test" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Build Rust library</span>
+cargo<span class="w"> </span>build<span class="w"> </span>--release
+
+<span class="c1"># Run tests</span>
+cargo<span class="w"> </span><span class="nb">test</span>
+
+<span class="c1"># Run benchmarks</span>
+cargo<span class="w"> </span>bench
+
+<span class="c1"># Build Python bindings</span>
+maturin<span class="w"> </span>develop
+
+<span class="c1"># Python tests</span>
+pytest<span class="w"> </span>tests/
+</pre></div>
+</div>
+</section>
+<section id="project-structure">
+<h3>Project Structure<a class="headerlink" href="#project-structure" title="Link to this heading">¶</a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>hyperstreamdb/
+├── src/
+│   ├── lib.rs              # Main library
+│   ├── segment.rs          # Hybrid segment writer
+│   ├── reader.rs           # Index-aware reader
+│   ├── manifest.rs         # Manifest management
+│   ├── compaction.rs       # Compaction engine
+│   ├── maintenance.rs      # Vacuum/GC
+│   ├── python_binding.rs   # PyO3 bindings
+│   └── storage.rs          # Multi-cloud storage
+├── spark-hyperstream/      # Spark connector (Java)
+├── trino-hyperstream/      # Trino connector (Java)
+├── tests/
+│   ├── data/               # Test datasets
+│   ├── integration/        # Integration tests
+│   └── benchmarks/         # Performance tests
+└── benches/                # Criterion benchmarks
+</pre></div>
+</div>
+</section>
+</section>
+<section id="roadmap">
+<h2>📈 Roadmap<a class="headerlink" href="#roadmap" title="Link to this heading">¶</a></h2>
+<section id="completed">
+<h3>✅ Completed<a class="headerlink" href="#completed" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>[x] Hybrid segment format (Parquet + indexes)</p></li>
+<li><p>[x] Manifest management (Iceberg-like)</p></li>
+<li><p>[x] Compaction engine</p></li>
+<li><p>[x] Maintenance (expire_snapshots, remove_orphan_files)</p></li>
+<li><p>[x] Python bindings (Pandas-compatible)</p></li>
+<li><p>[x] Native SQL support (DataFusion integration)</p></li>
+<li><p>[x] pgvector-compatible SQL operators and syntax</p></li>
+<li><p>[x] Index Nested Loop Join optimization</p></li>
+<li><p>[x] Boolean column indexing</p></li>
+<li><p>[x] Multi-table JOIN support</p></li>
+<li><p>[x] Real-world testing (NYC Taxi, Wikipedia, embeddings)</p></li>
+<li><p>[x] Nessie catalog integration</p></li>
+<li><p>[x] Iceberg V2 compliance (Sort Orders, Partition Evolution, Statistics)</p></li>
+<li><p>[x] Iceberg V3 features (Row Lineage, Default Values, HyperLogLog NDV)</p></li>
+<li><p>[x] Standard Iceberg API (<code class="docutils literal notranslate"><span class="pre">update_spec</span></code>, <code class="docutils literal notranslate"><span class="pre">replace_sort_order</span></code>, <code class="docutils literal notranslate"><span class="pre">rewrite_data_files</span></code>, <code class="docutils literal notranslate"><span class="pre">rollback_to_snapshot</span></code>)</p></li>
+<li><p>[x] Python Vector Distance API with GPU acceleration</p></li>
+<li><p>[x] Multi-backend GPU support (CUDA, ROCm, Metal, XPU)</p></li>
+<li><p>[x] Sparse and binary vector operations</p></li>
+</ul>
+</section>
+<section id="in-progress">
+<h3>🔄 In Progress<a class="headerlink" href="#in-progress" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>[ ] Spark/Trino connectors</p></li>
+<li><p>[ ] Schema evolution</p></li>
+<li><p>[ ] Partition evolution</p></li>
+</ul>
+</section>
+<section id="planned">
+<h3>📋 Planned<a class="headerlink" href="#planned" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p>[ ] Distributed locking (DynamoDB/Zookeeper)</p></li>
+<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">hyperstream</span> <span class="pre">admin</span></code>)</p></li>
+<li><p>[ ] Prometheus metrics</p></li>
+<li><p>[ ] <strong>REST Gateway</strong> (OpenAPI for JS/Frontend RAG integration)</p></li>
+</ul>
+</section>
+</section>
+<section id="contributing">
+<h2>🤝 Contributing<a class="headerlink" href="#contributing" title="Link to this heading">¶</a></h2>
+<p>We welcome contributions! See <a class="reference internal" href="#CONTRIBUTING.md"><span class="xref myst">CONTRIBUTING.md</span></a> for guidelines.</p>
+</section>
+<section id="license">
+<h2>📄 License<a class="headerlink" href="#license" title="Link to this heading">¶</a></h2>
+<p>The Python wrapper is licensed under the <strong>MIT License</strong>.
+The underlying Rust engine and core database logic is licensed under the <strong>Apache License 2.0</strong>.</p>
+<p>This project contains modified source code from various upstream open-source projects (including <code class="docutils literal notranslate"><span class="pre">hnsw_rs</span></code> for pre-filtering support), which were originally licensed under Apache 2.0. HyperStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.</p>
+</section>
+<section id="acknowledgments">
+<h2>🙏 Acknowledgments<a class="headerlink" href="#acknowledgments" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p><strong>Apache Iceberg</strong> - Inspiration for manifest design</p></li>
+<li><p><strong>Apache Arrow</strong> - Columnar format</p></li>
+<li><p><strong>hnsw_rs</strong> - Vector indexing</p></li>
+<li><p><strong>RoaringBitmap</strong> - Scalar indexing</p></li>
+</ul>
+<hr class="docutils" />
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="comprehensive_guide.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">HyperStreamDB Comprehensive Guide</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="../index.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Home</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, HyperStream Team
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            <div class="icons">
+              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+                <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
+                </svg>
+            </a>
+              
+            </div>
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer no-toc">
+      
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=45def3bc"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    </body>
+</html>

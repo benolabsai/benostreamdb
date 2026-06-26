@@ -42,6 +42,7 @@ extensions = [
 
 templates_path = ['_templates']
 exclude_patterns = []
+suppress_warnings = ["myst.xref_missing", "myst.header", "toc.not_included", "docutils"]
 
 # Support both .rst and .md files
 source_suffix = {

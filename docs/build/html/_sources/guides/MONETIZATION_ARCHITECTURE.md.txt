@@ -1,0 +1,610 @@
+# Monetization Architecture Guide
+
+**Purpose**: Structure codebase to support open-core/freemium model while maintaining clean separation between free (Apache 2.0) and paid features.
+
+---
+
+## Core Principles
+
+### 1. **License Strategy**
+- **Open Source (Apache 2.0)**: Core functionality, basic indexing, standard features
+- **Commercial License**: Premium features (continuous indexing, advanced optimizations, enterprise features)
+- **Important**: Apache 2.0 allows commercial use, so premium features must be in separate modules or require a commercial license
+
+### 2. **Architecture Patterns**
+
+#### Pattern A: Feature Flags (Recommended)
+- Compile-time feature flags (`--features enterprise`)
+- Runtime license checking
+- Clean separation via traits/interfaces
+
+#### Pattern B: Plugin Architecture
+- Core engine is open source
+- Premium features as plugins (separate crates)
+- License validation at plugin load time
+
+#### Pattern C: Dual License
+- Open source version (limited features)
+- Commercial version (full features)
+- Same codebase, different feature sets
+
+---
+
+## Recommended Structure
+
+### Directory Layout
+
+```
+hyperstreamdb/
+├── src/
+│   ├── core/              # Open source core (Apache 2.0)
+│   │   ├── table.rs
+│   │   ├── segment.rs
+│   │   ├── reader.rs
+│   │   └── index/
+│   │       ├── mod.rs
+│   │       ├── hnsw_ivf.rs
+│   │       └── basic.rs    # Basic indexing (free)
+│   │
+│   ├── enterprise/         # Premium features (Commercial license)
+│   │   ├── mod.rs
+│   │   ├── continuous_indexing.rs
+│   │   ├── incremental_updates.rs
+│   │   ├── advanced_optimizations.rs
+│   │   └── license.rs      # License validation
+│   │
+│   └── lib.rs              # Main library entry point
+│
+├── Cargo.toml              # Feature flags defined here
+└── LICENSE                 # Apache 2.0
+└── LICENSE-COMMERCIAL       # Commercial license (if dual-licensing)
+```
+
+---
+
+## Implementation: Feature Flag Architecture
+
+### 1. Cargo.toml Configuration
+
+```toml
+[package]
+name = "hyperstreamdb"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+enterprise = ["hyperstreamdb-enterprise"]  # Enable premium features
+
+[dependencies]
+# Core dependencies (always included)
+arrow = "57.2.0"
+parquet = "57.2.0"
+# ... other core deps
+
+# Enterprise features (optional dependency)
+hyperstreamdb-enterprise = { path = "../hyperstreamdb-enterprise", optional = true }
+
+[dev-dependencies]
+# ... test dependencies
+```
+
+### 2. Core Module Structure
+
+**`src/core/index/mod.rs`**:
+```rust
+// Core indexing trait (open source)
+pub trait IndexBuilder {
+    fn build_index(&self, data: &RecordBatch) -> Result<Index>;
+    fn update_index(&self, index: &mut Index, new_data: &RecordBatch) -> Result<()>;
+}
+
+// Basic implementation (free, open source)
+pub mod basic;
+pub use basic::BasicIndexBuilder;
+
+// Enterprise implementation (premium, requires license)
+#[cfg(feature = "enterprise")]
+pub mod enterprise;
+#[cfg(feature = "enterprise")]
+pub use enterprise::EnterpriseIndexBuilder;
+```
+
+**`src/core/index/basic.rs`** (Free, Open Source):
+```rust
+use super::IndexBuilder;
+use arrow::record_batch::RecordBatch;
+use anyhow::Result;
+
+/// Basic index builder - rebuilds indexes on flush
+/// This is the free, open-source implementation
+pub struct BasicIndexBuilder {
+    // ... basic implementation
+}
+
+impl IndexBuilder for BasicIndexBuilder {
+    fn build_index(&self, data: &RecordBatch) -> Result<Index> {
+        // Current implementation: build index from scratch
+        // This is free and open source
+        // ...
+    }
+    
+    fn update_index(&self, index: &mut Index, new_data: &RecordBatch) -> Result<()> {
+        // Basic implementation: rebuild entire index
+        // Premium version would do incremental updates
+        self.build_index(new_data)
+    }
+}
+```
+
+**`src/enterprise/continuous_indexing.rs`** (Premium, Commercial):
+```rust
+use crate::core::index::IndexBuilder;
+use arrow::record_batch::RecordBatch;
+use anyhow::Result;
+use crate::enterprise::license::validate_license;
+
+/// Enterprise index builder with continuous/incremental indexing
+/// Requires valid commercial license
+pub struct ContinuousIndexBuilder {
+    license_key: Option<String>,
+}
+
+impl ContinuousIndexBuilder {
+    pub fn new(license_key: Option<String>) -> Result<Self> {
+        // Validate license if provided
+        if let Some(key) = &license_key {
+            validate_license(key)?;
+        }
+        Ok(Self { license_key })
+    }
+    
+    /// Incremental index update - only rebuilds affected portions
+    pub fn update_incremental(&self, index: &mut Index, new_data: &RecordBatch) -> Result<()> {
+        // Check license
+        self.ensure_licensed()?;
+        
+        // Premium feature: Incremental index updates
+        // Only rebuilds affected clusters/segments
+        // Much faster than full rebuild
+        // ...
+    }
+    
+    fn ensure_licensed(&self) -> Result<()> {
+        if self.license_key.is_none() {
+            anyhow::bail!(
+                "Continuous indexing requires a commercial license. \
+                Visit https://hyperstreamdb.com/pricing for more information."
+            );
+        }
+        Ok(())
+    }
+}
+```
+
+### 3. License Validation Module
+
+**`src/enterprise/license.rs`**:
+```rust
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct License {
+    pub key: String,
+    pub features: Vec<String>,  // e.g., ["continuous_indexing", "advanced_optimizations"]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub max_tables: Option<usize>,
+}
+
+pub fn validate_license(license_key: &str) -> Result<License> {
+    // In production, this would:
+    // 1. Decrypt/verify license key signature
+    // 2. Check expiration
+    // 3. Validate against license server (optional)
+    // 4. Cache validation result
+    
+    // For now, simple validation
+    if license_key.starts_with("HSDB-ENT-") {
+        Ok(License {
+            key: license_key.to_string(),
+            features: vec!["continuous_indexing".to_string()],
+            expires_at: None,
+            max_tables: None,
+        })
+    } else {
+        anyhow::bail!("Invalid license key")
+    }
+}
+
+pub fn has_feature(license: &License, feature: &str) -> bool {
+    license.features.contains(&feature.to_string())
+}
+```
+
+### 4. Table Integration
+
+**`src/core/table.rs`** (Modified):
+```rust
+use crate::core::index::{IndexBuilder, BasicIndexBuilder};
+#[cfg(feature = "enterprise")]
+use crate::enterprise::continuous_indexing::ContinuousIndexBuilder;
+
+pub struct Table {
+    // ... existing fields
+    index_builder: Box<dyn IndexBuilder>,
+    #[cfg(feature = "enterprise")]
+    enterprise_license: Option<String>,
+}
+
+impl Table {
+    pub fn new(uri: String) -> Self {
+        Self {
+            // ... existing initialization
+            index_builder: Box::new(BasicIndexBuilder::new()),
+            #[cfg(feature = "enterprise")]
+            enterprise_license: None,
+        }
+    }
+    
+    /// Enable enterprise features (requires license)
+    #[cfg(feature = "enterprise")]
+    pub fn enable_enterprise(&mut self, license_key: String) -> Result<()> {
+        let builder = ContinuousIndexBuilder::new(Some(license_key.clone()))?;
+        self.index_builder = Box::new(builder);
+        self.enterprise_license = Some(license_key);
+        Ok(())
+    }
+    
+    /// Enable continuous indexing (premium feature)
+    pub fn enable_continuous_indexing(&mut self) -> Result<()> {
+        #[cfg(feature = "enterprise")]
+        {
+            if self.enterprise_license.is_none() {
+                anyhow::bail!(
+                    "Continuous indexing requires enterprise license. \
+                    Use table.enable_enterprise(license_key) first."
+                );
+            }
+            // Already enabled via enable_enterprise
+            Ok(())
+        }
+        
+        #[cfg(not(feature = "enterprise"))]
+        {
+            anyhow::bail!(
+                "Continuous indexing is an enterprise feature. \
+                Build with --features enterprise or contact sales."
+            );
+        }
+    }
+}
+```
+
+---
+
+## Python Bindings Integration
+
+**`src/python_binding.rs`** (Modified):
+```rust
+use pyo3::prelude::*;
+
+#[pyclass]
+pub struct PyTable {
+    table: crate::core::table::Table,
+}
+
+#[pymethods]
+impl PyTable {
+    #[new]
+    fn new(uri: String) -> Self {
+        Self {
+            table: crate::core::table::Table::new(uri),
+        }
+    }
+    
+    /// Enable enterprise features (Python API)
+    #[cfg(feature = "enterprise")]
+    fn enable_enterprise(&mut self, license_key: String) -> PyResult<()> {
+        self.table.enable_enterprise(license_key)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+    
+    /// Enable continuous indexing (Python API)
+    fn enable_continuous_indexing(&mut self) -> PyResult<()> {
+        self.table.enable_continuous_indexing()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+}
+```
+
+**Python Usage**:
+```python
+import hyperstreamdb as hdb
+
+# Free version (basic indexing)
+table = hdb.Table("s3://bucket/table")
+table.write_arrow(data)  # Indexes rebuilt on flush (free)
+
+# Enterprise version (continuous indexing)
+table = hdb.Table("s3://bucket/table")
+table.enable_enterprise("HSDB-ENT-...")  # Requires license
+table.enable_continuous_indexing()       # Premium feature
+table.write_arrow(data)  # Incremental index updates (premium)
+```
+
+---
+
+## Continuous Indexing Implementation
+
+### What is Continuous Indexing?
+
+**Current (Free)**: Indexes are rebuilt from scratch on each flush
+- Slow for large datasets
+- Full rebuild required
+
+**Premium (Continuous)**: Incremental index updates
+- Only affected portions rebuilt
+- Much faster for updates
+- Real-time index maintenance
+
+### Implementation Strategy
+
+**`src/enterprise/continuous_indexing.rs`** (Full Implementation):
+```rust
+use crate::core::index::IndexBuilder;
+use crate::index::hnsw_ivf::HnswIvfIndex;
+use arrow::record_batch::RecordBatch;
+use anyhow::Result;
+
+pub struct ContinuousIndexBuilder {
+    license_key: Option<String>,
+}
+
+impl ContinuousIndexBuilder {
+    /// Incremental HNSW-IVF update
+    /// Only rebuilds affected clusters, not entire index
+    pub fn update_hnsw_ivf_incremental(
+        &self,
+        existing_index: &mut HnswIvfIndex,
+        new_vectors: &RecordBatch,
+    ) -> Result<()> {
+        self.ensure_licensed()?;
+        
+        // Premium algorithm:
+        // 1. Identify which clusters new vectors belong to
+        // 2. Only rebuild those clusters' HNSW graphs
+        // 3. Merge new vectors into existing clusters
+        // 4. Rebalance if cluster sizes become imbalanced
+        
+        // This is 10-100x faster than full rebuild for small updates
+        // ...
+    }
+    
+    /// Continuous index maintenance
+    /// Runs in background, keeps indexes up-to-date
+    pub async fn start_continuous_maintenance(&self) -> Result<()> {
+        self.ensure_licensed()?;
+        
+        // Premium feature: Background index maintenance
+        // Monitors for new data, automatically updates indexes
+        // Configurable update frequency (real-time, hourly, daily)
+        // ...
+    }
+}
+```
+
+---
+
+## Alternative: Separate Enterprise Crate
+
+For even cleaner separation, create a separate crate:
+
+**`hyperstreamdb-enterprise/Cargo.toml`**:
+```toml
+[package]
+name = "hyperstreamdb-enterprise"
+version = "0.1.0"
+edition = "2021"
+license = "COMMERCIAL"  # Not open source
+
+[dependencies]
+hyperstreamdb = { path = "../hyperstreamdb", default-features = false }
+# Enterprise-specific dependencies
+```
+
+**Benefits**:
+- Complete separation of open source and commercial code
+- Can use different licenses
+- Easier to distribute enterprise version separately
+- Clearer legal boundaries
+
+---
+
+## Feature Matrix
+
+| Feature | Free (Apache 2.0) | Enterprise (Commercial) |
+|---------|-------------------|------------------------|
+| **Basic Indexing** | ✅ Yes | ✅ Yes |
+| **HNSW-IVF Indexes** | ✅ Yes | ✅ Yes |
+| **Scalar Indexes** | ✅ Yes | ✅ Yes |
+| **Vector Search** | ✅ Yes | ✅ Yes |
+| **GPU Acceleration** | ✅ Yes (Free) | ✅ Yes |
+| **CUDA Support** | ✅ Yes (Free) | ✅ Yes |
+| **Continuous Indexing** | ❌ No | ✅ Yes |
+| **Incremental Updates** | ❌ No (full rebuild) | ✅ Yes |
+| **Background Maintenance** | ❌ No | ✅ Yes |
+| **Advanced Optimizations** | ❌ No | ✅ Yes |
+| **Priority Support** | ❌ No | ✅ Yes |
+
+---
+
+## License Enforcement Strategy
+
+### Option 1: Compile-Time (Recommended for MVP)
+- Enterprise features only available with `--features enterprise`
+- License validation at runtime
+- Simpler to implement
+
+### Option 2: Runtime Plugin Loading
+- Core is always open source
+- Enterprise features loaded as plugins
+- More flexible but more complex
+
+### Option 3: Dual Distribution
+- Open source version on GitHub (Apache 2.0)
+- Enterprise version distributed separately (Commercial license)
+- Same codebase, different builds
+
+---
+
+## GPU Support: Should It Be Free?
+
+### Recommendation: **YES, GPU should be FREE** (like PyTorch/FAISS)
+
+### Industry Precedent
+
+**Open Source Tools with Free GPU Support:**
+- **PyTorch**: GPU acceleration is completely free and open source
+- **FAISS**: `faiss-gpu` package is free (MIT license)
+- **Milvus**: GPU indexes are free in open-source version
+- **TensorFlow**: GPU support is free and open source
+
+**Why GPU Support Should Be Free:**
+
+1. **Backend Compute Option**: GPU is a hardware choice, not a software feature
+   - Users still need to own/provide GPUs
+   - Similar to how PyTorch doesn't charge for CUDA support
+   - The value is in the software, not hardware access
+
+2. **Competitive Necessity**: 
+   - All major ML/data tools offer free GPU support
+   - Charging would put HyperStreamDB at a disadvantage
+   - Users expect GPU support to be free (industry standard)
+
+3. **User Expectations**:
+   - Developers expect GPU support to work like PyTorch
+   - "Why would I pay for something PyTorch gives me for free?"
+   - GPU support is table stakes, not a premium feature
+
+4. **Monetization Strategy**:
+   - **Free**: GPU acceleration (users provide their own GPUs)
+   - **Premium**: Managed GPU infrastructure, auto-scaling, cloud GPU access
+   - **Premium**: Advanced GPU optimizations (multi-GPU, specialized kernels)
+
+### Implementation Strategy
+
+**Free (Open Source):**
+```rust
+// GPU support is free - users provide their own GPUs
+#[cfg(feature = "gpu")]
+pub mod gpu {
+    use cuda_runtime_sys::*;
+    
+    pub fn build_hnsw_ivf_gpu(vectors: &[Vec<f32>]) -> Result<HnswIvfIndex> {
+        // Free GPU implementation using CUDA
+        // Users must have NVIDIA GPU and CUDA installed
+    }
+}
+```
+
+**Premium (Commercial):**
+- Managed GPU infrastructure (cloud GPUs)
+- Auto-scaling GPU clusters
+- Advanced multi-GPU optimizations
+- GPU resource management/orchestration
+- Specialized GPU kernels (beyond standard CUDA)
+
+### What to Charge For Instead
+
+**Premium GPU Features (Commercial):**
+1. **Managed GPU Infrastructure**: Cloud GPU access, auto-scaling
+2. **GPU Orchestration**: Multi-GPU coordination, load balancing
+3. **Advanced Optimizations**: Custom CUDA kernels, specialized algorithms
+4. **GPU Resource Management**: Automatic GPU selection, memory optimization
+
+**Example:**
+```python
+# Free: Use your own GPU
+table = hdb.Table("s3://bucket/table")
+table.enable_gpu()  # Uses local GPU (free)
+
+# Premium: Managed GPU infrastructure
+table.enable_managed_gpu(cluster_id="gpu-cluster-1")  # Cloud GPUs (paid)
+```
+
+### Comparison to Competitors
+
+| Tool | GPU Support | Pricing Model |
+|------|-------------|---------------|
+| **PyTorch** | ✅ Free | Open source |
+| **FAISS** | ✅ Free | Open source |
+| **Milvus** | ✅ Free (OSS) | Free in open source, paid in cloud |
+| **HyperStreamDB** | ✅ **Free (Recommended)** | Open source, premium for managed |
+
+### Final Recommendation
+
+**Make GPU support FREE** (like PyTorch):
+- ✅ GPU acceleration code is open source
+- ✅ Users provide their own GPUs
+- ✅ Standard CUDA/ROCm support
+- ✅ Competitive with industry standards
+
+**Charge for PREMIUM GPU services**:
+- 💰 Managed GPU infrastructure (cloud GPUs)
+- 💰 Auto-scaling GPU clusters
+- 💰 Advanced GPU optimizations
+- 💰 GPU orchestration and management
+
+**Rationale**: 
+- GPU support is a backend compute option, not a premium feature
+- Industry standard is free GPU support
+- Monetize infrastructure/services, not basic functionality
+- Maintains competitive position vs. PyTorch/FAISS/Milvus
+
+---
+
+## Best Practices
+
+1. **Keep Core Open Source**: All essential functionality should be free
+2. **Premium = Performance/Convenience**: Enterprise features should be "nice to have", not "must have"
+3. **Clear Error Messages**: When premium feature is used without license, provide helpful error
+4. **Documentation**: Clearly document what's free vs. paid
+5. **Community**: Don't alienate open source users - premium should enhance, not restrict
+
+---
+
+## Example: Continuous Indexing Feature
+
+**Free Version**:
+```rust
+// User writes data
+table.write_arrow(batch);
+table.commit();  // Indexes rebuilt from scratch (free)
+```
+
+**Enterprise Version**:
+```rust
+// User enables continuous indexing
+table.enable_enterprise(license_key);
+table.enable_continuous_indexing();
+
+// Now writes are much faster
+table.write_arrow(batch);
+table.commit();  // Only affected index portions rebuilt (premium)
+```
+
+---
+
+## Next Steps
+
+1. **Create feature flag structure** in `Cargo.toml`
+2. **Separate core from enterprise** modules
+3. **Implement license validation** module
+4. **Add continuous indexing** as first premium feature
+5. **Update Python bindings** with enterprise API
+6. **Document** free vs. paid features clearly
+
+---
+
+**Note**: Consult with a lawyer before implementing license validation to ensure compliance with Apache 2.0 and commercial licensing requirements.

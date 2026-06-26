@@ -1,4 +1,4 @@
-# Installation
+### Installation
 
 ```bash
 # Install from source
@@ -20,7 +20,7 @@ pip install hyperstreamdb
 # Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
 
-## GPU Acceleration (Optional)
+### GPU Acceleration (Optional)
 
 For GPU-accelerated vector operations, install the appropriate backend:
 
@@ -53,7 +53,7 @@ vulkaninfo | grep vendor
 
 See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
 
-## pgvector SQL Compatibility
+### pgvector SQL Compatibility
 
 HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:
 
@@ -78,7 +78,7 @@ LIMIT 10;
 
 See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation.
 
-## Basic Usage
+### Basic Usage
 
 ```python
 import hyperstreamdb as hdb
@@ -115,7 +115,7 @@ results = table.to_pandas(
 )
 ```
 
-# 🔄 Fluent Query API
+## 🔄 Fluent Query API
 
 HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:
 
@@ -331,7 +331,7 @@ python tests/integration/test_nyc_taxi.py
     - **Vector Search (k=10)**: 819ms (CPU / NEON) ✅
     - **Vector Search (k=10)**: 860ms (MPS GPU) ⏱️
 
-## Phase 2: Nessie Integration (Next)
+### Phase 2: Nessie Integration (Next)
 
 **Catalog Strategy:**
 - ✅ Use Nessie REST v2 (don't build custom catalog)
@@ -343,7 +343,7 @@ python tests/integration/test_nyc_taxi.py
 - Multi-table transactions
 - Battle-tested (Netflix, Apple, Dremio)
 
-## Phase 3: Production Hardening
+### Phase 3: Production Hardening
 
 - [ ] Schema evolution support
 - [ ] Partition evolution
@@ -551,3 +551,4 @@ This project contains modified source code from various upstream open-source pro
 - **hnsw_rs** - Vector indexing
 - **RoaringBitmap** - Scalar indexing
 
+---
