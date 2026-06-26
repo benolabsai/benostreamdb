@@ -2,6 +2,9 @@
 //! Efficient and robust approximate nearest neighbour search using Hierarchical Navigable
 //! small World graphs.
 //! Yu. A. Malkov, D.A Yashunin 2016, 2018
+//!
+//! Copyright (c) Jean-Pierre Both and hnsw_rs contributors
+//! Licensed under the MIT or Apache 2.0 license.
 
 use serde::{Deserialize, Serialize};
 
