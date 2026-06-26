@@ -388,7 +388,7 @@ python tests/integration/test_nyc_taxi.py
 
 - [x] Schema evolution support
 - [x] Partition evolution
-- [ ] Pluggable Distributed Locking (Redis/etcd)
+
 - [ ] CLI tools (`hyperstream compact`, `vacuum`)
 - [ ] Prometheus metrics
 - [ ] Error handling & retries
@@ -593,12 +593,16 @@ hyperstreamdb/
 - [x] Sparse and binary vector operations
 
 - [x] Spark/Trino connectors (JNI Bridge & Native GPU support)
-- [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
+- [x] Schema evolution
+- [x] Partition evolution
+- [x] CLI tools (`hyperstream admin`)
+- [x] Prometheus metrics & Grafana dashboards
+
+### 🔄 In Progress
 
 ### 📋 Planned
-- [ ] Pluggable Distributed Locking (Redis/etcd)
-- [ ] CLI tools (`hyperstream admin`)
-- [ ] Prometheus metrics & Grafana dashboards
+
+- [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 - [ ] Apache Polaris catalog support (OAuth2)
 
 ## 🤝 Contributing
