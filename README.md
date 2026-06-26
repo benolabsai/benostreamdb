@@ -446,6 +446,10 @@ s3://bucket/table/
 
 ## 🔌 Connectors
 
+> [!NOTE]
+> **MERGE INTO Support**
+> While Apache DataFusion's native SQL engine does not currently support `MERGE INTO` syntax out-of-the-box, **you can seamlessly use `MERGE INTO` with HyperStreamDB via the Spark and Trino connectors**. Spark and Trino parse the SQL statements using their respective query engines, determine the row-level changes, and send standard Iceberg Position Deletes and Data Appends to the HyperStreamDB core via our optimized JNI bridges.
+
 ### Spark
 The Spark connector supports **Spark 3.5, 4.0, and 4.1** via a shared JNI FFI bridge. It intercepts row-level operations (like `MERGE INTO`) to take advantage of HyperStreamDB's fast indexing and supports configuring GPU backends.
 
