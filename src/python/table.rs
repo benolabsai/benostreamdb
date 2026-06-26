@@ -1027,6 +1027,50 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
+    /// Add a new column to the table schema
+    #[pyo3(signature = (name, py_schema))]
+    fn add_column(
+        &self,
+        py: Python<'_>,
+        name: String,
+        py_schema: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let arrow_schema = super::helpers::extract_schema(py_schema)?;
+        if arrow_schema.fields().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Provided schema is empty",
+            ));
+        }
+        let data_type = arrow_schema.field(0).data_type().clone();
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_column(&name, data_type)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Drop a column from the table schema
+    fn drop_column(&self, py: Python<'_>, name: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.drop_column(&name)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Rename a column
+    fn rename_column(&self, py: Python<'_>, old_name: String, new_name: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rename_column(&old_name, &new_name)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Update column type (e.g. int -> long)
+    fn update_column_type(&self, py: Python<'_>, name: String, new_type: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.update_column_type(&name, &new_type)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Move column to a new index
+    fn move_column(&self, py: Python<'_>, name: String, new_index: usize) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.move_column(&name, new_index)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Rollback to a specific snapshot
     fn rollback_to_snapshot(&self, py: Python<'_>, snapshot_id: i64) -> PyResult<()> {
         py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rollback_to_snapshot(snapshot_id)))

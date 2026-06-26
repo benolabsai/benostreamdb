@@ -608,6 +608,7 @@ hyperstreamdb/
 
 - [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 - [ ] Apache Polaris catalog support (OAuth2)
+- [ ] Spark/Trino native `ALTER TABLE` (Schema/Partition Evolution via JNI)
 
 ## 🤝 Contributing
 

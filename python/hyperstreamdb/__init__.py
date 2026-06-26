@@ -691,6 +691,53 @@ class Table:
         """
         return self._inner.drop_primary_key(column)
 
+    def add_column(self, name: str, data_type: Union[str, Any]):
+        """
+        Add a new column to the table.
+        data_type can be a string (e.g., 'int32', 'float64', 'string') or a pyarrow.DataType.
+        """
+        import pyarrow as pa
+        if isinstance(data_type, str):
+            # Helper to parse common string types
+            dt_map = {
+                'int8': pa.int8(), 'int16': pa.int16(), 'int32': pa.int32(), 'int64': pa.int64(),
+                'uint8': pa.uint8(), 'uint16': pa.uint16(), 'uint32': pa.uint32(), 'uint64': pa.uint64(),
+                'float16': pa.float16(), 'float32': pa.float32(), 'float64': pa.float64(),
+                'string': pa.string(), 'utf8': pa.string(), 'large_string': pa.large_string(),
+                'bool': pa.bool_(), 'boolean': pa.bool_(),
+                'date32': pa.date32(), 'date64': pa.date64(),
+            }
+            if data_type.lower() in dt_map:
+                data_type = dt_map[data_type.lower()]
+            else:
+                raise ValueError(f"Unsupported or unrecognized string data_type: {data_type}. Please pass a pyarrow.DataType explicitly.")
+                
+        if isinstance(data_type, pa.DataType):
+            # Create a single-field schema to pass the type down safely via FFI
+            schema = pa.schema([(name, data_type)])
+            return self._inner.add_column(name, schema)
+        else:
+            raise TypeError("data_type must be a string or pyarrow.DataType")
+
+    def drop_column(self, name: str):
+        """Drop an existing column from the table."""
+        return self._inner.drop_column(name)
+
+    def rename_column(self, old_name: str, new_name: str):
+        """Rename an existing column."""
+        return self._inner.rename_column(old_name, new_name)
+
+    def update_column_type(self, name: str, new_type: str):
+        """
+        Update the type of a column (Type Promotion).
+        Example: update_column_type('id', 'long')
+        """
+        return self._inner.update_column_type(name, new_type)
+
+    def move_column(self, name: str, new_index: int):
+        """Move a column to a new 0-based index position."""
+        return self._inner.move_column(name, new_index)
+
     def set_sort_order(self, columns: List[str], ascending: List[bool]):
         """Set the table's default sort order for future data writes."""
         return self._inner.replace_sort_order(columns, ascending)
