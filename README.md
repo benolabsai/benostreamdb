@@ -288,7 +288,9 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 
 See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
 
-# SQL queries (full DataFusion support with pgvector syntax)
+### SQL queries (full DataFusion support with pgvector syntax)
+
+```python
 import hyperstreamdb as hdb
 session = hdb.Session()
 session.register("users", table)
