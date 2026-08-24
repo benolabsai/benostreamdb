@@ -29,6 +29,12 @@ exclude = [
 name = "hyperstreamdb"
 crate-type = ["cdylib", "rlib"]
 
+[workspace]
+members = [
+    ".",
+    "hyperstreamdb-search",
+]
+
 
 
 [[test]]
