@@ -3603,6 +3603,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hyperstreamdb-search"
+version = "0.5.5"
+dependencies = [
+ "arrow",
+ "axum 0.7.9",
+ "chrono",
+ "hyperstreamdb",
+ "object_store",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "iana-time-zone"
 version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
