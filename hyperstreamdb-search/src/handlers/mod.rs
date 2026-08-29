@@ -3,6 +3,7 @@
 //! Axum handlers for the ES-compatible API.
 
 pub mod cluster;
+pub mod docs;
 pub mod metrics;
 
 use axum::http::StatusCode;
@@ -16,8 +17,17 @@ use crate::es_types::EsError;
 /// Convert a `Result<T, HyperstreamError>` into an HTTP response, mapping
 /// errors to the ES-style JSON envelope (`{"error": {...}, "status": N}`).
 pub(crate) fn es_response<T: Serialize>(result: Result<T, HyperstreamError>) -> Response {
+    es_response_with_status(StatusCode::OK, result)
+}
+
+/// Like [`es_response`], but lets the caller choose the success status
+/// (e.g. 201 for document creation). Errors always use their own status.
+pub(crate) fn es_response_with_status<T: Serialize>(
+    status: StatusCode,
+    result: Result<T, HyperstreamError>,
+) -> Response {
     match result {
-        Ok(value) => Json(value).into_response(),
+        Ok(value) => (status, Json(value)).into_response(),
         Err(err) => {
             tracing::error!(%err, "request failed");
             let es = EsError::from(err);

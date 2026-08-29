@@ -3606,6 +3606,7 @@ dependencies = [
 name = "hyperstreamdb-search"
 version = "0.5.5"
 dependencies = [
+ "anyhow",
  "arrow",
  "axum 0.7.9",
  "chrono",

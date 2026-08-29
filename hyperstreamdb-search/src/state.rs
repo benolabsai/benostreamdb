@@ -117,7 +117,7 @@ pub fn resolve_storage_uri() -> String {
 /// Probe for an initialized table: the Iceberg metadata version hint under
 /// the table root. The object store is prefix-scoped to the table directory,
 /// so the path is relative.
-async fn table_exists(uri: &str) -> bool {
+pub(crate) async fn table_exists(uri: &str) -> bool {
     match hyperstreamdb::core::storage::create_object_store(uri) {
         Ok(store) => store
             .head(&object_store::path::Path::from(
