@@ -11,6 +11,7 @@
 
 pub mod es_types;
 pub mod handlers;
+pub mod infer;
 pub mod state;
 
 /// ES 7.10 cluster version reported by `GET /` and health endpoints.

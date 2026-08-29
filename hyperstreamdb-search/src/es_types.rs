@@ -2,6 +2,9 @@
 
 //! ES-style JSON types shared across handlers.
 
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use hyperstreamdb::HyperstreamError;
 use serde::Serialize;
 
@@ -43,6 +46,27 @@ impl From<HyperstreamError> for EsError {
                 },
                 status: 400,
             },
+            HyperstreamError::NullConstraintViolation { .. } => EsError {
+                error: EsErrorBody {
+                    error_type: "illegal_argument_exception".into(),
+                    reason: err.to_string(),
+                },
+                status: 400,
+            },
+            HyperstreamError::ColumnNotFound { .. } => EsError {
+                error: EsErrorBody {
+                    error_type: "illegal_argument_exception".into(),
+                    reason: err.to_string(),
+                },
+                status: 400,
+            },
+            HyperstreamError::SchemaIncompatible { .. } => EsError {
+                error: EsErrorBody {
+                    error_type: "illegal_argument_exception".into(),
+                    reason: err.to_string(),
+                },
+                status: 400,
+            },
             _ => EsError {
                 error: EsErrorBody {
                     error_type: "internal_error".into(),
@@ -52,6 +76,42 @@ impl From<HyperstreamError> for EsError {
             },
         }
     }
+}
+
+impl IntoResponse for EsError {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        (status, Json(self)).into_response()
+    }
+}
+
+/// ES document write (create) response.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocWriteResponse {
+    #[serde(rename = "_index")]
+    pub index: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_version")]
+    pub version: u64,
+    pub result: String,
+    #[serde(rename = "_shards")]
+    pub shards: Shards,
+}
+
+/// Shard outcome reported by write/refresh operations (single-shard cluster).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct Shards {
+    pub total: u32,
+    pub successful: u32,
+    pub failed: u32,
+}
+
+/// ES `_refresh` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct RefreshResponse {
+    #[serde(rename = "_shards")]
+    pub shards: Shards,
 }
 
 #[derive(Debug, Serialize)]

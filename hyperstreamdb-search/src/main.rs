@@ -6,12 +6,12 @@
 //! and stores indexes under `HYPERSEARCH_STORAGE_URI`
 //! (default `file://~/.hyperstreamdb/search`).
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyperstreamdb_search::handlers::{cluster, metrics};
+use hyperstreamdb_search::handlers::{cluster, docs, metrics};
 use hyperstreamdb_search::state::{resolve_storage_uri, AppState};
 
 #[tokio::main]
@@ -41,6 +41,9 @@ async fn main() {
         .route("/_health", get(cluster::cluster_health))
         .route("/_cluster/health", get(cluster::cluster_health))
         .route("/metrics", get(metrics::metrics))
+        .route("/:index/_doc", post(docs::index_document))
+        .route("/:index/_doc/:id", post(docs::index_document_id))
+        .route("/:index/_refresh", post(docs::refresh))
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
