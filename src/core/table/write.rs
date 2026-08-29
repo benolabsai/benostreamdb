@@ -5,6 +5,7 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
+use crate::core::error::HyperstreamError;
 use crate::core::manifest::ManifestManager;
 use crate::telemetry::metrics::INGEST_ROWS_TOTAL;
 use crate::SegmentConfig;
@@ -177,16 +178,21 @@ impl Table {
 
                             // Check for nulls in PK
                             if matches!(m_val, crate::core::manifest::ManifestValue::Null) {
-                                return Err(anyhow::anyhow!("Null constraint violation: Primary key column '{}' cannot contain null values", pk_col));
+                                return Err(anyhow::Error::from(
+                                    HyperstreamError::NullConstraintViolation {
+                                        column: pk_col.clone(),
+                                    },
+                                ));
                             }
 
                             let val_str = m_val.to_string();
 
                             // Check against buffer and current batch
                             if seen_keys.contains(&val_str) {
-                                return Err(anyhow::anyhow!(
-                                    "Duplicate primary key error: id = {}",
-                                    val_str
+                                return Err(anyhow::Error::from(
+                                    HyperstreamError::PrimaryKeyViolation {
+                                        key: val_str.clone(),
+                                    },
                                 ));
                             }
 
@@ -194,9 +200,10 @@ impl Table {
                             let val_json =
                                 serde_json::to_value(&m_val).unwrap_or(serde_json::Value::Null);
                             if self._check_pk_in_storage_async(pk_col, &val_json).await? {
-                                return Err(anyhow::anyhow!(
-                                    "Duplicate primary key error: id = {}",
-                                    val_str
+                                return Err(anyhow::Error::from(
+                                    HyperstreamError::PrimaryKeyViolation {
+                                        key: val_str.clone(),
+                                    },
                                 ));
                             }
 
@@ -215,7 +222,11 @@ impl Table {
 
                                 // Check for nulls in PK
                                 if matches!(val, crate::core::manifest::ManifestValue::Null) {
-                                    return Err(anyhow::anyhow!("Null constraint violation: Primary key column '{}' cannot contain null values", pk_col));
+                                    return Err(anyhow::Error::from(
+                                        HyperstreamError::NullConstraintViolation {
+                                            column: pk_col.clone(),
+                                        },
+                                    ));
                                 }
 
                                 // Check against buffer
@@ -227,9 +238,10 @@ impl Table {
                                                     b_col, j,
                                                 );
                                             if val == b_val {
-                                                return Err(anyhow::anyhow!(
-                                                    "Duplicate primary key error: id = {}",
-                                                    val
+                                                return Err(anyhow::Error::from(
+                                                    HyperstreamError::PrimaryKeyViolation {
+                                                        key: val.to_string(),
+                                                    },
                                                 ));
                                             }
                                         }
@@ -241,9 +253,10 @@ impl Table {
                                     let b_val =
                                         crate::core::manifest::ManifestValue::from_array(col, j);
                                     if val == b_val {
-                                        return Err(anyhow::anyhow!(
-                                            "Duplicate primary key error: id = {}",
-                                            val
+                                        return Err(anyhow::Error::from(
+                                            HyperstreamError::PrimaryKeyViolation {
+                                                key: val.to_string(),
+                                            },
                                         ));
                                     }
                                 }
@@ -414,9 +427,8 @@ impl Table {
                             let val_str = crate::core::manifest::ManifestValue::from_array(col, i)
                                 .to_string();
                             if !seen.insert(val_str.clone()) {
-                                return Err(anyhow::anyhow!(
-                                    "Duplicate primary key error: id = {}",
-                                    val_str
+                                return Err(anyhow::Error::from(
+                                    HyperstreamError::PrimaryKeyViolation { key: val_str },
                                 ));
                             }
                         }

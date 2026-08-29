@@ -116,6 +116,8 @@ impl HybridSegmentWriter {
                 || filename.ends_with(".mapping.parquet")
             {
                 // HNSW-IVF Auxiliary Parquet Files
+            } else if filename.contains(".doclen.parquet") {
+                // BM25 doc-length sidecar (per-row token counts); not a search index
             } else if filename.ends_with(".parquet") {
                 // Main Data File
                 parquet_file = filename.clone();
@@ -447,6 +449,73 @@ impl HybridSegmentWriter {
                 inverted_map.len()
             );
 
+            // BM25 bookkeeping: only string columns have an analyzer recorded
+            // (build_inverted inserts into index_metadata for Utf8/LargeUtf8; the
+            // Int32/Date32/Float inverted arms do not).
+            let analyzer_name = self.index_metadata.lock().get(&col_name).cloned();
+
+            if let Some(analyzer) = analyzer_name.as_ref() {
+                // Per-row token counts from the inverted map, taken by reference
+                // before the consuming loop below drains it. Rows with no tokens
+                // are absent and read as 0 at query time.
+                let mut doc_counts: HashMap<u32, u32> = HashMap::new();
+                for row_ids in inverted_map.values() {
+                    for &row_id in row_ids {
+                        *doc_counts.entry(row_id).or_insert(0) += 1;
+                    }
+                }
+                let mut doc_rows: Vec<(u32, u32)> = doc_counts.into_iter().collect();
+                doc_rows.sort_unstable_by_key(|(row_id, _)| *row_id);
+
+                let doclen_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+                    arrow::datatypes::Field::new(
+                        "row_id",
+                        arrow::datatypes::DataType::UInt32,
+                        false,
+                    ),
+                    arrow::datatypes::Field::new(
+                        "token_count",
+                        arrow::datatypes::DataType::UInt32,
+                        false,
+                    ),
+                ]));
+                let doc_rows_vec: Vec<u32> = doc_rows.iter().map(|(row_id, _)| *row_id).collect();
+                let token_counts_vec: Vec<u32> = doc_rows.iter().map(|(_, count)| *count).collect();
+                let doclen_batch = RecordBatch::try_new(
+                    doclen_schema.clone(),
+                    vec![
+                        std::sync::Arc::new(arrow::array::UInt32Array::from(doc_rows_vec)),
+                        std::sync::Arc::new(arrow::array::UInt32Array::from(token_counts_vec)),
+                    ],
+                )?;
+
+                let doclen_filename =
+                    format!("{}.{}.doclen.parquet", self.config.segment_id, col_name);
+                let doclen_path_str = format!("{}{}", parent_prefix, doclen_filename);
+                let mut doclen_buffer = Vec::new();
+                {
+                    let props = parquet::file::properties::WriterProperties::builder().build();
+                    let mut writer =
+                        ArrowWriter::try_new(&mut doclen_buffer, doclen_schema, Some(props))?;
+                    writer.write(&doclen_batch)?;
+                    writer.close()?;
+                }
+                store
+                    .put(
+                        &object_store::path::Path::from(doclen_path_str.clone()),
+                        doclen_buffer.into(),
+                    )
+                    .await?;
+                let mut files = self.generated_files.lock();
+                files.push(doclen_path_str.clone());
+                tracing::info!(
+                    "  BM25 doc-length sidecar written for column '{}' (analyzer: {}): {}",
+                    col_name,
+                    analyzer,
+                    doclen_path_str
+                );
+            }
+
             // Build Arrow Arrays for Parquet
             let mut key_builder = arrow::array::StringBuilder::new();
             let value_builder = arrow::array::UInt32Builder::new();
@@ -486,10 +555,20 @@ impl HybridSegmentWriter {
             let full_path_str = format!("{}{}", parent_prefix, filename);
             let target_path = object_store::path::Path::from(full_path_str.clone());
 
-            // Write to memory buffer then to store
+            // Write to memory buffer then to store. String-indexed columns embed
+            // the analyzer name in key/value metadata so readers re-tokenize
+            // queries identically.
             let mut buffer = Vec::new();
             {
-                let props = parquet::file::properties::WriterProperties::builder().build();
+                let kv_meta = analyzer_name.as_ref().map(|name| {
+                    vec![parquet::file::metadata::KeyValue {
+                        key: "analyzer".to_string(),
+                        value: Some(name.clone()),
+                    }]
+                });
+                let props = parquet::file::properties::WriterProperties::builder()
+                    .set_key_value_metadata(kv_meta)
+                    .build();
                 let mut writer = ArrowWriter::try_new(&mut buffer, inv_schema, Some(props))?;
                 writer.write(&inv_batch)?;
                 writer.close()?;

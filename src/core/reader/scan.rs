@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use crate::core::cache::CacheExt;
+use crate::core::index::bm25::Bm25Params;
 use std::sync::Arc;
 // use std::collections::HashSet;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
@@ -810,17 +811,23 @@ impl HybridReader {
 
         // Handle keyword search regardless of filter path
         if let crate::core::index::VectorValue::Keyword(ref q) = query {
-            let results = self.keyword_search_index(column, q, k, filter).await?;
+            let results = self
+                .keyword_search_index(column, q, k, &Bm25Params::default(), None, filter)
+                .await?;
             if results.is_empty() {
                 return Ok(vec![]);
             }
 
-            let matches: Vec<(u32, f32)> = results.iter().map(|(id, s)| (*id as u32, *s)).collect();
+            let matches: Vec<(u32, f32)> = results
+                .iter()
+                .map(|(id, s)| (*id as u32, 1.0 / (1.0 + s)))
+                .collect();
+            let mut matches = matches;
+            matches.sort_by_key(|(id, _)| *id);
+            let scores: Vec<f32> = matches.iter().map(|(_, d)| *d).collect();
             let batch = self
                 .read_rows_by_id_with_schema(matches, target_schema)
                 .await?;
-
-            let scores: Vec<f32> = results.into_iter().map(|(_, s)| s).collect();
             return Ok(vec![(batch, scores)]);
         }
 
@@ -910,11 +917,18 @@ impl HybridReader {
         }
     }
 
+    /// Search the inverted index with Okapi BM25 scoring.
+    ///
+    /// Returns `(row_id, raw_bm25_score)` pairs sorted by score descending
+    /// (best first). Callers needing a distance-like metric convert with
+    /// `1/(1+score)` at the boundary so row order stays aligned with scores.
     pub async fn keyword_search_index(
         &self,
         column: &str,
         query: &str,
         k: usize,
+        params: &Bm25Params,
+        analyzer: Option<&str>,
         _filter: Option<&FilterExpr>,
     ) -> Result<Vec<(usize, f32)>> {
         // 1. Find Inverted Index
@@ -975,6 +989,22 @@ impl HybridReader {
             let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
                 Bytes::from(inv_bytes),
             )?;
+            // Record the analyzer name from the footer's key/value metadata so
+            // repeated queries re-tokenize identically without re-reading.
+            if let Some(kv_list) = builder.metadata().file_metadata().key_value_metadata() {
+                for kv in kv_list {
+                    if kv.key == "analyzer" {
+                        if let Some(value) = &kv.value {
+                            if analyzer.is_none() {
+                                crate::core::cache::ANALYZER_META_CACHE
+                                    .insert(cache_key.clone(), value.clone())
+                                    .await;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
             let reader = builder.build()?;
             let mut decoded = Vec::new();
             for batch_result in reader {
@@ -987,27 +1017,86 @@ impl HybridReader {
         };
 
         // 3. Tokenize Query
-        // Use the tokenizer defined in the index metadata, fallback to standard
-        let tokenizer_name = "default";
+        // Resolution order: caller override > footer metadata (cached) > the
+        // writer's default analyzer (kept in sync with build_inverted.rs).
+        let analyzer_name = if let Some(override_name) = analyzer {
+            override_name.to_string()
+        } else if let Some(cached) = crate::core::cache::ANALYZER_META_CACHE
+            .get(&cache_key)
+            .await
+        {
+            cached
+        } else {
+            "analyzer:english".to_string()
+        };
 
         let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY
             .read()
-            .get(tokenizer_name)
-            .ok_or_else(|| anyhow::anyhow!("Missing standard tokenizer"))?;
+            .get(&analyzer_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown analyzer '{}'", analyzer_name))?;
 
-        let query_tokens = tokenizer.tokenize(query);
+        let mut query_tokens = tokenizer.tokenize(query);
+        // Dedupe: repeated query terms must not inflate BM25 term-frequency scoring
+        query_tokens.sort_unstable();
+        query_tokens.dedup();
         if query_tokens.is_empty() {
             return Ok(vec![]);
         }
 
-        // 4. Scoring Map: RowID -> BM25 Score
+        // 4. Doc-length sidecar (per-row token counts) written by finish_indexing.
+        // Missing file (pre-M2 inverted files) degrades to unnormalized scoring.
+        let doclen_path_str = full_inv_path_str
+            .strip_suffix(".inv.parquet")
+            .map(|p| format!("{}.doclen.parquet", p))
+            .unwrap_or_default();
+        let mut doc_lengths: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        if !doclen_path_str.is_empty() {
+            if let Ok(res) = self.store.get(&Path::from(doclen_path_str.as_str())).await {
+                if let Ok(doclen_bytes) = res.bytes().await {
+                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL
+                        .inc_by(doclen_bytes.len() as u64);
+                    let dl_builder =
+                        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                            doclen_bytes,
+                        )
+                        .ok();
+                    if let Some(dl_builder) = dl_builder {
+                        if let Ok(mut dl_reader) = dl_builder.build() {
+                            for batch in dl_reader.filter_map(Result::ok) {
+                                if let (Some(row_ids), Some(counts)) = (
+                                    batch
+                                        .column(0)
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::UInt32Array>(),
+                                    batch
+                                        .column(1)
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::UInt32Array>(),
+                                ) {
+                                    for i in 0..batch.num_rows() {
+                                        doc_lengths.insert(row_ids.value(i), counts.value(i));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let n_docs = self.config.record_count.unwrap_or(0) as usize;
+        let avg_doc_len = if n_docs == 0 {
+            0.0
+        } else {
+            doc_lengths.values().sum::<u32>() as f32 / n_docs as f32
+        };
+
+        // 5. Scoring Map: RowID -> BM25 Score
         let mut scores: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
-        let n_total = (self.config.record_count.unwrap_or(0) as f32).max(1.0); // Ensure at least 1.0 for IDF
-        let k1 = 1.2;
 
         for token in &query_tokens {
-            // Find this token in the inverted index batches
-            // Build document term frequencies for scoring
+            // Aggregate per-document term frequencies for this term across all batches
+            let mut current_doc_counts: std::collections::HashMap<u32, u32> =
+                std::collections::HashMap::new();
             for batch in batches.iter() {
                 let key_array = batch
                     .column(0)
@@ -1026,46 +1115,47 @@ impl HybridReader {
 
                 for i in 0..batch.num_rows() {
                     let key = key_array.value(i);
-                    if key == token {
-                        // Found the term!
+                    if key == token.as_str() {
+                        // Delta-decode row ids
                         let list = row_ids_list.value(i);
                         let row_ids = list
                             .as_any()
                             .downcast_ref::<arrow::array::UInt32Array>()
                             .context("Invalid cast")?;
 
-                        // Count frequencies by document
-                        let mut current_doc_counts: std::collections::HashMap<u32, u32> =
-                            std::collections::HashMap::new();
                         let mut last_id = 0;
                         for j in 0..row_ids.len() {
                             let rid = last_id + row_ids.value(j);
                             *current_doc_counts.entry(rid).or_default() += 1;
                             last_id = rid;
                         }
-
-                        // IDF for this token
-                        let n_token = current_doc_counts.len() as f32;
-                        let idf = ((n_total - n_token + 0.5) / (n_token + 0.5) + 1.0).ln();
-
-                        // Add to global scores
-                        for (rid, tf) in current_doc_counts {
-                            let tf = tf as f32;
-                            let score_inc = idf * (tf * (k1 + 1.0)) / (tf + k1);
-                            *scores.entry(rid).or_default() += score_inc;
-                        }
                     }
                 }
             }
+            if current_doc_counts.is_empty() {
+                continue;
+            }
+            let df = current_doc_counts.len();
+            for (rid, tf) in current_doc_counts {
+                let doc_len = doc_lengths.get(&rid).copied().unwrap_or(0);
+                let score_inc = crate::core::index::bm25::term_score(
+                    tf as f32,
+                    df,
+                    n_docs,
+                    doc_len,
+                    avg_doc_len,
+                    params,
+                );
+                *scores.entry(rid).or_default() += score_inc;
+            }
         }
 
-        // 5. Sort by score and convert to (RowID, Distance)
+        // 6. Sort by raw BM25 score descending (best first) and truncate.
         let mut results: Vec<(usize, f32)> = scores
             .into_iter()
-            .map(|(rid, score)| (rid as usize, 1.0 / (1.0 + score))) // Convert score to distance-like metric
+            .map(|(rid, score)| (rid as usize, score))
             .collect();
-
-        results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         if results.len() > k {
             results.truncate(k);

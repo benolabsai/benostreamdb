@@ -204,7 +204,10 @@ impl fmt::Display for HyperstreamError {
                 write!(f, "Table '{namespace}.{name}' not found in catalog")
             }
             Self::NullConstraintViolation { column } => {
-                write!(f, "NULL constraint violation on column '{column}'")
+                write!(
+                    f,
+                    "Null constraint violation: Primary key column '{column}' cannot contain null values"
+                )
             }
 
             Self::IndexNotFound { path } => write!(f, "Index file not found at '{path}'"),
@@ -273,7 +276,7 @@ impl fmt::Display for HyperstreamError {
             Self::BitmapExhausted => write!(f, "Bitmap iterator exhausted"),
 
             Self::PrimaryKeyViolation { key } => {
-                write!(f, "Primary key violation: duplicate key '{key}'")
+                write!(f, "Duplicate primary key error: id = {key}")
             }
             Self::WriteFailed { reason } => write!(f, "Write failed: {reason}"),
 

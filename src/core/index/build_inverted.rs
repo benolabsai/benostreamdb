@@ -419,10 +419,12 @@ impl crate::core::segment::HybridSegmentWriter {
                     .downcast_ref::<arrow::array::StringArray>()
                     .context("Invalid cast")?;
 
-                // Fetch tokenizer if configured
+                // Fetch tokenizer if configured; default to the English analyzer
+                // (standard tokenization + stop-word filter) so keyword/BM25
+                // search gets sensible token streams out of the box.
                 let tokenizer_name = config
                     .and_then(|c| c.tokenizer.clone())
-                    .unwrap_or_else(|| "identity".to_string());
+                    .unwrap_or_else(|| "analyzer:english".to_string());
                 tracing::info!(
                     "  Using tokenizer: '{}' for column '{}'",
                     tokenizer_name,
@@ -431,7 +433,15 @@ impl crate::core::segment::HybridSegmentWriter {
                 let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY
                     .read()
                     .get(&tokenizer_name)
-                    .ok_or_else(|| anyhow::anyhow!("Missing identity tokenizer"))?;
+                    .ok_or_else(|| anyhow::anyhow!("Missing tokenizer '{}'", tokenizer_name))?;
+
+                // Remember the analyzer for this column so finish_indexing can
+                // stamp it into the inverted file's parquet metadata (query-time
+                // tokenization must match index-time tokenization).
+                {
+                    let mut meta = self.index_metadata.lock();
+                    meta.insert(col_name.to_string(), tokenizer_name.clone());
+                }
 
                 // Build inverted index: Token -> RowIDs (buffered in memory per segment)
                 let mut inverted_lock = self.inverted_data.lock();

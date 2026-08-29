@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod analyzer;
+pub mod bm25;
 pub mod distance;
 pub mod gpu;
 pub mod hnsw_ivf;
