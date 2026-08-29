@@ -88,4 +88,39 @@ impl HybridSearchCoordinator {
 pub struct KeywordSearchParams {
     pub column: String,
     pub query: String,
+    pub k1: f32,
+    pub b: f32,
+    /// Optional analyzer override; defaults to the analyzer recorded in the
+    /// inverted index file's metadata (writer default: `analyzer:english`).
+    pub analyzer: Option<String>,
+}
+
+impl Default for KeywordSearchParams {
+    fn default() -> Self {
+        let p = crate::core::index::bm25::Bm25Params::default();
+        Self {
+            column: String::new(),
+            query: String::new(),
+            k1: p.k1,
+            b: p.b,
+            analyzer: None,
+        }
+    }
+}
+
+impl KeywordSearchParams {
+    pub fn new(column: impl Into<String>, query: impl Into<String>) -> Self {
+        Self {
+            column: column.into(),
+            query: query.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn params(&self) -> crate::core::index::bm25::Bm25Params {
+        crate::core::index::bm25::Bm25Params {
+            k1: self.k1,
+            b: self.b,
+        }
+    }
 }

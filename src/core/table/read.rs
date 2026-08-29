@@ -512,10 +512,10 @@ impl Table {
                     }
                 };
 
-                let keyword_params = KeywordSearchParams {
-                    column: filtered_cols.iter().next().unwrap().clone(),
-                    query: extracted_query,
-                };
+                let keyword_params = KeywordSearchParams::new(
+                    filtered_cols.iter().next().unwrap().clone(),
+                    extracted_query,
+                );
 
                 let scored_results = coordinator
                     .execute_hybrid(
@@ -1164,7 +1164,14 @@ impl Table {
 
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             let matches = reader
-                .keyword_search_index(&params.column, &params.query, 1000, None)
+                .keyword_search_index(
+                    &params.column,
+                    &params.query,
+                    1000,
+                    &params.params(),
+                    params.analyzer.as_deref(),
+                    None,
+                )
                 .await?;
 
             for (row_id, score) in matches {
@@ -1175,6 +1182,13 @@ impl Table {
                 });
             }
         }
+        // Global best-first order: per-segment results were concatenated above,
+        // and RRF rank fusion requires each input list sorted by score desc.
+        all_scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
             .observe(start_time.elapsed().as_secs_f64());
         Ok(all_scored)

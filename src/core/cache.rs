@@ -234,6 +234,16 @@ pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = La
         .build()
 });
 
+/// Analyzer-name cache keyed by inverted-index file path. Readers pull the
+/// analyzer name from the inv file's key/value metadata once and cache it so
+/// repeated queries re-tokenize identically without re-reading the footer.
+pub static ANALYZER_META_CACHE: Lazy<Cache<String, String>> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(10_000)
+        .time_to_idle(Duration::from_secs(60 * 15))
+        .build()
+});
+
 pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>> =
     Lazy::new(|| {
         Cache::builder()

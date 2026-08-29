@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use super::analyzer::EnglishTokenizer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,6 +57,10 @@ impl TokenizerRegistry {
         tr.register("whitespace", Arc::new(WhitespaceTokenizer));
         tr.register("standard", Arc::new(StandardTokenizer));
         tr.register("identity", Arc::new(IdentityTokenizer));
+        // Analyzer-style names: standard tokenization plus an optional
+        // stop-word filter, so query-time tokenization matches index-time.
+        tr.register("analyzer:standard", Arc::new(StandardTokenizer));
+        tr.register("analyzer:english", Arc::new(EnglishTokenizer));
         tr
     }
 
