@@ -116,7 +116,7 @@ fn build_row_batch(target_schema: &Schema, doc: &Value) -> Result<RecordBatch, H
 /// when this request created the index, `"updated"` (200) when it was
 /// written into an existing one. A duplicate `_id` is a 400
 /// `resource_already_exists_exception`.
-async fn index_document_core(
+pub(crate) async fn index_document_core(
     state: &AppState,
     index: &str,
     path_id: Option<&str>,
@@ -216,7 +216,10 @@ pub async fn refresh(State(state): State<Arc<AppState>>, Path(index): Path<Strin
     es_response_with_status(StatusCode::OK, refresh_core(&state, &index).await)
 }
 
-async fn refresh_core(state: &AppState, index: &str) -> Result<RefreshResponse, HyperstreamError> {
+pub(crate) async fn refresh_core(
+    state: &AppState,
+    index: &str,
+) -> Result<RefreshResponse, HyperstreamError> {
     if !table_exists(&state.index_uri(index)).await {
         return Err(HyperstreamError::TableNotFound {
             namespace: String::new(),
@@ -225,6 +228,13 @@ async fn refresh_core(state: &AppState, index: &str) -> Result<RefreshResponse, 
     }
     let table = state.open_or_create(index, &None).await?;
     table.commit_async().await.map_err(translate_write_error)?;
+    // Wait for the background index-building tasks spawned by the commit
+    // so the new segment's BM25/HNSW indexes are attached to the manifest
+    // before `_search` can observe the data.
+    table
+        .wait_for_background_tasks_async()
+        .await
+        .map_err(translate_write_error)?;
     Ok(RefreshResponse {
         shards: Shards {
             total: 1,
