@@ -60,29 +60,45 @@ impl AppState {
         let _gate = self.open_gate.lock().await;
         let uri = self.index_uri(index);
 
-        let table = if table_exists(&uri).await {
-            Table::new_async(uri).await.map_err(|e| {
+        // Open (or create) with indexing enabled. The default builder
+        // config (`index_all = false`) would leave segments without the
+        // BM25/HNSW indexes that `_search` relies on; `Table::builder`
+        // works for existing tables, while new ones still need
+        // `create_async` for the manifest/Iceberg init.
+        let mut table = if table_exists(&uri).await {
+            Table::builder(uri).with_index_all(true).build_async().await.map_err(|e| {
                 HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
             })?
         } else {
             let schema = schema.clone().unwrap_or_else(empty_schema);
             match Table::create_async(uri.clone(), schema).await {
-                Ok(t) => t,
+                Ok(_) => {}
                 // Lost a create race with another request: re-open instead.
-                Err(e) if e.to_string().contains("already exists") => {
-                    Table::new_async(uri).await.map_err(|e| {
-                        HyperstreamError::internal(format!(
-                            "failed to open index '{index}' after create race: {e}"
-                        ))
-                    })?
-                }
+                Err(e) if e.to_string().contains("already exists") => {}
                 Err(e) => {
                     return Err(HyperstreamError::internal(format!(
                         "failed to create index '{index}': {e}"
                     )))
                 }
             }
+            Table::builder(uri).with_index_all(true).build_async().await.map_err(|e| {
+                HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
+            })?
         };
+
+        // Backfill BM25/HNSW indexes on segments committed before this
+        // table instance was opened with indexing enabled (a no-op for
+        // fresh tables). The call also pins `index_all = true` on this
+        // instance so its commits keep building the indexes in the
+        // background.
+        table
+            .index_all_columns_async()
+            .await
+            .map_err(|e| {
+                HyperstreamError::internal(format!(
+                    "failed to build search indexes for '{index}': {e}"
+                ))
+            })?;
 
         // 3. Publish (first instance wins) and hand back the shared handle.
         let mut tables = self.tables.write().await;

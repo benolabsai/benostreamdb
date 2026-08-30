@@ -606,9 +606,10 @@ hyperstreamdb/
 
 ### 🔄 In Progress
 
+- [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on) — `hypersearch` implements indexing, refresh, and `_search` (match/knn/hybrid, filters, pagination); ES conformance validation pending
+
 ### 📋 Planned
 
-- [ ] Elasticsearch-like REST Search API (`hyperstreamdb-search` add-on)
 - [ ] Apache Polaris catalog support (OAuth2)
 - [ ] Spark/Trino native `ALTER TABLE` (Schema/Partition Evolution via JNI)
 

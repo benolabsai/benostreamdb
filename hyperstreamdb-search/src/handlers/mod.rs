@@ -5,6 +5,7 @@
 pub mod cluster;
 pub mod docs;
 pub mod metrics;
+pub mod search;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

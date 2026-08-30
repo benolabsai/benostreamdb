@@ -11,7 +11,7 @@ use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyperstreamdb_search::handlers::{cluster, docs, metrics};
+use hyperstreamdb_search::handlers::{cluster, docs, metrics, search};
 use hyperstreamdb_search::state::{resolve_storage_uri, AppState};
 
 #[tokio::main]
@@ -44,6 +44,7 @@ async fn main() {
         .route("/:index/_doc", post(docs::index_document))
         .route("/:index/_doc/:id", post(docs::index_document_id))
         .route("/:index/_refresh", post(docs::refresh))
+        .route("/:index/_search", post(search::search))
         .with_state(state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 

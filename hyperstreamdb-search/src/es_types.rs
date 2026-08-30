@@ -7,6 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hyperstreamdb::HyperstreamError;
 use serde::Serialize;
+use serde_json::Value;
 
 /// ES-style error envelope: `{"error": {"type": ..., "reason": ...}, "status": ...}`
 #[derive(Debug, Serialize)]
@@ -176,4 +177,38 @@ pub struct ClusterHealth {
     pub number_of_in_flight_fetch: u32,
     pub task_max_waiting_in_queue_millis: u64,
     pub active_shards_percent_as_number: f64,
+}
+
+/// ES 7.10 `POST /{index}/_search` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchResponse {
+    pub took: u64,
+    pub timed_out: bool,
+    pub hits: SearchHits,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHits {
+    pub total: TotalHits,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_score: Option<f32>,
+    pub hits: Vec<SearchHit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TotalHits {
+    pub value: u64,
+    pub relation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    #[serde(rename = "_index")]
+    pub index: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_score", skip_serializing_if = "Option::is_none")]
+    pub score: Option<f32>,
+    #[serde(rename = "_source")]
+    pub source: Value,
 }

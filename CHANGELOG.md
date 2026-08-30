@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`hyperstreamdb-search` add-on** (`hypersearch` binary): Elasticsearch 7.10-compatible REST API over HyperStreamDB tables (any supported storage URI, default `file://~/.hyperstreamdb/search`).
+  - Indexing: `POST /{index}/_doc`, `POST /{index}/_doc/{id}` (schema inference, typed error mapping), and `POST /{index}/_refresh`
+  - `POST /{index}/_search` with `match` (BM25), `knn` (HNSW), and `hybrid` (reciprocal rank fusion) queries; top-level filters (`term`, `range`, `exists`, `bool`); `from`/`size` pagination with deterministic `_id` tie-breaking
+  - ES-compatible response envelope (`_index`, `_id`, `_score`, `_source`, `took`, `timed_out`, `hits.total`)
+  - Cluster endpoints: `GET /`, `GET /_health`, `GET /_cluster/health`, `GET /metrics`
+- Okapi BM25 keyword scoring (tunable `k1`/`b`) with an English analyzer in the core engine; public `keyword_search_index` API.
+- Smart hybrid trigger fusing keyword (BM25) and vector (HNSW) results via reciprocal rank fusion (RRF, k=60).
+- Background segment index builds with `wait_for_background_tasks_async` for deterministic refresh semantics.
+
 ---
 
 ## [0.5.3] - 2026-06-21
