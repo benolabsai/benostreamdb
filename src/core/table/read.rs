@@ -24,21 +24,21 @@ impl Table {
     pub fn read(
         &self,
         filter: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
     ) -> Result<Vec<RecordBatch>> {
         self.runtime()
-            .block_on(self.read_async(filter, vector_filter, None))
+            .block_on(self.read_async(filter, vector_filters, None))
     }
 
     pub fn read_with_columns(
         &self,
         filter: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Vec<String>,
     ) -> Result<Vec<RecordBatch>> {
         let columns_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
         self.runtime()
-            .block_on(self.read_async(filter, vector_filter, Some(&columns_refs)))
+            .block_on(self.read_async(filter, vector_filters, Some(&columns_refs)))
     }
 
     #[tracing::instrument(skip(self))]
@@ -54,16 +54,16 @@ impl Table {
         Ok(df.collect().await?)
     }
 
-    #[tracing::instrument(skip(self, filter_str, vector_filter, columns))]
+    #[tracing::instrument(skip(self, filter_str, vector_filters, columns))]
     pub async fn read_async(
         &self,
         filter_str: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         self.read_with_config_async(
             filter_str,
-            vector_filter,
+            vector_filters,
             columns,
             self.query_config.clone(),
         )
@@ -73,12 +73,12 @@ impl Table {
     pub async fn read_stream_async(
         &self,
         filter_str: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
         self.read_with_config_stream_async(
             filter_str,
-            vector_filter,
+            vector_filters,
             columns,
             self.query_config.clone(),
         )
@@ -88,7 +88,7 @@ impl Table {
     pub async fn read_with_config_stream_async(
         &self,
         filter_str: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
     ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
@@ -99,7 +99,7 @@ impl Table {
             }
             _ => None,
         };
-        self.read_expr_stream_async(expr, vector_filter, columns, config, filter_str)
+        self.read_expr_stream_async(expr, vector_filters, columns, config, filter_str)
             .await
     }
 
@@ -374,7 +374,7 @@ impl Table {
     pub async fn read_with_config_async(
         &self,
         filter_str: Option<&str>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
     ) -> Result<Vec<RecordBatch>> {
@@ -385,20 +385,20 @@ impl Table {
             }
             _ => None,
         };
-        self.read_expr_with_config_async(expr, vector_filter, columns, config, filter_str)
+        self.read_expr_with_config_async(expr, vector_filters, columns, config, filter_str)
             .await
     }
 
     pub async fn read_expr_with_config_async(
         &self,
         expr: Option<FilterExpr>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
         filter_str: Option<&str>,
     ) -> Result<Vec<RecordBatch>> {
         let stream = self
-            .read_expr_stream_async(expr, vector_filter, columns, config, filter_str)
+            .read_expr_stream_async(expr, vector_filters, columns, config, filter_str)
             .await?;
         let results: Vec<Result<RecordBatch>> = stream.collect().await;
         results.into_iter().collect()
@@ -407,7 +407,7 @@ impl Table {
     pub async fn read_expr_stream_async(
         &self,
         expr: Option<FilterExpr>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
         filter_str: Option<&str>,
@@ -427,10 +427,10 @@ impl Table {
             }
         };
         let entries_to_read = if version > 0 {
-            if expr.is_some() || vector_filter.is_some() {
+            if expr.is_some() || vector_filters.is_some() {
                 let planner = QueryPlanner::new();
                 planner
-                    .prune_entries(&all_entries, expr.as_ref(), vector_filter.as_ref())
+                    .prune_entries(&all_entries, expr.as_ref(), vector_filters.as_ref())
                     .into_iter()
                     .map(|(e, _)| e)
                     .collect()
@@ -449,7 +449,7 @@ impl Table {
         // --- SMART HYBRID TRIGGER ---
         // If we have both a vector filter AND a text filter on a BM25/Inverted indexed column,
         // we switch to the Hybrid Coordinator path.
-        if let (Some(ref vs_params), Some(ref e)) = (&vector_filter, &expr) {
+        if let (Some(ref vs_params), Some(ref e)) = (&vector_filters, &expr) {
             let manifest = self.manifest().await?;
             let filtered_cols = e.get_referenced_columns();
 
@@ -539,7 +539,7 @@ impl Table {
         }
 
         // Handle standard vector search
-        if let Some(ref vs_params) = vector_filter {
+        if let Some(ref vs_params) = vector_filters {
             // 1. Search Disk
             let request = VectorSearchRequest::new(
                 vs_params.column.clone(),
@@ -809,12 +809,12 @@ impl Table {
     pub async fn read_filter_async(
         &self,
         filters: Vec<QueryFilter>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         self.read_filter_with_config_async(
             filters,
-            vector_filter,
+            vector_filters,
             columns,
             self.query_config.clone(),
         )
@@ -824,12 +824,12 @@ impl Table {
     pub async fn read_filter_with_config_async(
         &self,
         filters: Vec<QueryFilter>,
-        vector_filter: Option<VectorSearchParams>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
         columns: Option<&[&str]>,
         config: QueryConfig,
     ) -> Result<Vec<RecordBatch>> {
         let expr = FilterExpr::from_filters(filters);
-        self.read_expr_with_config_async(expr, vector_filter, columns, config, None)
+        self.read_expr_with_config_async(expr, vector_filters, columns, config, None)
             .await
     }
 
