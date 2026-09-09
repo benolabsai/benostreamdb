@@ -344,6 +344,28 @@ pub async fn execute_vector_search(
 }
 
 /// Execute vector search with custom configuration
+pub async fn execute_multi_vector_search_with_config(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+    base_uri: &str,
+    requests: Vec<VectorSearchRequest>,
+) -> Result<Vec<(String, RecordBatch)>> {
+    let mut all_results = Vec::new();
+    for request in requests {
+        let results = execute_vector_search_with_config(
+            entries.clone(),
+            store.clone(),
+            data_store.clone(),
+            base_uri,
+            request,
+        )
+        .await?;
+        all_results.extend(results);
+    }
+    Ok(all_results)
+}
+
 pub async fn execute_vector_search_with_config(
     entries: Vec<ManifestEntry>,
     store: Arc<dyn ObjectStore>,

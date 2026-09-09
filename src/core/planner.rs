@@ -855,7 +855,7 @@ impl QueryPlanner {
         &self,
         entries: &[ManifestEntry],
         expr: Option<&FilterExpr>,
-        vector_params: Option<&VectorSearchParams>,
+        vector_params: Option<&Vec<VectorSearchParams>>,
     ) -> Vec<(ManifestEntry, Option<IndexFile>)> {
         let pruning_start = std::time::Instant::now();
         let mut candidates = Vec::new();
@@ -868,8 +868,15 @@ impl QueryPlanner {
                 }
             }
 
-            let vector_matches = if let Some(vp) = vector_params {
-                self.might_match_vector(entry, vp)
+            let vector_matches = if let Some(vps) = vector_params {
+                let mut all_match = true;
+                for vp in vps {
+                    if !self.might_match_vector(entry, vp) {
+                        all_match = false;
+                        break;
+                    }
+                }
+                all_match
             } else {
                 true
             };
