@@ -907,7 +907,7 @@ impl HybridReader {
         RowSelection::from(selectors)
     }
 
-    /// Rewrites a list of QueryFilters, combining exact match filters on multiple columns 
+    /// Rewrites a list of QueryFilters, combining exact match filters on multiple columns
     /// into a single composite filter if a corresponding composite index exists.
     pub(crate) fn rewrite_composite_filters(
         &self,
@@ -931,7 +931,12 @@ impl HybridReader {
             for part in &parts {
                 let mut found = false;
                 for (i, f) in filters.iter().enumerate() {
-                    if f.column == *part && f.min == f.max && f.min.is_some() && f.min_inclusive && f.max_inclusive {
+                    if f.column == *part
+                        && f.min == f.max
+                        && f.min.is_some()
+                        && f.min_inclusive
+                        && f.max_inclusive
+                    {
                         matched_indices.push(i);
                         values.push(f.min.as_ref().unwrap().clone());
                         found = true;
