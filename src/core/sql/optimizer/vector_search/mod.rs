@@ -66,13 +66,8 @@ impl PhysicalOptimizerRule for VectorSearchOptimizerRule {
                 return Ok(Transformed::no(plan));
             }
 
-            // Use the first vector search for index optimization (primary ranking)
-            // Rest are applied as tiebreakers after index results
-            // Adapted from Apache Iceberg Rust LIMIT pushdown (v0.9.0+)
-            let primary_search = &vector_searches[0];
-
-            // Step 3: Build optimized plan
-            let new_plan = build_optimized_plan(&pattern, primary_search, config)?;
+            // Pass all vector searches for multi-vector optimization
+            let new_plan = build_optimized_plan(&pattern, &vector_searches, config)?;
 
             Ok(Transformed::yes(new_plan))
         })

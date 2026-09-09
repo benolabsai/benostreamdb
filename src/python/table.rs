@@ -747,7 +747,7 @@ impl PyTable {
                                     k,
                                 );
                                 table_clone
-                                    .read_async(filter.as_deref(), Some(vf_params), None)
+                                    .read_async(filter.as_deref(), Some(vec![vf_params]), None)
                                     .await
                             })
                         },

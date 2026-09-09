@@ -782,6 +782,7 @@ impl HybridReader {
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
         let allowed_bitmap = if let Some(expr) = filter {
             let sub_filters = expr.extract_and_conditions();
+            let sub_filters = self.rewrite_composite_filters(sub_filters);
             let mut combined_bitmap: Option<RoaringBitmap> = None;
 
             for sub_f in sub_filters {

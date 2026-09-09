@@ -416,6 +416,9 @@ pub enum IndexAlgorithm {
         fpr: f32,
     },
     Bitmap,
+    CompositeBitmap {
+        columns: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for IndexAlgorithm {
@@ -428,6 +431,7 @@ impl std::fmt::Display for IndexAlgorithm {
             IndexAlgorithm::Bm25 { .. } => write!(f, "bm25"),
             IndexAlgorithm::Bloom { .. } => write!(f, "bloom"),
             IndexAlgorithm::Bitmap => write!(f, "bitmap"),
+            IndexAlgorithm::CompositeBitmap { .. } => write!(f, "composite_bitmap"),
         }
     }
 }

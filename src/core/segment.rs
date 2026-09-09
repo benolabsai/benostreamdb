@@ -631,6 +631,46 @@ impl HybridSegmentWriter {
                 }
             })?;
 
+        // 2. Build Composite Indexes (Virtual Columns)
+        let mut composite_tasks = Vec::new();
+        for (col_name, config) in &self.index_configs {
+            if !config.enabled { continue; }
+            for alg in &config.algorithms {
+                if let crate::core::manifest::IndexAlgorithm::CompositeBitmap { columns } = alg {
+                    composite_tasks.push((col_name.clone(), columns.clone()));
+                }
+            }
+        }
+
+        composite_tasks.into_par_iter().try_for_each(|(col_name, columns)| {
+            let mut builder = arrow::array::StringBuilder::new();
+            let num_rows = batch.num_rows();
+
+            let mut arrays = Vec::new();
+            for col in &columns {
+                if let Some(arr) = batch.column_by_name(col) {
+                    arrays.push(arr);
+                } else {
+                    return Err(anyhow::anyhow!("Column {} not found for composite index", col));
+                }
+            }
+
+            for row in 0..num_rows {
+                let mut joined = String::new();
+                for (i, arr) in arrays.iter().enumerate() {
+                    if i > 0 {
+                        joined.push('\0');
+                    }
+                    let val = crate::core::manifest::ManifestValue::from_array(arr, row).to_string();
+                    joined.push_str(&val);
+                }
+                builder.append_value(&joined);
+            }
+            let composite_array = std::sync::Arc::new(builder.finish()) as std::sync::Arc<dyn Array>;
+
+            self.index_column(&col_name, &composite_array, row_offset)
+        })?;
+
         Ok(())
     }
 

@@ -82,7 +82,7 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     // 3. Search with parallelism = 4 (Parallel)
     let config_par = QueryConfig::new().with_max_parallel_readers(4);
     let results_par = table
-        .read_with_config_async(None, Some(vs_params), None, config_par)
+        .read_with_config_async(None, Some(vec![vs_params]), None, config_par)
         .await?;
 
     // 4. Verify results are identical (after sorting by ID to compare batches)
