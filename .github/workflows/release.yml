@@ -70,7 +70,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.30
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.1.0"
       - name: Prep CUDA Stubs
@@ -167,7 +167,7 @@ jobs:
           shared-key: "linux-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
       - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         id: cuda-toolkit
         with:
           cuda: "12.1.0"
