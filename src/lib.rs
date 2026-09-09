@@ -8,7 +8,6 @@
     clippy::non_canonical_partial_ord_impl,
     clippy::needless_late_init,
     clippy::collapsible_match,
-
     unknown_lints
 )]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
