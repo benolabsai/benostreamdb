@@ -2,7 +2,7 @@
 name = "hyperstreamdb-enterprise"
 version = "0.1.0"
 edition = "2021"
-description = "HyperStreamDB - Enterprise Edition Extensions (TurboQuant, GPU-fused kernels)"
+description = "HyperStreamDB - Enterprise Edition Extensions (Continuous Indexing, Enterprise Security)"
 license = "Proprietary"
 
 [dependencies]
@@ -20,3 +20,5 @@ simdeez = "1.0.8"
 default = ["avx512"]
 avx512 = []
 cuda = ["hyperstreamdb/cuda"]
+
+[workspace]

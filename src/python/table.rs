@@ -256,8 +256,9 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Explicitly quantize a column using TurboQuant or PQ.
-    /// This is an enterprise-grade compression feature.
+    /// Explicitly quantize a vector column using TurboQuant (TQ8/TQ4) or Product Quantization (PQ).
+    /// TurboQuant is built directly into the free community core engine, offering 4x (TQ8)
+    /// to 8x (TQ4) memory compression with outlier-robust Fast Walsh-Hadamard Transforms.
     #[pyo3(signature = (column, type_ = "TQ8", metric = "l2", complexity = 16, quality = 200))]
     fn quantize(
         &mut self,
