@@ -93,7 +93,7 @@ async fn test_high_concurrency_readers_writers() -> Result<()> {
                     5,
                 );
                 let _ = t
-                    .read_async(None, Some(vec![vs_params]), None)
+                    .read_async(None, Some(vs_params), None)
                     .await
                     .unwrap();
 

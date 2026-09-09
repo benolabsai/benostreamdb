@@ -130,7 +130,7 @@ async fn test_hybrid_sql_vector_search() -> Result<()> {
 
     let filter = "year = 2022 AND category = 'A' AND id > 5";
     let results = table
-        .read_async(Some(filter), Some(vec![vs_params]), None)
+        .read_async(Some(filter), Some(vs_params), None)
         .await?;
 
     let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
@@ -271,7 +271,7 @@ async fn test_cosine_similarity_search() -> Result<()> {
     )
     .with_metric(VectorMetric::Cosine);
 
-    let results = table.read_async(None, Some(vec![vs_params]), None).await?;
+    let results = table.read_async(None, Some(vs_params), None).await?;
     let total_rows: usize = results.iter().map(|b| b.num_rows()).sum();
     assert_eq!(total_rows, 1);
 
