@@ -90,7 +90,7 @@ async fn test_chaos_missing_index_files() -> Result<()> {
         5,
     );
 
-    let search_res = table.read_async(None, Some(vec![vs_params]), None).await;
+    let search_res = table.read_async(None, Some(vs_params), None).await;
 
     // Should result in explicit Error or graceful fallback
     match search_res {
