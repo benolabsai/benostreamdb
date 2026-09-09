@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb"
-version = "0.5.5"
+version = "0.6.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
@@ -31,7 +31,7 @@ crate-type = ["cdylib", "rlib"]
 
 [workspace]
 members = [
-    ".",
+    ".", "hyperstreamdb-flight",
     "hyperstreamdb-search",
 ]
 

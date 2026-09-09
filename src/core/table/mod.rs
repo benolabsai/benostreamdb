@@ -1917,6 +1917,38 @@ impl Table {
         Ok(())
     }
 
+    /// Re-indexes data files that are missing overlay index sidecars.
+    ///
+    /// This recovers tables when an external Iceberg engine (such as Apache Spark
+    /// `rewriteDataFiles`, Trino `OPTIMIZE`, or PyIceberg) has compacted or rewritten
+    /// data files, which creates new Parquet files lacking HyperStreamDB sidecars.
+    pub async fn recover_indexes_async(&self) -> Result<usize> {
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _) = manager.load_latest_full().await?;
+
+        let unindexed_count = all_entries
+            .iter()
+            .filter(|e| e.index_files.is_empty())
+            .count();
+        if unindexed_count == 0 {
+            tracing::info!("All segments have valid overlay indexes; no recovery needed.");
+            return Ok(0);
+        }
+
+        tracing::info!(
+            "Recovering overlay indexes for {} unindexed/compacted segments...",
+            unindexed_count
+        );
+        let target_columns = self.indexing.index_columns.read().clone();
+        self.backfill_indexes_async(target_columns).await?;
+        self.infer_index_metadata_from_physical_async().await?;
+        Ok(unindexed_count)
+    }
+
+    pub fn recover_indexes(&self) -> Result<usize> {
+        self.runtime().block_on(self.recover_indexes_async())
+    }
+
     // Read operations moved to read.rs
 
     // Write operations moved to write.rs

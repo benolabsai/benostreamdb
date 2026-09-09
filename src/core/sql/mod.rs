@@ -2,6 +2,7 @@
 
 pub mod literal;
 pub mod optimizer;
+pub mod partition_rewriter;
 pub mod pgvector_rewriter;
 pub mod physical_plan;
 pub mod session;

@@ -1,6 +1,6 @@
 [package]
 name = "hyperstreamdb-search"
-version = "0.5.5"
+version = "0.6.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "HyperStreamDB Search - OpenSearch/ES 7.10-compatible REST API over HyperStreamDB"
@@ -25,6 +25,7 @@ axum = "0.7"
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace"] }
 tokio = { version = "1.36", features = ["full"] }
+futures = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 prometheus = "0.13"
@@ -33,6 +34,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 chrono = "0.4"
 object_store = { version = "0.12.4", features = ["aws", "azure", "gcp", "http"] }
+
+[features]
+default = []
+cuda = ["hyperstreamdb/cuda"]
+wgpu = ["hyperstreamdb/wgpu", "hyperstreamdb/pollster"]
+rocm = ["wgpu"]
+intel = ["wgpu"]
+all-gpu = ["cuda", "wgpu"]
 
 [dev-dependencies]
 tempfile = "3.10"

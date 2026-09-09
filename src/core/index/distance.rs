@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+#![allow(clippy::chunks_exact_to_as_chunks, unknown_lints)]
+
 /// Optimized distance functions for vector search
 ///
 /// This module provides SIMD-accelerated distance metrics.

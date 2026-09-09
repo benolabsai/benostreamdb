@@ -1,0 +1,8 @@
+name: 'test_project'
+version: '1.0.0'
+config-version: 2
+profile: 'hyperstreamdb_profile'
+
+models:
+  test_project:
+    +materialized: table

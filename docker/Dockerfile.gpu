@@ -1,0 +1,113 @@
+# ---------------------------------------------------------------------------
+# HyperStreamDB Multi-Flavor GPU Accelerated Services
+# Supports NVIDIA CUDA, AMD ROCm, and Intel XPU / Vulkan backends
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    python3 \
+    libpython3-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace manifests for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY hyperstreamdb-flight/Cargo.toml hyperstreamdb-flight/Cargo.toml
+COPY hyperstreamdb-search/Cargo.toml hyperstreamdb-search/Cargo.toml
+
+# Create stub sources for dependency layer caching
+RUN mkdir -p src \
+    && echo "pub fn stub() {}" > src/lib.rs \
+    && echo "fn main() {}" > build.rs \
+    && mkdir -p hyperstreamdb-search/src \
+    && echo "fn main() {}" > hyperstreamdb-search/src/main.rs \
+    && echo "pub fn stub() {}" > hyperstreamdb-search/src/lib.rs \
+    && mkdir -p hyperstreamdb-flight/src \
+    && echo "fn main() {}" > hyperstreamdb-flight/src/main.rs \
+    && mkdir -p tests/bin benches \
+    && echo "fn main() {}" > tests/test_connector_ffi.rs \
+    && echo "fn main() {}" > tests/bin/generate_iceberg_manifests.rs \
+    && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
+    && echo "fn main() {}" > benches/performance.rs \
+    && echo "fn main() {}" > benches/bench_table.rs \
+    && cargo build --release -p hyperstreamdb-search -p hyperstreamdb-flight --features all-gpu \
+    && rm -rf target/release/.fingerprint/hyperstreamdb* \
+              target/release/deps/*hyperstreamdb* \
+              target/release/deps/libhyperstreamdb* \
+              target/release/build/hyperstreamdb* \
+              target/release/hypersearch* \
+              target/release/hyperstreamdb-flight*
+
+# Copy actual source code
+COPY build.rs ./
+COPY src ./src
+COPY hyperstreamdb-search/src ./hyperstreamdb-search/src
+COPY hyperstreamdb-flight/src ./hyperstreamdb-flight/src
+
+# Build both release binaries with all GPU acceleration features enabled
+RUN cargo build --release -p hyperstreamdb-search -p hyperstreamdb-flight --features all-gpu
+
+
+# ---------------------------------------------------------------------------
+# Runtime: Ubuntu 22.04 with CUDA 12.4 runtime + Vulkan/Mesa drivers
+# Supports:
+#   - NVIDIA: CUDA 12.x driver/runtime + NVRTC JIT compilation
+#   - AMD: Vulkan RADV driver (ROCm compatibility via /dev/kfd + /dev/dri)
+#   - Intel: Vulkan ANV driver (Arc / Flex / Max compatibility via /dev/dri)
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    python3 \
+    libssl3 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    vulkan-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r hyperstream && useradd -r -g hyperstream -m hyperstream
+
+WORKDIR /app
+
+# Copy binaries and entrypoint script
+COPY --from=builder /app/target/release/hypersearch /usr/local/bin/hypersearch
+COPY --from=builder /app/target/release/hyperstreamdb-flight /usr/local/bin/hyperstreamdb-flight
+COPY docker/quickstart-entrypoint.sh /usr/local/bin/quickstart-entrypoint.sh
+
+RUN chmod +x /usr/local/bin/quickstart-entrypoint.sh \
+    && mkdir -p /home/hyperstream/.hyperstreamdb/search \
+    && chown -R hyperstream:hyperstream /home/hyperstream/.hyperstreamdb
+
+# Expose ports: ES 7.10 (9200), Qdrant (6333), Flight SQL (50051), Prometheus (9090)
+EXPOSE 9200 6333 50051 9090
+
+# Container GPU passthrough settings for NVIDIA Container Toolkit
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+# Default network configuration
+ENV HYPERSEARCH_BIND=0.0.0.0
+ENV HYPERSEARCH_PORT=9200
+ENV QDRANT_BIND=0.0.0.0
+ENV QDRANT_PORT=6333
+ENV FLIGHT_BIND=0.0.0.0
+ENV FLIGHT_PORT=50051
+ENV HYPERSEARCH_DEVICE=auto
+ENV RUST_LOG=info
+
+USER hyperstream
+
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:9200/_cluster/health || exit 1
+
+ENTRYPOINT ["quickstart-entrypoint.sh"]
+CMD []

@@ -1,0 +1,138 @@
+# ---------------------------------------------------------------------------
+# HyperStreamDB Quickstart — Full Stack
+# Single command to launch MinIO + Nessie + HyperStreamDB (all APIs)
+#
+# Usage:
+#   docker compose -f docker-compose.quickstart.yml up
+#
+# Endpoints:
+#   http://localhost:9200   — Elasticsearch 7.10 REST API
+#   http://localhost:6333   — Qdrant REST API
+#   grpc://localhost:50051  — Arrow Flight SQL (ADBC/JDBC/ODBC)
+#   http://localhost:9000   — MinIO Console (minioadmin/minioadmin)
+#   http://localhost:19120  — Nessie REST Catalog
+# ---------------------------------------------------------------------------
+
+services:
+  # ---------------------
+  # 1. MinIO (S3)
+  # ---------------------
+  minio:
+    image: minio/minio:latest
+    container_name: hdb-minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - hyperstream_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: hdb-minio-init
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set minio http://minio:9000 minioadmin minioadmin;
+      mc mb minio/warehouse --ignore-existing;
+      mc mb minio/hyperstream --ignore-existing;
+      mc policy set public minio/warehouse;
+      mc policy set public minio/hyperstream;
+      exit 0;
+      "
+
+  # ---------------------
+  # 2. Nessie Catalog
+  # ---------------------
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.105.5
+    container_name: hdb-nessie
+    ports:
+      - "19120:19120"
+    environment:
+      - QUARKUS_HTTP_PORT=19120
+      - NESSIE_VERSION_STORE_TYPE=IN_MEMORY
+      # Iceberg REST catalog
+      - nessie.catalog.iceberg-rest.enabled=true
+      - nessie.catalog.default-warehouse=warehouse
+      - nessie.catalog.warehouses.warehouse.location=s3://warehouse/
+      - nessie.catalog.s3.endpoint=http://minio:9000/
+      - nessie.catalog.s3.access-key=minioadmin
+      - nessie.catalog.s3.secret-key=minioadmin
+      - nessie.catalog.s3.path-style-access=true
+      - nessie.server.authentication.enabled=false
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------
+  # 3. HyperStreamDB (All APIs)
+  # ---------------------
+  hyperstreamdb:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: hyperstreamdb/quickstart:latest
+    container_name: hdb-server
+    restart: unless-stopped
+    ports:
+      - "9200:9200"    # Elasticsearch 7.10 REST
+      - "6333:6333"    # Qdrant REST
+      - "50051:50051"  # Arrow Flight SQL gRPC
+    environment:
+      - HYPERSEARCH_BIND=0.0.0.0
+      - HYPERSEARCH_PORT=9200
+      - QDRANT_BIND=0.0.0.0
+      - QDRANT_PORT=6333
+      - HYPERSEARCH_STORAGE_URI=s3://hyperstream/
+      - HYPERSEARCH_AUTO_REFRESH_SECS=5
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT=http://minio:9000
+      - AWS_REGION=us-east-1
+      - AWS_ALLOW_HTTP=true
+      - RUST_LOG=info
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+    volumes:
+      - hdb-cache:/home/hyperstream/.hyperstreamdb
+    networks:
+      - hyperstream_net
+    depends_on:
+      minio:
+        condition: service_healthy
+
+volumes:
+  minio-data:
+    driver: local
+  hdb-cache:
+    driver: local
+
+networks:
+  hyperstream_net:
+    driver: bridge

@@ -1,73 +1,93 @@
-# Production Docker Compose for HyperStreamDB
-# Requires .env file with secrets (see .env.example)
-
-version: "3.8"
+# ---------------------------------------------------------------------------
+# HyperStreamDB Production Deployment
+# Separate containers for each service (microservice architecture)
+#
+# Usage:
+#   docker compose -f docker-compose.production.yml up -d
+#
+# Requires .env file with credentials (see .env.example)
+# ---------------------------------------------------------------------------
 
 services:
-  gateway:
+  # ---------------------
+  # Search Service (ES 7.10 + Qdrant APIs)
+  # ---------------------
+  search:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: hyperstreamdb:latest
-    container_name: hdb-gateway
+      dockerfile: docker/Dockerfile.search
+    image: hyperstreamdb/search:${HDB_VERSION:-latest}
+    container_name: hdb-search
     restart: unless-stopped
     ports:
-      - "${GATEWAY_PORT:-3000}:3000"
+      - "${HYPERSEARCH_PORT:-9200}:9200"
+      - "${QDRANT_PORT:-6333}:6333"
     environment:
-      - HYPERSTREAM_STORAGE_URI=s3://${AWS_BUCKET:-warehouse}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - HYPERSEARCH_BIND=0.0.0.0
+      - HYPERSEARCH_PORT=9200
+      - QDRANT_BIND=0.0.0.0
+      - QDRANT_PORT=6333
+      - HYPERSEARCH_STORAGE_URI=${HYPERSEARCH_STORAGE_URI:-s3://hyperstream/}
+      - HYPERSEARCH_AUTO_REFRESH_SECS=${HYPERSEARCH_AUTO_REFRESH_SECS:-5}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+      - AWS_ALLOW_HTTP=${AWS_ALLOW_HTTP:-false}
       - RUST_LOG=${RUST_LOG:-info}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
       interval: 30s
       timeout: 5s
       retries: 3
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: "2.0"
+          memory: ${SEARCH_MEMORY:-4G}
+          cpus: "${SEARCH_CPUS:-2.0}"
     volumes:
-      - hdb-cache:/tmp/hyperstream_cache
+      - search-cache:/home/hyperstream/.hyperstreamdb
     networks:
       - hyperstream_net
 
-  iceberg-rest:
+  # ---------------------
+  # Flight SQL Service (Arrow Flight gRPC)
+  # ---------------------
+  flight:
     build:
       context: .
-      dockerfile: Dockerfile
-    image: hyperstreamdb:latest
-    container_name: hdb-iceberg-rest
+      dockerfile: docker/Dockerfile.flight
+    image: hyperstreamdb/flight:${HDB_VERSION:-latest}
+    container_name: hdb-flight
     restart: unless-stopped
-    entrypoint: ["iceberg_rest"]
     ports:
-      - "${ICEBERG_REST_PORT:-8181}:8181"
+      - "${FLIGHT_PORT:-50051}:50051"
     environment:
-      - HYPERSTREAM_STORAGE_URI=s3://${AWS_BUCKET:-warehouse}
-      - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ENDPOINT=${AWS_ENDPOINT:-}
+      - AWS_ALLOW_HTTP=${AWS_ALLOW_HTTP:-false}
       - RUST_LOG=${RUST_LOG:-info}
-      - PORT=8181
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8181/v1/config"]
+      test: ["CMD", "curl", "-sf", "http://localhost:50051/", "||", "exit", "0"]
       interval: 30s
       timeout: 5s
       retries: 3
     deploy:
       resources:
         limits:
-          memory: 4G
-          cpus: "2.0"
+          memory: ${FLIGHT_MEMORY:-4G}
+          cpus: "${FLIGHT_CPUS:-2.0}"
     volumes:
-      - hdb-cache:/tmp/hyperstream_cache
+      - flight-cache:/home/hyperstream/.hyperstreamdb
     networks:
       - hyperstream_net
 
 volumes:
-  hdb-cache:
+  search-cache:
+    driver: local
+  flight-cache:
     driver: local
 
 networks:

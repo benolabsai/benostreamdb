@@ -1,0 +1,221 @@
+{
+  "run": {
+    "generated": "2026-09-07T12:51:06",
+    "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "docs": 200,
+    "dim": 32,
+    "runs": 20,
+    "k": 10,
+    "envelope_ms": [
+      50.0,
+      200.0
+    ],
+    "notes": [],
+    "rss_mb": {
+      "HyperStreamDB": 317.4
+    },
+    "es_version": "7.10.2",
+    "es_build": "747e1cc71def077253878a59143c1f785afa92b9",
+    "hs_version": "7.10.2"
+  },
+  "results": [
+    {
+      "system": "HyperStreamDB",
+      "operation": "ingest",
+      "dataset_size": 200,
+      "latency_ms": 227.5,
+      "throughput": 879.0,
+      "memory_mb": null,
+      "storage_mb": 232.63,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "min_ms": 0.892,
+        "p50_ms": 1.101,
+        "p95_ms": 1.298,
+        "p99_ms": 1.42,
+        "max_ms": 5.857,
+        "mean_ms": 1.135,
+        "n": 200,
+        "exclude_embedding": false
+      }
+    },
+    {
+      "system": "HyperStreamDB",
+      "operation": "refresh",
+      "dataset_size": 200,
+      "latency_ms": 19559.7,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "note": "time until data is searchable (index build included where applicable)"
+      }
+    },
+    {
+      "system": "HyperStreamDB",
+      "operation": "match_bm25",
+      "dataset_size": 200,
+      "latency_ms": 86.117,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "min_ms": 77.345,
+        "p50_ms": 86.117,
+        "p95_ms": 100.429,
+        "p99_ms": 107.713,
+        "max_ms": 109.533,
+        "mean_ms": 87.421,
+        "n": 20
+      }
+    },
+    {
+      "system": "HyperStreamDB",
+      "operation": "filtered",
+      "dataset_size": 200,
+      "latency_ms": 106.498,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "min_ms": 96.381,
+        "p50_ms": 106.498,
+        "p95_ms": 120.123,
+        "p99_ms": 120.254,
+        "max_ms": 120.287,
+        "mean_ms": 107.987,
+        "n": 20
+      }
+    },
+    {
+      "system": "HyperStreamDB",
+      "operation": "knn",
+      "dataset_size": 200,
+      "latency_ms": 85.607,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "dim": 32,
+        "min_ms": 82.739,
+        "p50_ms": 85.607,
+        "p95_ms": 88.987,
+        "p99_ms": 90.455,
+        "max_ms": 90.822,
+        "mean_ms": 85.692,
+        "n": 20
+      }
+    },
+    {
+      "system": "HyperStreamDB",
+      "operation": "hybrid_rrf",
+      "dataset_size": 200,
+      "latency_ms": 101.541,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "dim": 32,
+        "min_ms": 95.267,
+        "p50_ms": 101.541,
+        "p95_ms": 109.296,
+        "p99_ms": 110.838,
+        "max_ms": 111.224,
+        "mean_ms": 102.428,
+        "n": 20
+      }
+    },
+    {
+      "system": "Elasticsearch 7.10.2",
+      "operation": "ingest",
+      "dataset_size": 200,
+      "latency_ms": 907.0,
+      "throughput": 220.5,
+      "memory_mb": null,
+      "storage_mb": 0.36,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "min_ms": 3.321,
+        "p50_ms": 4.127,
+        "p95_ms": 6.372,
+        "p99_ms": 9.043,
+        "max_ms": 34.157,
+        "mean_ms": 4.531,
+        "n": 200,
+        "exclude_embedding": true
+      }
+    },
+    {
+      "system": "Elasticsearch 7.10.2",
+      "operation": "refresh",
+      "dataset_size": 200,
+      "latency_ms": 46.4,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "note": "time until data is searchable (index build included where applicable)"
+      }
+    },
+    {
+      "system": "Elasticsearch 7.10.2",
+      "operation": "match_bm25",
+      "dataset_size": 200,
+      "latency_ms": 3.293,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "min_ms": 2.677,
+        "p50_ms": 3.293,
+        "p95_ms": 4.769,
+        "p99_ms": 6.141,
+        "max_ms": 6.484,
+        "mean_ms": 3.438,
+        "n": 20
+      }
+    },
+    {
+      "system": "Elasticsearch 7.10.2",
+      "operation": "filtered",
+      "dataset_size": 200,
+      "latency_ms": 2.641,
+      "throughput": null,
+      "memory_mb": null,
+      "storage_mb": null,
+      "hardware": "AMD Ryzen 9 5900XT 16-Core Processor",
+      "device_type": "cpu",
+      "metadata": {
+        "k": 10,
+        "min_ms": 2.05,
+        "p50_ms": 2.641,
+        "p95_ms": 2.929,
+        "p99_ms": 3.165,
+        "max_ms": 3.224,
+        "mean_ms": 2.614,
+        "n": 20
+      }
+    }
+  ]
+}

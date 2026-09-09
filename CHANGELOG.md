@@ -7,17 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.6.0] - 2026-09-09
+
 ### Added
-- **`hyperstreamdb-search` add-on** (`hypersearch` binary): Elasticsearch 7.10-compatible REST API over HyperStreamDB tables (any supported storage URI, default `file://~/.hyperstreamdb/search`).
-  - Indexing: `POST /{index}/_doc`, `POST /{index}/_doc/{id}` (schema inference, typed error mapping), and `POST /{index}/_refresh`
-  - `POST /{index}/_search` with `match` (BM25), `knn` (HNSW), and `hybrid` (reciprocal rank fusion) queries; top-level filters (`term`, `range`, `exists`, `bool`); `from`/`size` pagination with deterministic `_id` tie-breaking
-  - ES-compatible response envelope (`_index`, `_id`, `_score`, `_source`, `took`, `timed_out`, `hits.total`)
-  - Cluster endpoints: `GET /`, `GET /_health`, `GET /_cluster/health`, `GET /metrics`
+- **Multi-Protocol Gateway Ecosystem**:
+  - **`hyperstreamdb-search` Service (`hypersearch` binary)**: Dual Elasticsearch 7.10 (Port 9200) and Qdrant (Port 6333) compatible REST APIs over HyperStreamDB tables.
+    - Elasticsearch 7.10 API: Full document CRUD (`POST /{index}/_doc`), hybrid search (`POST /{index}/_search` with BM25 + HNSW kNN + Reciprocal Rank Fusion), index management (`PUT /{index}`, `POST /{index}/_refresh`), and cluster health (`GET /_cluster/health`).
+    - Qdrant REST API: Collection management (`/collections/{name}`), point upsert/retrieval (`/collections/{name}/points`), and vector search (`/collections/{name}/points/search`).
+    - Prometheus metrics exporter on `/metrics` (Port 9090).
+  - **`hyperstreamdb-flight` Gateway Service**: Native Arrow Flight SQL gRPC gateway (Port 50051) enabling zero-copy analytics for DuckDB, Polars, Apache Spark, and JDBC/ODBC BI tools via standard Flight SQL/ADBC.
+- **Multi-Flavor GPU Acceleration & Hardware Auto-Detection**:
+  - Optional GPU acceleration exposed across `hyperstreamdb-search` and `hyperstreamdb-flight` via `cuda`, `wgpu`, `rocm`, `intel`, and `all-gpu` feature flags.
+  - Runtime device selection via `HYPERSEARCH_DEVICE=auto|cuda[:N]|rocm[:N]|intel[:N]|mps|cpu`.
+  - Active compute backend (`compute` block) exposed in `GET /` cluster info and `GET /_cluster/stats`.
+  - `docker/Dockerfile.gpu`: Multi-flavor GPU container image with CUDA 12 runtime, NVRTC JIT compilation, and Vulkan/Mesa drivers for AMD Radeon and Intel Arc.
+  - `docker/docker-compose.gpu.yml`: Compose GPU override with hardware reservations and device pass-through.
+- **Iceberg Compaction Resilience & Index Recovery**:
+  - `Table::recover_indexes_async(&self)` / `recover_indexes(&self)`: Re-indexes data files that are missing overlay index sidecars, recovering fast vector (HNSW) and keyword (BM25) search after external Iceberg tools (Spark `rewriteDataFiles`, Trino `OPTIMIZE`, PyIceberg) compact table data files.
+- **Docker Container Infrastructure**:
+  - `hyperstreamdb/quickstart:latest`: Single all-in-one developer container running ES 7.10 (9200), Qdrant (6333), and Flight SQL (50051).
+  - `hyperstreamdb/search:latest`: Standalone production search microservice.
+  - `hyperstreamdb/flight:latest`: Standalone production Arrow Flight SQL microservice.
+  - `docker/docker-compose.quickstart.yml`: Single-command full stack with MinIO (S3), Project Nessie catalog, and HyperStreamDB.
+  - `docker-compose.production.yml`: Production multi-container configuration with health checks and resource limits.
 - Okapi BM25 keyword scoring (tunable `k1`/`b`) with an English analyzer in the core engine; public `keyword_search_index` API.
 - Smart hybrid trigger fusing keyword (BM25) and vector (HNSW) results via reciprocal rank fusion (RRF, k=60).
 - Background segment index builds with `wait_for_background_tasks_async` for deterministic refresh semantics.
-
----
 
 ## [0.5.3] - 2026-06-21
 
