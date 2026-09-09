@@ -243,7 +243,10 @@ impl Table {
                         .entry(sub_f.column.clone())
                         .or_default()
                         .insert(path);
+                }
 
+                let rewritten_filters = reader.rewrite_composite_filters(sub_filters.clone());
+                for sub_f in &rewritten_filters {
                     if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(sub_f).await {
                         match seg_bm {
                             Some(ref mut existing) => *existing &= bm,

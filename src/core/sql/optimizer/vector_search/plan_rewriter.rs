@@ -27,7 +27,7 @@ use crate::core::sql::optimizer::config::VectorSearchConfig;
 /// 4. Re-wraps with FilterExec if a filter was present
 pub fn build_optimized_plan(
     pattern: &DetectedKnnPattern,
-    primary_search: &ParsedVectorSearch,
+    vector_searches: &[ParsedVectorSearch],
     config: &ConfigOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Read configuration from session config
@@ -37,9 +37,11 @@ pub fn build_optimized_plan(
     // This reduces the amount of data fetched and processed
     let k_with_offset = pattern.limit + pattern.offset;
 
+
+
     tracing::info!(
-        "VectorSearchOptimizer: Detected KNN pattern for column '{}' with k={}, offset={}, metric={:?}",
-        primary_search.column, pattern.limit, pattern.offset, primary_search.metric
+        "VectorSearchOptimizer: Detected KNN pattern for columns '{:?}' with k={}, offset={}",
+        vector_searches.iter().map(|s| s.column.as_str()).collect::<Vec<_>>(), pattern.limit, pattern.offset
     );
 
     if search_config.limit_pushdown {
@@ -49,21 +51,24 @@ pub fn build_optimized_plan(
         );
     }
 
-    let mut vp = VectorSearchParams::new(
-        &primary_search.column,
-        primary_search.query_value.clone(),
-        k_with_offset,
-    )
-    .with_metric(primary_search.metric);
+    let mut vector_params = Vec::new();
+    for search in vector_searches {
+        let mut vp = VectorSearchParams::new(
+            &search.column,
+            search.query_value.clone(),
+            k_with_offset,
+        )
+        .with_metric(search.metric);
 
-    // Apply configuration parameters
-    if let Some(ef) = search_config.ef_search {
-        vp = vp.with_ef_search(ef);
-        tracing::debug!("VectorSearchOptimizer: Using ef_search={}", ef);
-    }
-    if let Some(probes) = search_config.probes {
-        vp = vp.with_probes(probes);
-        tracing::debug!("VectorSearchOptimizer: Using probes={}", probes);
+        // Apply configuration parameters
+        if let Some(ef) = search_config.ef_search {
+            vp = vp.with_ef_search(ef);
+        }
+        if let Some(probes) = search_config.probes {
+            vp = vp.with_probes(probes);
+        }
+        
+        vector_params.push(vp);
     }
 
     // FAST PATH OPTIMIZATION: For small result sets (limit < 100), use single-threaded execution (Iceberg v0.9.0+)
@@ -85,7 +90,7 @@ pub fn build_optimized_plan(
         pattern.hyperstream_exec.partitions.clone(),
         pattern.hyperstream_exec.projection.clone(),
         pattern.hyperstream_exec.filter_str.clone(),
-        vp,
+        vector_params.into_iter().next().unwrap(),
         Some(k_with_offset),
         pattern.hyperstream_exec.schema.clone(),
     )?;

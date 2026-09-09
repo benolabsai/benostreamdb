@@ -101,10 +101,13 @@ impl Table {
                 // Update in-memory state if no manifest/schema exists yet.
                 // This allows pre-configuring indexes before the first write.
                 let mut index_configs = self.indexing.index_configs.write();
-                let config = index_configs.entry(column.clone()).or_insert_with(|| crate::core::table::state::ColumnIndexConfig {
-                    enabled: true,
-                    ..Default::default()
-                });
+                let config =
+                    index_configs
+                        .entry(column.clone())
+                        .or_insert_with(|| crate::core::table::state::ColumnIndexConfig {
+                            enabled: true,
+                            ..Default::default()
+                        });
                 config.algorithms.push(algorithm);
 
                 let mut index_cols = self.indexing.index_columns.write();
@@ -115,20 +118,38 @@ impl Table {
             }
         };
 
-        let field = latest_schema.fields.iter()
-            .find(|f| f.name == column)
-            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
+        // If it's a composite index, we map it to the first column for manifest storage
+        let mut target_col = column.clone();
+        if let IndexAlgorithm::CompositeBitmap { columns } = &algorithm {
+            if let Some(first) = columns.first() {
+                target_col = first.clone();
+            }
+        }
+
+        let field = latest_schema
+            .fields
+            .iter()
+            .find(|f| f.name == target_col)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", target_col))?;
 
         let mut next_indexes = field.indexes.clone();
 
         // Deduplicate by type for unique algorithms (Vector families, BM25, Bloom)
         match &algorithm {
-            IndexAlgorithm::Hnsw { .. } | IndexAlgorithm::HnswPq { .. } |
-            IndexAlgorithm::HnswTq4 { .. } | IndexAlgorithm::HnswTq8 { .. } => {
+            IndexAlgorithm::Hnsw { .. }
+            | IndexAlgorithm::HnswPq { .. }
+            | IndexAlgorithm::HnswTq4 { .. }
+            | IndexAlgorithm::HnswTq8 { .. } => {
                 // Vector index family - replace existing ones
-                next_indexes.retain(|idx| !matches!(idx,
-                    IndexAlgorithm::Hnsw { .. } | IndexAlgorithm::HnswPq { .. } |
-                    IndexAlgorithm::HnswTq4 { .. } | IndexAlgorithm::HnswTq8 { .. }));
+                next_indexes.retain(|idx| {
+                    !matches!(
+                        idx,
+                        IndexAlgorithm::Hnsw { .. }
+                            | IndexAlgorithm::HnswPq { .. }
+                            | IndexAlgorithm::HnswTq4 { .. }
+                            | IndexAlgorithm::HnswTq8 { .. }
+                    )
+                });
             }
             IndexAlgorithm::Bm25 { .. } => {
                 next_indexes.retain(|idx| !matches!(idx, IndexAlgorithm::Bm25 { .. }));
@@ -139,17 +160,48 @@ impl Table {
             _ => {
                 if !next_indexes.contains(&algorithm) {
                     next_indexes.push(algorithm.clone());
-                    return self.set_index_columns(HashMap::from([(column, next_indexes)])).await;
+                    let mut updates = HashMap::new();
+                    updates.insert(target_col.clone(), next_indexes);
+                    self.set_index_columns(updates).await?;
+                    
+                    if target_col != column {
+                        let mut index_configs = self.indexing.index_configs.write();
+                        let config = index_configs.entry(column.clone()).or_default();
+                        config.enabled = true;
+                        if !config.algorithms.contains(&algorithm) {
+                            config.algorithms.push(algorithm.clone());
+                        }
+                        let mut index_cols = self.indexing.index_columns.write();
+                        if !index_cols.contains(&column) {
+                            index_cols.push(column);
+                        }
+                    }
+                    return Ok(());
                 }
             }
         }
 
-        next_indexes.push(algorithm);
+        next_indexes.push(algorithm.clone());
 
         let mut updates = HashMap::new();
-        updates.insert(column, next_indexes);
+        updates.insert(target_col.clone(), next_indexes);
 
-        self.set_index_columns(updates).await
+        self.set_index_columns(updates).await?;
+
+        if target_col != column {
+            let mut index_configs = self.indexing.index_configs.write();
+            let config = index_configs.entry(column.clone()).or_default();
+            config.enabled = true;
+            if !config.algorithms.contains(&algorithm) {
+                config.algorithms.push(algorithm);
+            }
+            let mut index_cols = self.indexing.index_columns.write();
+            if !index_cols.contains(&column) {
+                index_cols.push(column);
+            }
+        }
+        
+        Ok(())
     }
 
     /// Remove all indexing strategies from a column.

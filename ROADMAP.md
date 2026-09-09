@@ -583,4 +583,3 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 
 **Last Updated:** 2026-09-09  
 **Status:** Phases 1–8 COMPLETE ✅ | Active Next: Polaris REST OAuth2, Trino Sidecar Pushdown, Multi-Vector Search & Graph RAG  
-📖 **Commercial & Monetization Strategy:** See [COMMERCIALIZATION_STRATEGY.md](COMMERCIALIZATION_STRATEGY.md) for enterprise packaging, monetization roadmap (Security/Compliance, Accelerator), and GTM strategy.

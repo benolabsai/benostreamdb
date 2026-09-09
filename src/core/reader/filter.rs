@@ -906,4 +906,73 @@ impl HybridReader {
 
         RowSelection::from(selectors)
     }
+
+    /// Rewrites a list of QueryFilters, combining exact match filters on multiple columns 
+    /// into a single composite filter if a corresponding composite index exists.
+    pub(crate) fn rewrite_composite_filters(
+        &self,
+        mut filters: Vec<crate::core::planner::QueryFilter>,
+    ) -> Vec<crate::core::planner::QueryFilter> {
+        let mut composite_indices = Vec::new();
+        for idx in &self.config.index_files {
+            if let Some(col_name) = &idx.column_name {
+                if col_name.contains(',') {
+                    let parts: Vec<String> = col_name.split(',').map(|s| s.to_string()).collect();
+                    composite_indices.push((col_name.clone(), parts));
+                }
+            }
+        }
+
+        for (comp_name, parts) in composite_indices {
+            let mut matched_indices = Vec::new();
+            let mut all_matched = true;
+            let mut values = Vec::new();
+
+            for part in &parts {
+                let mut found = false;
+                for (i, f) in filters.iter().enumerate() {
+                    if f.column == *part && f.min == f.max && f.min.is_some() && f.min_inclusive && f.max_inclusive {
+                        matched_indices.push(i);
+                        values.push(f.min.as_ref().unwrap().clone());
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    all_matched = false;
+                    break;
+                }
+            }
+
+            if all_matched && !parts.is_empty() {
+                matched_indices.sort_unstable();
+                for &i in matched_indices.iter().rev() {
+                    filters.remove(i);
+                }
+
+                let mut composite_val_str = String::new();
+                for (i, val) in values.iter().enumerate() {
+                    if i > 0 {
+                        composite_val_str.push('\0');
+                    }
+                    if let Some(s) = val.as_str() {
+                        composite_val_str.push_str(s);
+                    } else {
+                        composite_val_str.push_str(&val.to_string());
+                    }
+                }
+
+                filters.push(crate::core::planner::QueryFilter {
+                    column: comp_name.clone(),
+                    min: Some(serde_json::Value::String(composite_val_str.clone())),
+                    min_inclusive: true,
+                    max: Some(serde_json::Value::String(composite_val_str.clone())),
+                    max_inclusive: true,
+                    values: None,
+                    negated: false,
+                });
+            }
+        }
+        filters
+    }
 }
