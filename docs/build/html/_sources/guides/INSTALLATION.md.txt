@@ -347,7 +347,7 @@ python tests/integration/test_nyc_taxi.py
 
 - [ ] Schema evolution support
 - [ ] Partition evolution
-- [ ] Distributed locking (DynamoDB)
+- [ ] Cloud-agnostic distributed locking (FileBasedLock)
 - [ ] CLI tools (`hyperstream compact`, `vacuum`)
 - [ ] Prometheus metrics
 - [ ] Error handling & retries
@@ -528,7 +528,7 @@ hyperstreamdb/
 - [ ] Partition evolution
 
 ### 📋 Planned
-- [ ] Distributed locking (DynamoDB/Zookeeper)
+- [ ] Cloud-agnostic distributed locking (FileBasedLock)
 - [ ] CLI tools (`hyperstream admin`)
 - [ ] Prometheus metrics
 - [ ] **REST Gateway** (OpenAPI for JS/Frontend RAG integration)

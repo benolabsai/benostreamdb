@@ -343,14 +343,14 @@ python tests/integration/test_nyc_taxi.py
 - Multi-table transactions
 - Battle-tested (Netflix, Apple, Dremio)
 
-## Phase 3: Production Hardening
+## Phase 3: Production Hardening ✅ COMPLETE
 
-- [ ] Schema evolution support
-- [ ] Partition evolution
-- [ ] Distributed locking (DynamoDB)
-- [ ] CLI tools (`hyperstream compact`, `vacuum`)
-- [ ] Prometheus metrics
-- [ ] Error handling & retries
+- [x] Schema evolution support
+- [x] Partition evolution
+- [x] Cloud-agnostic distributed locking (`FileBasedLock` via object store CAS)
+- [x] CLI tools (`hyperstream compact`, `vacuum`, REPL SQL)
+- [x] Prometheus metrics & tracing
+- [x] Error handling & retries
 
 ## 🏗️ Architecture
 
@@ -523,15 +523,13 @@ hyperstreamdb/
 - [x] Sparse and binary vector operations
 
 ### 🔄 In Progress
-- [ ] Spark/Trino connectors
-- [ ] Schema evolution
-- [ ] Partition evolution
+- [ ] 100k / 1M doc competitive benchmarks vs Elasticsearch 7.10
+- [ ] Apache Polaris REST catalog integration (OAuth2 client credentials)
 
 ### 📋 Planned
-- [ ] Distributed locking (DynamoDB/Zookeeper)
-- [ ] CLI tools (`hyperstream admin`)
-- [ ] Prometheus metrics
-- [ ] **REST Gateway** (OpenAPI for JS/Frontend RAG integration)
+- [ ] Trino connector sidecar index predicate pushdown
+- [ ] Multi-vector search
+- [ ] Universal GPU PyPI wheel and automated CUDA CI
 
 ## 🤝 Contributing
 

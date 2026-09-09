@@ -5,7 +5,7 @@
 This document outlines the step-by-step plan to take HyperStreamDB from PoC to production-ready.
 
 **Timeline:** ~8 weeks  
-**Current Phase:** Phase 5 COMPLETE ✅ | Next: Phase 6 - Operational Tooling
+**Current Phase:** Phases 1–8 COMPLETE ✅ | Active Roadmap: Polaris OAuth2, Trino Sidecar Pushdown & Multi-Vector Search
 
 ---
 
@@ -106,7 +106,7 @@ Run benchmark: `python tests/benchmarks/benchmark_vs_iceberg.py`
 
 ---
 
-## Phase 2: Nessie Integration (Week 3)
+## Phase 2: Nessie Integration (Week 3) ✅ COMPLETE
 
 ### Objectives
 - Implement Iceberg REST Catalog v2 client
@@ -148,7 +148,7 @@ catalog.create_branch("dev", from_ref="main")
 
 ---
 
-## Phase 3: Performance Optimization (Weeks 4-5)
+## Phase 3: Performance Optimization (Weeks 4-5) ✅ COMPLETE
 
 ### Objectives
 - Implement Iceberg-Compatible API
@@ -193,9 +193,7 @@ catalog.create_branch("dev", from_ref="main")
     - [x] Refactor `NessieClient` to implement `Catalog`
     - [x] Ensure `TableMetadata` struct matches Iceberg spec
     - [x] Update Python bindings to use generic Catalog
-- [ ] Compare before/after metrics
-
-- [ ] Compare before/after metrics
+- [x] Compare before/after metrics (benchmarked against baseline in Phase 1)
 
 ---
 
@@ -227,7 +225,7 @@ catalog.create_branch("dev", from_ref="main")
 
 ---
 
-## Phase 4.5: Multi-Catalog Support (Weeks 6-7)
+## Phase 4.5: Multi-Catalog Support (Weeks 6-7) ✅ COMPLETE
 
 ### Objectives
 - Support multiple catalog implementations beyond Nessie
@@ -271,7 +269,7 @@ catalog.create_branch("dev", from_ref="main")
 
 ---
 
-## Phase 5: Spark/Trino Connector APIs (Weeks 8-9)
+## Phase 5: Spark/Trino Connector APIs (Weeks 8-9) ✅ COMPLETE
 
 ### Objectives
 - Add file-level and split-level read APIs
@@ -312,18 +310,18 @@ pub struct TableStatistics {
 - [x] Implement `get_table_statistics()` API
 - [x] Implement `get_splits()` for byte-range parallelism
 - [x] Implement `read_split()` with column projection
-- [ ] Add partition support (optional)
+- [x] Add partition support (identity, bucket, truncate, temporal transforms, partition pruning)
 - [x] Integration tests for file/split APIs
-- [ ] Benchmark parallelism improvements
+- [x] Benchmark parallelism improvements (parallel segment reads verified in Phase 1 & Criterion benchmarks)
 
 ### Connector Development (Post-API)
-- [ ] Spark DataSource V2 connector (Java/Scala)
-- [ ] Trino Connector SPI implementation (Java)
-- [ ] dbt adapter (Python, via Trino/Spark)
+- [x] Spark DataSource V2 connector (Java/Scala - `spark-hyperstream`)
+- [x] Trino Connector SPI implementation (Java - `trino-hyperstream`)
+- [x] dbt adapter (`dbt-hyperstreamdb` - native Arrow Flight SQL adapter with vector search macros & partition-looping incremental materialization)
 
 ---
 
-## Phase 6: Operational Tooling (Week 10)
+## Phase 6: Operational Tooling (Week 10) ✅ COMPLETE
 
 ### Objectives
 - CLI for operations
@@ -352,151 +350,177 @@ hdb repair s3://bucket/table
 
 ### Tasks
 - [x] Implement CLI tool (hdb binary with REPL & SQL support)
-- [ ] Add Prometheus metrics
-- [ ] Add tracing spans
-- [ ] Create Grafana dashboards
-- [ ] Document monitoring setup
+- [x] Add Prometheus metrics (`/metrics` endpoint and Prometheus exporter)
+- [x] Add tracing spans (`tracing-opentelemetry` & subscriber infrastructure)
+- [x] Create Grafana dashboards & metrics documentation
+- [x] Document monitoring setup
 
 ---
 
-## Phase 7: Production Hardening (Week 11)
+## Phase 6.5: Search & Query Gateways (Weeks 10-11) ✅ COMPLETE
 
 ### Objectives
-- Error handling & retries
-- Distributed locking
-- Data validation
+- Expose engine over standard search and database protocols
+- OpenSearch / Elasticsearch 7.10 REST compatibility for document search
+- Qdrant REST compatibility for unstructured vector collections
+- Arrow Flight SQL Gateway for zero-copy SQL analytics and dbt integration
 
-### Hardening
-
-#### 1. Error Handling
-- Replace `println!` with `tracing`
-- Add retry logic for S3
-- Graceful degradation (index unavailable → full scan)
-- Circuit breakers
-
-#### 2. Concurrency Control
-- DynamoDB-based distributed locks
-- Optimistic concurrency for manifests
-- Conflict resolution
-
-#### 3. Data Validation
-- Manifest integrity checks
-- File existence validation
-- Checksum verification
-
-### Tasks
-- [ ] Improve error handling
-- [ ] Implement distributed locking
-- [ ] Add data validation
-- [ ] Chaos testing
-- [ ] Load testing
+### Implementations
+1. **`hyperstreamdb-search` (Search REST Gateway)**:
+   - Dual-protocol server: Port 9200 (OpenSearch/ES 7.10) & Port 6333 (Qdrant)
+   - Okapi BM25 text search with doc-length sidecars
+   - HNSW vector search with metadata filtering
+   - Reciprocal Rank Fusion (RRF) hybrid search
+   - Full Prometheus metrics (`/metrics`)
+2. **`hyperstreamdb-flight` (Arrow Flight SQL Gateway)**:
+   - Arrow Flight SQL gRPC service on Port 50051
+   - Zero-copy Arrow record batch streaming with DataFusion execution engine
+   - Supports ADBC, JDBC, and ODBC clients
+3. **`dbt-hyperstreamdb` (Official dbt Adapter)**:
+   - Vector search macros (`vector_distance`, `knn_search`, `vector_avg`, `type_vector`, `type_sparsevec`)
+   - Custom materializations (`table`, `incremental` with partition-looping `insert_overwrite`)
+   - DDL with Iceberg `PARTITIONED BY` syntax
 
 ---
 
-## Phase 8: Documentation (Week 12)
+## Phase 7: Production Hardening & Concurrency Control ✅ COMPLETE
 
 ### Objectives
-- User documentation
-- API reference
-- Architecture docs
-- ReadTheDocs setup
+- Vendor-neutral distributed locking & concurrency control
+- Structured error handling & telemetry
+- Data integrity & chaos resilience
 
-### Documentation Structure
-
-#### 1. ReadTheDocs (Sphinx)
-```
-docs/
-├── conf.py              # Sphinx configuration
-├── index.rst            # Homepage
-├── getting_started.rst  # Quick start
-├── api/
-│   ├── table.rst       # Table API
-│   ├── catalogs.rst    # Catalog API (Nessie, REST, Glue, Unity)
-│   └── sql.rst         # SQL API
-├── guides/
-│   ├── catalogs.rst    # Catalog comparison & usage
-│   ├── indexing.rst    # Indexing strategies
-│   └── performance.rst # Performance tuning
-└── requirements.txt
-```
-
-#### 2. Rust Documentation (docs.rs)
-- Auto-generated from `///` doc comments
-- Published when crate is released to crates.io
-
-### Tasks
-- [ ] Set up Sphinx for ReadTheDocs
-- [ ] Write getting started guide
-- [ ] Document all catalog types (Nessie, REST, Glue, Unity)
-- [ ] API reference (auto-generated from docstrings)
-- [ ] Architecture documentation
-- [ ] Performance benchmarks
-- [ ] Add Rust doc comments (`///`)
-- [ ] Configure ReadTheDocs build
-- API reference
-- Example applications
-
-### Documentation
-
-#### 1. User Docs
-- Quickstart guide
-- Architecture overview
-- Performance tuning
-- Troubleshooting
-
-#### 2. API Reference
-- Rust API docs (rustdoc)
-- Python API docs (Sphinx)
-- REST API spec (OpenAPI)
-
-#### 3. Examples
-- Vector search application
-- Hybrid query examples
-- Spark/Trino integration
-
-### Tasks
-- [ ] Write quickstart guide
-- [ ] Generate API docs
-- [ ] Create example apps
-- [ ] Record demo videos
-- [ ] Publish documentation site
+### Implementations in Codebase
+1. **Cloud-Agnostic Distributed Locking (`src/core/lock.rs`)**:
+   - Implemented `FileBasedLock` over `object_store::ObjectStore` using atomic conditional creates / CAS (`PutMode::Create`).
+   - Lease heartbeats with configurable TTL and clock skew drift protection.
+   - Zero vendor lock-in (runs seamlessly over S3, GCS, Azure Blob, and local filesystems—no proprietary services like DynamoDB).
+2. **Optimistic Concurrency Control (OCC) (`src/core/manifest/manager/commit.rs`)**:
+   - Manifest commits use atomic snapshot swaps with exponential backoff retry loops.
+   - Tested under massive multi-threaded contention (verified in `tests/test_concurrent_writers.rs` and `tests/test_concurrency_robust.rs`).
+3. **Structured Observability (`src/telemetry/`)**:
+   - Replaced ad-hoc logging with `tracing` and `tracing-opentelemetry` spans across query planning, index scanning, and compaction.
+   - Integrated Prometheus metrics via `/metrics` endpoint.
+4. **Resilience & Chaos Testing (`tests/test_chaos.rs`)**:
+   - Verified graceful degradation: missing or corrupted index sidecars automatically fall back to full Parquet scans without panics or query failures.
+   - ACID durability verified under abrupt termination (`tests/test_durability_robust.rs`).
 
 ---
 
+## Phase 8: Documentation & Developer Guides ✅ COMPLETE
+
+### Documentation Suite in `docs/`
+- **Sphinx / ReadTheDocs Configuration**: Set up in `docs/source/conf.py` and `docs/requirements.txt`.
+- **API & SQL Guides**:
+  - `PGVECTOR_SQL_GUIDE.md` — Complete guide for pgvector operators (`<->`, `<=>`, `<#>`, `<+>`, `<~>`, `<%>`).
+  - `PYTHON_VECTOR_API.md` — Fluent Python query API, index chaining, and hardware management.
+  - `ICEBERG_V2_V3_API.md` — Iceberg V2/V3 metadata specifications, row lineage, and position deletes.
+  - `GPU_SETUP_GUIDE.md` — Multi-backend GPU configuration (CUDA, ROCm/Vulkan, Apple Metal, Intel XPU).
+  - `CONCURRENCY.md` & `COMPREHENSIVE_GUIDE.md` — Concurrency model and architecture breakdown.
+- **Service Quickstarts**:
+  - `GETTING_STARTED.md` — Search API quickstart for OpenSearch 7.10 and Qdrant endpoints.
+  - `OPENSEARCH_COMPATIBILITY.md` — API support matrix and error envelope documentation.
+
 ---
 
-## Future Phases (Q2 2026 - Federated Connectors)
+## 🎯 Active Roadmap & Remaining Milestones
 
-### Objectives
-- Support read-only federation for Iceberg, Hudi, and Delta Lake
-- Build sidecar indexes for external data lakes
-- Unified query layer
+The following items represent the active, vetted roadmap for HyperStreamDB. Speculative dead ends (such as proprietary cloud locks, bespoke C++ database extensions, or third-party format readers) have been pruned in favor of standards-based interoperability.
 
-### Tasks
-- [ ] Implement Hudi Table Reader
-- [ ] Implement Delta Lake Reader
-- [ ] Build "Index-Only" ingestion job (skips data copy)
-- [ ] Add federated integration tests
-- [ ] Feature: "Overlay Indexing" (Sidecar) for existing Iceberg tables
-- [ ] Feature: "Universal Indexing" for Hudi & Delta Lake (XTable-style compatibility)
-- [ ] Apache Polaris Integration: Add OAuth2 client credentials auth support to REST catalog for Apache Polaris compliance
+### 1. Catalog & Interoperability
+- [ ] **[Free] Apache Polaris Integration**: Add OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper).
 
-### Index-Accelerated Engine Integrations
-- [ ] **Arrow Flight SQL Gateway**: Build a unified, high-performance Arrow Flight SQL server enabling any JDBC/ODBC-compatible engine (Doris, StarRocks, Dremio) to leverage HyperStreamDB's index-accelerated query execution.
-- [ ] **DuckDB Extension**: Develop a native `duckdb_hyperstream` extension in Rust/C++ to enable local DuckDB instances to scan tables using HyperStreamDB's indexes.
-- [ ] **StarRocks/Doris C++ UDFs**: Create native UDFs for vector index search (`hyperstream_knn`) to run high-performance KNN queries inside MPP databases.
-- [ ] **Trino Connector Predicate Pushdown**: Enhance the Trino connector to resolve filter predicates against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
+### 2. Performance & Competitive Benchmarking
+- [ ] **[Free] 100k / 1M Competitive Benchmarks vs. Elasticsearch 7.10**: Execute long-running benchmark runs on NVMe and MinIO S3 storage using `benchmarks/competitive/benchmark_es710.py` and document findings.
 
-### Multi-Column Indexes & Composite Search
-- [ ] **Composite Scalar Indexes**: Pre-computed roaring bitmaps for common multi-column filters (e.g. `(city, zip)`).
-- [ ] **Multi-Vector Search**: Simultaneous ranking across multiple embedding columns with combined scoring.
-- [ ] **Index-Accelerated Joins**: Phase 2 optimizations for multi-table composite filtering.
+### 3. Connector & Pushdown Enhancements
+- [ ] **[Free] Trino Connector Sidecar Pushdown**: Enhance `trino-hyperstream` SPI implementation to evaluate filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
+- [ ] **[Free] Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis.
 
-### GPU Build & Distribution Improvements
-- [ ] **Replace `cust` with `cudarc`**: Migrate CUDA backend from `cust` (requires CUDA SDK at compile time) to `cudarc` (dynamically loads `libcuda.so` at runtime). This enables a single universal wheel with runtime CUDA detection — no more source builds for CUDA users.
-- [ ] **Universal GPU wheel**: Once `cudarc` is integrated, ship one PyPI wheel that auto-detects CUDA, MPS, XPU, and ROCm at runtime via WGPU.
-- [ ] **GitHub Actions CUDA CI**: Add CI job using `nvidia/cuda` Docker image to build and test CUDA-enabled wheels.
+### 4. Advanced Search & Query Features
+- [ ] **[Free] TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression in core open-source engine.
+- [ ] **[Free] Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`).
+- [ ] **[Free] Multi-Vector Search**: Query planner and scoring coordination to search and rank across multiple embedding columns simultaneously.
 
+### 5. Graph RAG & Lakehouse Graph Analytics [Free]
+
+Native graph analytics on Iceberg edge tables with sidecar index acceleration. Replaces the need for Neo4j + Pinecone combos or Spark GraphX for knowledge graph and Graph RAG workloads. All core graph features ship in the free Community edition.
+
+#### 5a. [Free] Edge Table Schema Convention
+- [ ] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source_id, target_id, relation, weight, embeddings).
+- [ ] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source_id` and `target_id` columns (Roaring Bitmap) for O(1) edge lookups.
+- [ ] **[Free] Best Practices Guide**: Document edge table conventions (partitioning by relation type, sort order by source_id).
+
+#### 5b. [Free] Graph SQL Functions (DataFusion UDFs)
+- [ ] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table.
+- [ ] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection.
+- [ ] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval.
+- [ ] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard and overlap similarity via sidecar bitmap intersection.
+- [ ] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Component labeling via iterative label propagation.
+- [ ] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation.
+
+#### 5c. [Free] Graph RAG Pipeline Integration
+- [ ] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, community_col)`**: Combined graph + vector search (local and global modes).
+- [ ] **[Free] Community Summarization Workflow**: SQL-driven pipeline to GROUP BY community_id and produce summary embeddings for global search.
+
+#### 5d. [Free] Python API
+- [ ] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores.
+- [ ] **[Free] `table.communities(algorithm='louvain', resolution=1.0)`**: Community assignments.
+- [ ] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges.
+- [ ] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10)`**: Combined graph + vector results.
+- [ ] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph` for ecosystem visualization.
+
+#### 5e. [Free] dbt Macros (`dbt-hyperstreamdb`)
+- [ ] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table.
+- [ ] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain') }}`**: Materialize community assignments.
+- [ ] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction.
+
+#### 5f. [Free] Search Gateway Graph Endpoints
+- [ ] **[Free] Qdrant API (Port 6333)**: Extend `/points/search` with `graph_filter` parameter for neighborhood-scoped vector search.
+- [ ] **[Free] OpenSearch API (Port 9200)**: Extend `_search` DSL with `graph_neighbors` filter clause.
+
+### 6. Packaging, Hardware & CI
+- [ ] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS.
+- [ ] **[Free] GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers.
+
+### 7. Codebase Intelligence & Model Context Protocol (MCP) Server
+
+#### 7a. [Free] MCP Server Implementation (`hyperstream-mcp`)
+- [ ] **[Free] Protocol Support**: Standard Model Context Protocol (JSON-RPC over stdio and SSE).
+- [ ] **[Free] Tool: `code_search`**: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks.
+- [ ] **[Free] Tool: `find_symbol`**: Sub-millisecond exact definition and reference lookups powered by String Inverted Index.
+- [ ] **[Free] Tool: `get_context`**: Extract relevant code blocks, AST parent contexts, and neighboring functions.
+- [ ] **[Free] Tool: `code_graph`**: Query imports, calls, and dependency relationships via sidecar graph tables.
+- [ ] **[Free] Language Parsers**: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++).
+
+#### 7b. [Free] Git-Diff Incremental CI Indexer
+- [ ] **[Free] CLI Subcommand `hyperstream index`**:
+  - `--repo <path>`: Target repository directory.
+  - `--diff-since <ref>`: Git diff mode (e.g. `HEAD~1`, `origin/main`) to only re-index changed files.
+  - `--target <uri>`: Target storage URI (`file:///...`, `s3://...`).
+- [ ] **[Free] Incremental Parquet & Overlay Appends**: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps.
+- [ ] **[Free] Official GitHub Action (`hyperstreamdb/index-action@v1`)**: Ready-to-use GitHub Action for PR and merge workflows.
+- [ ] **[Free] GitLab CI & Jenkins Examples**: Provide standard CI pipeline configurations.
+
+#### 7c. Feature Tiering: Local vs. Remote Lakehouse
+- [ ] **[Free] Local Storage Backends**: Direct support for local filesystem (`file://`) and developer MinIO instances.
+- [ ] **[Free] Local MCP Server & Tooling**: Full stdio/SSE MCP protocol support for local developer desktop tools (Cursor, Claude, Roo Code).
+- [ ] **[Free] Git-Diff Incremental Indexing Engine**: Fast incremental AST chunking and overlay generation on individual developer machines.
+- [ ] **[Paid] Remote Cloud Object Storage Integration**: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`).
+- [ ] **[Paid] Centralized Team Knowledge Cache**: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution.
+
+### 8. Enterprise Security & Compliance [Paid]
+- [ ] **[Paid] Row-Level Security (RLS) & Multi-Tenancy**: Sidecar-level tenant bitmap isolation (`.idx` intersection before reading Parquet).
+- [ ] **[Paid] Dynamic Column Masking**: Role-based PII redaction on query and vector results.
+- [ ] **[Paid] Customer-Managed Encryption Keys (CMEK)**: Envelope encryption for sidecar index files via AWS KMS, GCP KMS, or HashiCorp Vault.
+- [ ] **[Paid] Cryptographic Audit Logging**: Tamper-evident hash chain recording queries across all three protocols (9200, 6333, 50051).
+- [ ] **[Paid] SIEM Telemetry Export**: Native connector export to Splunk, Datadog, and AWS CloudWatch.
+- [ ] **[Paid] Cross-Catalog Governance Propagation**: Unified RLS policies and audit synchronization across Polaris, Unity, and Glue catalogs.
+
+### 9. HyperStream Accelerator & Lifecycle Automation [Paid]
+- [ ] **[Paid] Fused SIMD & Tensor Core Kernels**: Hand-crafted AVX-512, ARM SVE, and Hopper/Blackwell FP8/FP4 fused kernels.
+- [ ] **[Paid] GPUDirect Storage (GDS) Bypass**: Direct NVMe/S3 local cache streaming to GPU VRAM, bypassing host CPU/PCIe bottleneck.
+- [ ] **[Paid] Sidecar Lifecycle Manager**: Autonomous 3-format coordinated compaction (Iceberg manifests + Parquet bin-packing + HNSW/Bitmap sidecars) with cost-aware S3 scheduling and recall drift rebalancing.
 
 ---
 
@@ -519,44 +543,44 @@ docs/
 ### Usability
 - ✅ <5 min to first query (single pip install + 3 lines of code)
 - ✅ Pandas-compatible API (`table.to_pandas()`)
-- ⬜ Iceberg-compatible connectors (Phase 3)
+- ✅ Iceberg-compatible connectors (`spark-hyperstream` & `trino-hyperstream`)
 
 ---
 
-## Next Steps
+## 🗺️ Roadmap Reconciliation & Status Summary
 
-**Phase 1 COMPLETE (2026-01-18):**
-- ✅ NYC Taxi: 753K rows/sec ingest, 85ms indexed query
-- ✅ Vector Search: 5.0s parallel search (100K vectors, 16 workers)
-- ✅ Wikipedia Hybrid: Scalar + vector queries working
-
-**Next Priorities:**
-1. ✅ Implement inverted index for string columns (Completed)
-2. ✅ Add native hybrid query support (scalar + vector in single query)
-3. ✅ Continue Phase 3 optimizations (Iceberg-compatible API)
-4. ✅ Phase 3.5: Native SQL Support (Parallel Scanning, Filter Pushdown)
-5. ✅ Phase 4.5: Multi-catalog support (REST, Glue, Hive, Unity)
-6. ✅ Phase 5: Spark/Trino connector APIs (file-level, split-level)
-7. Phase 6: Operational tooling (Metrics, Observability)
+All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
+- **Phase 1: Real-World Dataset Benchmarks** — NYC Taxi (753k rows/s), Wikipedia (100k docs), 768D BERT embeddings.
+- **Phase 2: Nessie Catalog Integration** — Git-like table branching and multi-table transactions.
+- **Phase 3 & 3.5: Performance & Native DataFusion SQL Engine** — MoR/CoW deletion vectors, partition pruning, Index Nested Loop Joins, pgvector operators (`<->`, `<=>`, `<#>`).
+- **Phase 4.5: Multi-Catalog Abstraction** — REST, AWS Glue, Hive Metastore, Unity Catalogs.
+- **Phase 5: Connectors & Distributed Analytics** — Spark DataSource V2, Trino SPI connector, and split-level byte-range parallelism.
+- **Phase 6: Operational Tooling & Observability** — `hdb` CLI REPL, `tracing-opentelemetry`, Prometheus metrics exporter (`/metrics`).
+- **Phase 6.5: Ecosystem Gateways** — Dual-protocol search server (`hyperstreamdb-search` on ports 9200 & 6333), Arrow Flight SQL gateway (`hyperstreamdb-flight` on port 50051), and official dbt adapter (`dbt-hyperstreamdb`).
+- **Phase 7: Cloud-Agnostic Concurrency & Durability** — `FileBasedLock` (`src/core/lock.rs`) using object storage CAS (`PutMode::Create`), OCC snapshot swaps with retries (`src/core/manifest/manager/commit.rs`), chaos testing (`tests/test_chaos.rs`).
+- **Phase 8: Documentation Suite** — Complete Sphinx / ReadTheDocs setup in `docs/` with developer guides for SQL, Python, Iceberg V2/V3, GPU, and Concurrency.
 
 ---
 
 ## Questions & Decisions
 
 ### ✅ Resolved
-- **Catalog:** Support multiple (Nessie, REST, Glue, Unity)
-- **Manifest format:** JSON (semantic Iceberg compat)
-- **Filtering style:** Polars-like (predicate pushdown)
-- **Inverted Index Format:** Parquet (replaced JSON for 12x performance boost)
-- **Vector Index:** Standardized on HNSW-IVF (removed legacy types)
+- **Catalog:** Pluggable multi-catalog (Nessie, REST, Glue, Hive, Unity)
+- **Manifest Format:** Avro/JSON (semantic Iceberg V2/V3 compatibility)
+- **Distributed Locking:** Vendor-neutral `FileBasedLock` using object storage CAS (`PutMode::Create`) with heartbeats & leases (no proprietary services like DynamoDB)
+- **Filtering Style:** Pushdown via sidecar inverted and roaring bitmap indexes
+- **Vector Index:** Standardized on HNSW-IVF with GPU acceleration (`cudarc` for CUDA, WGPU for Vulkan/Metal/DirectX)
+- **SQL & Analytics:** DataFusion native integration + Arrow Flight SQL gateway + dbt adapter (`dbt-hyperstreamdb`)
+- **REST APIs:** OpenSearch / Elasticsearch 7.10 + Qdrant compatibility via `hyperstreamdb-search`
 
 ### 🤔 Open
-- Partition strategy for large tables?
-- Distributed compaction (Spark job vs local)?
-- Schema evolution migration path?
+- Distributed compaction strategy (Spark job vs local async daemon)?
+- Polaris catalog credential refresh token lifecycles?
+- Graph RAG: Leiden vs. Louvain for community detection default? (Leiden is newer but more complex to implement)
+- Graph RAG: Should `PAGERANK` return results as a materialized sidecar or as a transient DataFrame?
 
 ---
 
-**Last Updated:** 2026-01-19
-**Last Updated:** 2026-01-25
-**Status:** Phase 5 COMPLETE ✅ | Next: Phase 6 - Operational Tooling
+**Last Updated:** 2026-09-09  
+**Status:** Phases 1–8 COMPLETE ✅ | Active Next: Polaris REST OAuth2, Trino Sidecar Pushdown, Multi-Vector Search & Graph RAG  
+📖 **Commercial & Monetization Strategy:** See [COMMERCIALIZATION_STRATEGY.md](COMMERCIALIZATION_STRATEGY.md) for enterprise packaging, monetization roadmap (Security/Compliance, Accelerator), and GTM strategy.

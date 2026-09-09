@@ -2,9 +2,13 @@
 
 //! Axum handlers for the ES-compatible API.
 
+pub mod bulk;
 pub mod cluster;
 pub mod docs;
+pub mod indices;
+pub mod mapping;
 pub mod metrics;
+pub mod qdrant;
 pub mod search;
 
 use axum::http::StatusCode;

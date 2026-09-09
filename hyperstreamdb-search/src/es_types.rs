@@ -122,6 +122,16 @@ pub struct ClusterInfo {
     pub cluster_uuid: String,
     pub version: VersionInfo,
     pub tagline: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compute: Option<ComputeInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComputeInfo {
+    pub backend: String,
+    pub device_id: i32,
+    pub gpu_accelerated: bool,
+    pub available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,4 +221,10 @@ pub struct SearchHit {
     pub score: Option<f32>,
     #[serde(rename = "_source")]
     pub source: Value,
+}
+
+/// ES 7.10 `GET /{index}/_count` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct CountResponse {
+    pub count: u64,
 }

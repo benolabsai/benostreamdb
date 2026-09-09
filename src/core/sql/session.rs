@@ -20,9 +20,14 @@ use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::session_state::SessionStateBuilder;
 
 impl HyperStreamSession {
+    pub fn get_ctx(&self) -> SessionContext {
+        self.ctx.clone()
+    }
+
     pub fn new(memory_limit_bytes: Option<usize>) -> Self {
         let mut config = SessionConfig::new();
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+        config = config.with_information_schema(true);
 
         let runtime = Arc::new({
             let builder = RuntimeEnvBuilder::new();
@@ -75,12 +80,12 @@ impl HyperStreamSession {
         Ok(())
     }
 
-    pub async fn sql(
-        &self,
-        query: &str,
-    ) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef)> {
+    pub async fn sql_to_df(&self, query: &str) -> Result<datafusion::dataframe::DataFrame> {
         // Pre-process string to handle pgvector syntax not supported by DataFusion parser natively
         let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        // Strip PARTITIONED BY to bypass DataFusion's lack of Hive distribution support on memory tables
+        let query_processed =
+            crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
 
         // Parse the SQL query to get a logical plan
         let plan = self
@@ -94,7 +99,35 @@ impl HyperStreamSession {
 
         // Execute the rewritten logical plan
         let df = self.ctx.execute_logical_plan(rewritten_plan).await?;
+        Ok(df)
+    }
 
+    pub async fn get_schema(&self, query: &str) -> Result<arrow::datatypes::SchemaRef> {
+        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        let query_processed =
+            crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
+        let plan = self
+            .ctx
+            .state()
+            .create_logical_plan(&query_processed)
+            .await?;
+        let rewritten_plan = crate::core::sql::pgvector_rewriter::rewrite_pgvector_plan(plan)?;
+        if matches!(
+            rewritten_plan,
+            datafusion::logical_expr::LogicalPlan::Ddl(_)
+        ) {
+            return Ok(std::sync::Arc::new(arrow::datatypes::Schema::empty()));
+        }
+        // We can create a DataFrame without executing the plan to get the schema
+        let df = datafusion::dataframe::DataFrame::new(self.ctx.state(), rewritten_plan);
+        Ok(std::sync::Arc::new(df.schema().as_arrow().clone()))
+    }
+
+    pub async fn sql(
+        &self,
+        query: &str,
+    ) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef)> {
+        let df = self.sql_to_df(query).await?;
         let schema: arrow::datatypes::SchemaRef =
             std::sync::Arc::new(df.schema().as_arrow().clone());
         let batches = df.collect().await?;

@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------------------
+# HyperStreamDB GPU Acceleration Override for Docker Compose
+#
+# Usage (NVIDIA):
+#   docker compose -f docker/docker-compose.quickstart.yml -f docker/docker-compose.gpu.yml up -d
+#
+# For AMD ROCm or Intel Arc pass-through, mount /dev/kfd and /dev/dri:
+#   devices:
+#     - /dev/kfd:/dev/kfd
+#     - /dev/dri:/dev/dri
+# ---------------------------------------------------------------------------
+
+services:
+  hyperstreamdb:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.gpu
+    image: hyperstreamdb/quickstart:gpu
+    environment:
+      - HYPERSEARCH_DEVICE=auto
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

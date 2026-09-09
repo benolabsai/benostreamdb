@@ -1,118 +1,158 @@
-# Getting Started with Real-World Testing
+# Getting Started
 
-This guide will walk you through running your first HyperStreamDB benchmarks.
+This guide covers two ways to use HyperStreamDB:
 
-## Prerequisites
+1. **The `hypersearch` REST server** — an OpenSearch / Elasticsearch 7.10-compatible
+   API (plus a Qdrant-compatible API) served on top of the HyperStreamDB engine.
+2. **The Python client** — direct, in-process access to the engine via `pyo3` bindings.
 
-```bash
-# 1. Build the Rust library
-cargo build --release
+---
 
-# 2. Install Python bindings
-pip install maturin
-maturin develop
+## 1. The `hypersearch` REST server
 
-# 3. Install test dependencies
-pip install pyarrow pandas numpy
-```
+`hypersearch` is an optional add-on crate (`hyperstreamdb-search`) that exposes an
+Elasticsearch/OpenSearch 7.10 wire-compatible REST API. It is ideal for website
+search, document catalogs, and knowledge bases where a 50–200 ms query latency
+envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
 
-## Quick Test: Synthetic Data
-
-Let's start with a small synthetic dataset to verify everything works:
+### Build
 
 ```bash
-# Run the benchmark suite
-cargo bench
+# From the repository root (the workspace builds both the core and the add-on):
+cargo build --release -p hyperstreamdb-search --bin hypersearch
 ```
 
-This will test:
-- Ingest throughput (1K, 10K, 100K rows)
-- Query latency with indexes
-- Vector search performance
+The binary is produced at `target/release/hypersearch`.
 
-## Real-World Test 1: NYC Taxi (Optional - 200GB download)
-
-**Warning:** This downloads ~200GB of data. Only run if you have space and bandwidth.
+### Run
 
 ```bash
-# Download NYC Taxi data
-./tests/data/download_nyc_taxi.sh
+# Defaults: bind 127.0.0.1:9200, store indexes under file://~/.hyperstreamdb/search
+./target/release/hypersearch
 
-# Run integration test
-python tests/integration/test_nyc_taxi.py
+# Or with explicit configuration:
+HYPERSEARCH_BIND=0.0.0.0 \
+HYPERSEARCH_PORT=9200 \
+HYPERSEARCH_STORAGE_URI=file:///data/search \
+./target/release/hypersearch
 ```
 
-**Expected results:**
-- Ingest: >100K rows/sec
-- Query: <100ms
-- Compaction: <5min per 10GB
+### Configuration (environment variables)
 
-## Real-World Test 2: Vector Embeddings
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HYPERSEARCH_STORAGE_URI` | `file://~/.hyperstreamdb/search` | Index root. Each index `<name>` is a table at `{root}/{name}`. Supports `file://`, `s3://`, `gs://`, `az://`, `http(s)://`. |
+| `HYPERSEARCH_BIND` | `127.0.0.1` | OpenSearch/ES API bind address. |
+| `HYPERSEARCH_PORT` | `9200` | OpenSearch/ES API port. |
+| `HYPERSEARCH_AUTO_REFRESH_SECS` | `0` (off) | Periodically flush every index so new docs become searchable without an explicit `_refresh`. |
+| `HYPERSEARCH_RRF_K` | `60` | Default RRF fusion constant for hybrid (BM25 + HNSW) search. Overridable per-request with `rrf_k`. |
+| `QDRANT_BIND` | `127.0.0.1` | Qdrant-compatible API bind address. |
+| `QDRANT_PORT` | `6333` | Qdrant-compatible API port. |
+| `HYPERSTREAM_CACHE_GB` | — | (inherited) read-cache size in GB. |
+| `HYPERSTREAM_WAL_SYNC_INTERVAL_MS` | — | (inherited) WAL sync interval. |
 
-Generate 10M synthetic embeddings (simulates BERT):
+> **Security note:** `hypersearch` v1 has **no authentication** and binds to
+> `127.0.0.1` by default. If you expose it beyond localhost, place it behind a
+> reverse proxy with authentication (e.g. an auth-enabled gateway) and TLS.
+
+### Smoke test
 
 ```bash
-# Generate embeddings (~7GB)
-python tests/data/generate_embeddings.py
+# Cluster info (reports ES 7.10.2 wire format)
+curl -s localhost:9200/ | jq
 
-# Run vector search benchmark
-python tests/benchmarks/vector_search/test_parallel_search.py
+# Index a document (auto-creates the index on first write)
+curl -s -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
+  -d '{"title":"Hello","body":"Welcome to HyperStreamDB"}' | jq
+
+# Make it searchable
+curl -s -X POST localhost:9200/articles/_refresh | jq
+
+# Lexical (BM25) search
+curl -s -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
+  -d '{"query":{"match":{"body":"HyperStreamDB"}}}' | jq
+
+# Vector (HNSW) search
+curl -s -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
+  -d '{"knn":{"field":"vec","vector":[0.1,0.2,0.3],"k":5}}' | jq
+
+# Prometheus metrics
+curl -s localhost:9200/metrics
 ```
 
-## Viewing Results
+### Supported endpoints (OpenSearch / ES 7.10)
 
-Benchmark results are saved to:
-```
-target/criterion/
-├── ingest/
-│   └── report/index.html
-├── query_indexed/
-│   └── report/index.html
-└── vector_search/
-    └── report/index.html
-```
+| Area | Endpoints |
+|------|-----------|
+| Cluster | `GET /`, `GET /_health`, `GET /_cluster/health`, `GET /_cluster/stats`, `GET /_cat/indices` |
+| Index CRUD | `PUT /{index}`, `GET /{index}`, `DELETE /{index}` |
+| Mapping | `GET /{index}/_mapping`, `PUT /{index}/_mapping` |
+| Documents | `POST /{index}/_doc[/{id}]`, `DELETE /{index}/_doc/{id}` (501 — append-only) |
+| Bulk | `POST /_bulk`, `POST /{index}/_bulk` |
+| Search | `POST /{index}/_search`, `GET /{index}/_search?q=`, `POST /{index}/_count` |
+| Refresh | `POST /{index}/_refresh`, `POST /_refresh` |
+| Metrics | `GET /metrics` (Prometheus text format) |
 
-Open in browser:
+See [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) for the full
+supported / unsupported matrix.
+
+---
+
+## 2. The Python client
+
+The core engine ships `pyo3` bindings so you can use HyperStreamDB in-process
+without the REST server.
+
+### Install
+
 ```bash
-open target/criterion/report/index.html
+# Build and install the Python bindings (requires a Rust toolchain):
+pip install -e .
+# or, from the python/ directory:
+cd python && pip install -e .
 ```
 
-## Next Steps
+### Quickstart
 
-1. ✅ Run synthetic benchmarks
-2. ✅ Review performance results
-3. ✅ Identify bottlenecks
-4. 🔄 Optimize and re-run
-5. 🔄 Run NYC Taxi test (if desired)
+```python
+import hyperstreamdb as hdb
 
-## Troubleshooting
+# Open (or create) a table on local disk or object storage.
+table = hdb.Table("file:///tmp/my_table")
 
-**Error: "maturin: command not found"**
+# Write rows (schema-on-write; columns are inferred and evolved).
+table.write([
+    {"title": "alpha", "body": "quick brown fox", "vec": [0.1, 0.2]},
+    {"title": "beta",  "body": "lazy dog sleeps", "vec": [0.9, 0.1]},
+])
+
+# Commit so the data is durable and indexed.
+table.commit()
+
+# Vector search.
+results = table.vector_search("vec", [0.1, 0.2], k=2)
+
+# Scalar / SQL search.
+rows = table.read(filter="body LIKE '%fox%'")
+```
+
+### Running the test suites
+
 ```bash
-pip install maturin
+# Rust unit + integration tests (workspace):
+cargo test --workspace
+
+# Python test suite:
+pytest tests/
+
+# hypersearch REST conformance suite:
+pytest hyperstreamdb-search/tests/test_search_api.py
 ```
 
-**Error: "cannot find -lpython3.x"**
-```bash
-# Install Python dev headers
-sudo apt-get install python3-dev  # Ubuntu/Debian
-brew install python@3.11           # macOS
-```
+---
 
-**Error: "failed to compile hyperstreamdb"**
-```bash
-# Check Rust version
-rustc --version  # Should be 1.80+
-rustup update
-```
+## Next steps
 
-## Performance Targets
-
-| Metric | Target | Current |
-|--------|--------|---------|
-| Ingest | >100K rows/sec | >10K rows/sec (CPU) |
-| Query (indexed) | <100ms p99 | ⏱️ In progress |
-| Vector search | <50ms (k=10) | 819ms (100K, 768D, CPU) |
-| Compaction | <5min/10GB | ⏱️ In progress |
-
-Fill in "Current" after running benchmarks!
+- [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) — full API compatibility matrix.
+- [ELASTICSEARCH_INTEGRATION_PLAN.md](ELASTICSEARCH_INTEGRATION_PLAN.md) — design and positioning.
+- [README.md](README.md) — core engine features, Iceberg compliance, and query engines.

@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# HyperStreamDB Search Service
+# Elasticsearch 7.10 (Port 9200) + Qdrant (Port 6333) compatible REST API
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    python3 \
+    libpython3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace manifests for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY hyperstreamdb-search/Cargo.toml hyperstreamdb-search/Cargo.toml
+COPY hyperstreamdb-flight/Cargo.toml hyperstreamdb-flight/Cargo.toml
+
+# Create stub sources for dependency layer caching and manifest validation
+RUN mkdir -p src \
+    && echo "pub fn stub() {}" > src/lib.rs \
+    && echo "fn main() {}" > build.rs \
+    && mkdir -p hyperstreamdb-search/src \
+    && echo "fn main() {}" > hyperstreamdb-search/src/main.rs \
+    && echo "pub fn stub() {}" > hyperstreamdb-search/src/lib.rs \
+    && mkdir -p hyperstreamdb-flight/src \
+    && echo "fn main() {}" > hyperstreamdb-flight/src/main.rs \
+    && mkdir -p tests/bin benches \
+    && echo "fn main() {}" > tests/test_connector_ffi.rs \
+    && echo "fn main() {}" > tests/bin/generate_iceberg_manifests.rs \
+    && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
+    && echo "fn main() {}" > benches/performance.rs \
+    && echo "fn main() {}" > benches/bench_table.rs \
+    && cargo build --release -p hyperstreamdb-search \
+    && rm -rf target/release/.fingerprint/hyperstreamdb* \
+              target/release/deps/*hyperstreamdb* \
+              target/release/deps/libhyperstreamdb* \
+              target/release/build/hyperstreamdb* \
+              target/release/hypersearch*
+
+# Copy actual source
+COPY build.rs ./
+COPY src ./src
+COPY hyperstreamdb-search/src ./hyperstreamdb-search/src
+
+# Build the hypersearch binary
+RUN cargo build --release -p hyperstreamdb-search
+
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3t64 \
+    ca-certificates \
+    curl \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r hyperstream && useradd -r -g hyperstream hyperstream
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/hypersearch /usr/local/bin/
+
+# ES 7.10 API + Qdrant API + Prometheus metrics
+EXPOSE 9200 6333 9090
+
+# Health check against ES cluster health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:9200/_cluster/health || exit 1
+
+USER hyperstream
+
+# Default: bind to 0.0.0.0 for container networking
+ENV HYPERSEARCH_BIND=0.0.0.0
+ENV HYPERSEARCH_PORT=9200
+ENV QDRANT_BIND=0.0.0.0
+ENV QDRANT_PORT=6333
+ENV RUST_LOG=info
+
+ENTRYPOINT ["hypersearch"]
+CMD []

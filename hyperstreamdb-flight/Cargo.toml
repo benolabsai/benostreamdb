@@ -1,0 +1,29 @@
+[package]
+name = "hyperstreamdb-flight"
+version = "0.6.0"
+edition = "2021"
+license = "MIT AND Apache-2.0"
+description = "HyperStreamDB Flight SQL - Arrow Flight SQL gateway over HyperStreamDB"
+repository = "https://github.com/rla3rd/hyperstreamdb"
+homepage = "https://github.com/rla3rd/hyperstreamdb"
+keywords = ["database", "arrow", "flight-sql", "vector-search", "iceberg"]
+categories = ["database-implementations"]
+
+[dependencies]
+arrow = "57.2.0"
+arrow-flight = { version = "57.2.0", features = ["flight-sql-experimental"] }
+datafusion = "52.0.0"
+futures = "0.3.34"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tonic = "0.14"
+hyperstreamdb = { path = ".." }
+
+[features]
+default = []
+cuda = ["hyperstreamdb/cuda"]
+wgpu = ["hyperstreamdb/wgpu", "hyperstreamdb/pollster"]
+rocm = ["wgpu"]
+intel = ["wgpu"]
+all-gpu = ["cuda", "wgpu"]

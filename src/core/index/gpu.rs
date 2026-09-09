@@ -573,13 +573,17 @@ impl GpuBackend for WgpuBackend {
 
 impl ComputeContext {
     pub fn from_backend(backend: ComputeBackend) -> Result<Self> {
+        Self::from_backend_with_device(backend, 0)
+    }
+
+    pub fn from_backend_with_device(backend: ComputeBackend, device_id: usize) -> Result<Self> {
         let imp: Option<std::sync::Arc<dyn GpuBackend>> = match backend {
             ComputeBackend::Cpu => Some(std::sync::Arc::new(CpuBackend)),
             ComputeBackend::Cuda => {
                 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
                 {
                     let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        CudaBackend::new(0)
+                        CudaBackend::new(device_id)
                     }))
                     .map_err(|_| {
                         anyhow::anyhow!(
@@ -614,7 +618,7 @@ impl ComputeContext {
                 }
                 #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 {
-                    anyhow::bail!("ROCm not enabled on this platform")
+                    anyhow::bail!("ROCm not enabled on this platform (enable the 'wgpu' feature)")
                 }
             }
             ComputeBackend::Intel => {
@@ -627,7 +631,7 @@ impl ComputeContext {
                 }
                 #[cfg(not(all(target_os = "linux", feature = "wgpu")))]
                 {
-                    anyhow::bail!("Intel not enabled on this platform")
+                    anyhow::bail!("Intel not enabled on this platform (enable the 'wgpu' feature)")
                 }
             }
         };
@@ -636,7 +640,7 @@ impl ComputeContext {
             device_id: if backend == ComputeBackend::Cpu {
                 -1
             } else {
-                0
+                device_id as i32
             },
             implementation: imp,
         })
@@ -716,19 +720,59 @@ impl ComputeContext {
 
     pub fn from_device_str(device: &str) -> Result<Self> {
         let lower = device.to_lowercase();
-        match lower.as_str() {
+        let trimmed = lower.trim();
+        match trimmed {
             "cpu" => Ok(Self {
                 backend: ComputeBackend::Cpu,
                 device_id: -1,
                 implementation: Some(Arc::new(CpuBackend)),
             }),
             "gpu" | "auto" => Ok(Self::auto_detect()),
-            _ if lower.starts_with("cuda:") => Self::from_backend(ComputeBackend::Cuda),
-            _ if lower.starts_with("mps:") => Self::from_backend(ComputeBackend::Mps),
-            _ if lower.starts_with("rocm:") => Self::from_backend(ComputeBackend::Rocm),
-            _ if lower.starts_with("intel:") => Self::from_backend(ComputeBackend::Intel),
+            "cuda" => Self::from_backend(ComputeBackend::Cuda),
+            _ if trimmed.starts_with("cuda:") => {
+                let id = trimmed
+                    .strip_prefix("cuda:")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                Self::from_backend_with_device(ComputeBackend::Cuda, id)
+            }
+            "mps" => Self::from_backend(ComputeBackend::Mps),
+            _ if trimmed.starts_with("mps:") => Self::from_backend(ComputeBackend::Mps),
+            "rocm" => Self::from_backend(ComputeBackend::Rocm),
+            _ if trimmed.starts_with("rocm:") => {
+                let id = trimmed
+                    .strip_prefix("rocm:")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                Self::from_backend_with_device(ComputeBackend::Rocm, id)
+            }
+            "intel" => Self::from_backend(ComputeBackend::Intel),
+            _ if trimmed.starts_with("intel:") => {
+                let id = trimmed
+                    .strip_prefix("intel:")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap_or(0);
+                Self::from_backend_with_device(ComputeBackend::Intel, id)
+            }
             _ => anyhow::bail!("Unsupported device: {}", device),
         }
+    }
+
+    pub fn backend_name(&self) -> &'static str {
+        match self.backend {
+            ComputeBackend::Cpu => "cpu",
+            ComputeBackend::Cuda => "cuda",
+            ComputeBackend::Rocm => "rocm",
+            ComputeBackend::Mps => "mps",
+            ComputeBackend::Intel => "intel",
+        }
+    }
+
+    pub fn is_gpu(&self) -> bool {
+        self.backend != ComputeBackend::Cpu
     }
 
     pub fn is_available(&self) -> bool {
@@ -914,11 +958,45 @@ pub fn get_thread_gpu_context() -> Option<ComputeContext> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_cpu() {
         let q = vec![1.0, 0.0];
         let v = vec![1.0, 0.0, 0.0, 1.0];
         let d = compute_distance(&q, &v, 2, VectorMetric::L2).unwrap();
         assert_eq!(d[0], 0.0);
+    }
+
+    #[test]
+    fn test_from_device_str_cpu() {
+        let ctx = ComputeContext::from_device_str("cpu").unwrap();
+        assert_eq!(ctx.backend, ComputeBackend::Cpu);
+        assert_eq!(ctx.device_id, -1);
+        assert_eq!(ctx.backend_name(), "cpu");
+        assert!(!ctx.is_gpu());
+        assert!(ctx.is_available());
+    }
+
+    #[test]
+    fn test_from_device_str_auto() {
+        let ctx = ComputeContext::from_device_str("auto").unwrap();
+        // auto should resolve to CPU or an active GPU
+        assert!(!ctx.backend_name().is_empty());
+    }
+
+    #[test]
+    fn test_from_device_str_invalid() {
+        assert!(ComputeContext::from_device_str("nonexistent_device").is_err());
+    }
+
+    #[test]
+    fn test_backend_name_and_is_gpu() {
+        let cpu = ComputeContext {
+            backend: ComputeBackend::Cpu,
+            device_id: -1,
+            implementation: Some(Arc::new(CpuBackend)),
+        };
+        assert_eq!(cpu.backend_name(), "cpu");
+        assert!(!cpu.is_gpu());
     }
 }

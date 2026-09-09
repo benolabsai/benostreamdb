@@ -9,7 +9,7 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hyperstreamdb::HyperstreamError;
 use serde_json::Value;
@@ -27,7 +27,7 @@ pub const ID_COLUMN: &str = "_id";
 ///
 /// A non-object body is rejected: HyperStreamDB tables are columnar and
 /// every row must carry the same reserved id column.
-fn with_id(doc: &mut Value, id: &str) -> Result<(), HyperstreamError> {
+pub(crate) fn with_id(doc: &mut Value, id: &str) -> Result<(), HyperstreamError> {
     let obj = doc
         .as_object_mut()
         .ok_or_else(|| HyperstreamError::SchemaIncompatible {
@@ -44,7 +44,7 @@ fn with_id(doc: &mut Value, id: &str) -> Result<(), HyperstreamError> {
 /// preferred. Errors wrapped in an anyhow context chain (or older
 /// string-only failures) fall back to matching the exact Display
 /// message, which is preserved by the core's Display impls.
-fn translate_write_error(err: anyhow::Error) -> HyperstreamError {
+pub(crate) fn translate_write_error(err: anyhow::Error) -> HyperstreamError {
     if let Some(he) = err.downcast_ref::<HyperstreamError>() {
         match he {
             HyperstreamError::PrimaryKeyViolation { key } => {
@@ -86,7 +86,10 @@ fn translate_write_error(err: anyhow::Error) -> HyperstreamError {
 /// pre-filtered before [`infer::value_to_array`] because that function
 /// only treats `None` as a null, and a leaked `Value::Null` would be
 /// misread by the numeric arms.
-fn build_row_batch(target_schema: &Schema, doc: &Value) -> Result<RecordBatch, HyperstreamError> {
+pub(crate) fn build_row_batch(
+    target_schema: &Schema,
+    doc: &Value,
+) -> Result<RecordBatch, HyperstreamError> {
     let obj = doc
         .as_object()
         .ok_or_else(|| HyperstreamError::SchemaIncompatible {
@@ -182,6 +185,19 @@ pub(crate) async fn index_document_core(
     })
 }
 
+/// Record one doc-write outcome in the ingestion counter (plan 5.2.2).
+fn record_ingest(state: &AppState, result: &Result<DocWriteResponse, HyperstreamError>) {
+    let outcome = match result {
+        Ok(resp) => resp.result.as_str(),
+        Err(_) => "error",
+    };
+    state
+        .metrics
+        .docs_indexed_total
+        .with_label_values(&[outcome])
+        .inc();
+}
+
 /// `POST /{index}/_doc` — index a document with a server-generated id.
 pub async fn index_document(
     State(state): State<Arc<AppState>>,
@@ -189,6 +205,7 @@ pub async fn index_document(
     Json(doc): Json<Value>,
 ) -> Response {
     let result = index_document_core(&state, &index, None, doc).await;
+    record_ingest(&state, &result);
     let status = match &result {
         Ok(resp) if resp.result == "created" => StatusCode::CREATED,
         _ => StatusCode::OK,
@@ -203,6 +220,7 @@ pub async fn index_document_id(
     Json(doc): Json<Value>,
 ) -> Response {
     let result = index_document_core(&state, &index, Some(&id), doc).await;
+    record_ingest(&state, &result);
     let status = match &result {
         Ok(resp) if resp.result == "created" => StatusCode::CREATED,
         _ => StatusCode::OK,
@@ -216,7 +234,46 @@ pub async fn refresh(State(state): State<Arc<AppState>>, Path(index): Path<Strin
     es_response_with_status(StatusCode::OK, refresh_core(&state, &index).await)
 }
 
-pub(crate) async fn refresh_core(
+/// `POST /_refresh` — flush every index's write buffer to storage.
+pub async fn refresh_all(State(state): State<Arc<AppState>>) -> Response {
+    let indexes = state.list_indexes().await.unwrap_or_default();
+    for index in indexes {
+        if let Err(e) = refresh_core(&state, &index).await {
+            tracing::warn!(index, error = %e, "global refresh failed for index");
+        }
+    }
+    es_response_with_status(
+        StatusCode::OK,
+        Ok(RefreshResponse {
+            shards: Shards {
+                total: 1,
+                successful: 1,
+                failed: 0,
+            },
+        }),
+    )
+}
+
+/// `DELETE /{index}/_doc/{id}` — unsupported in v1 (append-only store).
+/// Returns a 501 with a clear ES-style error.
+pub async fn delete_document(
+    State(_state): State<Arc<AppState>>,
+    Path((index, _id)): Path<(String, String)>,
+) -> Response {
+    let es = crate::es_types::EsError {
+        error: crate::es_types::EsErrorBody {
+            error_type: "unsupported_operation".to_string(),
+            reason: format!(
+                "per-document delete is not supported on index '{index}' (append-only store); use DELETE /{index} to drop the index"
+            ),
+        },
+        status: 501,
+    };
+    let status = StatusCode::from_u16(501).unwrap();
+    (status, axum::Json(es)).into_response()
+}
+
+pub async fn refresh_core(
     state: &AppState,
     index: &str,
 ) -> Result<RefreshResponse, HyperstreamError> {
@@ -226,6 +283,7 @@ pub(crate) async fn refresh_core(
             name: index.to_string(),
         });
     }
+    let started = std::time::Instant::now();
     let table = state.open_or_create(index, &None).await?;
     table.commit_async().await.map_err(translate_write_error)?;
     // Wait for the background index-building tasks spawned by the commit
@@ -235,6 +293,10 @@ pub(crate) async fn refresh_core(
         .wait_for_background_tasks_async()
         .await
         .map_err(translate_write_error)?;
+    state
+        .metrics
+        .refresh_seconds
+        .observe(started.elapsed().as_secs_f64());
     Ok(RefreshResponse {
         shards: Shards {
             total: 1,
