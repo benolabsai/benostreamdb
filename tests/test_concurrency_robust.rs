@@ -92,7 +92,10 @@ async fn test_high_concurrency_readers_writers() -> Result<()> {
                     hyperstreamdb::core::index::VectorValue::Float32(query_vec),
                     5,
                 );
-                let _ = t.read_async(None, Some(vs_params), None).await.unwrap();
+                let _ = t
+                    .read_async(None, Some(vec![vs_params]), None)
+                    .await
+                    .unwrap();
 
                 sleep(Duration::from_millis(15)).await;
             }

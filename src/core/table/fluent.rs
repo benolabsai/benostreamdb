@@ -10,7 +10,7 @@ use super::Table;
 pub struct TableQuery<'a> {
     pub table: &'a Table,
     pub filter_str: Option<String>,
-    pub vector_filter: Option<VectorSearchParams>,
+    pub vector_filters: Option<Vec<VectorSearchParams>>,
     pub columns: Option<Vec<String>>,
     pub context: Option<ComputeContext>,
     pub rrf_k: Option<f32>,
@@ -21,7 +21,7 @@ impl<'a> TableQuery<'a> {
         Self {
             table,
             filter_str: None,
-            vector_filter: None,
+            vector_filters: None,
             columns: None,
             context: None,
             rrf_k: None,
@@ -43,7 +43,12 @@ impl<'a> TableQuery<'a> {
         query: crate::core::index::VectorValue,
         k: usize,
     ) -> Self {
-        self.vector_filter = Some(VectorSearchParams::new(column, query, k));
+        let params = VectorSearchParams::new(column, query, k);
+        if let Some(ref mut vf) = self.vector_filters {
+            vf.push(params);
+        } else {
+            self.vector_filters = Some(vec![params]);
+        }
         self
     }
 
@@ -82,7 +87,7 @@ impl<'a> TableQuery<'a> {
         self.table
             .read_with_config_async(
                 self.filter_str.as_deref(),
-                self.vector_filter,
+                self.vector_filters,
                 cols_slice,
                 config,
             )

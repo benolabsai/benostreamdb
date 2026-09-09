@@ -111,7 +111,7 @@ impl Table {
     pub async fn explain(
         &self,
         filter_str: Option<&str>,
-        vector_param: Option<VectorSearchParams>,
+        vector_params: Option<Vec<VectorSearchParams>>,
     ) -> String {
         let manifest_manager =
             crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -136,7 +136,7 @@ impl Table {
 
         let planner = QueryPlanner::new();
         let pruned_entries: Vec<(ManifestEntry, Option<IndexFile>)> = if version > 0 {
-            planner.prune_entries(&all_entries, expr.as_ref(), vector_param.as_ref())
+            planner.prune_entries(&all_entries, expr.as_ref(), vector_params.as_ref())
         } else {
             all_entries.iter().map(|e| (e.clone(), None)).collect()
         };
@@ -296,12 +296,14 @@ impl Table {
         }
 
         // 4. Vector Plan (Second: Vector search on pre-filtered rows)
-        if let Some(ref vs) = vector_param {
+        if let Some(ref vss) = vector_params {
             plan.push("Vector Execution:".to_string());
-            plan.push(format!(
-                "  -> VectorSearch (col: {}, k: {}, metric: {:?})",
-                vs.column, vs.k, vs.metric
-            ));
+            for vs in vss {
+                plan.push(format!(
+                    "  -> VectorSearch (col: {}, k: {}, metric: {:?})",
+                    vs.column, vs.k, vs.metric
+                ));
+            }
 
             // Check for vector index by detecting .hnsw.graph files on disk
             let mut has_vector_index = false;
@@ -322,21 +324,25 @@ impl Table {
                     .strip_suffix(".parquet")
                     .unwrap_or(&entry.file_path);
 
-                // Look for HNSW graph files for this column: segment_id.{column_name}.cluster_*.hnsw.graph
-                let hnsw_pattern_prefix = format!("{}.{}.cluster_", segment_id, vs.column);
-                let hnsw_pattern_suffix = ".hnsw.graph";
+                for vs in vss {
+                    let hnsw_pattern_prefix = format!("{}.{}.cluster_", segment_id, vs.column);
+                    let hnsw_pattern_suffix = ".hnsw.graph";
 
-                // Try to list files in the table directory to detect index files
-                if let Ok(dirs) = std::fs::read_dir(fs_path) {
-                    for entry in dirs.flatten() {
-                        if let Some(filename) = entry.file_name().to_str() {
-                            if filename.starts_with(&hnsw_pattern_prefix)
-                                && filename.ends_with(hnsw_pattern_suffix)
-                            {
-                                has_vector_index = true;
-                                break;
+                    // Try to list files in the table directory to detect index files
+                    if let Ok(dirs) = std::fs::read_dir(fs_path) {
+                        for entry in dirs.flatten() {
+                            if let Some(filename) = entry.file_name().to_str() {
+                                if filename.starts_with(&hnsw_pattern_prefix)
+                                    && filename.ends_with(hnsw_pattern_suffix)
+                                {
+                                    has_vector_index = true;
+                                    break;
+                                }
                             }
                         }
+                    }
+                    if has_vector_index {
+                        break;
                     }
                 }
                 if has_vector_index {
@@ -449,7 +455,7 @@ impl Table {
         // --- SMART HYBRID TRIGGER ---
         // If we have both a vector filter AND a text filter on a BM25/Inverted indexed column,
         // we switch to the Hybrid Coordinator path.
-        if let (Some(ref vs_params), Some(ref e)) = (&vector_filters, &expr) {
+        if let (Some(ref vs_params_list), Some(ref e)) = (&vector_filters, &expr) {
             let manifest = self.manifest().await?;
             let filtered_cols = e.get_referenced_columns();
 
@@ -520,13 +526,16 @@ impl Table {
                     extracted_query,
                 );
 
+                let first_vs_param = vs_params_list.first().cloned();
+                let k = first_vs_param.as_ref().map(|p| p.k).unwrap_or(10);
+
                 let scored_results = coordinator
                     .execute_hybrid(
                         self,
                         filter_str,
-                        Some(vs_params.clone()),
+                        first_vs_param,
                         Some(keyword_params),
-                        vs_params.k,
+                        k,
                         config.rrf_k,
                     )
                     .await?;
@@ -539,25 +548,30 @@ impl Table {
         }
 
         // Handle standard vector search
-        if let Some(ref vs_params) = vector_filters {
+        if let Some(ref vs_params_list) = vector_filters {
             // 1. Search Disk
-            let request = VectorSearchRequest::new(
-                vs_params.column.clone(),
-                vs_params.query.clone(),
-                vs_params.k,
-                vs_params.metric,
-            )
-            .with_filter(expr.clone())
-            .with_config(config.clone())
-            .with_ef_search(vs_params.ef_search)
-            .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect()));
+            let mut requests = Vec::new();
+            for vs_params in vs_params_list {
+                requests.push(
+                    VectorSearchRequest::new(
+                        vs_params.column.clone(),
+                        vs_params.query.clone(),
+                        vs_params.k,
+                        vs_params.metric,
+                    )
+                    .with_filter(expr.clone())
+                    .with_config(config.clone())
+                    .with_ef_search(vs_params.ef_search)
+                    .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect())),
+                );
+            }
 
-            let mut results = execute_vector_search_with_config(
+            let mut results = crate::core::query::execute_multi_vector_search_with_config(
                 entries_to_read.clone(),
                 self.store.clone(),
                 self.data_store.clone(),
                 &self.uri,
-                request,
+                requests,
             )
             .await?;
 
@@ -584,7 +598,13 @@ impl Table {
                     } else {
                         None
                     };
-                    mem_idx.search(&vs_params.query, vs_params.k, filter_bitmap.as_ref())
+                    let mut all_mem_hits = Vec::new();
+                    for vs_params in vs_params_list {
+                        let hits =
+                            mem_idx.search(&vs_params.query, vs_params.k, filter_bitmap.as_ref());
+                        all_mem_hits.extend(hits);
+                    }
+                    all_mem_hits
                 } else {
                     vec![]
                 }

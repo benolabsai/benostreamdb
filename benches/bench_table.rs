@@ -153,7 +153,14 @@ fn bench_vector_search_in_memory(c: &mut Criterion) {
         b.to_async(&rt).iter(|| {
             let vs_params = vs_params.clone();
             let table = table.clone();
-            async move { black_box(table.read_async(None, Some(vs_params), None).await.unwrap()) }
+            async move {
+                black_box(
+                    table
+                        .read_async(None, Some(vec![vs_params]), None)
+                        .await
+                        .unwrap(),
+                )
+            }
         });
     });
 }
