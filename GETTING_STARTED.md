@@ -136,6 +136,37 @@ results = table.vector_search("vec", [0.1, 0.2], k=2)
 rows = table.read(filter="body LIKE '%fox%'")
 ```
 
+### Vector Quantization with TurboQuant (TQ8 / TQ4)
+
+HyperStreamDB includes **TurboQuant™** out-of-the-box in the free community core engine. TurboQuant uses Fast Walsh-Hadamard Transform (FWHT) followed by scalar quantization to deliver outlier-robust compression with high recall retention:
+
+- **TQ8 (8-bit)**: 4x RAM and disk compression with >99% recall retention. Ideal default for production RAG and semantic search.
+- **TQ4 (4-bit)**: 8x RAM and disk compression for massive datasets.
+
+```python
+import hyperstreamdb as hdb
+
+table = hdb.Table("file:///tmp/my_rag_table")
+
+# High-Performance Default: HNSW with TurboQuant 8-bit (4x compression)
+table.add_index("embedding", "hnsw_tq8")
+
+# Maximum Compression: HNSW with TurboQuant 4-bit (8x compression)
+table.add_index("embedding", "hnsw_tq4")
+
+# Or use the explicit quantize() API with tuning knobs
+table.quantize(
+    column="embedding",
+    type_="TQ8",           # "TQ8", "TQ4", or "PQ"
+    metric="l2",           # "l2", "cosine", or "dot"
+    complexity=16,         # HNSW M connections
+    quality=200            # HNSW ef_construction
+)
+
+# Search transparently leverages Asymmetric Distance Calculation (ADC)
+results = table.vector_search("embedding", [0.1, 0.2], k=10)
+```
+
 ### Running the test suites
 
 ```bash

@@ -1,52 +1,85 @@
 """
-Example: Choosing Vector Index Type (HNSW vs IVF-PQ)
+Example: Choosing Vector Index Types and Quantization in HyperStreamDB
 
-HyperStreamDB supports two vector index types:
-1. HNSW (default) - Best for <10M vectors, high recall
-2. IVF-PQ - Best for >100M vectors, memory-efficient (not yet fully implemented)
+HyperStreamDB provides native vector index strategies in the free community core:
+1. HNSW (Uncompressed) - Exact float32 vectors, highest precision.
+2. HNSW + TurboQuant 8-bit (hnsw_tq8) - 4x compression via Fast Walsh-Hadamard Transform (FWHT), >99% recall retention.
+3. HNSW + TurboQuant 4-bit (hnsw_tq4) - 8x compression for massive datasets, maximum memory efficiency.
+4. HNSW + Product Quantization (hnsw_pq) - Traditional sub-space vector quantization.
 """
 
-import hyperstreamdb as hdb
-import pandas as pd
 import numpy as np
+import pandas as pd
+import hyperstreamdb as hdb
 
-# Example 1: Using HNSW (default)
-print("Example 1: HNSW Index (default)")
-table_hnsw = hdb.Table("file:///tmp/test_hnsw")
-
+# Prepare sample 128-dimensional embedding data
+np.random.seed(42)
 df = pd.DataFrame({
-    'id': [1, 2, 3],
-    'embedding': [
-        np.random.rand(128).tolist(),
-        np.random.rand(128).tolist(),
-        np.random.rand(128).tolist()
-    ]
+    'id': [1, 2, 3, 4, 5],
+    'text': [f"Document {i}" for i in range(1, 6)],
+    'embedding': [np.random.rand(128).astype(np.float32).tolist() for _ in range(5)]
 })
 
+# -------------------------------------------------------------
+# Example 1: Standard Uncompressed HNSW
+# -------------------------------------------------------------
+print("=" * 60)
+print("Example 1: Uncompressed HNSW Index")
+table_hnsw = hdb.Table("file:///tmp/test_hnsw")
 table_hnsw.write_pandas(df)
-print("✓ Written with HNSW index (default)")
+table_hnsw.add_index("embedding", "hnsw")
+table_hnsw.commit()
+print("✓ Written with standard uncompressed HNSW index")
 
-# Example 2: Explicitly choosing HNSW
-print("\nExample 2: Explicitly choosing HNSW")
-table_hnsw_explicit = hdb.Table(
-    "file:///tmp/test_hnsw_explicit",
-    vector_index_type=hdb.VectorIndexType.Hnsw
+# -------------------------------------------------------------
+# Example 2: TurboQuant 8-bit (TQ8) — Recommended Production Default
+# -------------------------------------------------------------
+print("\n" + "=" * 60)
+print("Example 2: TurboQuant 8-bit (4x Compression, >99% Recall)")
+table_tq8 = hdb.Table("file:///tmp/test_tq8")
+table_tq8.write_pandas(df)
+# Add HNSW index with TQ8 quantization
+table_tq8.add_index("embedding", "hnsw_tq8")
+table_tq8.commit()
+
+query_vec = np.random.rand(128).astype(np.float32).tolist()
+results = table_tq8.vector_search("embedding", query_vec, k=3)
+print(f"✓ Written and searched with HNSW-TQ8 (returned {len(results)} results)")
+
+# -------------------------------------------------------------
+# Example 3: TurboQuant 4-bit (TQ4) — Maximum Compression
+# -------------------------------------------------------------
+print("\n" + "=" * 60)
+print("Example 3: TurboQuant 4-bit (8x Compression)")
+table_tq4 = hdb.Table("file:///tmp/test_tq4")
+table_tq4.write_pandas(df)
+table_tq4.add_index("embedding", "hnsw_tq4")
+table_tq4.commit()
+
+results_tq4 = table_tq4.vector_search("embedding", query_vec, k=3)
+print(f"✓ Written and searched with HNSW-TQ4 (returned {len(results_tq4)} results)")
+
+# -------------------------------------------------------------
+# Example 4: Explicit quantize() API
+# -------------------------------------------------------------
+print("\n" + "=" * 60)
+print("Example 4: Explicit table.quantize() Configuration")
+table_custom = hdb.Table("file:///tmp/test_custom_tq")
+table_custom.write_pandas(df)
+table_custom.quantize(
+    column="embedding",
+    type_="TQ8",
+    metric="l2",
+    complexity=32,  # M connections
+    quality=200     # ef_construction
 )
-table_hnsw_explicit.write_pandas(df)
-print("✓ Written with HNSW index (explicit)")
+table_custom.commit()
+print("✓ Configured custom quantization parameters successfully")
 
-# Example 3: Choosing IVF-PQ (falls back to HNSW for now)
-print("\nExample 3: IVF-PQ (not yet implemented, falls back to HNSW)")
-table_ivf = hdb.Table(
-    "file:///tmp/test_ivf",
-    vector_index_type=hdb.VectorIndexType.IvfPq
-)
-table_ivf.write_pandas(df)
-print("✓ Written with IVF-PQ (currently falls back to HNSW)")
-
-print("\n" + "="*60)
-print("Summary:")
-print("- HNSW: Best for <10M vectors, high recall")
-print("- IVF-PQ: Best for >100M vectors, memory-efficient")
-print("- Default: HNSW")
-print("="*60)
+print("\n" + "=" * 60)
+print("Summary of Quantization Options:")
+print("- 'hnsw': Float32 baseline (1x compression, 100% recall)")
+print("- 'hnsw_tq8': TurboQuant 8-bit (4x compression, >99% recall)")
+print("- 'hnsw_tq4': TurboQuant 4-bit (8x compression, ultra-compact)")
+print("- 'hnsw_pq': Product Quantization (configurable subspaces)")
+print("=" * 60)

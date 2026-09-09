@@ -281,7 +281,7 @@ HyperStreamDB features **TurboQuant**, an optimized quantization engine that red
 - **TQ4 (4-bit)**: 8x compression vs. float32. Maximum efficiency for massive datasets where storage cost is the primary bottleneck.
 
 ```python
-# Use enterprise defaults (HNSW-TQ8)
+# High-performance community default (HNSW-TQ8)
 table.add_index("embedding", "hnsw_tq8")
 
 # High-compression mode
@@ -611,7 +611,7 @@ hyperstreamdb/
 ├── hyperstreamdb-flight/        # Arrow Flight SQL gRPC server
 ├── hyperstreamdb-search/        # OpenSearch 7.10 & Qdrant REST search gateway
 ├── dbt-hyperstreamdb/           # Official dbt adapter (Arrow Flight SQL)
-├── hyperstreamdb-enterprise/    # Enterprise extensions (TurboQuant, SIMD)
+├── hyperstreamdb-enterprise/    # Enterprise extensions (Continuous Indexing, Enterprise Security)
 ├── spark-hyperstream/          # Spark connector (Java)
 ├── trino-hyperstream/          # Trino connector (Java)
 ├── tests/

@@ -12,6 +12,9 @@ pub mod pq;
 pub mod tokenizer;
 pub mod turboquant;
 
+pub use pq::PqEncoder;
+pub use turboquant::{fwht, TurboQuantEncoder};
+
 use anyhow::Result;
 use roaring::RoaringBitmap;
 use serde::{Deserialize, Serialize};
