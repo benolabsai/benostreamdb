@@ -37,11 +37,14 @@ pub fn build_optimized_plan(
     // This reduces the amount of data fetched and processed
     let k_with_offset = pattern.limit + pattern.offset;
 
-
-
     tracing::info!(
         "VectorSearchOptimizer: Detected KNN pattern for columns '{:?}' with k={}, offset={}",
-        vector_searches.iter().map(|s| s.column.as_str()).collect::<Vec<_>>(), pattern.limit, pattern.offset
+        vector_searches
+            .iter()
+            .map(|s| s.column.as_str())
+            .collect::<Vec<_>>(),
+        pattern.limit,
+        pattern.offset
     );
 
     if search_config.limit_pushdown {
@@ -53,12 +56,9 @@ pub fn build_optimized_plan(
 
     let mut vector_params = Vec::new();
     for search in vector_searches {
-        let mut vp = VectorSearchParams::new(
-            &search.column,
-            search.query_value.clone(),
-            k_with_offset,
-        )
-        .with_metric(search.metric);
+        let mut vp =
+            VectorSearchParams::new(&search.column, search.query_value.clone(), k_with_offset)
+                .with_metric(search.metric);
 
         // Apply configuration parameters
         if let Some(ef) = search_config.ef_search {
@@ -67,7 +67,7 @@ pub fn build_optimized_plan(
         if let Some(probes) = search_config.probes {
             vp = vp.with_probes(probes);
         }
-        
+
         vector_params.push(vp);
     }
 
