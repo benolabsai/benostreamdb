@@ -55,8 +55,8 @@ features = ["python"]
 # Build both the Rust library and Python bindings (multi-version compatible)
 module-name = "hyperstreamdb.hyperstreamdb"
 python-source = "python"
-# Build both the Rust library and Python bindings (multi-version compatible)
-bindings = "pyo3-abi3"
+# Build both the Rust library and Python bindings
+bindings = "pyo3"
 sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
 # Optimizations for WHEEL builds
 strip = false
