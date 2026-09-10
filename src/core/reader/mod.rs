@@ -1,25 +1,12 @@
-#![allow(unused)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use crate::core::cache::CacheExt;
-use std::sync::Arc;
-// use std::collections::HashSet;
-use crate::core::index::hnsw_ivf::HnswIvfIndex;
-use crate::core::index::VectorMetric;
-use crate::core::planner::FilterExpr;
 use crate::SegmentConfig;
-use arrow::array::Array;
-use arrow::record_batch::RecordBatch;
-use bytes::Bytes;
-use chrono::Utc;
-use futures::StreamExt;
-use object_store::{path::Path, ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
-};
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
-use parquet::arrow::ProjectionMask;
+use anyhow::Result;
+use object_store::{path::Path, ObjectStore};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::file::metadata::ParquetMetaData;
+use std::sync::Arc;
 
 /// Helper function to check if values in `col` distinct are in `values` set.
 /// Returns a BooleanArray where true means the value is in the set.
@@ -145,11 +132,6 @@ pub(crate) fn check_is_in(
         }
     }
 }
-
-use anyhow::{Context, Result};
-use futures::stream::BoxStream;
-use roaring::RoaringBitmap;
-
 pub mod delete;
 pub mod filter;
 pub mod scan;
@@ -257,11 +239,14 @@ impl HybridReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use futures::StreamExt;
     use object_store::memory::InMemory;
     use parquet::arrow::ArrowWriter;
+    use roaring::RoaringBitmap;
     use std::sync::Arc;
 
     #[tokio::test]

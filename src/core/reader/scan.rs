@@ -7,19 +7,15 @@ use std::sync::Arc;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
 use crate::core::index::VectorMetric;
 use crate::core::planner::FilterExpr;
-use crate::SegmentConfig;
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
 use object_store::{path::Path, ObjectMeta, ObjectStore};
-use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
-};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::ProjectionMask;
-use parquet::file::metadata::ParquetMetaData;
 use parquet::file::statistics::Statistics as ParquetStats;
 
 use anyhow::{Context, Result};
@@ -1062,7 +1058,7 @@ impl HybridReader {
                         )
                         .ok();
                     if let Some(dl_builder) = dl_builder {
-                        if let Ok(mut dl_reader) = dl_builder.build() {
+                        if let Ok(dl_reader) = dl_builder.build() {
                             for batch in dl_reader.filter_map(Result::ok) {
                                 if let (Some(row_ids), Some(counts)) = (
                                     batch

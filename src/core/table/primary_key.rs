@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::manifest::{ManifestManager, Schema};
+use crate::core::planner::{FilterExpr, QueryPlanner};
+use crate::core::reader::HybridReader;
+use crate::SegmentConfig;
 /// Primary key management: setting, syncing, adding, dropping, and validation.
 ///
 /// Contains methods on `Table` for:
@@ -9,14 +13,9 @@
 /// - `add_primary_key`, `drop_primary_key`
 /// - `_validate_pk_uniqueness`, `_check_pk_in_storage_async`
 /// - `check_primary_key_uniqueness_async`
-use anyhow::{Result, Context};
-use arrow::record_batch::RecordBatch;
+use anyhow::Result;
 use arrow::array::Array;
-use serde_json::Value;
-use crate::core::manifest::{ManifestManager, Schema};
-use crate::core::planner::{QueryPlanner, QueryFilter, FilterExpr};
-use crate::core::reader::HybridReader;
-use crate::SegmentConfig;
+use arrow::record_batch::RecordBatch;
 
 use super::Table;
 
@@ -38,11 +37,16 @@ impl Table {
     /// and ensures the columns are marked as NOT NULL (required: true).
     pub async fn set_primary_key_async(&self, columns: Vec<String>) -> Result<()> {
         let manifest = self.manifest().await?;
-        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        let latest_schema = manifest
+            .schemas
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No schema found"))?;
 
         let mut field_ids = Vec::new();
         for col in &columns {
-            let id = latest_schema.fields.iter()
+            let id = latest_schema
+                .fields
+                .iter()
                 .find(|f| f.name == *col)
                 .map(|f| f.id)
                 .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", col))?;
@@ -88,7 +92,8 @@ impl Table {
 
     /// Synchronize PK columns (Public Sync)
     pub fn sync_primary_key_from_schema(&self) -> Result<()> {
-        self.runtime().block_on(self.sync_primary_key_from_schema_async())
+        self.runtime()
+            .block_on(self.sync_primary_key_from_schema_async())
     }
 
     // -----------------------------------------------------------------------
@@ -100,10 +105,15 @@ impl Table {
     /// Validation: Ensures no duplicate keys exist for the new definition.
     pub async fn add_primary_key(&self, column: String) -> Result<()> {
         let manifest = self.manifest().await?;
-        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        let latest_schema = manifest
+            .schemas
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No schema found"))?;
 
         // Find field ID for column
-        let field_id = latest_schema.fields.iter()
+        let field_id = latest_schema
+            .fields
+            .iter()
             .find(|f| f.name == column)
             .map(|f| f.id)
             .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
@@ -115,7 +125,8 @@ impl Table {
         next_ids.push(field_id);
 
         // Validate uniqueness before committing
-        self._validate_pk_uniqueness(&next_ids, &latest_schema).await?;
+        self._validate_pk_uniqueness(&next_ids, &latest_schema)
+            .await?;
 
         // Atomic commit to manifest
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -133,9 +144,14 @@ impl Table {
     /// This is an atomic operation that commits a new manifest version.
     pub async fn drop_primary_key(&self, column: String) -> Result<()> {
         let manifest = self.manifest().await?;
-        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        let latest_schema = manifest
+            .schemas
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No schema found"))?;
 
-        let field_id = latest_schema.fields.iter()
+        let field_id = latest_schema
+            .fields
+            .iter()
             .find(|f| f.name == column)
             .map(|f| f.id)
             .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
@@ -159,27 +175,41 @@ impl Table {
 
     /// Internal helper to validate that a set of field IDs form a unique key across existing data.
     async fn _validate_pk_uniqueness(&self, field_ids: &[i32], schema: &Schema) -> Result<()> {
-        let col_names: Vec<String> = field_ids.iter()
-            .map(|id| schema.fields.iter().find(|f| f.id == *id).map(|f| f.name.clone()).unwrap())
-            .collect();
+        let col_names: Vec<String> = field_ids
+            .iter()
+            .map(|id| {
+                schema
+                    .fields
+                    .iter()
+                    .find(|f| f.id == *id)
+                    .map(|f| f.name.clone())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Field id {} in primary key not found in schema", id)
+                    })
+            })
+            .collect::<Result<Vec<String>>>()?;
 
         // 1. Acceleration: Single-column PK check using indexes
         if col_names.len() == 1 {
             let col_name = &col_names[0];
 
             // For now, we perform an optimized read of just the PK column.
-            let batches = self.read_with_columns(None, None, col_names.clone())
+            let batches = self
+                .read_with_columns(None, None, col_names.clone())
                 .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
 
             let mut seen = std::collections::HashSet::new();
             for batch in batches {
-                let col = batch.column_by_name(col_name)
-                    .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in validation batch", col_name))?
-                    .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in validation batch", col_name))?;
+                let col = batch.column_by_name(col_name).ok_or_else(|| {
+                    anyhow::anyhow!("Column '{}' not found in validation batch", col_name)
+                })?;
                 for i in 0..batch.num_rows() {
                     let val = crate::core::manifest::ManifestValue::from_array(col, i).to_string();
                     if !seen.insert(val) {
-                        return Err(anyhow::anyhow!("Primary key violation detected for column {}: Duplicate value found.", col_name));
+                        return Err(anyhow::anyhow!(
+                            "Primary key violation detected for column {}: Duplicate value found.",
+                            col_name
+                        ));
                     }
                 }
             }
@@ -187,18 +217,23 @@ impl Table {
         }
 
         // Fallback: Multi-column PK scan
-        let batches = self.read_with_columns(None, None, col_names.clone())
+        let batches = self
+            .read_with_columns(None, None, col_names.clone())
             .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
 
         let mut seen = std::collections::HashSet::new();
         for batch in batches {
-            let sort_fields = batch.schema().fields().iter()
+            let sort_fields = batch
+                .schema()
+                .fields()
+                .iter()
                 .map(|f| arrow::row::SortField::new(f.data_type().clone()))
                 .collect::<Vec<_>>();
             let converter = arrow::row::RowConverter::new(sort_fields)
                 .map_err(|e| anyhow::anyhow!("RowConverter error: {}", e))?;
 
-            let rows = converter.convert_columns(batch.columns())
+            let rows = converter
+                .convert_columns(batch.columns())
                 .map_err(|e| anyhow::anyhow!("Row conversion error: {}", e))?;
 
             for row in rows.iter() {
@@ -213,7 +248,11 @@ impl Table {
 
     /// Check if a single primary key value exists in the committed storage.
     /// Uses index-first searching (Bloom Filter -> Inverted Index -> Data Scan).
-    async fn _check_pk_in_storage_async(&self, column: &str, value: &serde_json::Value) -> Result<bool> {
+    pub(crate) async fn _check_pk_in_storage_async(
+        &self,
+        column: &str,
+        value: &serde_json::Value,
+    ) -> Result<bool> {
         let manifest = self.manifest().await?;
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let all_entries = manager.load_all_entries(&manifest).await?;
@@ -234,8 +273,8 @@ impl Table {
                 let entry_size = entry.file_size_bytes as u64;
 
                 async move {
-                    let mut reader = HybridReader::new(config, store, &uri)
-                        .with_iceberg_schema(schema);
+                    let mut reader =
+                        HybridReader::new(config, store, &uri).with_iceberg_schema(schema);
 
                     reader.config.parquet_path = Some(entry_path);
                     reader.config.file_size = Some(entry_size);
@@ -256,28 +295,37 @@ impl Table {
         let result = pinned_stream.next().await;
 
         match result {
-            Some(res) => res, // Found a match or error
+            Some(res) => res,  // Found a match or error
             None => Ok(false), // No matches found in any segment
         }
     }
 
     /// Check if any keys in the batch already exist in the table (Primary Key Enforcement)
-    async fn check_primary_key_uniqueness_async(&self, batch: &RecordBatch, columns: &[String]) -> Result<()> {
-        if batch.num_rows() == 0 { return Ok(()); }
+    pub async fn check_primary_key_uniqueness_async(
+        &self,
+        batch: &RecordBatch,
+        columns: &[String],
+    ) -> Result<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
 
         let schema = batch.schema();
-        let col_indices: Vec<usize> = columns.iter()
+        let col_indices: Vec<usize> = columns
+            .iter()
             .map(|c| schema.index_of(c))
             .collect::<Result<Vec<usize>, _>>()?;
 
         // OPTIMIZATION: Use IN clause for batches (efficient via Inverted Index)
         // For now, we take the first row as a sample check to avoid huge expression generation
         // until we have a proper Row-Value In-List implementation.
-        for i in 0..batch.num_rows().min(100) { // Limit samples for performance in MVP
+        for i in 0..batch.num_rows().min(100) {
+            // Limit samples for performance in MVP
             let mut filters_str_vec = Vec::new();
             for (col_name, col_idx) in columns.iter().zip(col_indices.iter()) {
                 let col = batch.column(*col_idx);
-                let val = if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+                let val = if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>()
+                {
                     format!("{}", arr.value(i))
                 } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
                     format!("{}", arr.value(i))
@@ -306,12 +354,16 @@ impl Table {
                         let path = std::path::Path::new(&entry.file_path);
                         let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
                         let full_base_path = if rel_parent.is_empty() {
-                             self.uri.clone()
+                            self.uri.clone()
                         } else {
-                             format!("{}/{}", self.uri, rel_parent)
+                            format!("{}/{}", self.uri, rel_parent)
                         };
 
-                        let seg_id = entry.file_path.split('/').next_back().unwrap_or(&entry.file_path)
+                        let seg_id = entry
+                            .file_path
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(&entry.file_path)
                             .replace(".parquet", "");
 
                         let config = SegmentConfig::new(&full_base_path, &seg_id)
@@ -344,10 +396,16 @@ impl Table {
 
                         if let Some(bm) = bitmap_opt {
                             if !bm.is_empty() {
-                                let pk_val = columns.iter().zip(filters_str_vec.iter())
+                                let pk_val = columns
+                                    .iter()
+                                    .zip(filters_str_vec.iter())
                                     .map(|(c, f)| format!("{}={}", c, f))
-                                    .collect::<Vec<_>>().join(", ");
-                                return Err(anyhow::anyhow!("Duplicate primary key error: {} already exists", pk_val));
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                return Err(anyhow::anyhow!(
+                                    "Duplicate primary key error: {} already exists",
+                                    pk_val
+                                ));
                             }
                         }
                     }

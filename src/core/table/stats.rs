@@ -1,5 +1,10 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager};
+use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner};
+use crate::core::reader::HybridReader;
+use crate::core::storage::create_object_store;
+use crate::SegmentConfig;
 /// Statistics and connector APIs: data file enumeration, split generation,
 /// table-level statistics, and index coverage reporting.
 ///
@@ -11,17 +16,11 @@
 /// - `get_table_statistics`, `get_table_statistics_async`
 /// - `get_snapshot_segments`, `get_snapshot_segments_with_version`
 /// - `read_write_buffer`
-use anyhow::{Result, Context};
-use arrow::record_batch::RecordBatch;
+use anyhow::Result;
 use arrow::datatypes::Schema;
-use std::collections::HashMap;
+use arrow::record_batch::RecordBatch;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
-use crate::core::storage::create_object_store;
-use crate::core::manifest::{Manifest, ManifestEntry, ManifestManager};
-use crate::core::planner::{QueryPlanner, QueryFilter, FilterExpr};
-use crate::core::reader::HybridReader;
-use crate::SegmentConfig;
 
 use super::Table;
 
@@ -107,10 +106,18 @@ impl Table {
                     }
                 }
 
-                let has_scalar_indexes = entry.index_files.iter().any(|f| f.index_type == "scalar" || f.index_type == "inverted");
-                let has_vector_indexes = entry.index_files.iter().any(|f| f.index_type == "vector" || f.index_type == "hnsw");
+                let has_scalar_indexes = entry
+                    .index_files
+                    .iter()
+                    .any(|f| f.index_type == "scalar" || f.index_type == "inverted");
+                let has_vector_indexes = entry
+                    .index_files
+                    .iter()
+                    .any(|f| f.index_type == "vector" || f.index_type == "hnsw");
 
-                let indexed_columns = entry.index_files.iter()
+                let indexed_columns = entry
+                    .index_files
+                    .iter()
                     .filter_map(|f| f.column_name.clone())
                     .collect();
 
@@ -158,10 +165,18 @@ impl Table {
                 }
             }
 
-            let has_scalar_indexes = entry.index_files.iter().any(|f| f.index_type == "scalar" || f.index_type == "inverted");
-            let has_vector_indexes = entry.index_files.iter().any(|f| f.index_type == "vector" || f.index_type == "hnsw");
+            let has_scalar_indexes = entry
+                .index_files
+                .iter()
+                .any(|f| f.index_type == "scalar" || f.index_type == "inverted");
+            let has_vector_indexes = entry
+                .index_files
+                .iter()
+                .any(|f| f.index_type == "vector" || f.index_type == "hnsw");
 
-            let indexed_columns = entry.index_files.iter()
+            let indexed_columns = entry
+                .index_files
+                .iter()
                 .filter_map(|f| f.column_name.clone())
                 .collect();
 
@@ -205,9 +220,10 @@ impl Table {
                         start_offset: i * max_split_size as u64,
                         length: max_split_size as u64,
                         row_group_ids: vec![i as usize],
-                        index_file_path: file.indexed_columns.first().map(|_| {
-                            file.file_path.replace(".parquet", "")
-                        }),
+                        index_file_path: file
+                            .indexed_columns
+                            .first()
+                            .map(|_| file.file_path.replace(".parquet", "")),
                         can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
                     });
                 }
@@ -217,9 +233,10 @@ impl Table {
                     start_offset: 0,
                     length: file.file_size_bytes,
                     row_group_ids: vec![0],
-                    index_file_path: file.indexed_columns.first().map(|_| {
-                        file.file_path.replace(".parquet", "")
-                    }),
+                    index_file_path: file
+                        .indexed_columns
+                        .first()
+                        .map(|_| file.file_path.replace(".parquet", "")),
                     can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
                 });
             }
@@ -240,9 +257,10 @@ impl Table {
                         start_offset: i * max_split_size as u64,
                         length: max_split_size as u64,
                         row_group_ids: vec![i as usize],
-                        index_file_path: file.indexed_columns.first().map(|_| {
-                            file.file_path.replace(".parquet", "")
-                        }),
+                        index_file_path: file
+                            .indexed_columns
+                            .first()
+                            .map(|_| file.file_path.replace(".parquet", "")),
                         can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
                     });
                 }
@@ -252,9 +270,10 @@ impl Table {
                     start_offset: 0,
                     length: file.file_size_bytes,
                     row_group_ids: vec![0],
-                    index_file_path: file.indexed_columns.first().map(|_| {
-                        file.file_path.replace(".parquet", "")
-                    }),
+                    index_file_path: file
+                        .indexed_columns
+                        .first()
+                        .map(|_| file.file_path.replace(".parquet", "")),
                     can_use_indexes: file.has_scalar_indexes || file.has_vector_indexes,
                 });
             }
@@ -267,7 +286,12 @@ impl Table {
     // -----------------------------------------------------------------------
 
     /// Read a specific data file (with index acceleration)
-    pub async fn read_file_async(&self, file_path: &str, columns: Option<Vec<String>>, filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+    pub async fn read_file_async(
+        &self,
+        file_path: &str,
+        columns: Option<Vec<String>>,
+        filter: Option<&str>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
         // Use HybridReader
         let parts: Vec<&str> = file_path.split('/').collect();
         let filename = parts.last().unwrap_or(&"wrapper");
@@ -290,18 +314,24 @@ impl Table {
 
                     let relative_path = if scheme == "file" {
                         let path = std::path::Path::new(url.path());
-                        path.file_name().and_then(|s| s.to_str()).unwrap_or("wrapper").to_string()
+                        path.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("wrapper")
+                            .to_string()
                     } else {
                         let p = url.path();
                         p.trim_start_matches('/').to_string()
                     };
 
                     let segment_id_full = relative_path;
-                    let segment_id = segment_id_full.strip_suffix(".parquet").unwrap_or(&segment_id_full).to_string();
+                    let segment_id = segment_id_full
+                        .strip_suffix(".parquet")
+                        .unwrap_or(&segment_id_full)
+                        .to_string();
 
                     let config = SegmentConfig::new("", &segment_id);
                     (store, config)
-                },
+                }
                 Err(_) => {
                     let s = create_object_store(file_path)?;
                     let config = SegmentConfig::new("", &segment_id);
@@ -316,8 +346,12 @@ impl Table {
         // Try to enrich config from manifest
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, all_entries, _) = manager.load_latest_full().await.unwrap_or_default();
-        if let Some(entry) = all_entries.iter().find(|e| e.file_path == file_path || e.file_path.ends_with(file_path)) {
-            config = config.with_parquet_path(entry.file_path.clone())
+        if let Some(entry) = all_entries
+            .iter()
+            .find(|e| e.file_path == file_path || e.file_path.ends_with(file_path))
+        {
+            config = config
+                .with_parquet_path(entry.file_path.clone())
                 .with_delete_files(entry.delete_files.clone())
                 .with_index_files(entry.index_files.clone())
                 .with_file_size(entry.file_size_bytes as u64);
@@ -329,7 +363,8 @@ impl Table {
         // Resolve Target Schema (Projection)
         let target_schema = if let Some(cols) = columns {
             let current_schema = self.arrow_schema();
-            let fields: Vec<arrow::datatypes::Field> = cols.iter()
+            let fields: Vec<arrow::datatypes::Field> = cols
+                .iter()
                 .filter_map(|name| current_schema.field_with_name(name).ok().cloned())
                 .collect();
             if fields.is_empty() {
@@ -347,7 +382,9 @@ impl Table {
         let mut index_used = false;
         if let Some(filter_str) = filter {
             if let Some(qf) = QueryFilter::parse(filter_str) {
-                if let Ok(indexed_batches) = reader.query_index_first(&qf, target_schema.clone()).await {
+                if let Ok(indexed_batches) =
+                    reader.query_index_first(&qf, target_schema.clone()).await
+                {
                     batches = indexed_batches;
                     index_used = true;
                 }
@@ -360,22 +397,29 @@ impl Table {
 
             // Apply post-filter on full scan if filter is present
             if let Some(filter_str) = filter {
-                let filter_expr_owned = Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
+                let filter_expr_owned =
+                    Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
                 let filtered_stream = stream.filter_map(move |batch_res| {
                     let filter_expr_cloned = filter_expr_owned.clone();
                     async move {
                         let planner = QueryPlanner::new();
                         match batch_res {
-                            Ok(b) => {
-                                match planner.filter_expr(&b, &filter_expr_cloned) {
-                                    Ok(filtered) => if filtered.num_rows() > 0 { Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(filtered)) } else { None },
-                                    Err(e) => {
-                                        tracing::error!("Error evaluating filter: {}", e);
-                                        Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
+                            Ok(b) => match planner.filter_expr(&b, &filter_expr_cloned) {
+                                Ok(filtered) => {
+                                    if filtered.num_rows() > 0 {
+                                        Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(
+                                            filtered,
+                                        ))
+                                    } else {
+                                        None
                                     }
                                 }
-                            }
-                            Err(e) => Some(Err(e))
+                                Err(e) => {
+                                    tracing::error!("Error evaluating filter: {}", e);
+                                    Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
+                                }
+                            },
+                            Err(e) => Some(Err(e)),
                         }
                     }
                 });
@@ -386,26 +430,35 @@ impl Table {
 
         // 3. Apply post-filtering if filter is present
         if let Some(filter_str) = filter {
-            let filter_expr_owned = Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
+            let filter_expr_owned =
+                Arc::new(FilterExpr::parse_sql(filter_str, self.arrow_schema()).await?);
 
-            let stream = futures::stream::iter(batches.into_iter().map(Ok)).filter_map(move |batch_res: Result<RecordBatch>| {
-                let filter_expr_cloned = filter_expr_owned.clone();
-                async move {
-                    let planner = QueryPlanner::new();
-                    match batch_res {
-                        Ok(b) => {
-                            match planner.filter_expr(&b, &filter_expr_cloned) {
-                                Ok(filtered) => if filtered.num_rows() > 0 { Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(filtered)) } else { None },
+            let stream = futures::stream::iter(batches.into_iter().map(Ok)).filter_map(
+                move |batch_res: Result<RecordBatch>| {
+                    let filter_expr_cloned = filter_expr_owned.clone();
+                    async move {
+                        let planner = QueryPlanner::new();
+                        match batch_res {
+                            Ok(b) => match planner.filter_expr(&b, &filter_expr_cloned) {
+                                Ok(filtered) => {
+                                    if filtered.num_rows() > 0 {
+                                        Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(
+                                            filtered,
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                }
                                 Err(e) => {
                                     tracing::error!("Error evaluating filter: {}", e);
                                     Some(Ok::<arrow::record_batch::RecordBatch, anyhow::Error>(b))
                                 }
-                            }
+                            },
+                            Err(e) => Some(Err(e)),
                         }
-                        Err(e) => Some(Err(e))
                     }
-                }
-            });
+                },
+            );
             Ok(stream.boxed())
         } else {
             let stream = futures::stream::iter(batches.into_iter().map(Ok::<_, anyhow::Error>));
@@ -414,7 +467,12 @@ impl Table {
     }
 
     /// Read a specific split (with index acceleration)
-    pub async fn read_split_async(&self, split: &Split, columns: Vec<String>, filter: Option<&str>) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+    pub async fn read_split_async(
+        &self,
+        split: &Split,
+        columns: Vec<String>,
+        filter: Option<&str>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
         // New Implementation: Use stream_row_groups with column pushdown
         let file_path = &split.file_path;
 
@@ -434,16 +492,22 @@ impl Table {
 
                     let relative_path = if scheme == "file" {
                         let path = std::path::Path::new(url.path());
-                        path.file_name().and_then(|s| s.to_str()).unwrap_or("wrapper").to_string()
+                        path.file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("wrapper")
+                            .to_string()
                     } else {
                         let p = url.path();
                         p.trim_start_matches('/').to_string()
                     };
                     let segment_id_full = relative_path;
-                    let segment_id = segment_id_full.strip_suffix(".parquet").unwrap_or(&segment_id_full).to_string();
+                    let segment_id = segment_id_full
+                        .strip_suffix(".parquet")
+                        .unwrap_or(&segment_id_full)
+                        .to_string();
                     let config = SegmentConfig::new("", &segment_id);
                     (store, config)
-                },
+                }
                 Err(_) => {
                     let s = create_object_store(file_path)?;
                     let parts: Vec<&str> = file_path.split('/').collect();
@@ -464,8 +528,12 @@ impl Table {
         // Enrich config from manifest (index files, delete files, file size)
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         if let Ok((_, all_entries, _)) = manager.load_latest_full().await {
-            if let Some(entry) = all_entries.iter().find(|e| e.file_path == *file_path || e.file_path.ends_with(file_path)) {
-                config = config.with_parquet_path(entry.file_path.clone())
+            if let Some(entry) = all_entries
+                .iter()
+                .find(|e| e.file_path == *file_path || e.file_path.ends_with(file_path))
+            {
+                config = config
+                    .with_parquet_path(entry.file_path.clone())
                     .with_delete_files(entry.delete_files.clone())
                     .with_index_files(entry.index_files.clone())
                     .with_file_size(entry.file_size_bytes as u64);
@@ -480,14 +548,16 @@ impl Table {
             None
         } else {
             let current_schema = self.arrow_schema();
-            let mut fields: Vec<arrow::datatypes::Field> = columns.iter()
+            let mut fields: Vec<arrow::datatypes::Field> = columns
+                .iter()
                 .filter_map(|name| current_schema.field_with_name(name).ok().cloned())
                 .collect();
             if fields.is_empty() {
                 // Fallback: if the table schema is empty (no committed data),
                 // resolve columns against the Parquet file's own schema
                 if let Ok(file_schema) = reader.get_arrow_schema().await {
-                    fields = columns.iter()
+                    fields = columns
+                        .iter()
                         .filter_map(|name| file_schema.field_with_name(name).ok().cloned())
                         .collect();
                 }
@@ -506,16 +576,21 @@ impl Table {
         // of matching rows, then stream the filtered row groups.
         if let Some(filter_str) = filter {
             if let Some(qf) = QueryFilter::parse(filter_str) {
-                if let Ok(indexed_batches) = reader.query_index_first(&qf, target_schema.clone()).await {
+                if let Ok(indexed_batches) =
+                    reader.query_index_first(&qf, target_schema.clone()).await
+                {
                     if !indexed_batches.is_empty() {
-                        let owned_batches: Vec<Result<RecordBatch>> = indexed_batches.into_iter().map(Ok).collect();
+                        let owned_batches: Vec<Result<RecordBatch>> =
+                            indexed_batches.into_iter().map(Ok).collect();
                         return Ok(futures::stream::iter(owned_batches).boxed());
                     }
                 }
             }
         }
 
-        let stream = reader.stream_row_groups(Some(&split.row_group_ids), target_schema).await?;
+        let stream = reader
+            .stream_row_groups(Some(&split.row_group_ids), target_schema)
+            .await?;
         Ok(stream.boxed())
     }
 
@@ -644,7 +719,8 @@ impl Table {
         for batch in buffer.iter() {
             // Apply projection first
             let batch_to_filter = if let Some(cols) = columns {
-                let indices: Vec<usize> = cols.iter()
+                let indices: Vec<usize> = cols
+                    .iter()
                     .filter_map(|name| batch.schema().index_of(name).ok())
                     .collect();
                 batch.project(&indices).unwrap_or(batch.clone())

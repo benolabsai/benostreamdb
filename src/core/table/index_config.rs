@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::manifest::{IndexAlgorithm, ManifestManager};
+use crate::core::reader::HybridReader;
+use crate::core::segment::HybridSegmentWriter;
+use crate::SegmentConfig;
 /// Index configuration: setting indexed columns, adding/dropping indexes,
 /// backfill logic, and physical-index inference.
 ///
@@ -12,10 +16,6 @@
 /// - `infer_index_metadata_from_physical_async`
 use anyhow::Result;
 use std::collections::HashMap;
-use crate::core::manifest::{ManifestManager, IndexAlgorithm};
-use crate::core::reader::HybridReader;
-use crate::core::segment::HybridSegmentWriter;
-use crate::SegmentConfig;
 
 use super::Table;
 
@@ -31,9 +31,14 @@ impl Table {
 
     /// Update indexing specifications for multiple columns at once.
     /// This is an atomic operation that commits a new manifest version.
-    pub async fn set_index_columns(&self, column_indexes: HashMap<String, Vec<IndexAlgorithm>>) -> Result<()> {
+    pub async fn set_index_columns(
+        &self,
+        column_indexes: HashMap<String, Vec<IndexAlgorithm>>,
+    ) -> Result<()> {
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
-        manifest_manager.update_index_specs(column_indexes.clone()).await?;
+        manifest_manager
+            .update_index_specs(column_indexes.clone())
+            .await?;
 
         // Update in-memory state
         {
@@ -51,24 +56,24 @@ impl Table {
                     }
 
                     // Extract tokenizer from algorithms if present
-                    let tokenizer = algs.iter().find_map(|alg| {
-                        match alg {
-                            IndexAlgorithm::Bm25 { tokenizer, .. } => {
-                                if tokenizer.is_empty() || tokenizer == "default" {
-                                    Some("default".to_string())
-                                } else {
-                                    Some(tokenizer.clone())
-                                }
-                            },
-                            _ => None,
+                    let tokenizer = algs.iter().find_map(|alg| match alg {
+                        IndexAlgorithm::Bm25 { tokenizer, .. } => {
+                            if tokenizer.is_empty() || tokenizer == "default" {
+                                Some("default".to_string())
+                            } else {
+                                Some(tokenizer.clone())
+                            }
                         }
+                        _ => None,
                     });
 
                     // Update config
-                    let config = index_configs.entry(col.clone()).or_insert_with(|| crate::core::table::state::ColumnIndexConfig {
-                        enabled: true,
-                        algorithms: algs.clone(),
-                        ..Default::default()
+                    let config = index_configs.entry(col.clone()).or_insert_with(|| {
+                        crate::core::table::state::ColumnIndexConfig {
+                            enabled: true,
+                            algorithms: algs.clone(),
+                            ..Default::default()
+                        }
                     });
                     config.algorithms = algs.clone();
                     if let Some(tok) = tokenizer {
@@ -101,13 +106,12 @@ impl Table {
                 // Update in-memory state if no manifest/schema exists yet.
                 // This allows pre-configuring indexes before the first write.
                 let mut index_configs = self.indexing.index_configs.write();
-                let config =
-                    index_configs
-                        .entry(column.clone())
-                        .or_insert_with(|| crate::core::table::state::ColumnIndexConfig {
-                            enabled: true,
-                            ..Default::default()
-                        });
+                let config = index_configs.entry(column.clone()).or_insert_with(|| {
+                    crate::core::table::state::ColumnIndexConfig {
+                        enabled: true,
+                        ..Default::default()
+                    }
+                });
                 config.algorithms.push(algorithm);
 
                 let mut index_cols = self.indexing.index_columns.write();
@@ -163,7 +167,7 @@ impl Table {
                     let mut updates = HashMap::new();
                     updates.insert(target_col.clone(), next_indexes);
                     self.set_index_columns(updates).await?;
-                    
+
                     if target_col != column {
                         let mut index_configs = self.indexing.index_configs.write();
                         let config = index_configs.entry(column.clone()).or_default();
@@ -200,13 +204,14 @@ impl Table {
                 index_cols.push(column);
             }
         }
-        
+
         Ok(())
     }
 
     /// Add a composite roaring bitmap index across multiple scalar columns (e.g., ["tenant_id", "status"]).
     pub fn add_composite_index(&self, columns: Vec<String>) -> Result<()> {
-        self.runtime().block_on(self.add_composite_index_async(columns))
+        self.runtime()
+            .block_on(self.add_composite_index_async(columns))
     }
 
     /// Async implementation of add_composite_index
@@ -233,7 +238,11 @@ impl Table {
     // Add index columns (sync + async)
     // -----------------------------------------------------------------------
 
-    pub fn add_index_columns(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
+    pub fn add_index_columns(
+        &mut self,
+        columns: Vec<String>,
+        device: Option<String>,
+    ) -> Result<()> {
         {
             let mut index_cols = self.indexing.index_columns.write();
             let mut index_configs = self.indexing.index_configs.write();
@@ -245,7 +254,15 @@ impl Table {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), crate::core::table::state::ColumnIndexConfig { device: effective_device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
+                index_configs.insert(
+                    col.clone(),
+                    crate::core::table::state::ColumnIndexConfig {
+                        device: effective_device.clone(),
+                        enabled: true,
+                        tokenizer: None,
+                        algorithms: Vec::new(),
+                    },
+                );
             }
             index_cols.sort();
             index_cols.dedup();
@@ -253,7 +270,11 @@ impl Table {
         self.backfill_indexes(columns)
     }
 
-    pub async fn add_index_columns_async(&mut self, columns: Vec<String>, device: Option<String>) -> Result<()> {
+    pub async fn add_index_columns_async(
+        &mut self,
+        columns: Vec<String>,
+        device: Option<String>,
+    ) -> Result<()> {
         {
             let mut index_cols = self.indexing.index_columns.write();
             let mut index_configs = self.indexing.index_configs.write();
@@ -265,7 +286,15 @@ impl Table {
                 if !index_cols.contains(col) {
                     index_cols.push(col.clone());
                 }
-                index_configs.insert(col.clone(), crate::core::table::state::ColumnIndexConfig { device: effective_device.clone(), enabled: true, tokenizer: None, algorithms: Vec::new() });
+                index_configs.insert(
+                    col.clone(),
+                    crate::core::table::state::ColumnIndexConfig {
+                        device: effective_device.clone(),
+                        enabled: true,
+                        tokenizer: None,
+                        algorithms: Vec::new(),
+                    },
+                );
             }
             index_cols.sort();
             index_cols.dedup();
@@ -290,10 +319,11 @@ impl Table {
     // -----------------------------------------------------------------------
 
     pub(crate) fn backfill_indexes(&self, target_columns: Vec<String>) -> Result<()> {
-        self.runtime().block_on(self.backfill_indexes_async(target_columns))
+        self.runtime()
+            .block_on(self.backfill_indexes_async(target_columns))
     }
 
-    async fn backfill_indexes_async(&self, target_columns: Vec<String>) -> Result<()> {
+    pub(crate) async fn backfill_indexes_async(&self, target_columns: Vec<String>) -> Result<()> {
         use futures::StreamExt;
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, all_entries, _) = manager.load_latest_full().await?;
@@ -302,75 +332,83 @@ impl Table {
             return Ok(());
         }
 
-        let entries_results: Vec<Result<crate::core::manifest::ManifestEntry>> = futures::future::join_all(all_entries.iter().map(|entry| {
-            let entry = entry.clone();
-            let table_uri = self.uri.clone();
-            let store = self.store.clone();
-            let data_store = self.data_store.clone().unwrap_or(self.store.clone());
-            let target_cols = target_columns.clone();
+        let entries_results: Vec<Result<crate::core::manifest::ManifestEntry>> =
+            futures::future::join_all(all_entries.iter().map(|entry| {
+                let entry = entry.clone();
+                let table_uri = self.uri.clone();
+                let store = self.store.clone();
+                let data_store = self.data_store.clone().unwrap_or(self.store.clone());
+                let target_cols = target_columns.clone();
 
-            async move {
-                let mut current_entry = entry.clone();
-                let file_path_str = current_entry.file_path.clone();
-                let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
-                    .strip_suffix(".parquet").unwrap_or(&file_path_str);
+                async move {
+                    let mut current_entry = entry.clone();
+                    let file_path_str = current_entry.file_path.clone();
+                    let segment_id = file_path_str
+                        .split('/')
+                        .next_back()
+                        .unwrap_or(&file_path_str)
+                        .strip_suffix(".parquet")
+                        .unwrap_or(&file_path_str);
 
-                let mut cols_to_index = self.indexing.index_columns.read().clone();
-                for col in target_cols {
-                    if !cols_to_index.contains(&col) {
-                        cols_to_index.push(col);
+                    let mut cols_to_index = self.indexing.index_columns.read().clone();
+                    for col in target_cols {
+                        if !cols_to_index.contains(&col) {
+                            cols_to_index.push(col);
+                        }
                     }
+
+                    let config = SegmentConfig::new(&table_uri, segment_id)
+                        .with_parquet_path(current_entry.file_path.clone())
+                        .with_data_store(data_store)
+                        .with_index_all(self.indexing.index_all)
+                        .with_columns_to_index(cols_to_index);
+
+                    let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
+                    let mut writer = HybridSegmentWriter::new(config)
+                        .with_index_configs(self.indexing.index_configs.read().clone())
+                        .with_record_count(current_entry.record_count as usize)
+                        .with_existing_stats(current_entry.column_stats.clone());
+                    writer.primary_key = self.primary_key.read().clone();
+                    writer.set_store(store.clone());
+
+                    let stream = reader.stream_row_groups(None, None).await?;
+                    let mut stream = stream.boxed();
+                    let mut current_offset = 0;
+                    while let Some(batch) = stream.next().await {
+                        let batch = batch?;
+                        let batch_rows = batch.num_rows();
+                        writer.build_indexes(&batch, current_offset)?;
+                        current_offset += batch_rows;
+                    }
+
+                    writer.finish_indexing().await?;
+                    writer.upload_to_store().await?;
+
+                    // Invalidate the cache for this segment
+                    let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
+                    crate::core::cache::PARQUET_META_CACHE
+                        .invalidate(&cache_key)
+                        .await;
+
+                    let gen_files = writer.get_generated_files();
+                    tracing::debug!(
+                        segment = %current_entry.file_path,
+                        generated_files = ?gen_files,
+                        "Backfill index files generated"
+                    );
+
+                    let updated_entry = writer.to_manifest_entry();
+                    tracing::debug!(
+                        segment = %current_entry.file_path,
+                        index_files = ?updated_entry.index_files,
+                        "Backfill index manifest updated"
+                    );
+                    current_entry.index_files = updated_entry.index_files;
+
+                    Ok(current_entry)
                 }
-
-                let config = SegmentConfig::new(&table_uri, segment_id)
-                    .with_parquet_path(current_entry.file_path.clone())
-                    .with_data_store(data_store)
-                    .with_index_all(self.indexing.index_all)
-                    .with_columns_to_index(cols_to_index);
-
-                let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
-                let mut writer = HybridSegmentWriter::new(config)
-                    .with_index_configs(self.indexing.index_configs.read().clone())
-                    .with_record_count(current_entry.record_count as usize)
-                    .with_existing_stats(current_entry.column_stats.clone());
-                writer.primary_key = self.primary_key.read().clone();
-                writer.set_store(store.clone());
-
-                let stream = reader.stream_row_groups(None, None).await?;
-                let mut stream = stream.boxed();
-                let mut current_offset = 0;
-                while let Some(batch) = stream.next().await {
-                    let batch = batch?;
-                    let batch_rows = batch.num_rows();
-                    writer.build_indexes(&batch, current_offset)?;
-                    current_offset += batch_rows;
-                }
-
-                writer.finish_indexing().await?;
-                writer.upload_to_store().await?;
-
-                // Invalidate the cache for this segment
-                let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
-                crate::core::cache::PARQUET_META_CACHE.invalidate(&cache_key).await;
-
-                let gen_files = writer.get_generated_files();
-                tracing::debug!(
-                    segment = %current_entry.file_path,
-                    generated_files = ?gen_files,
-                    "Backfill index files generated"
-                );
-
-                let updated_entry = writer.to_manifest_entry();
-                tracing::debug!(
-                    segment = %current_entry.file_path,
-                    index_files = ?updated_entry.index_files,
-                    "Backfill index manifest updated"
-                );
-                current_entry.index_files = updated_entry.index_files;
-
-                Ok(current_entry)
-            }
-        })).await;
+            }))
+            .await;
 
         let mut updated_entries = Vec::new();
         for res in entries_results {
@@ -392,10 +430,15 @@ impl Table {
     /// This provides zero-touch backward compatibility for tables created before the IndexSpec refactor.
     pub async fn infer_index_metadata_from_physical_async(&self) -> Result<()> {
         let manifest = self.manifest().await?;
-        let latest_schema = manifest.schemas.last().ok_or_else(|| anyhow::anyhow!("No schema found"))?;
+        let latest_schema = manifest
+            .schemas
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("No schema found"))?;
 
         // Build a set of columns that already have logical index metadata
-        let indexed_columns: std::collections::HashSet<String> = latest_schema.fields.iter()
+        let indexed_columns: std::collections::HashSet<String> = latest_schema
+            .fields
+            .iter()
             .filter(|f| !f.indexes.is_empty())
             .map(|f| f.name.clone())
             .collect();
@@ -415,15 +458,17 @@ impl Table {
                         continue;
                     }
 
-                    let algorithms = inferred_specs.entry(col_name.clone()).or_insert_with(Vec::new);
+                    let algorithms = inferred_specs
+                        .entry(col_name.clone())
+                        .or_insert_with(Vec::new);
 
                     let alg = match index_file.index_type.as_str() {
                         "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {
-                             metric: "l2".to_string(),
-                             complexity: 16,
-                             quality: 128,
-                             build_device: None,
-                             search_device: None,
+                            metric: "l2".to_string(),
+                            complexity: 16,
+                            quality: 128,
+                            build_device: None,
+                            search_device: None,
                         }),
                         "inverted" => Some(IndexAlgorithm::Bm25 {
                             k1: 1.5,

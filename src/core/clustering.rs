@@ -19,8 +19,8 @@ pub fn apply_zorder(batch: &RecordBatch, columns: &[String]) -> Result<RecordBat
     let columns: Vec<Arc<dyn Array>> = batch
         .columns()
         .iter()
-        .map(|c| arrow::compute::take(c.as_ref(), &indices, None).unwrap())
-        .collect();
+        .map(|c| arrow::compute::take(c.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
@@ -86,8 +86,8 @@ pub fn apply_hilbert(batch: &RecordBatch, columns: &[String]) -> Result<RecordBa
     let columns: Vec<Arc<dyn Array>> = batch
         .columns()
         .iter()
-        .map(|c| arrow::compute::take(c.as_ref(), &indices, None).unwrap())
-        .collect();
+        .map(|c| arrow::compute::take(c.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
 
     Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }

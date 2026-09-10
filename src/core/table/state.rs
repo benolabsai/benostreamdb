@@ -1,16 +1,21 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+use crate::core::index::memory::InMemoryVectorIndex;
+use crate::core::query::QueryConfig;
+use crate::SegmentConfig;
 /// Table state management: indexing state, catalog identity, and configuration accessors.
 ///
 /// Contains:
 /// - `TableIndexState` / `TableCatalogState` structs
 /// - `ColumnIndexConfig` / `LabelPattern` types
 /// - State accessor/mutator methods on `Table`
+use anyhow::Result;
+use arrow::datatypes::SchemaRef;
+use object_store::ObjectStore;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
-use crate::SegmentConfig;
-use crate::core::index::memory::InMemoryVectorIndex;
+use tokio::runtime::Runtime;
 
 use super::Table;
 
@@ -18,8 +23,7 @@ use super::Table;
 // Public type definitions (re-exported from mod.rs)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ColumnIndexConfig {
     pub device: Option<String>,
     pub tokenizer: Option<String>,
@@ -84,7 +88,8 @@ impl Table {
     }
 
     pub fn set_autocommit(&self, enabled: bool) {
-        self.autocommit.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.autocommit
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_autocommit(&self) -> bool {
@@ -124,5 +129,36 @@ impl Table {
         let mut index_cols = self.indexing.index_columns.write();
         index_cols.clear();
         self.indexing.index_all = false;
+    }
+
+    pub fn object_store(&self) -> Arc<dyn ObjectStore> {
+        self.store.clone()
+    }
+
+    pub fn table_uri(&self) -> &str {
+        &self.uri
+    }
+
+    pub fn query_config(&self) -> &QueryConfig {
+        &self.query_config
+    }
+
+    pub fn runtime(&self) -> Arc<Runtime> {
+        self.rt
+            .as_ref()
+            .expect("Runtime not available on async Table")
+            .clone()
+    }
+
+    pub fn arrow_schema(&self) -> SchemaRef {
+        self.schema.read().clone()
+    }
+
+    pub async fn manifest(&self) -> Result<crate::core::manifest::Manifest> {
+        let (manifest, _) =
+            crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri)
+                .load_latest()
+                .await?;
+        Ok(manifest)
     }
 }

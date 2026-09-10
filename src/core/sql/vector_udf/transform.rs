@@ -56,8 +56,16 @@ macro_rules! create_vector_binary_op_udf {
                         for i in 0..l_arr.len() {
                             let v1_array = l_arr.value(i);
                             let v2_array = r_arr.value(i);
-                            let v1 = v1_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
-                            let v2 = v2_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                            let v1 = v1_array
+                                .as_any()
+                                .downcast_ref::<Float32Array>()
+                                .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                                .values();
+                            let v2 = v2_array
+                                .as_any()
+                                .downcast_ref::<Float32Array>()
+                                .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                                .values();
                             builder.append_slice(&$op_fn(v1, v2));
                         }
                         Ok(ColumnarValue::Array(Arc::new(FixedSizeListArray::try_new(
@@ -126,8 +134,14 @@ impl ScalarUDFImpl for VectorConcatUDF {
                 for i in 0..l_arr.len() {
                     let v1_array = l_arr.value(i);
                     let v2_array = r_arr.value(i);
-                    let v1 = v1_array.as_any().downcast_ref::<Float32Array>().unwrap();
-                    let v2 = v2_array.as_any().downcast_ref::<Float32Array>().unwrap();
+                    let v1 = v1_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?;
+                    let v2 = v2_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?;
 
                     let concatenated: Vec<f32> = v1.values().iter().chain(v2.values().iter()).copied().collect();
                     builder.values().append_slice(&concatenated);
@@ -197,7 +211,11 @@ impl ScalarUDFImpl for VectorNormUDF {
                 let mut results = Vec::with_capacity(fsl.len());
                 for i in 0..fsl.len() {
                     let value_array = fsl.value(i);
-                    let v = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                    let v = value_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                        .values();
                     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                     results.push(norm);
                 }
@@ -234,7 +252,11 @@ impl ScalarUDFImpl for VectorNormalizeUDF {
 
                 for i in 0..fsl.len() {
                     let value_array = fsl.value(i);
-                    let v = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                    let v = value_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                        .values();
                     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 0.0 {
                         let normalized: Vec<f32> = v.iter().map(|x| x / norm).collect();
@@ -424,7 +446,11 @@ impl ScalarUDFImpl for SubvectorUDF {
 
                 for i in 0..fsl.len() {
                     let value_array = fsl.value(i);
-                    let v = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                    let v = value_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                        .values();
                     let s = (*start as usize).min(v.len());
                     let c = (*count as usize).min(v.len() - s);
                     builder.values().append_slice(&v[s..s+c]);
@@ -464,7 +490,11 @@ impl ScalarUDFImpl for VectorToBinaryUDF {
 
                 for i in 0..fsl.len() {
                     let value_array = fsl.value(i);
-                    let v = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                    let v = value_array
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                        .values();
                     let mut packed = vec![0u8; packed_len];
                     for (j, &val) in v.iter().enumerate() {
                         if val >= 0.0 {

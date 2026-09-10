@@ -1,18 +1,11 @@
-#![allow(unused)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use crate::core::cache::CacheExt;
-use anyhow::Result;
 use arrow::array::Array;
-use arrow::record_batch::RecordBatch;
 use chrono::Utc;
-use futures::StreamExt;
-use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tracing;
 
 pub type SegmentId = String;
 

@@ -607,7 +607,7 @@ impl HnswIvfIndex {
             .collect();
 
         // Step 3: Merge and return top-k
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.dedup_by_key(|x| x.0); // Remove duplicates
         candidates.truncate(k);
         let t_fine = t_fine_start.elapsed();
