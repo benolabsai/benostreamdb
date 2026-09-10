@@ -204,6 +204,23 @@ impl Table {
         Ok(())
     }
 
+    /// Add a composite roaring bitmap index across multiple scalar columns (e.g., ["tenant_id", "status"]).
+    pub fn add_composite_index(&self, columns: Vec<String>) -> Result<()> {
+        self.runtime().block_on(self.add_composite_index_async(columns))
+    }
+
+    /// Async implementation of add_composite_index
+    pub async fn add_composite_index_async(&self, columns: Vec<String>) -> Result<()> {
+        if columns.len() < 2 {
+            anyhow::bail!("Composite index requires at least 2 columns");
+        }
+        let composite_name = columns.join(",");
+        let alg = IndexAlgorithm::CompositeBitmap {
+            columns: columns.clone(),
+        };
+        self.add_index(composite_name, alg).await
+    }
+
     /// Remove all indexing strategies from a column.
     /// This is an atomic operation that commits a new manifest version.
     pub async fn drop_index(&self, column: String) -> Result<()> {
@@ -337,10 +354,18 @@ impl Table {
                 crate::core::cache::PARQUET_META_CACHE.invalidate(&cache_key).await;
 
                 let gen_files = writer.get_generated_files();
-                println!("backfill: segment={}, generated_files={:?}", current_entry.file_path, gen_files);
+                tracing::debug!(
+                    segment = %current_entry.file_path,
+                    generated_files = ?gen_files,
+                    "Backfill index files generated"
+                );
 
                 let updated_entry = writer.to_manifest_entry();
-                println!("backfill: segment={}, index_files={:?}", current_entry.file_path, updated_entry.index_files);
+                tracing::debug!(
+                    segment = %current_entry.file_path,
+                    index_files = ?updated_entry.index_files,
+                    "Backfill index manifest updated"
+                );
                 current_entry.index_files = updated_entry.index_files;
 
                 Ok(current_entry)
@@ -376,12 +401,15 @@ impl Table {
             .collect();
 
         // Scan latest manifest entries for physical index files
-        println!("infer: checking {} entries", manifest.entries.len());
         let mut inferred_specs: HashMap<String, Vec<IndexAlgorithm>> = HashMap::new();
 
         for entry in &manifest.entries {
             for index_file in &entry.index_files {
                 if let Some(col_name) = &index_file.column_name {
+                    // Skip composite index virtual columns (they are managed via CompositeBitmap)
+                    if col_name.contains(',') {
+                        continue;
+                    }
                     // Skip columns that already have logical index metadata
                     if indexed_columns.contains(col_name) {
                         continue;

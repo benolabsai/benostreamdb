@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.7.0] - 2026-09-10
+
+### Added
+- **Multi-Vector Search & Reciprocal Rank Fusion (RRF)**:
+  - Coordinate multi-vector search queries across multiple vector columns (e.g., `title_vec` and `body_vec`) using reciprocal rank fusion ($1 / (k + \text{rank} + 1)$).
+  - DataFusion SQL physical plan optimization and optimizer pushdown for multi-vector expressions (`dist_l2(col1, ...) as dist1, dist_l2(col2, ...) as dist2`).
+  - Added programmatic and SQL end-to-end integration tests in `tests/test_multi_vector_search.rs`.
+- **Composite Scalar Roaring Bitmap Indexes (`IndexAlgorithm::CompositeBitmap`)**:
+  - Multi-column point and range query acceleration using combined composite inverted bitmap indexes.
+  - Virtual composite column naming and tokenization using exact `"identity"` tokenization to preserve multi-column key terms (`val1\0val2`).
+  - Fluent table API `table.add_composite_index(name, columns)` and filter rewriting.
+  - Added end-to-end integration tests in `tests/test_composite_index.rs`.
+- **Apache Polaris & Lakekeeper Iceberg REST Catalog OAuth2 Client Credentials**:
+  - Implemented standard `/v1/oauth/tokens` client credentials grant flow for Iceberg REST catalogs.
+  - Added token caching with automatic expiry tracking and refresh within 60-second window.
+  - Injected `Authorization: Bearer <token>` across all REST catalog requests (`load_table`, `create_table`, `commit_table`).
+- **Core Community TurboQuant™ (TQ4 / TQ8) Scalar Quantization**:
+  - Polar Quantization (PQ) and TurboQuant 4-bit / 8-bit quantized HNSW vector index algorithms integrated into open-source core engine.
+- **Production Hardening & Correctness Enhancements**:
+  - **Vector Metric Propagation**: Dynamic metric parsing (`VectorMetric::from_str`) and propagation from `IndexAlgorithm` (`L2`, `Cosine`, `InnerProduct`, `L1`, `Hamming`, `Jaccard`) through index construction and Puffin/Parquet serialization.
+  - **Global KNN Ordering**: Refactored `merge_and_rerank_vector_results` to guarantee monotonic ascending distance order across all returned batches without unordered `HashMap` bucketing.
+  - **Metric Parity Test Suite**: Added `tests/test_vector_metrics_parity.rs` establishing 100% nearest-neighbor accuracy against exact brute force ground truth across all 6 metrics.
+  - **Strict Query Execution Semantics**: Segment vector search failures now fail the query immediately with actionable diagnostics rather than silently omitting rows.
+  - **Zero-Warning Standard**: Eliminated diagnostic `println!` statements in favor of structured `tracing::debug!`, resolved all clippy compiler warnings with `#![deny(warnings)]`.
+
+---
+
 ## [0.6.0] - 2026-09-09
 
 ### Added

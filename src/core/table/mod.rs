@@ -385,11 +385,19 @@ impl Table {
             }
         };
 
+        // If it's a composite index, we map it to the first column for manifest storage
+        let mut target_col = column.clone();
+        if let IndexAlgorithm::CompositeBitmap { columns } = &algorithm {
+            if let Some(first) = columns.first() {
+                target_col = first.clone();
+            }
+        }
+
         let field = latest_schema
             .fields
             .iter()
-            .find(|f| f.name == column)
-            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", column))?;
+            .find(|f| f.name == target_col)
+            .ok_or_else(|| anyhow::anyhow!("Column '{}' not found in schema", target_col))?;
 
         let mut next_indexes = field.indexes.clone();
 
@@ -419,19 +427,72 @@ impl Table {
             _ => {
                 if !next_indexes.contains(&algorithm) {
                     next_indexes.push(algorithm.clone());
-                    return self
-                        .set_index_columns(HashMap::from([(column, next_indexes)]))
-                        .await;
+                    let mut updates = HashMap::new();
+                    updates.insert(target_col.clone(), next_indexes);
+                    self.set_index_columns(updates).await?;
+
+                    if target_col != column {
+                        let mut index_configs = self.indexing.index_configs.write();
+                        let config = index_configs.entry(column.clone()).or_default();
+                        config.enabled = true;
+                        if matches!(algorithm, IndexAlgorithm::CompositeBitmap { .. }) {
+                            config.tokenizer = Some("identity".to_string());
+                        }
+                        if !config.algorithms.contains(&algorithm) {
+                            config.algorithms.push(algorithm.clone());
+                        }
+                        let mut index_cols = self.indexing.index_columns.write();
+                        if !index_cols.contains(&column) {
+                            index_cols.push(column);
+                        }
+                    }
+                    return Ok(());
                 }
             }
         }
 
-        next_indexes.push(algorithm);
+        next_indexes.push(algorithm.clone());
 
         let mut updates = HashMap::new();
-        updates.insert(column, next_indexes);
+        updates.insert(target_col.clone(), next_indexes);
 
-        self.set_index_columns(updates).await
+        self.set_index_columns(updates).await?;
+
+        if target_col != column {
+            let mut index_configs = self.indexing.index_configs.write();
+            let config = index_configs.entry(column.clone()).or_default();
+            config.enabled = true;
+            if matches!(algorithm, IndexAlgorithm::CompositeBitmap { .. }) {
+                config.tokenizer = Some("identity".to_string());
+            }
+            if !config.algorithms.contains(&algorithm) {
+                config.algorithms.push(algorithm);
+            }
+            let mut index_cols = self.indexing.index_columns.write();
+            if !index_cols.contains(&column) {
+                index_cols.push(column);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Add a composite roaring bitmap index across multiple scalar columns (e.g., ["tenant_id", "status"]).
+    pub fn add_composite_index(&self, columns: Vec<String>) -> Result<()> {
+        self.runtime()
+            .block_on(self.add_composite_index_async(columns))
+    }
+
+    /// Async implementation of add_composite_index
+    pub async fn add_composite_index_async(&self, columns: Vec<String>) -> Result<()> {
+        if columns.len() < 2 {
+            anyhow::bail!("Composite index requires at least 2 columns");
+        }
+        let composite_name = columns.join(",");
+        let alg = IndexAlgorithm::CompositeBitmap {
+            columns: columns.clone(),
+        };
+        self.add_index(composite_name, alg).await
     }
 
     /// Remove all indexing strategies from a column.
@@ -663,16 +724,13 @@ impl Table {
 
         // Scan latest manifest entries for physical index files
         let mut inferred_specs: HashMap<String, Vec<IndexAlgorithm>> = HashMap::new();
-        println!("infer: checking {} entries", manifest.entries.len());
-
         for entry in &manifest.entries {
-            println!(
-                "infer: entry {} has {} index_files",
-                entry.file_path,
-                entry.index_files.len()
-            );
             for index_file in &entry.index_files {
                 if let Some(col_name) = &index_file.column_name {
+                    // Skip composite index virtual columns (they are managed via CompositeBitmap)
+                    if col_name.contains(',') {
+                        continue;
+                    }
                     // Skip columns that already have logical index metadata
                     if indexed_columns.contains(col_name) {
                         continue;
@@ -1847,63 +1905,76 @@ impl Table {
             return Ok(());
         }
 
-        let entries_results: Vec<Result<ManifestEntry>> = futures::future::join_all(all_entries.iter().map(|entry| {
-            let entry = entry.clone();
-            let table_uri = self.uri.clone();
-            let store = self.store.clone();
-            let data_store = self.data_store.clone().unwrap_or(self.store.clone());
-            let target_cols = target_columns.clone();
+        let entries_results: Vec<Result<ManifestEntry>> =
+            futures::future::join_all(all_entries.iter().map(|entry| {
+                let entry = entry.clone();
+                let table_uri = self.uri.clone();
+                let store = self.store.clone();
+                let data_store = self.data_store.clone().unwrap_or(self.store.clone());
+                let target_cols = target_columns.clone();
 
-            async move {
-                let mut current_entry = entry.clone();
-                let file_path_str = current_entry.file_path.clone();
-                let segment_id = file_path_str.split('/').next_back().unwrap_or(&file_path_str)
-                    .strip_suffix(".parquet").unwrap_or(&file_path_str);
+                async move {
+                    let mut current_entry = entry.clone();
+                    let file_path_str = current_entry.file_path.clone();
+                    let segment_id = file_path_str
+                        .split('/')
+                        .next_back()
+                        .unwrap_or(&file_path_str)
+                        .strip_suffix(".parquet")
+                        .unwrap_or(&file_path_str);
 
-                let mut cols_to_index = self.indexing.index_columns.read().clone();
-                for col in target_cols {
-                    if !cols_to_index.contains(&col) {
-                        cols_to_index.push(col);
+                    let mut cols_to_index = self.indexing.index_columns.read().clone();
+                    for col in target_cols {
+                        if !cols_to_index.contains(&col) {
+                            cols_to_index.push(col);
+                        }
                     }
+
+                    let config = SegmentConfig::new(&table_uri, segment_id)
+                        .with_parquet_path(current_entry.file_path.clone())
+                        .with_data_store(data_store)
+                        .with_index_all(self.indexing.index_all)
+                        .with_columns_to_index(cols_to_index);
+
+                    let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
+                    let mut writer = HybridSegmentWriter::new(config)
+                        .with_index_configs(self.indexing.index_configs.read().clone())
+                        .with_record_count(current_entry.record_count as usize)
+                        .with_existing_stats(current_entry.column_stats.clone());
+                    writer.primary_key = self.primary_key.read().clone();
+                    writer.set_store(store.clone());
+                    let stream = reader.stream_row_groups(None, None).await?;
+                    let mut stream = stream.boxed();
+                    let mut current_offset = 0;
+                    while let Some(batch) = stream.next().await {
+                        let batch = batch?;
+                        let batch_rows = batch.num_rows();
+                        writer.build_indexes(&batch, current_offset)?;
+                        current_offset += batch_rows;
+                    }
+
+                    writer.finish_indexing().await?;
+                    writer.upload_to_store().await?;
+
+                    // Invalidate the cache for this segment
+                    let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
+                    crate::core::cache::PARQUET_META_CACHE
+                        .invalidate(&cache_key)
+                        .await;
+
+                    let updated_entry = writer.to_manifest_entry();
+                    tracing::debug!(
+                    "backfill_indexes_async: file_path={}, generated_files={:?}, index_files={:?}",
+                    current_entry.file_path,
+                    writer.get_generated_files(),
+                    updated_entry.index_files
+                );
+                    current_entry.index_files = updated_entry.index_files;
+
+                    Ok(current_entry)
                 }
-
-                let config = SegmentConfig::new(&table_uri, segment_id)
-                    .with_parquet_path(current_entry.file_path.clone())
-                    .with_data_store(data_store)
-                    .with_index_all(self.indexing.index_all)
-                    .with_columns_to_index(cols_to_index);
-
-                let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
-                let mut writer = HybridSegmentWriter::new(config)
-                    .with_index_configs(self.indexing.index_configs.read().clone())
-                    .with_record_count(current_entry.record_count as usize)
-                    .with_existing_stats(current_entry.column_stats.clone());
-                writer.primary_key = self.primary_key.read().clone();
-                writer.set_store(store.clone());
-                let stream = reader.stream_row_groups(None, None).await?;
-                let mut stream = stream.boxed();
-                let mut current_offset = 0;
-                while let Some(batch) = stream.next().await {
-                    let batch = batch?;
-                    let batch_rows = batch.num_rows();
-                    writer.build_indexes(&batch, current_offset)?;
-                    current_offset += batch_rows;
-                }
-
-                writer.finish_indexing().await?;
-                writer.upload_to_store().await?;
-
-                // Invalidate the cache for this segment
-                let cache_key = format!("{}/{}", table_uri, current_entry.file_path);
-                crate::core::cache::PARQUET_META_CACHE.invalidate(&cache_key).await;
-
-                let updated_entry = writer.to_manifest_entry();
-                println!("backfill_indexes_async: file_path={}, generated_files={:?}, index_files={:?}", current_entry.file_path, writer.get_generated_files(), updated_entry.index_files);
-                current_entry.index_files = updated_entry.index_files;
-
-                Ok(current_entry)
-            }
-        })).await;
+            }))
+            .await;
 
         let mut updated_entries = Vec::new();
         for res in entries_results {

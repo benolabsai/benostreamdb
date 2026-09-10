@@ -934,7 +934,7 @@ impl Table {
         }
 
         let expr = expr.unwrap();
-        let and_filters = expr.extract_and_conditions();
+        let and_filters = reader.rewrite_composite_filters(expr.extract_and_conditions());
 
         // Try to use index for the FIRST filter that has one
         let mut batches = Vec::new();

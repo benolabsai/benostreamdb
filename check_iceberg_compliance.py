@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-Comprehensive Iceberg Spec Compliance Checker for HyperStreamDB
+Iceberg Specification Feature & Semantic Conformance Checker for HyperStreamDB
 
-This script checks HyperStreamDB's implementation against the official Apache Iceberg
-specification (v1, v2, and v3) to verify 100% compliance.
+This script inspects HyperStreamDB's implementation against the official Apache Iceberg
+table specification (v1, v2, and v3) to verify feature completeness and semantic support.
 
-If 100% compliant:
-1. Run full regression test suite
-2. If regression tests pass, run performance benchmarks
+Workflow:
+1. Validate required and optional Iceberg V1/V2/V3 features
+2. Run full regression test suite
+3. Run performance benchmarks
 
 Exit codes:
-0 - 100% compliant, all tests passed
-1 - Compliance issues found
+0 - Specification features supported and all tests passed
+1 - Conformance issues found
 2 - Regression tests failed
 3 - Performance benchmarks failed
 """

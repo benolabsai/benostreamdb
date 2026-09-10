@@ -4,6 +4,35 @@ Milestone log for HyperStreamDB. Newest entries first.
 
 ---
 
+## 2026-09-10 — v0.7.0 Release & Production Hardening
+
+HyperStreamDB v0.7.0 brings multi-vector search with RRF scoring coordination, composite scalar roaring bitmap indexes, Apache Polaris / Lakekeeper REST catalog OAuth2 authentication, and community TurboQuant™ scalar quantization. Additionally, following in-depth architectural and code review, significant correctness and production-hardening passes were executed across the engine.
+
+### Shipped
+- **Multi-Vector Search & Reciprocal Rank Fusion (RRF)**:
+  - Concurrent multi-vector search across distinct vector columns with RRF score combination ($1 / (k + \text{rank} + 1)$).
+  - DataFusion SQL optimizer and physical plan rewriter pushdown for multiple vector distance expressions (`VectorScanExec`).
+  - Integration test suite: `tests/test_multi_vector_search.rs`.
+- **Composite Scalar Roaring Bitmap Indexes**:
+  - `IndexAlgorithm::CompositeBitmap` with exact `"identity"` tokenization to support multi-column point and range queries.
+  - Multi-column index file generation and query filter rewriting in reader.
+  - Integration test suite: `tests/test_composite_index.rs`.
+- **Apache Polaris & Lakekeeper OAuth2 Client Credentials**:
+  - Full client credentials grant flow (`/v1/oauth/tokens`) conforming to Iceberg REST Catalog spec.
+  - Automatic bearer token caching and background refresh within 60s of expiration.
+  - REST catalog unit test coverage: `src/core/catalog/rest.rs`.
+- **Core Community TurboQuant™ (TQ4 & TQ8)**:
+  - Scalar quantization integrated into HNSW indexing pipeline.
+- **Production Hardening & Review Adaptations**:
+  - **Dynamic Vector Metric Propagation**: Extracted metric from `IndexAlgorithm` into `HnswIvfIndex::build` (supporting `L2`, `Cosine`, `InnerProduct`, `L1`, `Hamming`, `Jaccard`), implemented `FromStr` on `VectorMetric`, and updated Puffin/Parquet index metadata deserialization.
+  - **Global KNN Ordering**: Refactored `merge_and_rerank_vector_results` to guarantee monotonic ascending distance order across all returned batches using contiguous chunking rather than unordered `HashMap` bucketing.
+  - **Metric Parity Test Suite**: Added `tests/test_vector_metrics_parity.rs` establishing 100% nearest-neighbor accuracy against exact brute-force ground truth across all 6 metrics.
+  - **Strict Query Failure Semantics**: Segment vector search failures now fail the query immediately with actionable diagnostics rather than silently omitting rows.
+  - **Zero-Warning Standard**: Cleaned up diagnostic `println!` statements in favor of structured `tracing::debug!`, verified 0 warnings under `#![deny(warnings)]` and clean `cargo fmt`.
+  - **Iceberg Architecture Positioning**: Refined README and compliance tool to accurately position HyperStreamDB as an indexed lakehouse storage engine with an advisory/reconstructible index overlay.
+
+---
+
 ## 2026-09-07 — OpenSearch / Elasticsearch 7.10-compatible Search API (M0–M3 complete)
 
 The `hypersearch` add-on (`hyperstreamdb-search`) now implements the full v1

@@ -428,7 +428,7 @@ hdb repair s3://bucket/table
 The following items represent the active, vetted roadmap for HyperStreamDB. Speculative dead ends (such as proprietary cloud locks, bespoke C++ database extensions, or third-party format readers) have been pruned in favor of standards-based interoperability.
 
 ### 1. Catalog & Interoperability
-- [ ] **[Free] Apache Polaris Integration**: Add OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper).
+- [x] **[Free] Apache Polaris Integration**: Add OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper). ✅ (v0.7.0)
 
 ### 2. Performance & Competitive Benchmarking
 - [ ] **[Free] 100k / 1M Competitive Benchmarks vs. Elasticsearch 7.10**: Execute long-running benchmark runs on NVMe and MinIO S3 storage using `benchmarks/competitive/benchmark_es710.py` and document findings.
@@ -438,9 +438,9 @@ The following items represent the active, vetted roadmap for HyperStreamDB. Spec
 - [ ] **[Free] Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis.
 
 ### 4. Advanced Search & Query Features
-- [ ] **[Free] TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression in core open-source engine.
-- [ ] **[Free] Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`).
-- [ ] **[Free] Multi-Vector Search**: Query planner and scoring coordination to search and rank across multiple embedding columns simultaneously.
+- [x] **[Free] TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression in core open-source engine. ✅ (v0.7.0)
+- [x] **[Free] Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`). ✅ (v0.7.0)
+- [x] **[Free] Multi-Vector Search**: Query planner and scoring coordination to search and rank across multiple embedding columns simultaneously using Reciprocal Rank Fusion (RRF). ✅ (v0.7.0)
 
 ### 5. Graph RAG & Lakehouse Graph Analytics [Free]
 

@@ -94,9 +94,64 @@ pub async fn create_catalog_async(
         CatalogType::Rest => {
             let url = config
                 .get("url")
-                .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for REST catalog"))?;
+                .or_else(|| config.get("uri"))
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' or 'uri' config for REST catalog"))?;
             let prefix = config.get("prefix").cloned();
-            Ok(Box::new(rest::RestCatalogClient::new(url.clone(), prefix)))
+
+            let auth = if let Some(token) = config.get("token").cloned() {
+                Some(rest::RestCatalogAuth::BearerToken(token))
+            } else if let Some(credential) = config.get("credential") {
+                let parts: Vec<&str> = credential.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let client_id = parts[0].to_string();
+                    let client_secret = parts[1].to_string();
+                    let oauth2_url = config
+                        .get("oauth2-server-uri")
+                        .or_else(|| config.get("oauth2_server_uri"))
+                        .cloned();
+                    let scope = config.get("scope").cloned();
+                    let token_endpoint = oauth2_url.unwrap_or_else(|| {
+                        format!("{}/v1/oauth/tokens", url.trim_end_matches('/'))
+                    });
+                    Some(rest::RestCatalogAuth::OAuth2 {
+                        token_endpoint,
+                        client_id,
+                        client_secret,
+                        scope,
+                    })
+                } else {
+                    anyhow::bail!(
+                        "Invalid 'credential' format. Expected <client_id>:<client_secret>"
+                    );
+                }
+            } else if let (Some(client_id), Some(client_secret)) = (
+                config.get("client_id").or_else(|| config.get("client-id")),
+                config
+                    .get("client_secret")
+                    .or_else(|| config.get("client-secret")),
+            ) {
+                let oauth2_url = config
+                    .get("oauth2-server-uri")
+                    .or_else(|| config.get("oauth2_server_uri"))
+                    .cloned();
+                let scope = config.get("scope").cloned();
+                let token_endpoint = oauth2_url
+                    .unwrap_or_else(|| format!("{}/v1/oauth/tokens", url.trim_end_matches('/')));
+                Some(rest::RestCatalogAuth::OAuth2 {
+                    token_endpoint,
+                    client_id: client_id.clone(),
+                    client_secret: client_secret.clone(),
+                    scope,
+                })
+            } else {
+                None
+            };
+
+            Ok(Box::new(rest::RestCatalogClient::with_auth(
+                url.clone(),
+                prefix,
+                auth,
+            )))
         }
         CatalogType::Glue => {
             let catalog_id = config.get("catalog_id").cloned();

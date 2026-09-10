@@ -931,16 +931,13 @@ impl HybridReader {
             for part in &parts {
                 let mut found = false;
                 for (i, f) in filters.iter().enumerate() {
-                    if f.column == *part
-                        && f.min == f.max
-                        && f.min.is_some()
-                        && f.min_inclusive
-                        && f.max_inclusive
-                    {
-                        matched_indices.push(i);
-                        values.push(f.min.as_ref().unwrap().clone());
-                        found = true;
-                        break;
+                    if f.column == *part && f.min == f.max && f.min_inclusive && f.max_inclusive {
+                        if let Some(ref min_val) = f.min {
+                            matched_indices.push(i);
+                            values.push(min_val.clone());
+                            found = true;
+                            break;
+                        }
                     }
                 }
                 if !found {

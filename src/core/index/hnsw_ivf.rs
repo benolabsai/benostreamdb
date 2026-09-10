@@ -512,12 +512,16 @@ impl HnswIvfIndex {
             VectorMetric::L2 => {
                 crate::core::index::distance::l2_distance_batch(query_f32, &self.centroids)
             }
-            VectorMetric::Cosine => {
-                crate::core::index::distance::cosine_similarity_batch(query_f32, &self.centroids)
-            }
-            VectorMetric::InnerProduct => {
-                crate::core::index::distance::dot_product_batch(query_f32, &self.centroids)
-            }
+            VectorMetric::Cosine => self
+                .centroids
+                .par_iter()
+                .map(|c| crate::core::index::distance::cosine_distance(query_f32, c))
+                .collect(),
+            VectorMetric::InnerProduct => self
+                .centroids
+                .par_iter()
+                .map(|c| -crate::core::index::distance::dot_product(query_f32, c))
+                .collect(),
             VectorMetric::L1 => self
                 .centroids
                 .par_iter()
@@ -607,9 +611,10 @@ impl HnswIvfIndex {
         candidates.dedup_by_key(|x| x.0); // Remove duplicates
         candidates.truncate(k);
         let t_fine = t_fine_start.elapsed();
-        println!(
+        tracing::debug!(
             "Search Profile -> Coarse: {:?}, Fine: {:?}",
-            t_coarse, t_fine
+            t_coarse,
+            t_fine
         );
         Ok(candidates)
     }
@@ -776,12 +781,7 @@ impl HnswIvfIndex {
                     }
 
                     if let Some(m_str) = blob.properties.get("vector-metric") {
-                        metric = match m_str.as_str() {
-                            "l2" => VectorMetric::L2,
-                            "cosine" => VectorMetric::Cosine,
-                            "ip" => VectorMetric::InnerProduct,
-                            _ => VectorMetric::L2,
-                        };
+                        metric = m_str.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
                     }
                 }
                 "hnsw-cluster-graph" => {
@@ -992,14 +992,7 @@ impl HnswIvfIndex {
                 for kv in kv_list {
                     if kv.key == "vector_metric" {
                         if let Some(ref val) = kv.value {
-                            loaded_metric = match val.as_str() {
-                                "cosine" => VectorMetric::Cosine,
-                                "ip" => VectorMetric::InnerProduct,
-                                "l1" => VectorMetric::L1,
-                                "hamming" => VectorMetric::Hamming,
-                                "jaccard" => VectorMetric::Jaccard,
-                                _ => VectorMetric::L2,
-                            };
+                            loaded_metric = val.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
                         }
                     } else if kv.key == "quantizer_config" {
                         if let Some(ref val) = kv.value {
@@ -1200,7 +1193,7 @@ impl HnswIvfIndex {
             cluster_graphs.insert(cid, val);
         }
 
-        println!("Loaded {} cluster graphs (Async)", cluster_graphs.len());
+        tracing::debug!("Loaded {} cluster graphs (Async)", cluster_graphs.len());
 
         let index = HnswIvfIndex {
             centroids,
@@ -1266,11 +1259,7 @@ impl HnswIvfIndex {
                 for kv in kv_list {
                     if kv.key == "vector_metric" {
                         if let Some(ref val) = kv.value {
-                            loaded_metric = match val.as_str() {
-                                "cosine" => VectorMetric::Cosine,
-                                "ip" => VectorMetric::InnerProduct,
-                                _ => VectorMetric::L2,
-                            };
+                            loaded_metric = val.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
                         }
                         break;
                     }
@@ -1279,7 +1268,7 @@ impl HnswIvfIndex {
             loaded_metric
         };
 
-        println!("Loaded {} centroids of dimension {}", n_lists, dim);
+        tracing::debug!("Loaded {} centroids of dimension {}", n_lists, dim);
 
         let quantizer_path = format!("{}.quantizer", base_path_str);
         let quantizer = if std::path::Path::new(&quantizer_path).exists() {
@@ -1410,7 +1399,7 @@ impl HnswIvfIndex {
             cluster_graphs.insert(cluster_id, (hnsw, row_id_mapping));
         }
 
-        println!("Loaded {} cluster graphs", cluster_graphs.len());
+        tracing::debug!("Loaded {} cluster graphs", cluster_graphs.len());
 
         Ok(HnswIvfIndex {
             centroids,

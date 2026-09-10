@@ -422,9 +422,26 @@ impl crate::core::segment::HybridSegmentWriter {
                 // Fetch tokenizer if configured; default to the English analyzer
                 // (standard tokenization + stop-word filter) so keyword/BM25
                 // search gets sensible token streams out of the box.
-                let tokenizer_name = config
-                    .and_then(|c| c.tokenizer.clone())
-                    .unwrap_or_else(|| "analyzer:english".to_string());
+                let is_composite = col_name.contains(',')
+                    || config
+                        .map(|c| {
+                            c.algorithms.iter().any(|a| {
+                                matches!(
+                                    a,
+                                    crate::core::manifest::IndexAlgorithm::CompositeBitmap { .. }
+                                )
+                            })
+                        })
+                        .unwrap_or(false);
+
+                let tokenizer_name =
+                    config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| {
+                        if is_composite {
+                            "identity".to_string()
+                        } else {
+                            "analyzer:english".to_string()
+                        }
+                    });
                 tracing::info!(
                     "  Using tokenizer: '{}' for column '{}'",
                     tokenizer_name,

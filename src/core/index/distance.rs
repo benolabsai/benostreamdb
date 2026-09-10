@@ -118,7 +118,7 @@ unsafe fn l2_distance_squared_avx2(a: &[f32], b: &[f32]) -> f32 {
 
 #[inline(always)]
 pub fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
-    1.0 - cosine_similarity(a, b)
+    (1.0 - cosine_similarity(a, b)).max(0.0)
 }
 
 #[inline(always)]
