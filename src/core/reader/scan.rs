@@ -640,116 +640,132 @@ impl HybridReader {
         let mut current_row_offset = 0usize;
 
         let q_vec = match query {
-            crate::core::index::VectorValue::Float32(v) => v,
+            crate::core::index::VectorValue::Float32(v) => v.clone(),
             _ => anyhow::bail!("Flat search only supports Float32 vectors currently"),
         };
 
         while let Some(batch_res) = stream.next().await {
             let batch = batch_res?;
             let rows = batch.num_rows();
+            if rows == 0 {
+                continue;
+            }
 
             if let Some(col) = batch.column_by_name(column) {
-                let vectors: Vec<Vec<f32>> = match col.data_type() {
-                    arrow::datatypes::DataType::FixedSizeList(_, _) => {
-                        let list = col
-                            .as_any()
-                            .downcast_ref::<arrow::array::FixedSizeListArray>()
-                            .context("Invalid cast")?;
-                        (0..list.len())
-                            .map(|i| {
-                                let item = list.value(i);
-                                if let Some(floats) =
-                                    item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                {
-                                    floats.values().to_vec()
-                                } else if let Some(doubles) =
-                                    item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                {
-                                    doubles.values().iter().map(|&d| d as f32).collect()
-                                } else {
-                                    vec![0.0; item.len()]
-                                }
-                            })
-                            .collect()
-                    }
-                    arrow::datatypes::DataType::List(_) => {
-                        let list = col
-                            .as_any()
-                            .downcast_ref::<arrow::array::ListArray>()
-                            .context("Invalid cast")?;
-                        (0..list.len())
-                            .map(|i| {
-                                let item = list.value(i);
-                                if let Some(floats) =
-                                    item.as_any().downcast_ref::<arrow::array::Float32Array>()
-                                {
-                                    floats.values().to_vec()
-                                } else if let Some(doubles) =
-                                    item.as_any().downcast_ref::<arrow::array::Float64Array>()
-                                {
-                                    doubles.values().iter().map(|&d| d as f32).collect()
-                                } else {
-                                    vec![0.0; item.len()]
-                                }
-                            })
-                            .collect()
-                    }
-                    _ => vec![],
-                };
+                let col = col.clone();
+                let q_vec_clone = q_vec.clone();
+                let allowed_bm = allowed_bitmap.clone();
+                let offset = current_row_offset;
 
-                for (i, v) in vectors.iter().enumerate() {
-                    let row_id = current_row_offset + i;
-
-                    // Check filter (allowed_bitmap)
-                    if let Some(bm) = allowed_bitmap {
-                        if !bm.contains(row_id as u32) {
-                            continue;
-                        }
-                    }
-
-                    let dist = match metric {
-                        VectorMetric::L2 => v
-                            .iter()
-                            .zip(q_vec.iter())
-                            .map(|(a, b)| (a - b) * (a - b))
-                            .sum::<f32>(),
-                        VectorMetric::Cosine => {
-                            let dot: f32 = v.iter().zip(q_vec.iter()).map(|(a, b)| a * b).sum();
-                            let mag_v: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                            let mag_q: f32 = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-                            1.0 - (dot / (mag_v * mag_q + 1e-10))
-                        }
-                        VectorMetric::InnerProduct => {
-                            -v.iter().zip(q_vec.iter()).map(|(a, b)| a * b).sum::<f32>()
-                        }
-                        VectorMetric::L1 => v
-                            .iter()
-                            .zip(q_vec.iter())
-                            .map(|(a, b)| (a - b).abs())
-                            .sum::<f32>(),
-                        VectorMetric::Hamming => {
-                            v.iter().zip(q_vec.iter()).filter(|(a, b)| a != b).count() as f32
-                        }
-                        VectorMetric::Jaccard => {
-                            let mut intersection = 0.0;
-                            let mut union = 0.0;
-                            for (x, y) in v.iter().zip(q_vec.iter()) {
-                                if *x > 0.0 || *y > 0.0 {
-                                    if *x == *y && *x > 0.0 {
-                                        intersection += 1.0;
+                let batch_matches = tokio::task::spawn_blocking(move || {
+                    let vectors: Vec<Vec<f32>> = match col.data_type() {
+                        arrow::datatypes::DataType::FixedSizeList(_, _) => {
+                            let list = col
+                                .as_any()
+                                .downcast_ref::<arrow::array::FixedSizeListArray>()
+                                .context("Invalid cast")?;
+                            (0..list.len())
+                                .map(|i| {
+                                    let item = list.value(i);
+                                    if let Some(floats) =
+                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
+                                    {
+                                        floats.values().to_vec()
+                                    } else if let Some(doubles) =
+                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
+                                    {
+                                        doubles.values().iter().map(|&d| d as f32).collect()
+                                    } else {
+                                        vec![0.0; item.len()]
                                     }
-                                    union += 1.0;
-                                }
-                            }
-                            if union == 0.0 {
-                                0.0
-                            } else {
-                                1.0 - intersection / union
+                                })
+                                .collect()
+                        }
+                        arrow::datatypes::DataType::List(_) => {
+                            let list = col
+                                .as_any()
+                                .downcast_ref::<arrow::array::ListArray>()
+                                .context("Invalid cast")?;
+                            (0..list.len())
+                                .map(|i| {
+                                    let item = list.value(i);
+                                    if let Some(floats) =
+                                        item.as_any().downcast_ref::<arrow::array::Float32Array>()
+                                    {
+                                        floats.values().to_vec()
+                                    } else if let Some(doubles) =
+                                        item.as_any().downcast_ref::<arrow::array::Float64Array>()
+                                    {
+                                        doubles.values().iter().map(|&d| d as f32).collect()
+                                    } else {
+                                        vec![0.0; item.len()]
+                                    }
+                                })
+                                .collect()
+                        }
+                        _ => vec![],
+                    };
+
+                    let mut local_matches = Vec::with_capacity(vectors.len());
+                    for (i, v) in vectors.iter().enumerate() {
+                        let row_id = offset + i;
+
+                        // Check filter (allowed_bitmap)
+                        if let Some(ref bm) = allowed_bm {
+                            if !bm.contains(row_id as u32) {
+                                continue;
                             }
                         }
-                    };
-                    matches.push((row_id, dist));
-                }
+
+                        let dist = match metric {
+                            VectorMetric::L2 => v
+                                .iter()
+                                .zip(q_vec_clone.iter())
+                                .map(|(a, b)| (a - b) * (a - b))
+                                .sum::<f32>(),
+                            VectorMetric::Cosine => {
+                                let dot: f32 = v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum();
+                                let mag_v: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let mag_q: f32 = q_vec_clone.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                1.0 - (dot / (mag_v * mag_q + 1e-10))
+                            }
+                            VectorMetric::InnerProduct => {
+                                -v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum::<f32>()
+                            }
+                            VectorMetric::L1 => v
+                                .iter()
+                                .zip(q_vec_clone.iter())
+                                .map(|(a, b)| (a - b).abs())
+                                .sum::<f32>(),
+                            VectorMetric::Hamming => {
+                                v.iter().zip(q_vec_clone.iter()).filter(|(a, b)| a != b).count() as f32
+                            }
+                            VectorMetric::Jaccard => {
+                                let mut intersection = 0.0;
+                                let mut union = 0.0;
+                                for (x, y) in v.iter().zip(q_vec_clone.iter()) {
+                                    if *x > 0.0 || *y > 0.0 {
+                                        if *x == *y && *x > 0.0 {
+                                            intersection += 1.0;
+                                        }
+                                        union += 1.0;
+                                    }
+                                }
+                                if union == 0.0 {
+                                    0.0
+                                } else {
+                                    1.0 - intersection / union
+                                }
+                            }
+                        };
+                        local_matches.push((row_id, dist));
+                    }
+                    Ok::<Vec<(usize, f32)>, anyhow::Error>(local_matches)
+                })
+                .await
+                .context("Blocking vector distance computation panicked")??;
+
+                matches.extend(batch_matches);
             }
             current_row_offset += rows;
         }
@@ -781,8 +797,8 @@ impl HybridReader {
             let sub_filters = self.rewrite_composite_filters(sub_filters);
             let mut combined_bitmap: Option<RoaringBitmap> = None;
 
-            for sub_f in sub_filters {
-                let res = self.get_scalar_filter_bitmap(&sub_f).await;
+            for sub_f in &sub_filters {
+                let res = self.get_scalar_filter_bitmap(sub_f).await;
                 if let Ok(Some(bm)) = res {
                     match combined_bitmap {
                         Some(ref mut existing) => {
@@ -1398,8 +1414,8 @@ impl HybridReader {
                         }
                         batch_distances = filtered_distances;
                     }
-                    Err(_) => {
-                        // Silently skip if evaluation fails (to maintain backward compatibility with unknown exprs)
+                    Err(e) => {
+                        tracing::debug!("Post-filter evaluate_expr failed: {}", e);
                     }
                 }
             }

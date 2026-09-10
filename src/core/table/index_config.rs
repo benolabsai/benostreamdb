@@ -350,6 +350,18 @@ impl Table {
                         .strip_suffix(".parquet")
                         .unwrap_or(&file_path_str);
 
+                    let rel_parent = if let Some(pos) = file_path_str.rfind('/') {
+                        &file_path_str[..pos]
+                    } else {
+                        ""
+                    };
+                    let full_base_uri = if rel_parent.is_empty() {
+                        table_uri.clone()
+                    } else {
+                        let base = table_uri.trim_end_matches('/');
+                        format!("{}/{}", base, rel_parent)
+                    };
+
                     let mut cols_to_index = self.indexing.index_columns.read().clone();
                     for col in target_cols {
                         if !cols_to_index.contains(&col) {
@@ -357,7 +369,7 @@ impl Table {
                         }
                     }
 
-                    let config = SegmentConfig::new(&table_uri, segment_id)
+                    let config = SegmentConfig::new(&full_base_uri, segment_id)
                         .with_parquet_path(current_entry.file_path.clone())
                         .with_data_store(data_store)
                         .with_index_all(self.indexing.index_all)

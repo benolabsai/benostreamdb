@@ -453,8 +453,9 @@ impl Table {
         };
 
         // --- SMART HYBRID TRIGGER ---
-        // If we have both a vector filter AND a text filter on a BM25/Inverted indexed column,
-        // we switch to the Hybrid Coordinator path.
+        // If we have both a vector filter AND a single text filter targeting a BM25/Inverted indexed column,
+        // we switch to the Hybrid Coordinator path. If there are multiple filter columns or non-BM25 conditions,
+        // we must stay on the standard SQL pushdown + vector search path.
         if let (Some(ref vs_params_list), Some(ref e)) = (&vector_filters, &expr) {
             let manifest = self.manifest().await?;
             let filtered_cols = e.get_referenced_columns();
@@ -464,33 +465,24 @@ impl Table {
                 .iter()
                 .find(|s| s.schema_id == manifest.current_schema_id);
 
-            let has_bm25_index = current_schema
-                .map(|s| {
-                    s.fields.iter().any(|f| {
-                        let matches_col = filtered_cols.contains(&f.name);
-                        let has_index = f
-                            .indexes
-                            .iter()
-                            .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }));
-                        if matches_col {
-                            tracing::debug!(
-                                "Smart Trigger Check: Column '{}' has BM25 index: {}",
-                                f.name,
-                                has_index
-                            );
-                            if !has_index {
-                                tracing::debug!("  Found indexes: {:?}", f.indexes);
-                            }
-                        }
-                        matches_col && has_index
+            let single_bm25_col = if filtered_cols.len() == 1 {
+                let col = filtered_cols.iter().next().unwrap();
+                current_schema.and_then(|s| {
+                    s.fields.iter().find(|f| {
+                        &f.name == col
+                            && f.indexes
+                                .iter()
+                                .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }))
                     })
-                })
-                .unwrap_or(false);
+                }).map(|f| f.name.clone())
+            } else {
+                None
+            };
 
-            if has_bm25_index {
+            if let Some(target_col) = single_bm25_col {
                 tracing::info!(
-                    "Smart Trigger: Executing Hybrid Search (RRF) for columns {:?}",
-                    filtered_cols
+                    "Smart Trigger: Executing Hybrid Search (RRF) for column '{}'",
+                    target_col
                 );
                 let coordinator = HybridSearchCoordinator::new();
 
@@ -499,7 +491,7 @@ impl Table {
                     let conditions = e.extract_and_conditions();
                     let mut terms = Vec::new();
                     for f in conditions {
-                        if filtered_cols.contains(&f.column) {
+                        if f.column == target_col {
                             if let Some(v) = &f.min {
                                 if let Some(s) = v.as_str() {
                                     terms.push(s.to_string());
@@ -522,7 +514,7 @@ impl Table {
                 };
 
                 let keyword_params = KeywordSearchParams::new(
-                    filtered_cols.iter().next().unwrap().clone(),
+                    target_col,
                     extracted_query,
                 );
 
