@@ -566,7 +566,7 @@ impl PyTable {
                 TOKIO_RUNTIME.block_on(
                     self.table.read_with_config_stream_async(
                         filter_str.as_deref(),
-                        vs_params,
+                        vs_params.map(|p| vec![p]),
                         columns_clone
                             .as_ref()
                             .map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
@@ -1310,7 +1310,7 @@ impl PyTable {
     }
 
     fn table_uri(&self) -> String {
-        self.table.table_uri()
+        self.table.table_uri().to_string()
     }
 
     /// Explain query plan showing index usage and execution strategy
@@ -1376,6 +1376,6 @@ impl PyTable {
             None
         };
 
-        Ok(TOKIO_RUNTIME.block_on(self.table.explain(filter.as_deref(), vs_params)))
+        Ok(TOKIO_RUNTIME.block_on(self.table.explain(filter.as_deref(), vs_params.map(|p| vec![p]))))
     }
 }

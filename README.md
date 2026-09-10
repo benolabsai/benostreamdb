@@ -5,7 +5,7 @@
 # HyperStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
-A production-ready indexed data lake format that combines the transactional guarantees of Apache Iceberg with persistent indexes (scalar bitmaps + HNSW vector search) for blazing-fast queries on object storage.
+An indexed lakehouse storage and search engine designed for production workloads, combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage.
 
 ## 🎯 Architecture: The Indexed Lakehouse
 
@@ -21,7 +21,11 @@ Authoritative Storage        Advisory Index Overlay
   Parquet Files              Bitmap / Bloom / BM25 / HNSW / TQ
 ```
 
-> **Core Invariant**: Indexes are **advisory and reconstructible**. Authoritative data always remains in standard Parquet files coordinated by table metadata. If an index is absent, corrupted, or disabled, queries fall back directly to Parquet scanning.
+> ### Core Architecture Invariants
+> 1. **The Overlay Invariant**: Index files are derived, reconstructible state. They may be absent, stale, or deleted without compromising snapshot correctness. Queries may degrade to Parquet scanning or background recovery, but never return incorrect results.
+> 2. **Publication Invariant**: A published manifest may reference only immutable artifacts that have already been successfully uploaded and verified to storage.
+> 3. **Durability Invariant**: WAL truncation is permitted only after the corresponding data is durably represented by a committed manifest snapshot.
+> 4. **Maintenance Invariant**: Maintenance operations may delete an artifact only if it is neither referenced by any active snapshot nor currently in-flight.
 
 | Feature | Iceberg/Delta | HyperStreamDB |
 |---------|---------------|---------------|
@@ -38,16 +42,18 @@ Authoritative Storage        Advisory Index Overlay
 
 ## ⚡ Iceberg V2/V3 Compatibility
 
-HyperStreamDB implements a substantial subset of Apache Iceberg table format V2 and V3 specifications:
+HyperStreamDB implements **100% of the core required Apache Iceberg table format V2 and V3 specifications**:
 
 | Feature | V1 | V2 | V3 | HyperStreamDB |
 |---------|----|----|----|--------------| 
 | **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
 | **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
 | **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ HyperLogLog |
-| **Row Lineage** | ❌ | ❌ | ✅ | ✅ UUID + Sequence |
-| **Default Values** | ❌ | ❌ | ✅ | ✅ Schema Fields |
-| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality |
+| **Row Lineage** | ❌ | ❌ | ✅ | ✅ `_row_id`, `_last_updated_sequence_number`, `next-row-id`, `first-row-id` |
+| **Default Values** | ❌ | ❌ | ✅ | ✅ `initial-default` & `write-default` |
+| **Deletion Vectors** | ❌ | ❌ | ✅ | ✅ Puffin Format Integrated |
+| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality Deletes |
+| **Nanosecond Timestamps** | ❌ | ❌ | ✅ | ✅ `timestamp_ns` & `timestamptz_ns` |
 
 ### New APIs
 

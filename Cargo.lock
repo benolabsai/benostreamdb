@@ -3688,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb-flight"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -3703,7 +3703,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb-search"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "arrow",

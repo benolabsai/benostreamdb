@@ -831,6 +831,53 @@ impl Table {
             }
         }
 
+        // 3. Upload data files synchronously BEFORE committing manifest/metadata.
+        // Invariant: A published manifest may reference only immutable artifacts that
+        // have already been successfully uploaded and verified.
+        if self.uri.contains("://") && !self.uri.starts_with("file://") {
+            let store_clone = self.store.clone();
+            for (local_path_str, remote_path_str) in files_to_upload {
+                let local_path = std::path::Path::new(&local_path_str);
+                let mut file = tokio::fs::File::open(&local_path)
+                    .await
+                    .with_context(|| format!("Failed to open local staged file for upload: {}", local_path_str))?;
+                let remote_path = object_store::path::Path::from(remote_path_str.as_str());
+                let mut upload = store_clone
+                    .put_multipart(&remote_path)
+                    .await
+                    .with_context(|| format!("Failed to initiate multipart upload to {}", remote_path_str))?;
+                use tokio::io::AsyncReadExt;
+                let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
+                let mut total_uploaded = 0;
+                loop {
+                    let n = file
+                        .read(&mut buf)
+                        .await
+                        .with_context(|| format!("Failed to read local staged file: {}", local_path_str))?;
+                    if n == 0 {
+                        break;
+                    }
+                    upload
+                        .put_part(buf[..n].to_vec().into())
+                        .await
+                        .with_context(|| format!("Failed to upload part to {}", remote_path_str))?;
+                    total_uploaded += n;
+                }
+                upload
+                    .complete()
+                    .await
+                    .with_context(|| format!("Failed to complete multipart upload to {}", remote_path_str))?;
+                tracing::info!(
+                    "Successfully uploaded staged file {} ({} bytes) to {}",
+                    local_path_str,
+                    total_uploaded,
+                    remote_path_str
+                );
+                // Cleanup local staging file only after verified upload
+                let _ = tokio::fs::remove_file(&local_path).await;
+            }
+        }
+
         // Detect if schema has evolved since last manifest load
         let manifest = manifest_manager
             .load_latest()
@@ -990,35 +1037,6 @@ impl Table {
                     ns,
                     table
                 );
-            }
-        }
-
-        // 3. Upload data files synchronously if remote
-        if self.uri.contains("://") && !self.uri.starts_with("file://") {
-            let store_clone = self.store.clone();
-            for (local_path_str, remote_path_str) in files_to_upload {
-                let local_path = std::path::Path::new(&local_path_str);
-                if let Ok(mut file) = tokio::fs::File::open(&local_path).await {
-                    let remote_path = object_store::path::Path::from(remote_path_str);
-                    // Stream file to object store directly (Fixes OOM issue)
-                    if let Ok(mut upload) = store_clone.put_multipart(&remote_path).await {
-                        use tokio::io::AsyncReadExt;
-                        let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
-                        loop {
-                            if let Ok(n) = file.read(&mut buf).await {
-                                if n == 0 {
-                                    break;
-                                }
-                                let _ = upload.put_part(buf[..n].to_vec().into()).await;
-                            } else {
-                                break;
-                            }
-                        }
-                        let _ = upload.complete().await;
-                    }
-                    // Cleanup local staging file
-                    let _ = tokio::fs::remove_file(&local_path).await;
-                }
             }
         }
 
