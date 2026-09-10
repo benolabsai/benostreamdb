@@ -53,8 +53,15 @@ impl ManifestManager {
                 .collect();
             let new_ver = current_ver + 1;
 
-            // Hardened De-duplication
+            // Hardened De-duplication and Precondition Validation
             for path in remove_paths {
+                if metadata.require_remove_paths_exist && !active_map.contains_key(path) {
+                    anyhow::bail!(
+                        "Compaction precondition failed: candidate file '{}' was concurrently removed or replaced in snapshot v{}",
+                        path,
+                        current_ver
+                    );
+                }
                 active_map.remove(path);
             }
 

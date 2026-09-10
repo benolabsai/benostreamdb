@@ -138,6 +138,7 @@ impl Table {
             updated_default_sort_order_id: Some(manifest.default_sort_order_id),
             updated_last_column_id: None,
             is_fast_append: false,
+            ..Default::default()
         };
 
         manifest_manager.commit(&[], &[], metadata).await?;

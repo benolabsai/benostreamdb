@@ -267,12 +267,17 @@ impl Table {
         Ok(())
     }
 
+    /// Remove orphan files (asynchronous)
+    pub async fn remove_orphan_files_async(&self, older_than_ms: i64) -> Result<()> {
+        let maintenance = Maintenance::new(&self.uri)?;
+        maintenance.remove_orphan_files(older_than_ms).await
+    }
+
     /// Remove orphan files
     pub fn remove_orphan_files(&self, older_than_days: u64) -> Result<()> {
         self.runtime().block_on(async {
-            let maintenance = Maintenance::new(&self.uri)?;
-            let older_than_ms = older_than_days * 24 * 60 * 60 * 1000;
-            maintenance.remove_orphan_files(older_than_ms as i64).await
+            let older_than_ms = (older_than_days as i64) * 24 * 60 * 60 * 1000;
+            self.remove_orphan_files_async(older_than_ms).await
         })
     }
 

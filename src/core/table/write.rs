@@ -104,9 +104,32 @@ impl Table {
 
     // Schema evolution logic moved to schema.rs
 
-    /// Async implementation of write (Buffered) with Schema Validation
+    /// Async implementation of write using the table's configured durability mode.
     #[tracing::instrument(skip(self, batches))]
     pub async fn write_async(&self, batches: Vec<RecordBatch>) -> Result<()> {
+        self.write_with_durability_async(batches, self.durability).await
+    }
+
+    /// Write batches with asynchronous durability (buffered in WAL worker without waiting for fsync).
+    /// Best for maximum streaming ingestion throughput.
+    #[tracing::instrument(skip(self, batches))]
+    pub async fn write_buffered_async(&self, batches: Vec<RecordBatch>) -> Result<()> {
+        self.write_with_durability_async(batches, crate::core::table::WalDurability::Async).await
+    }
+
+    /// Explicitly flush and sync pending WAL writes to durable storage.
+    pub async fn flush_wal_async(&self) -> Result<()> {
+        let wal = self.wal.lock().await;
+        wal.flush_async().await
+    }
+
+    /// Internal write implementation with explicit durability specification.
+    #[tracing::instrument(skip(self, batches))]
+    pub async fn write_with_durability_async(
+        &self,
+        batches: Vec<RecordBatch>,
+        durability: crate::core::table::WalDurability,
+    ) -> Result<()> {
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         INGEST_ROWS_TOTAL.inc_by(total_rows as u64);
 
@@ -444,16 +467,29 @@ impl Table {
             buffer.iter().map(|b| b.num_rows()).sum()
         };
 
-        let batches_for_wal = batches.clone();
+        let tx_id = uuid::Uuid::new_v4();
+        let batches_for_wal: Vec<RecordBatch> = batches
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                crate::core::wal::tag_batch_with_wal_tx(b, tx_id, i as u64).unwrap_or_else(|_| b.clone())
+            })
+            .collect();
         let batches_for_idx = batches.clone();
 
         let (wal_res, idx_res) = tokio::join!(
-            // WAL Task — fire-and-forget: send to the WAL worker but don't block on fdatasync.
-            // The WAL worker batches and syncs on its own interval (HYPERSTREAM_WAL_SYNC_INTERVAL_MS).
+            // WAL Task — appends according to durability configuration (Sync waits for disk sync, Async batches)
             async move {
                 let wal_lock = wal.lock().await;
                 for batch in batches_for_wal {
-                    wal_lock.append_fire_and_forget(batch).await?;
+                    match durability {
+                        crate::core::table::WalDurability::Sync => {
+                            wal_lock.append_sync(batch).await?;
+                        }
+                        crate::core::table::WalDurability::Async => {
+                            wal_lock.append_fire_and_forget(batch).await?;
+                        }
+                    }
                 }
                 wal_lock.should_compact()?;
                 Ok::<(), anyhow::Error>(())
@@ -554,14 +590,6 @@ impl Table {
     /// Flush buffer to disk
     #[tracing::instrument(skip(self))]
     pub async fn flush_async(&self) -> Result<()> {
-        // Type alias for stream results to avoid complex type annotation
-        type PartitionSegment = (
-            crate::core::manifest::ManifestEntry,
-            Vec<String>,
-            String,
-            RecordBatch,
-            HashMap<String, Value>,
-        );
         // Extract batches from buffer
         let batches_to_write: Vec<RecordBatch> = {
             let mut buffer = self.write_buffer.write();
@@ -570,6 +598,30 @@ impl Table {
             }
             std::mem::take(&mut *buffer)
         };
+
+        // If flush fails at any point (upload, network, catalog lock), restore batches back into write_buffer
+        // so in-memory visibility is preserved and subsequent calls can retry!
+        let flush_res = self.flush_internal_async(&batches_to_write).await;
+        if let Err(e) = flush_res {
+            let mut buffer = self.write_buffer.write();
+            let mut restored = batches_to_write;
+            restored.append(&mut *buffer);
+            *buffer = restored;
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    async fn flush_internal_async(&self, batches_to_write: &[RecordBatch]) -> Result<()> {
+        // Type alias for stream results to avoid complex type annotation
+        type PartitionSegment = (
+            crate::core::manifest::ManifestEntry,
+            Vec<String>,
+            String,
+            RecordBatch,
+            HashMap<String, Value>,
+        );
 
         // Reset memory index
         {
@@ -929,6 +981,7 @@ impl Table {
             updated_default_sort_order_id: final_sort_order_id,
             updated_last_column_id: None,
             is_fast_append: false,
+            ..Default::default()
         };
 
         // Calculate total rows being added from all new manifest entries
