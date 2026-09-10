@@ -85,6 +85,20 @@ pub struct Table {
     pub(crate) partition_spec: Arc<PartitionSpec>,
     /// Naming pattern to use for unnamed columns
     pub(crate) label_pattern: LabelPattern,
+    /// Durability mode for WAL writes
+    pub(crate) durability: WalDurability,
+}
+
+/// Durability level for WAL writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum WalDurability {
+    /// Synchronous durability: Each write waits for the WAL record to be fsynced to disk.
+    /// Recommended for database correctness and crash recovery guarantees.
+    #[default]
+    Sync,
+    /// Asynchronous durability: Writes are handed off to the WAL worker channel without blocking for fsync.
+    /// Higher throughput, but un-synced writes in the worker window (default 100ms) may be lost on process failure.
+    Async,
 }
 
 /// Generates an Excel-style column label (A, B, C... AA, AB...) for a given index.
@@ -124,6 +138,7 @@ impl Clone for Table {
             recovered_wal_paths: self.recovered_wal_paths.clone(),
             partition_spec: self.partition_spec.clone(),
             label_pattern: self.label_pattern,
+            durability: self.durability,
         }
     }
 }

@@ -160,6 +160,8 @@ pub struct TableBuilder {
     query_config: QueryConfig,
     data_store: Option<Arc<dyn ObjectStore>>,
     label_pattern: crate::core::table::LabelPattern,
+    wal_dir: Option<std::path::PathBuf>,
+    durability: crate::core::table::WalDurability,
 }
 
 impl TableBuilder {
@@ -175,7 +177,19 @@ impl TableBuilder {
             query_config: QueryConfig::default(),
             data_store: None,
             label_pattern: crate::core::table::LabelPattern::default(),
+            wal_dir: None,
+            durability: crate::core::table::WalDurability::default(),
         }
+    }
+
+    pub fn with_wal_dir<P: Into<std::path::PathBuf>>(mut self, path: P) -> Self {
+        self.wal_dir = Some(path.into());
+        self
+    }
+
+    pub fn with_durability(mut self, durability: crate::core::table::WalDurability) -> Self {
+        self.durability = durability;
+        self
     }
 
     pub fn with_catalog(
@@ -252,12 +266,23 @@ impl TableBuilder {
         let partition_spec = Arc::new(manifest.partition_spec.clone());
 
         // Initialize WAL
-        let wal_dir = if uri.starts_with("file://") {
+        let wal_dir = if let Some(dir) = self.wal_dir {
+            dir
+        } else if let Ok(env_dir) = std::env::var("HYPERSTREAM_WAL_DIR") {
+            std::path::PathBuf::from(env_dir)
+        } else if uri.starts_with("file://") {
             let path = uri.strip_prefix("file://").unwrap_or(&uri);
             std::path::PathBuf::from(path).join("_wal")
         } else {
             let safe_uri = uri.replace("://", "_").replace("/", "_");
-            std::env::temp_dir().join("hyperstream_wal").join(safe_uri)
+            let dir = std::env::temp_dir().join("hyperstream_wal").join(safe_uri);
+            tracing::info!(
+                "Table initialized with remote URI '{}' using default WAL directory '{}'. \
+                For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or HYPERSTREAM_WAL_DIR.",
+                uri,
+                dir.display()
+            );
+            dir
         };
 
         if !wal_dir.exists() {
@@ -267,13 +292,13 @@ impl TableBuilder {
         let mut wal = WriteAheadLog::new(wal_dir);
         let _ = wal.spawn_worker();
 
-        // Replay WAL (Recovery)
-        let recovered_stream = wal.replay_stream().unwrap_or_else(|e| {
+        // Replay WAL (Recovery) - single pass to avoid double reads
+        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
             tracing::warn!("WAL Recovery Warning: {}", e);
-            Box::new(std::iter::empty())
+            (vec![], vec![])
         });
 
-        let (_, recovered_paths) = wal.replay().unwrap_or_else(|_| (vec![], vec![])); // For paths cleanup only
+        let recovered_stream = Box::new(recovered_batches.into_iter().map(Ok));
 
         let (initial_buffer, initial_mem_index, schema_val) =
             recover_wal_state(recovered_stream, schema_val);
@@ -312,6 +337,7 @@ impl TableBuilder {
             recovered_wal_paths: Arc::new(parking_lot::Mutex::new(recovered_paths)),
             partition_spec,
             label_pattern: self.label_pattern,
+            durability: self.durability,
         };
 
         table.sync_primary_key_from_schema_async().await.ok();

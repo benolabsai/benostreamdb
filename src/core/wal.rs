@@ -60,8 +60,45 @@ impl WalConfig {
     }
 }
 
+use std::sync::Arc;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WalRecordHeader {
+    pub tx_id: uuid::Uuid,
+    pub sequence_number: u64,
+}
+
+/// Tag an Arrow RecordBatch with transaction identity metadata for the WAL.
+pub fn tag_batch_with_wal_tx(
+    batch: &RecordBatch,
+    tx_id: uuid::Uuid,
+    seq: u64,
+) -> Result<RecordBatch> {
+    let mut metadata = batch.schema().metadata().clone();
+    metadata.insert("hyperstream:tx_id".to_string(), tx_id.to_string());
+    metadata.insert("hyperstream:seq".to_string(), seq.to_string());
+    let schema = Arc::new(batch.schema().as_ref().clone().with_metadata(metadata));
+    RecordBatch::try_new(schema, batch.columns().to_vec()).map_err(Into::into)
+}
+
+/// Extract transaction identity metadata from an Arrow RecordBatch if present.
+pub fn extract_wal_tx(batch: &RecordBatch) -> Option<WalRecordHeader> {
+    let schema = batch.schema();
+    let meta = schema.metadata();
+    let tx_id_str = meta.get("hyperstream:tx_id")?;
+    let seq_str = meta.get("hyperstream:seq")?;
+    let tx_id = uuid::Uuid::parse_str(tx_id_str).ok()?;
+    let sequence_number = seq_str.parse::<u64>().ok()?;
+    Some(WalRecordHeader {
+        tx_id,
+        sequence_number,
+    })
+}
+
 enum LogOp {
     Append(RecordBatch, oneshot::Sender<Result<()>>),
+    AppendSync(RecordBatch, oneshot::Sender<Result<()>>),
+    Flush(oneshot::Sender<Result<()>>),
 }
 
 impl std::fmt::Debug for WriteAheadLog {
@@ -78,9 +115,11 @@ impl WriteAheadLog {
     /// Open or create a WAL directory.
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
-        // Create a unique filename for this instance to avoid clobbering by other processes
-        let id = uuid::Uuid::new_v4();
-        let path = dir.join(format!("log_{}.arrow", id));
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = dir.join(format!("log_{:020}_00000000.arrow", ts));
 
         Self {
             dir,
@@ -107,9 +146,11 @@ impl WriteAheadLog {
         self.tx = Some(tx);
 
         // Move state into worker
-        let path = self.path.clone();
+        let dir = self.dir.clone();
         let mut writer_opt: Option<StreamWriter<File>> = self.writer.take();
         let config = self.config.clone();
+        let mut current_schema: Option<Arc<arrow::datatypes::Schema>> = self.schema.clone();
+        let mut segment_counter: u64 = 0;
 
         tokio::spawn(async move {
             let mut pending_syncs = Vec::new();
@@ -128,12 +169,26 @@ impl WriteAheadLog {
                     msg = rx.recv() => {
                         match msg {
                             Some(LogOp::Append(batch, reply_tx)) => {
-                                // Ensure writer
-                                if writer_opt.is_none() {
+                                let schema_changed = match &current_schema {
+                                    None => true,
+                                    Some(curr) => curr.as_ref() != batch.schema().as_ref(),
+                                };
+
+                                if schema_changed || writer_opt.is_none() {
+                                    if let Some(old_w) = writer_opt.take() {
+                                        let _ = old_w.get_ref().sync_data();
+                                    }
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_nanos();
+                                    let target_path = dir.join(format!("log_{:020}_{:08}.arrow", ts, segment_counter));
+                                    segment_counter += 1;
+
                                     let file = match OpenOptions::new()
                                         .create(true)
                                         .append(true)
-                                        .open(&path) {
+                                        .open(&target_path) {
                                             Ok(f) => f,
                                             Err(e) => {
                                                 let _ = reply_tx.send(Err(anyhow::anyhow!("Failed to open WAL: {}", e)));
@@ -141,7 +196,10 @@ impl WriteAheadLog {
                                             }
                                         };
                                     writer_opt = match StreamWriter::try_new(file, &batch.schema()) {
-                                        Ok(w) => Some(w),
+                                        Ok(w) => {
+                                            current_schema = Some(batch.schema());
+                                            Some(w)
+                                        },
                                         Err(e) => {
                                              let _ = reply_tx.send(Err(anyhow::anyhow!("Failed to create WAL writer: {}", e)));
                                              continue;
@@ -173,6 +231,74 @@ impl WriteAheadLog {
                                         }
                                     }
                                 }
+                            }
+                            Some(LogOp::AppendSync(batch, reply_tx)) => {
+                                let schema_changed = match &current_schema {
+                                    None => true,
+                                    Some(curr) => curr.as_ref() != batch.schema().as_ref(),
+                                };
+
+                                if schema_changed || writer_opt.is_none() {
+                                    if let Some(old_w) = writer_opt.take() {
+                                        let _ = old_w.get_ref().sync_data();
+                                    }
+                                    let ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_nanos();
+                                    let target_path = dir.join(format!("log_{:020}_{:08}.arrow", ts, segment_counter));
+                                    segment_counter += 1;
+
+                                    let file = match OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open(&target_path) {
+                                            Ok(f) => f,
+                                            Err(e) => {
+                                                let _ = reply_tx.send(Err(anyhow::anyhow!("Failed to open WAL: {}", e)));
+                                                continue;
+                                            }
+                                        };
+                                    writer_opt = match StreamWriter::try_new(file, &batch.schema()) {
+                                        Ok(w) => {
+                                            current_schema = Some(batch.schema());
+                                            Some(w)
+                                        },
+                                        Err(e) => {
+                                             let _ = reply_tx.send(Err(anyhow::anyhow!("Failed to create WAL writer: {}", e)));
+                                             continue;
+                                        }
+                                    };
+                                }
+
+                                if let Some(writer) = &mut writer_opt {
+                                    if let Err(e) = writer.write(&batch) {
+                                        let _ = reply_tx.send(Err(anyhow::anyhow!("WAL write failed: {}", e)));
+                                    } else {
+                                        if let Err(e) = writer.get_ref().sync_data() {
+                                            tracing::error!("WAL sync_data failed: {}", e);
+                                            let _ = writer.get_ref().sync_all();
+                                        }
+                                        let _ = reply_tx.send(Ok(()));
+                                        for tx in pending_syncs.drain(..) {
+                                            let _ = tx.send(Ok(()));
+                                        }
+                                        batch_count = 0;
+                                    }
+                                }
+                            }
+                            Some(LogOp::Flush(reply_tx)) => {
+                                if let Some(writer) = &mut writer_opt {
+                                    if let Err(e) = writer.get_ref().sync_data() {
+                                        tracing::error!("WAL sync_data failed: {}", e);
+                                        let _ = writer.get_ref().sync_all();
+                                    }
+                                }
+                                for tx in pending_syncs.drain(..) {
+                                    let _ = tx.send(Ok(()));
+                                }
+                                batch_count = 0;
+                                let _ = reply_tx.send(Ok(()));
                             }
                             None => break, // Channel closed
                         }
@@ -241,6 +367,39 @@ impl WriteAheadLog {
             Ok(())
         } else {
             anyhow::bail!("WAL worker not started. Call spawn_worker() first.");
+        }
+    }
+
+    /// Append a batch to the WAL and immediately sync to disk before returning.
+    /// This provides strict synchronous durability guarantees.
+    pub async fn append_sync(&self, batch: RecordBatch) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(LogOp::AppendSync(batch, reply_tx))
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
+
+            reply_rx
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker dropped request"))?
+        } else {
+            anyhow::bail!("WAL worker not started. Call spawn_worker() first.");
+        }
+    }
+
+    /// Explicitly flush and sync all pending WAL writes to durable storage.
+    pub async fn flush_async(&self) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(LogOp::Flush(reply_tx))
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
+
+            reply_rx
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker dropped request"))?
+        } else {
+            Ok(())
         }
     }
 
@@ -364,12 +523,19 @@ impl WriteAheadLog {
         Ok(())
     }
 
-    /// Clear the log file owned by this instance.
+    /// Clear the log files owned by this WAL directory.
     /// Should be called after data is successfully persisted (flushed) to main storage.
     pub fn truncate(&mut self) -> Result<()> {
         self.writer = None; // Drop writer
-        if self.path.exists() {
-            std::fs::remove_file(&self.path)?;
+        self.schema = None;
+        if self.dir.exists() {
+            for entry in std::fs::read_dir(&self.dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("arrow") {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
         }
         Ok(())
     }

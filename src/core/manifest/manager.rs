@@ -52,6 +52,9 @@ pub struct CommitMetadata {
     pub updated_default_sort_order_id: Option<i32>,
     pub updated_last_column_id: Option<i32>,
     pub is_fast_append: bool,
+    /// If true, verifies that all remove_paths still exist in the current snapshot version.
+    /// Used by compaction to prevent removing files concurrently replaced or deleted.
+    pub require_remove_paths_exist: bool,
 }
 
 impl ManifestManager {

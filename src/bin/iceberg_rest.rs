@@ -785,6 +785,7 @@ async fn update_table(
         removed_properties,
         updated_last_column_id,
         is_fast_append: false,
+        ..Default::default()
     };
 
     match manager.commit(&new_entries, &[], commit_metadata).await {

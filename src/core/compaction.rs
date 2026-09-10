@@ -194,11 +194,13 @@ impl Compactor {
                 all_new_entries.len(),
                 all_old_paths.len()
             );
+            let mut commit_meta = crate::core::manifest::CommitMetadata::default();
+            commit_meta.require_remove_paths_exist = true;
             self.manifest
                 .commit(
                     &all_new_entries,
                     &all_old_paths,
-                    crate::core::manifest::CommitMetadata::default(),
+                    commit_meta,
                 )
                 .await?;
             metrics::counter!("hyperstreamdb_data_files_compacted")

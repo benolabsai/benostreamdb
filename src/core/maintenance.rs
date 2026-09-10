@@ -36,6 +36,10 @@ impl Maintenance {
     /// Iceberg-compatible command: expire_snapshots
     /// Removes old manifest versions and deletes data files that are ONLY reachable from expired snapshots.
     pub async fn expire_snapshots(&self, retain_last: usize) -> Result<()> {
+        let lock_path = Path::from(format!("{}/commit.lock", self.manifest_manager.manifest_dir));
+        let lock = crate::core::lock::FileBasedLock::new(self.store.clone(), lock_path, 60);
+        let _dist_guard = lock.acquire().await?;
+
         let history = self.manifest_manager.walk_history().await?;
 
         if history.len() <= retain_last {
@@ -131,6 +135,10 @@ impl Maintenance {
     /// Scans storage and deletes files not referenced by ANY valid manifest (Active + History).
     /// Used to clean up failed writes (partial uploads).
     pub async fn remove_orphan_files(&self, older_than_ms: i64) -> Result<()> {
+        let lock_path = Path::from(format!("{}/commit.lock", self.manifest_manager.manifest_dir));
+        let lock = crate::core::lock::FileBasedLock::new(self.store.clone(), lock_path, 60);
+        let _dist_guard = lock.acquire().await?;
+
         let history = self.manifest_manager.walk_history().await?;
 
         // 1. Collect Global Valid Set
@@ -159,8 +167,12 @@ impl Maintenance {
             let meta = meta?;
             let path_str = meta.location.to_string();
 
-            // Skip manifest directory
-            if path_str.contains("_manifest/") {
+            // Skip manifest, staging, and WAL directories, as well as locks
+            if path_str.contains("_manifest/")
+                || path_str.contains("_staging/")
+                || path_str.contains("_wal/")
+                || path_str.contains("commit.lock")
+            {
                 continue;
             }
 
