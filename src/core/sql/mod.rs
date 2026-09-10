@@ -249,7 +249,7 @@ impl TableProvider for HyperStreamTableProvider {
                 partitions,
                 projection.cloned(),
                 best_filter,
-                vp,
+                vec![vp],
                 limit,
                 self.schema(),
             )?;

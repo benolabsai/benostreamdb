@@ -100,14 +100,21 @@ impl crate::core::segment::HybridSegmentWriter {
                 }
 
                 for (idx, algo) in algos.iter().enumerate() {
-                    let hnsw_ivf_index = HnswIvfIndex::build(
-                        vectors.clone(),
-                        crate::core::index::VectorMetric::L2,
-                        None,
-                        None,
-                        algo,
-                    )
-                    .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
+                    let metric = match algo {
+                        crate::core::manifest::IndexAlgorithm::Hnsw { metric, .. }
+                        | crate::core::manifest::IndexAlgorithm::HnswPq { metric, .. }
+                        | crate::core::manifest::IndexAlgorithm::HnswTq4 { metric, .. }
+                        | crate::core::manifest::IndexAlgorithm::HnswTq8 { metric, .. } => metric
+                            .parse::<crate::core::index::VectorMetric>()
+                            .with_context(|| {
+                                format!("Invalid vector metric for {}: {}", col_name, metric)
+                            })?,
+                        _ => crate::core::index::VectorMetric::L2,
+                    };
+
+                    let hnsw_ivf_index =
+                        HnswIvfIndex::build(vectors.clone(), metric, None, None, algo)
+                            .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
 
                     let algo_id = match algo {
                         crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",

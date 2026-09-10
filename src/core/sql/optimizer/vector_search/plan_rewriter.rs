@@ -90,7 +90,7 @@ pub fn build_optimized_plan(
         pattern.hyperstream_exec.partitions.clone(),
         pattern.hyperstream_exec.projection.clone(),
         pattern.hyperstream_exec.filter_str.clone(),
-        vector_params.into_iter().next().unwrap(),
+        vector_params,
         Some(k_with_offset),
         pattern.hyperstream_exec.schema.clone(),
     )?;

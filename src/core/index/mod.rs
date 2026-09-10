@@ -108,6 +108,41 @@ pub enum VectorMetric {
     Jaccard,
 }
 
+impl VectorMetric {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VectorMetric::L2 => "l2",
+            VectorMetric::Cosine => "cosine",
+            VectorMetric::InnerProduct => "ip",
+            VectorMetric::L1 => "l1",
+            VectorMetric::Hamming => "hamming",
+            VectorMetric::Jaccard => "jaccard",
+        }
+    }
+}
+
+impl std::str::FromStr for VectorMetric {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "l2" | "euclidean" => Ok(VectorMetric::L2),
+            "cosine" => Ok(VectorMetric::Cosine),
+            "inner_product" | "innerproduct" | "ip" | "dot" => Ok(VectorMetric::InnerProduct),
+            "l1" | "manhattan" => Ok(VectorMetric::L1),
+            "hamming" => Ok(VectorMetric::Hamming),
+            "jaccard" => Ok(VectorMetric::Jaccard),
+            other => Err(anyhow::anyhow!("Unknown vector metric: {}", other)),
+        }
+    }
+}
+
+impl std::fmt::Display for VectorMetric {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VectorType {
     Float32,

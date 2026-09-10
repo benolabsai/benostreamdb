@@ -7,9 +7,21 @@
 
 A production-ready indexed data lake format that combines the transactional guarantees of Apache Iceberg with persistent indexes (scalar bitmaps + HNSW vector search) for blazing-fast queries on object storage.
 
-## 🎯 What Makes HyperStreamDB Different?
+## 🎯 Architecture: The Indexed Lakehouse
 
-**HyperStreamDB = Iceberg + Persistent Indexes**
+HyperStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer:
+
+```text
+               Iceberg Table
+                     │
+       ┌─────────────┴──────────────┐
+       │                            │
+Authoritative Storage        Advisory Index Overlay
+       │                            │
+  Parquet Files              Bitmap / Bloom / BM25 / HNSW / TQ
+```
+
+> **Core Invariant**: Indexes are **advisory and reconstructible**. Authoritative data always remains in standard Parquet files coordinated by table metadata. If an index is absent, corrupted, or disabled, queries fall back directly to Parquet scanning.
 
 | Feature | Iceberg/Delta | HyperStreamDB |
 |---------|---------------|---------------|
@@ -24,9 +36,9 @@ A production-ready indexed data lake format that combines the transactional guar
 | **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
 | **Query Engines** | Spark/Trino | Spark/Trino/Python |
 
-## ⚡ Iceberg V2/V3 Compliance
+## ⚡ Iceberg V2/V3 Compatibility
 
-HyperStreamDB implements Apache Iceberg table format with full V2 and V3 feature support:
+HyperStreamDB implements a substantial subset of Apache Iceberg table format V2 and V3 specifications:
 
 | Feature | V1 | V2 | V3 | HyperStreamDB |
 |---------|----|----|----|--------------| 

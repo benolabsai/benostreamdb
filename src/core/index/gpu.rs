@@ -917,7 +917,7 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
         dists.push(match m {
             VectorMetric::L2 => crate::core::index::distance::l2_distance(q, span),
             VectorMetric::Cosine => crate::core::index::distance::cosine_distance(q, span),
-            VectorMetric::InnerProduct => crate::core::index::distance::dot_product(q, span),
+            VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(q, span),
             VectorMetric::L1 => crate::core::index::distance::l1_distance(q, span),
             VectorMetric::Hamming => crate::core::index::distance::hamming_distance(q, span),
             VectorMetric::Jaccard => crate::core::index::distance::jaccard_distance(q, span),

@@ -16,7 +16,9 @@ use datafusion::physical_plan::{
 
 use crate::core::manifest::ManifestEntry;
 use crate::core::planner::{FilterExpr, QueryFilter};
-use crate::core::query::{execute_vector_search_with_config, VectorSearchRequest};
+use crate::core::query::{
+    execute_multi_vector_search_with_config, execute_vector_search_with_config, VectorSearchRequest,
+};
 use crate::core::table::{Table, VectorSearchParams};
 
 /// ExecutionPlan node that performs an HNSW Vector Search across a specific partition of segments.
@@ -27,7 +29,7 @@ pub struct VectorScanExec {
     pub partitions: Vec<Vec<ManifestEntry>>,
     pub projection: Option<Vec<usize>>,
     pub filter: Option<String>,
-    pub vector_params: VectorSearchParams,
+    pub vector_params: Vec<VectorSearchParams>,
     pub limit: Option<usize>,
     base_schema: SchemaRef,
     schema: SchemaRef,
@@ -40,7 +42,7 @@ impl VectorScanExec {
         partitions: Vec<Vec<ManifestEntry>>,
         projection: Option<Vec<usize>>,
         filter: Option<String>,
-        vector_params: VectorSearchParams,
+        vector_params: Vec<VectorSearchParams>,
         limit: Option<usize>,
         base_schema: SchemaRef,
     ) -> DataFusionResult<Self> {
@@ -59,21 +61,17 @@ impl VectorScanExec {
             .iter()
             .map(|f| f.as_ref().clone())
             .collect();
-        if projected_schema.column_with_name("distance").is_none() {
-            fields.push(datafusion::arrow::datatypes::Field::new(
-                "distance",
-                datafusion::arrow::datatypes::DataType::Float32,
-                false,
-            ));
-        }
+        fields.push(datafusion::arrow::datatypes::Field::new(
+            "distance",
+            datafusion::arrow::datatypes::DataType::Float32,
+            false,
+        ));
         let scan_schema = Arc::new(datafusion::arrow::datatypes::Schema::new(fields));
-
-        let partition_count = partitions.len().max(1);
 
         let properties = PlanProperties::new(
             EquivalenceProperties::new(scan_schema.clone()),
-            Partitioning::UnknownPartitioning(partition_count),
-            EmissionType::Final,
+            Partitioning::UnknownPartitioning(partitions.len().max(1)),
+            EmissionType::Incremental,
             Boundedness::Bounded,
         );
 
@@ -100,11 +98,15 @@ impl DisplayAs for VectorScanExec {
         match t {
             datafusion::physical_plan::DisplayFormatType::Default
             | datafusion::physical_plan::DisplayFormatType::Verbose => {
+                let cols: Vec<&str> = self
+                    .vector_params
+                    .iter()
+                    .map(|vp| vp.column.as_str())
+                    .collect();
                 write!(
                     f,
-                    "VectorScanExec: column={}, metric={:?}, partitions={}",
-                    self.vector_params.column,
-                    self.vector_params.metric,
+                    "VectorScanExec: columns={:?}, partitions={}",
+                    cols,
                     self.partitions.len()
                 )
             }
@@ -192,28 +194,30 @@ impl ExecutionPlan for VectorScanExec {
                     None
                 };
 
-                let mut request = VectorSearchRequest::new(
-                    vector_params.column.clone(),
-                    vector_params.query.clone(),
-                    vector_params.k,
-                    vector_params.metric,
-                )
-                .with_filter(filter_expr)
-                .with_config(table.query_config().clone())
-                .with_ef_search(vector_params.ef_search);
+                let mut requests = Vec::new();
+                for vp in &vector_params {
+                    let mut request = VectorSearchRequest::new(
+                        vp.column.clone(),
+                        vp.query.clone(),
+                        vp.k,
+                        vp.metric,
+                    )
+                    .with_filter(filter_expr.clone())
+                    .with_config(table.query_config().clone())
+                    .with_ef_search(vp.ef_search);
 
-                if let Some(ref proj_names) = col_names_owned {
-                    request = request.with_columns(Some(proj_names.clone()));
+                    if let Some(ref proj_names) = col_names_owned {
+                        request = request.with_columns(Some(proj_names.clone()));
+                    }
+                    requests.push(request);
                 }
 
-                // Currently executes a single segment search.
-                // Wait, if it executes single segment, it uses query.rs's execute_vector_search_with_config
-                match execute_vector_search_with_config(
+                match execute_multi_vector_search_with_config(
                     vec![entry.clone()],
                     table.object_store(),
                     None,
                     &table.table_uri(),
-                    request,
+                    requests,
                 ).await {
                     Ok(batches) => {
                         for (_segment_id, batch) in batches {

@@ -1,5 +1,6 @@
 #![deny(warnings)]
 #![allow(
+    unknown_lints,
     clippy::needless_range_loop,
     clippy::single_match,
     clippy::ptr_arg,
@@ -7,9 +8,7 @@
     clippy::question_mark,
     clippy::non_canonical_partial_ord_impl,
     clippy::needless_late_init,
-    clippy::collapsible_match,
-    clippy::chunks_exact_to_as_chunks,
-    unknown_lints
+    clippy::collapsible_match
 )]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 

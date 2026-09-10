@@ -194,24 +194,22 @@ pub fn merge_and_rerank_vector_results(
         return Ok(vec![]);
     }
 
-    // Group by batch to minimize slicing operations, preserving distances
-    let mut batch_rows: std::collections::HashMap<usize, Vec<(usize, f32)>> =
-        std::collections::HashMap::new();
-    for (batch_idx, row_idx, distance) in all_rows {
-        batch_rows
-            .entry(batch_idx)
-            .or_default()
-            .push((row_idx, distance));
-    }
-
-    // Extract rows from each batch and add distance column
+    // Group contiguous runs of the same batch to minimize slicing operations
+    // while strictly preserving global distance ordering across emitted batches.
     let mut result_batches = Vec::new();
-    for (batch_idx, row_data) in batch_rows {
-        let (seg_id, batch, _distances) = &results_with_distances[batch_idx];
+    let mut i = 0;
+    while i < all_rows.len() {
+        let current_batch_idx = all_rows[i].0;
+        let mut j = i + 1;
+        while j < all_rows.len() && all_rows[j].0 == current_batch_idx {
+            j += 1;
+        }
+        let chunk = &all_rows[i..j];
+        let (seg_id, batch, _distances) = &results_with_distances[current_batch_idx];
 
         // Extract row indices and distances
-        let row_indices: Vec<u32> = row_data.iter().map(|(idx, _)| *idx as u32).collect();
-        let distances: Vec<f32> = row_data.iter().map(|(_, dist)| *dist).collect();
+        let row_indices: Vec<u32> = chunk.iter().map(|(_, idx, _)| *idx as u32).collect();
+        let distances: Vec<f32> = chunk.iter().map(|(_, _, dist)| *dist).collect();
 
         // Create indices array for take operation
         let indices = arrow::array::UInt32Array::from(row_indices);
@@ -247,6 +245,8 @@ pub fn merge_and_rerank_vector_results(
 
         let result_batch = RecordBatch::try_new(schema_with_distance, columns)?;
         result_batches.push((seg_id.clone(), result_batch));
+
+        i = j;
     }
 
     Ok(result_batches)
@@ -343,7 +343,7 @@ pub async fn execute_vector_search(
     execute_vector_search_with_config(entries, store, None, base_uri, request).await
 }
 
-/// Execute vector search with custom configuration
+/// Execute vector search with custom configuration across multiple vector requests using RRF fusion
 pub async fn execute_multi_vector_search_with_config(
     entries: Vec<ManifestEntry>,
     store: Arc<dyn ObjectStore>,
@@ -351,19 +351,134 @@ pub async fn execute_multi_vector_search_with_config(
     base_uri: &str,
     requests: Vec<VectorSearchRequest>,
 ) -> Result<Vec<(String, RecordBatch)>> {
-    let mut all_results = Vec::new();
-    for request in requests {
-        let results = execute_vector_search_with_config(
-            entries.clone(),
-            store.clone(),
-            data_store.clone(),
-            base_uri,
-            request,
-        )
-        .await?;
-        all_results.extend(results);
+    if requests.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(all_results)
+
+    if requests.len() == 1 {
+        return execute_vector_search_with_config(
+            entries,
+            store,
+            data_store,
+            base_uri,
+            requests.into_iter().next().unwrap(),
+        )
+        .await;
+    }
+
+    // Multi-Vector Search: execute each vector search request concurrently and fuse with RRF
+    let rrf_k = requests
+        .first()
+        .and_then(|r| r.config.rrf_k)
+        .unwrap_or(60.0);
+    let max_k = requests.iter().map(|r| r.k).max().unwrap_or(10);
+
+    let mut search_handles = Vec::new();
+    for req in requests {
+        let entries_c = entries.clone();
+        let store_c = store.clone();
+        let data_store_c = data_store.clone();
+        let base_uri_c = base_uri.to_string();
+        search_handles.push(tokio::spawn(async move {
+            execute_vector_search_with_config(entries_c, store_c, data_store_c, &base_uri_c, req)
+                .await
+        }));
+    }
+
+    let mut ranked_lists = Vec::new();
+    for handle in search_handles {
+        match handle.await {
+            Ok(Ok(results)) => ranked_lists.push(results),
+            Ok(Err(e)) => return Err(e),
+            Err(e) => anyhow::bail!("Multi-vector search task panicked: {}", e),
+        }
+    }
+
+    fn row_key(batch: &RecordBatch, row: usize) -> String {
+        if let Some(col) = batch
+            .column_by_name("id")
+            .or_else(|| batch.column_by_name("_id"))
+            .or_else(|| batch.column_by_name("pk"))
+        {
+            crate::core::manifest::ManifestValue::from_array(col, row).to_string()
+        } else {
+            let mut key = String::new();
+            for (i, field) in batch.schema().fields().iter().enumerate() {
+                if field.name() == "distance" {
+                    continue;
+                }
+                if !key.is_empty() {
+                    key.push('\0');
+                }
+                let val = crate::core::manifest::ManifestValue::from_array(batch.column(i), row);
+                key.push_str(&val.to_string());
+            }
+            key
+        }
+    }
+
+    let mut fused_map: std::collections::HashMap<String, (f32, RecordBatch, String)> =
+        std::collections::HashMap::new();
+
+    for req_results in ranked_lists {
+        let mut req_rows = Vec::new();
+        for (seg_id, batch) in req_results {
+            let dist_col = batch
+                .column_by_name("distance")
+                .and_then(|c| c.as_any().downcast_ref::<arrow::array::Float32Array>());
+            for row_idx in 0..batch.num_rows() {
+                let dist = dist_col.map(|d| d.value(row_idx)).unwrap_or(0.0);
+                let key = row_key(&batch, row_idx);
+                let single_row = batch.slice(row_idx, 1);
+                req_rows.push((dist, key, single_row, seg_id.clone()));
+            }
+        }
+        // Lower distance is higher rank
+        req_rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (rank, (_dist, key, single_row, seg_id)) in req_rows.into_iter().enumerate() {
+            let rrf_score = 1.0 / (rrf_k + (rank as f32 + 1.0));
+            let entry = fused_map
+                .entry(key)
+                .or_insert_with(|| (0.0f32, single_row, seg_id));
+            entry.0 += rrf_score;
+        }
+    }
+
+    if fused_map.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut sorted_fused: Vec<(String, f32, RecordBatch, String)> = fused_map
+        .into_iter()
+        .map(|(key, (score, batch, seg_id))| (key, score, batch, seg_id))
+        .collect();
+    sorted_fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_fused.truncate(max_k);
+
+    let row_batches: Vec<&RecordBatch> = sorted_fused.iter().map(|(_, _, b, _)| b).collect();
+    let first_batch = row_batches[0];
+    let schema = first_batch.schema();
+    let concatenated = arrow::compute::concat_batches(&schema, row_batches)?;
+    let scores: Vec<f32> = sorted_fused.iter().map(|(_, s, _, _)| *s).collect();
+
+    let mut columns = concatenated.columns().to_vec();
+    let mut fields = concatenated.schema().fields().to_vec();
+
+    if let Ok(idx) = concatenated.schema().index_of("distance") {
+        columns[idx] = Arc::new(arrow::array::Float32Array::from(scores));
+    } else {
+        fields.push(Arc::new(arrow::datatypes::Field::new(
+            "distance",
+            arrow::datatypes::DataType::Float32,
+            false,
+        )));
+        columns.push(Arc::new(arrow::array::Float32Array::from(scores)));
+    }
+    let final_schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    let final_batch = RecordBatch::try_new(final_schema, columns)?;
+    let primary_seg_id = sorted_fused[0].3.clone();
+    Ok(vec![(primary_seg_id, final_batch)])
 }
 
 pub async fn execute_vector_search_with_config(
@@ -519,20 +634,23 @@ pub async fn execute_vector_search_with_config(
     metrics::histogram!("hyperstreamdb.query.segment_search_duration")
         .record(search_start.elapsed().as_secs_f64());
 
-    // Collect successful results, gracefully skip segments that fail
-    // (e.g. missing/corrupt index files) rather than failing the entire query.
+    // Collect successful results, failing if any segment search fails
+    // (the index layer already fell back to flat scan; unrecoverable failure must not silently drop rows).
     let mut all_results_with_distances = Vec::new();
     for (i, result) in results.into_iter().enumerate() {
         match result {
             Ok(tagged_batches) => all_results_with_distances.extend(tagged_batches),
             Err(e) => {
-                tracing::warn!(
+                tracing::error!(
                     segment = i,
                     error = %e,
-                    "Segment vector search failed — results for this segment will be incomplete. \
-                     The index layer should have fallen back to flat scan; if this warning \
-                     persists, check that segment data files are accessible."
+                    "Segment vector search failed — aborting query to prevent incomplete results"
                 );
+                return Err(anyhow::anyhow!(
+                    "Vector search failed on segment {}: {}",
+                    i,
+                    e
+                ));
             }
         }
     }
@@ -723,7 +841,7 @@ mod tests {
     #[cfg(test)]
     mod property_tests {
         use super::*;
-        use arrow::array::Int32Array;
+        use arrow::array::{Float32Array, Int32Array};
         use arrow::datatypes::{DataType, Field, Schema};
         use proptest::prelude::*;
         use std::sync::Arc;
@@ -767,12 +885,28 @@ mod tests {
                 // Merge and rerank
                 let merged = merge_and_rerank_vector_results(results, k, 0).unwrap();
 
-                // Collect all distances in order
+                // Collect all distances in order across all batches
                 let mut all_distances = Vec::new();
                 for (_sid, batch) in &merged {
-                    // We need to track distances - but they're not in the result batch
-                    // For this test, we'll verify the count is correct
-                    all_distances.push(batch.num_rows());
+                    let dist_col = batch
+                        .column_by_name("distance")
+                        .expect("distance column must be present in result batch")
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .expect("distance column must be Float32Array");
+                    for i in 0..dist_col.len() {
+                        all_distances.push(dist_col.value(i));
+                    }
+                }
+
+                // Verify monotonically non-decreasing distance ordering
+                for i in 1..all_distances.len() {
+                    prop_assert!(
+                        all_distances[i - 1] <= all_distances[i],
+                        "Distances should be monotonically ascending: {} > {}",
+                        all_distances[i - 1],
+                        all_distances[i]
+                    );
                 }
 
                 // Verify total rows <= k
