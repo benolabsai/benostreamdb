@@ -19,32 +19,62 @@ use tracing;
 
 use super::Table;
 
+/// Remove internal WAL tracking metadata from schema
+fn clean_wal_metadata(schema: &Schema) -> Schema {
+    let mut meta = schema.metadata().clone();
+    meta.remove("hyperstream:tx_id");
+    meta.remove("hyperstream:seq");
+    schema.clone().with_metadata(meta)
+}
+
+/// Robust schema merge that handles column additions, nullability relaxation,
+/// and metadata reconciliation without failing on transaction tags.
+fn merge_arrow_schemas(base: &Schema, incoming: &Schema) -> Schema {
+    let base_clean = clean_wal_metadata(base);
+    let incoming_clean = clean_wal_metadata(incoming);
+
+    if let Ok(merged) = Schema::try_merge(vec![base_clean.clone(), incoming_clean.clone()]) {
+        return merged;
+    }
+
+    let mut fields: Vec<arrow::datatypes::Field> =
+        base_clean.fields().iter().map(|f| (**f).clone()).collect();
+    for field in incoming_clean.fields() {
+        if let Some(idx) = fields.iter().position(|f| f.name() == field.name()) {
+            let existing = &fields[idx];
+            let is_nullable = existing.is_nullable() || field.is_nullable();
+            let mut updated = (**field).clone();
+            updated.set_nullable(is_nullable);
+            fields[idx] = updated;
+        } else {
+            fields.push((**field).clone());
+        }
+    }
+
+    let mut merged_meta = base_clean.metadata().clone();
+    for (k, v) in incoming_clean.metadata() {
+        merged_meta.entry(k.clone()).or_insert_with(|| v.clone());
+    }
+
+    Schema::new_with_metadata(fields, merged_meta)
+}
+
 /// Shared WAL recovery logic used by both sync and async Table constructors.
 /// Promotes schema to the widest version, aligns all recovered batches, and
 /// rebuilds the in-memory vector index from recovered data.
 /// Returns (aligned_buffer, optional_memory_index, promoted_schema).
 pub(crate) fn recover_wal_state(
     recovered_stream: Box<dyn Iterator<Item = Result<RecordBatch>>>,
-    mut schema_val: SchemaRef,
+    schema_val: SchemaRef,
 ) -> (Vec<RecordBatch>, Option<InMemoryVectorIndex>, SchemaRef) {
     let mut aligned_buffer = Vec::new();
     let mut total_rows = 0;
 
-    // 1. First pass: Collect batches and merge schema
+    // 1. Collect batches from stream
     let mut batches = Vec::new();
     for batch_res in recovered_stream {
         match batch_res {
-            Ok(batch) => {
-                // Safely merge schema
-                match arrow::datatypes::Schema::try_merge(vec![
-                    schema_val.as_ref().clone(),
-                    batch.schema().as_ref().clone(),
-                ]) {
-                    Ok(s) => schema_val = Arc::new(s),
-                    Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
-                }
-                batches.push(batch);
-            }
+            Ok(batch) => batches.push(batch),
             Err(e) => tracing::error!("WAL Replay Error: {}", e),
         }
     }
@@ -55,30 +85,22 @@ pub(crate) fn recover_wal_state(
 
     tracing::info!("Recovering {} batches from WAL...", batches.len());
 
-    // Use first batch schema if current schema is empty
-    if schema_val.fields().is_empty() {
+    // 2. Compute widest merged schema across all recovered batches
+    let mut merged = clean_wal_metadata(&schema_val);
+    if merged.fields().is_empty() {
         if let Some(first) = batches.first() {
-            schema_val = first.schema();
+            merged = clean_wal_metadata(first.schema().as_ref());
         }
     }
 
-    // Safely attempt to merge all WAL schemas to capture any column additions
-    // or type evolutions instead of fragile field count comparisons.
-    let mut merged_schema = schema_val.as_ref().clone();
     for batch in &batches {
-        match arrow::datatypes::Schema::try_merge(vec![
-            merged_schema.clone(),
-            batch.schema().as_ref().clone(),
-        ]) {
-            Ok(s) => merged_schema = s,
-            Err(e) => tracing::warn!("Failed to merge WAL batch schema: {}", e),
-        }
+        merged = merge_arrow_schemas(&merged, batch.schema().as_ref());
     }
-    let schema_val = std::sync::Arc::new(merged_schema);
+    let schema_val = std::sync::Arc::new(merged);
 
-    // Align all recovered batches to the widest schema
+    // 3. Align all recovered batches to the widest schema
     for b in batches {
-        let aligned = if b.schema() != schema_val {
+        let aligned = if b.schema().fields() != schema_val.fields() {
             let mut cols = Vec::with_capacity(schema_val.fields().len());
             for field in schema_val.fields() {
                 let col = if let Some(c) = b.column_by_name(field.name()) {
@@ -89,6 +111,8 @@ pub(crate) fn recover_wal_state(
                 cols.push(col);
             }
             RecordBatch::try_new(schema_val.clone(), cols).unwrap_or(b)
+        } else if b.schema().as_ref() != schema_val.as_ref() {
+            RecordBatch::try_new(schema_val.clone(), b.columns().to_vec()).unwrap_or(b)
         } else {
             b
         };

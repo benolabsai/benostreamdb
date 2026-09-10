@@ -13,7 +13,6 @@ pub use dist::*;
 pub mod api;
 pub mod flatten;
 pub mod hnswio;
-pub mod libext;
 pub mod prelude;
 
 lazy_static! {

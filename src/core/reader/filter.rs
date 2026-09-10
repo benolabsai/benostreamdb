@@ -323,14 +323,14 @@ impl HybridReader {
                                         .inc_by(b.len() as u64);
                                     b.to_vec()
                                 }
-                                Err(e)
+                                Err(e) => {
                                     if e.to_string().contains("not found")
-                                        || e.to_string().contains("404") =>
-                                {
-                                    // Missing index file - fallback to full scan
-                                    return Ok(None);
+                                        || e.to_string().contains("404")
+                                    {
+                                        return Ok(None);
+                                    }
+                                    return Err(e.into());
                                 }
-                                Err(e) => return Err(e.into()),
                             }
                         };
 
@@ -385,18 +385,22 @@ impl HybridReader {
                                 .value(i);
                             let mut ok = true;
                             if let Some(min_s) = min_val.as_str() {
-                                if filter.min_inclusive {
-                                    ok &= val >= min_s;
+                                if filter.min == filter.max {
+                                    ok = val == min_s || val.eq_ignore_ascii_case(min_s);
                                 } else {
-                                    ok &= val > min_s;
-                                }
-                            }
-                            if let Some(max_val) = &filter.max {
-                                if let Some(max_s) = max_val.as_str() {
-                                    if filter.max_inclusive {
-                                        ok &= val <= max_s;
+                                    if filter.min_inclusive {
+                                        ok &= val >= min_s || val.to_lowercase() >= min_s.to_lowercase();
                                     } else {
-                                        ok &= val < max_s;
+                                        ok &= val > min_s || val.to_lowercase() > min_s.to_lowercase();
+                                    }
+                                    if let Some(max_val) = &filter.max {
+                                        if let Some(max_s) = max_val.as_str() {
+                                            if filter.max_inclusive {
+                                                ok &= val <= max_s || val.to_lowercase() <= max_s.to_lowercase();
+                                            } else {
+                                                ok &= val < max_s || val.to_lowercase() < max_s.to_lowercase();
+                                            }
+                                        }
                                     }
                                 }
                             }
