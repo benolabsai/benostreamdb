@@ -875,8 +875,7 @@ impl PyTable {
 
     /// Compact the WAL (consolidate log entries into single batch)
     fn checkpoint(&self, py: Python<'_>) -> PyResult<()> {
-        // Release GIL during checkpoint to allow other Python threads to run
-        py.allow_threads(|| self.table.checkpoint())
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(async { self.table.checkpoint_async().await }))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 

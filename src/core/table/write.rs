@@ -97,8 +97,9 @@ impl Table {
     }
 
     /// Compact the WAL (consolidate log entries)
-    pub fn checkpoint(&self) -> Result<()> {
-        let mut wal = self.wal.blocking_lock();
+    pub async fn checkpoint_async(&self) -> Result<()> {
+        let mut wal = self.wal.lock().await;
+        wal.flush_and_release().await?;
         wal.compact()
     }
 
