@@ -283,7 +283,9 @@ def check_delete_support() -> List[ComplianceCheck]:
     dv_implemented = False
     try:
         # Check if DeletionVector variant exists in DeleteContent enum
-        manifest_file = Path("src/core/manifest.rs")
+        manifest_file = Path("src/core/manifest/types.rs")
+        if not manifest_file.exists():
+            manifest_file = Path("src/core/manifest.rs")
         if manifest_file.exists():
             content = manifest_file.read_text()
             dv_implemented = "DeletionVector" in content and "puffin_file_path" in content
@@ -641,6 +643,11 @@ def main():
     if optional_failures:
         print(f"\nNote: {len(optional_failures)} optional feature(s) not implemented (can be deferred)")
     
+    check_only = "--check-only" in sys.argv or "--spec-only" in sys.argv or "--skip-tests" in sys.argv
+    if check_only:
+        print("\n✅ Specification conformance check passed. Skipping regression tests & benchmarks (--check-only flag).")
+        return 0
+
     # Step 2: Run regression tests
     print("\nProceeding to regression tests...")
     if not run_regression_tests():

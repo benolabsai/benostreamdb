@@ -24,7 +24,9 @@ pub mod telemetry;
 include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
 #[cfg(feature = "python")]
-pub mod python_binding;
+pub mod python;
+#[cfg(feature = "python")]
+pub use python as python_binding;
 
 #[cfg(feature = "python")]
 pub mod python_gpu_context;
