@@ -16,9 +16,7 @@ use datafusion::physical_plan::{
 
 use crate::core::manifest::ManifestEntry;
 use crate::core::planner::{FilterExpr, QueryFilter};
-use crate::core::query::{
-    execute_multi_vector_search_with_config, execute_vector_search_with_config, VectorSearchRequest,
-};
+use crate::core::query::{execute_multi_vector_search_with_config, VectorSearchRequest};
 use crate::core::table::{Table, VectorSearchParams};
 
 /// ExecutionPlan node that performs an HNSW Vector Search across a specific partition of segments.

@@ -253,7 +253,7 @@ impl TableBuilder {
 
         // Initialize WAL
         let wal_dir = if uri.starts_with("file://") {
-            let path = uri.strip_prefix("file://").unwrap();
+            let path = uri.strip_prefix("file://").unwrap_or(&uri);
             std::path::PathBuf::from(path).join("_wal")
         } else {
             let safe_uri = uri.replace("://", "_").replace("/", "_");

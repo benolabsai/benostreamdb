@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -195,7 +195,10 @@ impl ExecutionPlan for VectorMergeExec {
                         let batch_has_distance = batch.schema().column_with_name("distance").is_some();
 
                         if !has_distance && batch_has_distance {
-                            let dist_idx = batch.schema().index_of("distance").unwrap();
+                            let dist_idx = batch
+                                .schema()
+                                .index_of("distance")
+                                .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
                             let mut cols = batch.columns().to_vec();
                             cols.remove(dist_idx);
                             let mut options = datafusion::arrow::record_batch::RecordBatchOptions::default();

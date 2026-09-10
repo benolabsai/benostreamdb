@@ -180,7 +180,10 @@ impl FileBasedLock {
                         break;
                     }
                     _ = tokio::time::sleep(std::time::Duration::from_millis(interval_ms)) => {
-                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
                         let payload = LockPayload {
                             owner: owner.clone(),
                             expires_at: now + ttl_seconds,

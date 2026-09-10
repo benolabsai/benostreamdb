@@ -71,7 +71,11 @@ impl Accumulator for VectorSumAccumulator {
         if let Some(fsl) = arr.as_any().downcast_ref::<FixedSizeListArray>() {
             for i in 0..fsl.len() {
                 let value_array = fsl.value(i);
-                let row = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                let row = value_array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                    .values();
 
                 // Dimension validation
                 if let Some(ref mut s) = self.sum {
@@ -88,7 +92,11 @@ impl Accumulator for VectorSumAccumulator {
         } else if let Some(list_arr) = arr.as_any().downcast_ref::<ListArray>() {
             for i in 0..list_arr.len() {
                 let value_array = list_arr.value(i);
-                let row = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                let row = value_array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                    .values();
 
                 // Dimension validation
                 if let Some(ref mut s) = self.sum {
@@ -215,7 +223,11 @@ impl Accumulator for VectorAvgAccumulator {
             self.count += fsl.len() as u64;
             for i in 0..fsl.len() {
                 let value_array = fsl.value(i);
-                let row = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                let row = value_array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                    .values();
 
                 // Dimension validation
                 if let Some(ref mut s) = self.sum {
@@ -233,7 +245,11 @@ impl Accumulator for VectorAvgAccumulator {
             self.count += list_arr.len() as u64;
             for i in 0..list_arr.len() {
                 let value_array = list_arr.value(i);
-                let row = value_array.as_any().downcast_ref::<Float32Array>().unwrap().values();
+                let row = value_array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| datafusion::error::DataFusionError::Execution("Expected Float32Array".to_string()))?
+                    .values();
 
                 // Dimension validation
                 if let Some(ref mut s) = self.sum {

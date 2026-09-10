@@ -198,6 +198,6 @@ pub fn create_catalog(
     config: std::collections::HashMap<String, String>,
 ) -> Result<Box<dyn Catalog>> {
     tokio::runtime::Runtime::new()
-        .unwrap()
+        .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime for catalog: {}", e))?
         .block_on(create_catalog_async(catalog_type, config))
 }

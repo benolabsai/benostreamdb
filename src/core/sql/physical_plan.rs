@@ -1,4 +1,3 @@
-#![allow(unused)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use std::any::Any;
@@ -18,7 +17,7 @@ use datafusion::physical_plan::{
 };
 
 use crate::core::manifest::ManifestEntry;
-use crate::core::table::{Table, VectorSearchParams};
+use crate::core::table::Table;
 
 #[derive(Debug)]
 pub struct HyperStreamExec {
@@ -182,7 +181,7 @@ impl ExecutionPlan for HyperStreamExec {
 
         let expected_schema = self.schema.clone();
         let expected_schema_inner = expected_schema.clone();
-        use crate::core::planner::{FilterExpr, QueryFilter};
+        use crate::core::planner::QueryFilter;
 
         let stream = async_stream::stream! {
             // For each segment in this partition

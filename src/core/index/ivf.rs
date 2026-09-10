@@ -214,6 +214,9 @@ pub fn simple_kmeans(
     if n == 0 {
         anyhow::bail!("Cannot cluster empty vectors");
     }
+    if k == 0 {
+        anyhow::bail!("k must be greater than 0");
+    }
     let dim = vectors[0].len();
 
     // Step 1: Flatten training vectors once for SIMD/Cache locality
@@ -251,7 +254,7 @@ pub fn simple_kmeans(
                     .map(|(i, centroid)| (i, l2_distance_squared(vec_slice, centroid)))
                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
-                    .unwrap()
+                    .unwrap_or(0)
             })
             .collect();
 
@@ -318,7 +321,7 @@ pub fn simple_kmeans(
                 .map(|(i, centroid)| (i, l2_distance_squared(v, centroid)))
                 .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i)
-                .unwrap()
+                .unwrap_or(0)
         })
         .collect();
 

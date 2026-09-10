@@ -1,14 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use crate::core::cache::CacheExt;
-use std::sync::Arc;
-// use std::collections::HashSet;
-use crate::core::index::hnsw_ivf::HnswIvfIndex;
-use crate::core::index::VectorMetric;
-use crate::core::planner::FilterExpr;
-use crate::SegmentConfig;
 use arrow::array::Array;
-use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use chrono::Utc;
 use futures::StreamExt;
@@ -18,10 +11,9 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::arrow::ProjectionMask;
-use parquet::file::metadata::ParquetMetaData;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use futures::stream::BoxStream;
 use roaring::RoaringBitmap;
 
 use super::*;
@@ -425,16 +417,17 @@ impl HybridReader {
                                     ok &= val > min_i;
                                 }
                                 if ok {
+                                    let row_ids_str = row_ids_list
+                                        .value(i)
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::UInt32Array>()
+                                        .map(|a| format!("{:?}", a.values()))
+                                        .unwrap_or_default();
                                     tracing::debug!(
-                                        "inverted_index_match: col={}, val={}, row_ids={:?}",
+                                        "inverted_index_match: col={}, val={}, row_ids={}",
                                         filter.column,
                                         val,
-                                        row_ids_list
-                                            .value(i)
-                                            .as_any()
-                                            .downcast_ref::<arrow::array::UInt32Array>()
-                                            .unwrap()
-                                            .values()
+                                        row_ids_str
                                     );
                                 }
                             }

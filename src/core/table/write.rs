@@ -839,13 +839,13 @@ impl Table {
             .unwrap_or_default();
         let current_schema = self.arrow_schema();
 
-        let should_update_schema = if manifest.schemas.is_empty() {
-            true
-        } else {
-            let latest_schema = manifest.schemas.last().unwrap().to_arrow();
+        let should_update_schema = if let Some(last_schema) = manifest.schemas.last() {
+            let latest_schema = last_schema.to_arrow();
             // Compare schemas, but ignore metadata if necessary.
             // Simple != check works for basic evolution.
             latest_schema != *current_schema
+        } else {
+            true
         };
 
         let (final_schemas, final_schema_id) = if should_update_schema {
@@ -969,10 +969,14 @@ impl Table {
                 &self.catalog_state.namespace,
                 &self.catalog_state.table_name,
             ) {
+                let snapshot = table_meta
+                    .snapshots
+                    .last()
+                    .ok_or_else(|| anyhow::anyhow!("No snapshot available in table metadata"))?;
                 let updates = vec![
                     serde_json::json!({
                         "action": "add-snapshot",
-                        "snapshot": table_meta.snapshots.last().unwrap()
+                        "snapshot": snapshot
                     }),
                     serde_json::json!({
                         "action": "set-current-snapshot",
