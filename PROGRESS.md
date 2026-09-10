@@ -29,6 +29,9 @@ HyperStreamDB v0.7.0 brings multi-vector search with RRF scoring coordination, c
   - **Metric Parity Test Suite**: Added `tests/test_vector_metrics_parity.rs` establishing 100% nearest-neighbor accuracy against exact brute-force ground truth across all 6 metrics.
   - **Strict Query Failure Semantics**: Segment vector search failures now fail the query immediately with actionable diagnostics rather than silently omitting rows.
   - **Zero-Warning Standard**: Cleaned up diagnostic `println!` statements in favor of structured `tracing::debug!`, verified 0 warnings under `#![deny(warnings)]` and clean `cargo fmt`.
+  - **Table Architectural Modularization**: Decomposed monolithic `src/core/table/mod.rs` (3,575 lines down to 350 lines) into focused domain submodules (`catalog.rs`, `maintenance.rs`, `merge.rs`, `state.rs`, `primary_key.rs`, `index_config.rs`, `stats.rs`, `tests.rs`) preserving 100% public API compatibility.
+  - **Production Unwrap Hardening**: Audited and replaced production `.unwrap()` occurrences across locking, clustering, centroids, table builder, writes, and DataFusion vector UDF downcasts with graceful error handling and fallbacks.
+  - **Elimination of `#![allow(unused)]`**: Completely removed `#![allow(unused)]` directives across the codebase and cleaned all unused imports to strictly enforce `#![deny(warnings)]`.
   - **Iceberg Architecture Positioning**: Refined README and compliance tool to accurately position HyperStreamDB as an indexed lakehouse storage engine with an advisory/reconstructible index overlay.
 
 ---
