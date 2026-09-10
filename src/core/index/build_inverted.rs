@@ -419,27 +419,43 @@ impl crate::core::segment::HybridSegmentWriter {
                     .downcast_ref::<arrow::array::StringArray>()
                     .context("Invalid cast")?;
 
-                // Fetch tokenizer if configured; default to the English analyzer
-                // (standard tokenization + stop-word filter) so keyword/BM25
-                // search gets sensible token streams out of the box.
-                let is_composite = col_name.contains(',')
-                    || config
-                        .map(|c| {
-                            c.algorithms.iter().any(|a| {
-                                matches!(
-                                    a,
-                                    crate::core::manifest::IndexAlgorithm::CompositeBitmap { .. }
-                                )
-                            })
-                        })
-                        .unwrap_or(false);
-
-                let tokenizer_name =
-                    config.and_then(|c| c.tokenizer.clone()).unwrap_or_else(|| {
-                        if is_composite {
-                            "identity".to_string()
+                // Fetch tokenizer if configured:
+                // - If BM25 is configured on the column, use its tokenizer or default to English analyzer
+                // - Otherwise (scalar inverted index, composite, or categorical), default to identity
+                //   so stop-words (e.g. 'A') are not discarded for exact/scalar matching.
+                let bm25_tokenizer = config.and_then(|c| {
+                    c.algorithms.iter().find_map(|a| {
+                        if let crate::core::manifest::IndexAlgorithm::Bm25 { tokenizer, .. } = a {
+                            if !tokenizer.is_empty() {
+                                Some(tokenizer.clone())
+                            } else {
+                                None
+                            }
                         } else {
+                            None
+                        }
+                    })
+                });
+
+                let is_bm25 = config
+                    .map(|c| {
+                        c.algorithms.iter().any(|a| {
+                            matches!(
+                                a,
+                                crate::core::manifest::IndexAlgorithm::Bm25 { .. }
+                            )
+                        })
+                    })
+                    .unwrap_or(false);
+
+                let tokenizer_name = config
+                    .and_then(|c| c.tokenizer.clone())
+                    .or(bm25_tokenizer)
+                    .unwrap_or_else(|| {
+                        if is_bm25 {
                             "analyzer:english".to_string()
+                        } else {
+                            "identity".to_string()
                         }
                     });
                 tracing::info!(

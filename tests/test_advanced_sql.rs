@@ -12,7 +12,17 @@ use std::sync::Arc;
 
 async fn clear_caches() {
     hyperstreamdb::core::cache::MANIFEST_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::MANIFEST_LIST_CACHE.invalidate_all();
     hyperstreamdb::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::INDEX_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::BYTE_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::HNSW_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::HNSW_IVF_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::INVERTED_INDEX_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::ANALYZER_META_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::PARQUET_META_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::BLOOM_FILTER_CACHE.invalidate_all();
+    hyperstreamdb::core::cache::BLOCK_CACHE.invalidate_all();
 }
 
 async fn get_complex_schema(dim: usize) -> SchemaRef {

@@ -322,7 +322,53 @@ impl WriteAheadLog {
                 }
             }
 
-            // Final cleanup when channel closes
+            // Final cleanup when channel closes — drain any remaining queued messages
+            // before shutting down. Without this, fire-and-forget writes that were
+            // queued but not yet processed would be silently lost.
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    LogOp::Append(batch, reply_tx) | LogOp::AppendSync(batch, reply_tx) => {
+                        let schema_changed = match &current_schema {
+                            None => true,
+                            Some(curr) => curr.as_ref() != batch.schema().as_ref(),
+                        };
+
+                        if schema_changed || writer_opt.is_none() {
+                            if let Some(old_w) = writer_opt.take() {
+                                let _ = old_w.get_ref().sync_data();
+                            }
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_nanos();
+                            let target_path = dir.join(format!("log_{:020}_{:08}.arrow", ts, segment_counter));
+                            segment_counter += 1;
+
+                            if let Ok(file) = OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(&target_path) {
+                                if let Ok(w) = StreamWriter::try_new(file, &batch.schema()) {
+                                    current_schema = Some(batch.schema());
+                                    writer_opt = Some(w);
+                                }
+                            }
+                        }
+
+                        if let Some(writer) = &mut writer_opt {
+                            let _ = writer.write(&batch);
+                        }
+                        let _ = reply_tx.send(Ok(()));
+                    }
+                    LogOp::Flush(reply_tx) => {
+                        if let Some(writer) = &mut writer_opt {
+                            let _ = writer.get_ref().sync_data();
+                        }
+                        let _ = reply_tx.send(Ok(()));
+                    }
+                }
+            }
+
             if let Some(mut writer) = writer_opt {
                 let _ = writer.finish();
                 if let Err(e) = writer.get_ref().sync_all() {

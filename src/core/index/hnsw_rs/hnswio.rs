@@ -206,7 +206,8 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     }
     let mut distv = vec![0; len];
     io_in.read_exact(distv.as_mut_slice())?;
-    let distname = String::from_utf8(distv).unwrap();
+    let distname = String::from_utf8(distv)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     log::debug!("distance name {:?} ", distname);
     descr.distname = distname;
     // reload of type name
@@ -220,7 +221,8 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     }
     let mut tnamev = vec![0; len];
     io_in.read_exact(tnamev.as_mut_slice())?;
-    let t_name = String::from_utf8(tnamev).unwrap();
+    let t_name = String::from_utf8(tnamev)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     log::debug!("T type name {:?} ", t_name);
     descr.t_name = t_name;
     log::debug!(" end of description load \n");
@@ -371,19 +373,22 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     let mut it_slice = [0u8; std::mem::size_of::<u32>()];
     data_in.read_exact(&mut it_slice)?;
     let magic = u32::from_ne_bytes(it_slice);
-    assert_eq!(
-        magic, MAGICDATAP,
-        "magic not equal to MAGICDATAP in load_point, point_id : {:?} ",
-        origin_id
-    );
+    if magic != MAGICDATAP {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("magic not equal to MAGICDATAP in load_point, point_id : {:?}", origin_id),
+        ));
+    }
     // read origin id
     let mut it_slice = [0u8; std::mem::size_of::<u64>()];
     data_in.read_exact(&mut it_slice)?;
     let origin_id_data = u64::from_ne_bytes(it_slice) as usize;
-    assert_eq!(
-        origin_id, origin_id_data,
-        "origin_id incoherent between graph and data"
-    );
+    if origin_id != origin_id_data {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "origin_id incoherent between graph and data",
+        ));
+    }
     // now read data. we use size_t that is in description, to take care of the casewhere we reload
     let mut it_slice = [0u8; std::mem::size_of::<u64>()];
     data_in.read_exact(&mut it_slice)?;
@@ -393,7 +398,8 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     data_in.read_exact(&mut v_serialized)?;
     let v: Vec<T>;
     if std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>() {
-        v = bincode::deserialize(&v_serialized).unwrap();
+        v = bincode::deserialize(&v_serialized)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     } else {
         v = Vec::<T>::new();
     }
@@ -523,16 +529,18 @@ fn load_point_indexation<
             let point = load_point_res.0;
             let p_id = point.get_point_id();
             // some checks
-            assert_eq!(l, p_id.0 as usize);
-            if r != p_id.1 as usize {
-                log::debug!(
-                    "\n\n origin= {:?},  p_id = {:?}",
-                    point.get_origin_id(),
-                    p_id
-                );
-                log::debug!("storing at l {:?}, r {:?}", l, r);
+            if l != p_id.0 as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("layer mismatch during reload: expected {}, got {}", l, p_id.0),
+                ));
             }
-            assert_eq!(r, p_id.1 as usize);
+            if r != p_id.1 as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("rank mismatch during reload: expected {}, got {}", r, p_id.1),
+                ));
+            }
             // store neoghbour info of this point
             neighbourhood_map.insert(p_id, load_point_res.1);
             vlayer.push(point);
@@ -543,10 +551,26 @@ fn load_point_indexation<
     // at this step all points are loaded , but without their neighbours fileds are not yet initialized
     let mut nbp: usize = 0;
     for (p_id, neighbours) in &neighbourhood_map {
-        let point = &points_by_layer[p_id.0 as usize][p_id.1 as usize];
+        let p_l = p_id.0 as usize;
+        let p_r = p_id.1 as usize;
+        if p_l >= points_by_layer.len() || p_r >= points_by_layer[p_l].len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "corrupted point index during graph reconstruction",
+            ));
+        }
+        let point = &points_by_layer[p_l][p_r];
         for l in 0..neighbours.len() {
             for n in &neighbours[l] {
-                let n_point = &points_by_layer[n.p_id.0 as usize][n.p_id.1 as usize];
+                let n_l = n.p_id.0 as usize;
+                let n_r = n.p_id.1 as usize;
+                if n_l >= points_by_layer.len() || n_r >= points_by_layer[n_l].len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "corrupted neighbour index during graph reconstruction",
+                    ));
+                }
+                let n_point = &points_by_layer[n_l][n_r];
                 // now n_point is the Arc<Point> corresponding to neighbour n of point,
                 // construct a corresponding PointWithOrder
                 let n_pwo = PointWithOrder::<T>::new(n_point, n.distance);
@@ -673,19 +697,22 @@ pub fn load_hnsw<
     let mut it_slice = [0u8; std::mem::size_of::<u32>()];
     data_in.read_exact(&mut it_slice)?;
     let magic = u32::from_ne_bytes(it_slice);
-    assert_eq!(
-        magic, MAGICDATAP,
-        "magic not equal to MAGICDATAP in load_point"
-    );
+    if magic != MAGICDATAP {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "magic not equal to MAGICDATAP in load_point",
+        ));
+    }
     //
     let mut it_slice = [0u8; std::mem::size_of::<usize>()];
     data_in.read_exact(&mut it_slice)?;
     let dimension = usize::from_ne_bytes(it_slice);
-    assert_eq!(
-        dimension, description.dimension,
-        "data dimension incoherent {:?} {:?} ",
-        dimension, description.dimension
-    );
+    if dimension != description.dimension {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("data dimension incoherent: {} vs {}", dimension, description.dimension),
+        ));
+    }
     //
     let _mode = description.dumpmode;
     let distname = description.distname.clone();
@@ -747,19 +774,22 @@ pub fn load_hnsw_with_dist<
     let mut it_slice = [0u8; std::mem::size_of::<u32>()];
     data_in.read_exact(&mut it_slice)?;
     let magic = u32::from_ne_bytes(it_slice);
-    assert_eq!(
-        magic, MAGICDATAP,
-        "magic not equal to MAGICDATAP in load_point"
-    );
+    if magic != MAGICDATAP {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "magic not equal to MAGICDATAP in load_point",
+        ));
+    }
     //
     let mut it_slice = [0u8; std::mem::size_of::<usize>()];
     data_in.read_exact(&mut it_slice)?;
     let dimension = usize::from_ne_bytes(it_slice);
-    assert_eq!(
-        dimension, description.dimension,
-        "data dimension incoherent {:?} {:?} ",
-        dimension, description.dimension
-    );
+    if dimension != description.dimension {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("data dimension incoherent: {} vs {}", dimension, description.dimension),
+        ));
+    }
     //
     let _mode = description.dumpmode;
     let distname = description.distname.clone();
