@@ -62,6 +62,7 @@ impl WalConfig {
 
 enum LogOp {
     Append(RecordBatch, oneshot::Sender<Result<()>>),
+    FlushAndRelease(oneshot::Sender<Result<()>>),
 }
 
 impl std::fmt::Debug for WriteAheadLog {
@@ -174,6 +175,15 @@ impl WriteAheadLog {
                                     }
                                 }
                             }
+                            Some(LogOp::FlushAndRelease(reply_tx)) => {
+                                if let Some(mut writer) = writer_opt.take() {
+                                    let _ = writer.finish();
+                                    if let Err(e) = writer.get_ref().sync_all() {
+                                        tracing::error!("WAL sync_all failed on FlushAndRelease: {}", e);
+                                    }
+                                }
+                                let _ = reply_tx.send(Ok(()));
+                            }
                             None => break, // Channel closed
                         }
                     }
@@ -241,6 +251,24 @@ impl WriteAheadLog {
             Ok(())
         } else {
             anyhow::bail!("WAL worker not started. Call spawn_worker() first.");
+        }
+    }
+
+    /// Sync and close the active writer in the worker thread.
+    /// Used before manual compaction to ensure all pending appends are on disk
+    /// and the file descriptor is released.
+    pub async fn flush_and_release(&self) -> Result<()> {
+        if let Some(tx) = &self.tx {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(LogOp::FlushAndRelease(reply_tx))
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker channel closed"))?;
+
+            reply_rx
+                .await
+                .map_err(|_| anyhow::anyhow!("WAL worker dropped request"))?
+        } else {
+            Ok(())
         }
     }
 
