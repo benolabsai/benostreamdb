@@ -36,7 +36,10 @@ impl Maintenance {
     /// Iceberg-compatible command: expire_snapshots
     /// Removes old manifest versions and deletes data files that are ONLY reachable from expired snapshots.
     pub async fn expire_snapshots(&self, retain_last: usize) -> Result<()> {
-        let lock_path = Path::from(format!("{}/commit.lock", self.manifest_manager.manifest_dir));
+        let lock_path = Path::from(format!(
+            "{}/commit.lock",
+            self.manifest_manager.manifest_dir
+        ));
         let lock = crate::core::lock::FileBasedLock::new(self.store.clone(), lock_path, 60);
         let _dist_guard = lock.acquire().await?;
 
@@ -135,7 +138,10 @@ impl Maintenance {
     /// Scans storage and deletes files not referenced by ANY valid manifest (Active + History).
     /// Used to clean up failed writes (partial uploads).
     pub async fn remove_orphan_files(&self, older_than_ms: i64) -> Result<()> {
-        let lock_path = Path::from(format!("{}/commit.lock", self.manifest_manager.manifest_dir));
+        let lock_path = Path::from(format!(
+            "{}/commit.lock",
+            self.manifest_manager.manifest_dir
+        ));
         let lock = crate::core::lock::FileBasedLock::new(self.store.clone(), lock_path, 60);
         let _dist_guard = lock.acquire().await?;
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-ES 7.10.2 vs HyperStreamDB (hypersearch) — REST API benchmark.
+OpenSearch 2.11 vs HyperStreamDB (hypersearch) — REST API benchmark.
 
-Spawns a local Elasticsearch 7.10.2 (Docker, single-node, security disabled)
+Spawns a local OpenSearch 2.11 (Docker, single-node, security disabled)
 and a local ``hypersearch`` binary, feeds both the same document stream
 (one document per HTTP POST), and measures:
 
@@ -31,9 +31,9 @@ Fairness notes:
   * Latencies include the localhost HTTP round trip, measured identically.
 
 Run:
-    ./venv/bin/python benchmarks/competitive/benchmark_es710.py --size 100000 --storage local
-    ./venv/bin/python benchmarks/competitive/benchmark_es710.py --size 100000 --storage cloud
-    ./venv/bin/python benchmarks/competitive/benchmark_es710.py --quick
+    ./venv/bin/python benchmarks/competitive/benchmark_opensearch.py --size 100000 --storage local
+    ./venv/bin/python benchmarks/competitive/benchmark_opensearch.py --size 100000 --storage cloud
+    ./venv/bin/python benchmarks/competitive/benchmark_opensearch.py --quick
 """
 
 import argparse
@@ -60,8 +60,8 @@ BINARY_DEBUG = REPO_ROOT / "target" / "debug" / "hypersearch"
 BINARY = BINARY_RELEASE if BINARY_RELEASE.exists() else BINARY_DEBUG
 RESULTS_DIR = Path(__file__).resolve().parent / "benchmark_results"
 
-ES_IMAGE_DEFAULT = "docker.elastic.co/elasticsearch/elasticsearch:7.10.2"
-ES_CONTAINER = "es710-bench"
+ES_IMAGE_DEFAULT = "opensearchproject/opensearch:2.11.1"
+ES_CONTAINER = "opensearch-bench"
 ES_STARTUP_DEADLINE_S = 180.0
 HYPERSEARCH_STARTUP_DEADLINE_S = 60.0
 HTTP_TIMEOUT_S = 300.0
@@ -135,28 +135,40 @@ def percentiles(latencies_ms: List[float]) -> Dict:
 # Test data
 # --------------------------------------------------------------------------
 
-def make_vocab(n: int = 512) -> List[str]:
-    """Deterministic pronounceable word vocabulary (stable across runs)."""
-    prefixes = ["ne", "te", "vo", "ra", "lu", "mi", "ka", "se", "bo", "fa", "gi", "hu"]
-    roots = ["ra", "lo", "vi", "na", "to", "mi", "de", "su", "pa", "ri", "le", "no"]
-    suffixes = ["n", "t", "s", "x"]
-    vocab = [f"{p}{r}{s}" for p in prefixes for r in roots for s in suffixes]
-    random.Random(1337).shuffle(vocab)
-    return vocab[:n]
 
-
-def generate_documents(n: int, dim: int, vocab: List[str]) -> List[Dict]:
-    rng = random.Random(1337)
-    cats = [f"cat-{i}" for i in range(8)]
+def get_documents_from_hf(dataset_name, size, dim):
+    from datasets import load_dataset
+    import random
+    
     docs = []
-    for i in range(n):
+    print(f"Loading {size} docs from {dataset_name} (streaming)...")
+    
+    if dataset_name == "wiki":
+        ds = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
+        title_col = "title"
+        body_col = "text"
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}. Only 'wiki' is currently supported.")
+
+    for i, item in enumerate(ds):
+        if i >= size:
+            break
+        
+        title = item.get(title_col, "")
+        if not title and "article_title" in item:
+             title = item["article_title"]
+             
+        body = item.get(body_col, "")
+        if not body and "text" in item:
+             body = item["text"]
+             
         docs.append({
-            "title": " ".join(rng.choice(vocab) for _ in range(rng.randint(4, 8))),
-            "body": " ".join(rng.choice(vocab) for _ in range(rng.randint(80, 120))),
-            "category": rng.choice(cats),
-            "price": round(rng.uniform(1.0, 1000.0), 2),
-            "ts": f"2026-01-{1 + i % 28:02d}T00:00:00Z",
-            "embedding": [rng.random() for _ in range(dim)],
+            "title": title[:200] if title else "",
+            "body": body[:2000] if body else "",
+            "category": "science" if dataset_name == "pmc" else "general",
+            "price": 0.0,
+            "ts": "2026-01-01T00:00:00Z",
+            "embedding": [random.random() for _ in range(dim)]
         })
     return docs
 
@@ -278,8 +290,8 @@ class Hypersearch:
                 pass
 
 
-class Elasticsearch:
-    """Docker-managed single-node ES 7.10.2 (security off)."""
+class OpenSearch:
+    """Docker-managed single-node OpenSearch 2.11 (security off)."""
 
     def __init__(self, image: str, port: int, keep: bool = False):
         # Remove any stale container from a previous run.
@@ -289,7 +301,8 @@ class Elasticsearch:
                 "docker", "run", "-d", "--name", ES_CONTAINER,
                 "-p", f"{port}:9200",
                 "-e", "discovery.type=single-node",
-                "-e", "xpack.security.enabled=false",
+                "-e", "DISABLE_SECURITY_PLUGIN=true",
+                "-e", "OPENSEARCH_INITIAL_ADMIN_PASSWORD=my-strong-password123!",
                 image,
             ],
             capture_output=True,
@@ -321,13 +334,14 @@ class Elasticsearch:
             )
         self.info = self.session.get(self.base + "/", timeout=5).json()
 
-    def create_index(self, index: str) -> None:
+    def create_index(self, index: str, dim: int) -> None:
         body = {
             "settings": {
                 "index": {
                     "number_of_shards": 1,
                     "number_of_replicas": 0,
                     "refresh_interval": "-1",
+                    "knn": True
                 }
             },
             "mappings": {
@@ -337,6 +351,10 @@ class Elasticsearch:
                     "category": {"type": "keyword"},
                     "price": {"type": "float"},
                     "ts": {"type": "date"},
+                    "embedding": {
+                        "type": "knn_vector",
+                        "dimension": dim
+                    }
                 }
             },
         }
@@ -427,18 +445,34 @@ def bench_ingest(
     hardware: str,
 ) -> List[BenchmarkResult]:
     n = len(docs)
-    print(f"  ingesting {n:,} docs (single-doc POST)...")
+    print(f"  ingesting {n:,} docs (bulk POST)...")
     t0 = time.time()
     per_doc = []
-    for i, doc in enumerate(docs):
-        payload = {k: v for k, v in doc.items() if not (exclude_embedding and k == "embedding")}
+    batch_size = 100
+    for i in range(0, n, batch_size):
+        batch = docs[i:i+batch_size]
+        payload = ""
+        for doc in batch:
+            clean_doc = {k: v for k, v in doc.items() if not (exclude_embedding and k == "embedding")}
+            payload += '{"index": {}}\n'
+            payload += json.dumps(clean_doc) + '\n'
+            
         t = time.time()
-        r = system.index_doc(index, payload)
-        per_doc.append((time.time() - t) * 1000.0)
+        # system.base is the URL for the system
+        if system_name.startswith("OpenSearch"):
+            url = f"{system.base}/{index}/_bulk"
+        else:
+            url = f"{system.base}/{index}/_bulk"
+            
+        r = requests.post(url, data=payload, headers={'Content-Type': 'application/x-ndjson'})
         if r.status_code not in (200, 201):
-            raise RuntimeError(f"{system_name} ingest failed at doc {i}: {r.status_code} {r.text}")
-        if (i + 1) % max(1, n // 10) == 0:
-            print(f"    {i + 1:,}/{n:,}")
+            raise RuntimeError(f"{system_name} bulk ingest failed at doc {i}: {r.status_code} {r.text[:300]}")
+        
+        per_doc.extend([((time.time() - t) * 1000.0) / len(batch)] * len(batch))
+            
+        if (i + batch_size) % max(1, n // 10) == 0:
+            print(f"    {min(i + batch_size, n):,}/{n:,}")
+            
     ingest_s = time.time() - t0
 
     t0 = time.time()
@@ -531,8 +565,8 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
     outdir.mkdir(parents=True, exist_ok=True)
     storage_mode = meta.get("storage_mode", "local")
     doc_count = meta["docs"]
-    json_path = outdir / f"es710_hypersearch_{storage_mode}_{doc_count}_{timestamp}.json"
-    md_path = outdir / f"es710_hypersearch_{storage_mode}_{doc_count}_{timestamp}.md"
+    json_path = outdir / f"opensearch_hypersearch_{storage_mode}_{doc_count}_{timestamp}.json"
+    md_path = outdir / f"opensearch_hypersearch_{storage_mode}_{doc_count}_{timestamp}.md"
 
     with open(json_path, "w") as f:
         json.dump({"run": meta, "results": [asdict(r) for r in results]}, f, indent=2)
@@ -547,14 +581,14 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
     build_type = "release" if "release" in str(BINARY) else "debug"
 
     with open(md_path, "w") as f:
-        f.write("# ES 7.10.2 vs HyperStreamDB — REST API Benchmark\n\n")
+        f.write("# OpenSearch 2.11 vs HyperStreamDB — REST API Benchmark\n\n")
         f.write(f"**Generated:** {meta['generated']}  \n")
         f.write(f"**Host:** {meta['hardware']} ({platform.system()} {platform.release()})  \n")
         f.write(f"**ES:** {meta['es_version']} (build `{meta['es_build']}`, Docker, single-node, 1 shard, no replicas, 1 GiB JVM)  \n")
         f.write(f"**hypersearch:** {meta['hs_version']} ({build_type} build, storage: `{storage_mode}`, in-process HNSW/BM25)  \n")
         f.write(f"**Dataset:** {meta['docs']:,} docs × {meta['dim']}-dim embeddings, {meta['runs']} query runs, k=10\n\n")
 
-        f.write("## Ingest (single-doc POST; hypersearch has no `_bulk` in this test)\n\n")
+        f.write("## Ingest (bulk POST)\n\n")
         f.write("| System | docs/s | total | mean/doc | p95/doc | refresh (until searchable) |\n")
         f.write("|---|---|---|---|---|---|\n")
         if "ingest" in by_op and "refresh" in by_op:
@@ -565,6 +599,18 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
                     f"| {sys_name} | {ing.throughput:,.0f} | {ing.latency_ms / 1000.0:.1f}s "
                     f"| {ing.metadata['mean_ms']}ms | {ing.metadata['p95_ms']}ms | {ref.latency_ms:.0f}ms |\n"
                 )
+            
+            f.write("\n## Total Time to Searchable State (Ingest + Refresh)\n\n")
+            f.write("| System | Ingest Time | Refresh Time | Total Time |\n")
+            f.write("|---|---|---|---|\n")
+            for sys_name in sorted(by_op["ingest"]):
+                ing = by_op["ingest"][sys_name]
+                ref = by_op["refresh"][sys_name]
+                ing_sec = ing.latency_ms / 1000.0
+                ref_sec = ref.latency_ms / 1000.0
+                total_sec = ing_sec + ref_sec
+                f.write(f"| {sys_name} | {ing_sec:.1f}s | {ref_sec:.1f}s | **{total_sec:.1f}s** |\n")
+
         f.write("\n")
 
         f.write(f"## Query latency (p50 / p95 / p99, {meta['runs']} runs each)\n\n")
@@ -588,30 +634,37 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
                 )
         f.write("\n")
 
-        f.write("## Storage & Memory Footprint\n\n")
+        f.write("## Storage Footprint (True Cost of Data Lake Architecture)\n\n")
         f.write(f"**Raw document payload:** `{meta.get('raw_json_mb', 'n/a')} MB` (uncompressed JSON over HTTP)\n\n")
-        f.write("| System | Raw Payload | Primary Data | Secondary Indexes | Total Storage | Memory Ingest (RSS/Heap) | Memory Post-Search |\n")
-        f.write("|---|---|---|---|---|---|---|\n")
+        f.write("| System | Primary Data (Lake) | Secondary Indexes (Search) | Data Duplication? | Total True Footprint |\n")
+        f.write("|---|---|---|---|---|\n")
 
         hs_bd = meta.get("storage_breakdown", {}).get("HyperStreamDB", {})
-        es_bd = meta.get("storage_breakdown", {}).get("Elasticsearch 7.10.2", {})
+        es_bd = meta.get("storage_breakdown", {}).get("OpenSearch 2.11", {})
         rss = meta.get("rss_mb", {})
 
-        hs_parquet = f"{hs_bd.get('parquet_mb', 'n/a')} MB"
-        hs_idx = f"{hs_bd.get('indexes_mb', 'n/a')} MB"
-        hs_tot = f"{hs_bd.get('total_mb', 'n/a')} MB"
+        hs_parquet = hs_bd.get('parquet_mb', 0)
+        hs_idx = hs_bd.get('indexes_mb', 0)
+        hs_tot = hs_bd.get('total_mb', 0)
         hs_mem_in = f"{rss.get('HyperStreamDB_after_ingest', 'n/a')} MB RSS"
         hs_mem_srch = f"{rss.get('HyperStreamDB_after_search', 'n/a')} MB RSS"
-        f.write(f"| HyperStreamDB ({storage_mode}) | {meta.get('raw_json_mb', 'n/a')} MB | {hs_parquet} (Parquet) | {hs_idx} (HNSW+BM25) | {hs_tot} | {hs_mem_in} | {hs_mem_srch} |\n")
+        f.write(f"| HyperStreamDB ({storage_mode}) | {hs_parquet} MB (Parquet) | {hs_idx} MB (HNSW+BM25) | No | **{hs_tot} MB** |\n")
 
-        if "Elasticsearch 7.10.2" in by_op.get("ingest", {}):
-            es_store = f"{es_bd.get('lucene_store_mb', 'n/a')} MB"
-            es_tot = f"{es_bd.get('data_dir_total_mb', 'n/a')} MB"
-            es_heap_in = f"JVM Heap: {rss.get('Elasticsearch_jvm_heap_after_ingest', 'n/a')} MB"
-            es_rss_in = f"Container RSS: {rss.get('Elasticsearch_container_rss_after_ingest', 'n/a')} MB"
-            es_heap_srch = f"JVM Heap: {rss.get('Elasticsearch_jvm_heap_after_search', 'n/a')} MB"
-            es_rss_srch = f"Container RSS: {rss.get('Elasticsearch_container_rss_after_search', 'n/a')} MB"
-            f.write(f"| Elasticsearch 7.10.2 (local) | {meta.get('raw_json_mb', 'n/a')} MB | {es_store} (Lucene) | Included in Lucene | {es_tot} | {es_heap_in} ({es_rss_in}) | {es_heap_srch} ({es_rss_srch}) |\n")
+        if "OpenSearch 2.11" in by_op.get("ingest", {}):
+            es_store = es_bd.get('lucene_store_mb', 0)
+            es_true = (float(hs_parquet) if hs_parquet != 'n/a' else 0) + (float(es_store) if es_store != 'n/a' else 0)
+            es_heap_in = f"JVM Heap: {rss.get('OpenSearch_jvm_heap_after_ingest', 'n/a')} MB"
+            es_rss_in = f"Container RSS: {rss.get('OpenSearch_container_rss_after_ingest', 'n/a')} MB"
+            f.write(f"| OpenSearch 2.11 (local) | {hs_parquet} MB (Duplicated Lake Source) | {es_store} MB (Lucene) | Yes | **{es_true:.2f} MB** |\n")
+
+        f.write("\n## Memory Usage\n\n")
+        f.write("| System | Memory Ingest (RSS/Heap) | Memory Post-Search |\n")
+        f.write("|---|---|---|\n")
+        f.write(f"| HyperStreamDB ({storage_mode}) | {hs_mem_in} | {hs_mem_srch} |\n")
+        if "OpenSearch 2.11" in by_op.get("ingest", {}):
+            es_heap_srch = f"JVM Heap: {rss.get('OpenSearch_jvm_heap_after_search', 'n/a')} MB"
+            es_rss_srch = f"Container RSS: {rss.get('OpenSearch_container_rss_after_search', 'n/a')} MB"
+            f.write(f"| OpenSearch 2.11 (local) | {es_heap_in} ({es_rss_in}) | {es_heap_srch} ({es_rss_srch}) |\n")
 
         f.write("\n")
 
@@ -642,14 +695,15 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
 # --------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ES 7.10.2 vs hypersearch REST benchmark")
+    parser = argparse.ArgumentParser(description="OpenSearch 2.11 vs hypersearch REST benchmark")
+    parser.add_argument("--dataset", choices=["wiki", "pmc"], default="wiki", help="HuggingFace dataset to use")
     parser.add_argument("--size", type=int, default=1000, help="document count (default 1000)")
     parser.add_argument("--quick", action="store_true", help="quick run: 200 docs, 20 runs, dim 32")
     parser.add_argument("--dim", type=int, default=64, help="embedding dimension (default 64)")
     parser.add_argument("--runs", type=int, default=100, help="query runs per operation (default 100)")
     parser.add_argument("--storage", choices=["local", "cloud"], default="local", help="storage backend for HyperStreamDB (default: local)")
     parser.add_argument("--cloud-uri", default="s3://warehouse/benchmarks", help="S3 URI prefix when --storage=cloud (default: s3://warehouse/benchmarks)")
-    parser.add_argument("--skip-es", action="store_true", help="skip Elasticsearch (hypersearch only)")
+    parser.add_argument("--skip-es", action="store_true", help="skip OpenSearch (hypersearch only)")
     parser.add_argument("--es-port", type=int, default=None, help="host port for ES (default: auto)")
     parser.add_argument("--keep-es", action="store_true", help="do not remove the ES container at the end")
     parser.add_argument("--es-image", default=ES_IMAGE_DEFAULT, help="ES docker image")
@@ -665,20 +719,20 @@ def main() -> None:
         raise SystemExit(f"{BINARY} not found; run `cargo build -p hyperstreamdb-search --bin hypersearch` first")
 
     print("=" * 72)
-    print("ES 7.10.2 vs HyperStreamDB — REST benchmark")
+    print("OpenSearch 2.11 vs HyperStreamDB — REST benchmark")
     print("=" * 72)
     print(f"size={size} dim={dim} runs={runs} storage={args.storage} skip_es={args.skip_es} binary={BINARY.name}")
 
     hardware = get_hardware_info()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    vocab = make_vocab(512)
+    words = ['science', 'research', 'data', 'information', 'study', 'history', 'world', 'time', 'people', 'water']
     print(f"Generating {size:,} test documents ({dim}-dim embeddings)...")
-    docs = generate_documents(size, dim, vocab)
+    docs = get_documents_from_hf(args.dataset, size, dim)
     raw_doc_bytes = sum(len(json.dumps(d).encode("utf-8")) for d in docs)
     raw_doc_mb = round(raw_doc_bytes / (1024 * 1024), 2)
     print(f"Raw document payload size: {raw_doc_mb} MB")
 
-    words = random.Random(2026).sample(vocab, min(runs, len(vocab)))
+    
     qvecs = [[random.Random(4242 + i).random() for _ in range(dim)] for i in range(runs)]
 
     results: List[BenchmarkResult] = []
@@ -753,33 +807,36 @@ def main() -> None:
         if local_dir_to_clean:
             shutil.rmtree(local_dir_to_clean, ignore_errors=True)
 
-    # ---------------- Elasticsearch ----------------
+    # ---------------- OpenSearch ----------------
     if not args.skip_es:
-        print("\n[Elasticsearch 7.10.2 (Docker)]")
+        print("\n[OpenSearch 2.11 (Docker)]")
         es = None
         es_port = args.es_port or free_port()
         try:
-            es = Elasticsearch(args.es_image, es_port, keep=args.keep_es)
+            es = OpenSearch(args.es_image, es_port, keep=args.keep_es)
             es_index = "bench-es-" + uuid.uuid4().hex[:8]
-            es.create_index(es_index)
-            results += bench_ingest(es, "Elasticsearch 7.10.2", es_index, docs, exclude_embedding=True,
+            es.create_index(es_index, dim)
+            results += bench_ingest(es, "OpenSearch 2.11", es_index, docs, exclude_embedding=False,
                                     hardware=hardware)
             # Capture ES storage & memory breakdown after ingest
             es_data_dir = es.data_dir_mb()
             es_store = es.index_store_mb(es_index)
             results[-2].storage_mb = es_data_dir
-            meta["storage_breakdown"]["Elasticsearch 7.10.2"] = {
+            meta["storage_breakdown"]["OpenSearch 2.11"] = {
                 "lucene_store_mb": es_store,
                 "data_dir_total_mb": es_data_dir,
             }
-            meta["rss_mb"]["Elasticsearch_jvm_heap_after_ingest"] = es.jvm_heap_mb()
-            meta["rss_mb"]["Elasticsearch_container_rss_after_ingest"] = es.container_rss_mb()
+            meta["rss_mb"]["OpenSearch_jvm_heap_after_ingest"] = es.jvm_heap_mb()
+            meta["rss_mb"]["OpenSearch_container_rss_after_ingest"] = es.container_rss_mb()
             ver = es.info["version"]
             meta["es_version"] = ver["number"]
             meta["es_build"] = ver.get("build_hash", "unknown")
 
             def match_body_es(i):
                 return {"query": {"match": {"body": words[i % len(words)]}}, "size": 10}
+
+            def knn_body_es(i):
+                return {"size": 10, "query": {"knn": {"embedding": {"vector": qvecs[i % len(qvecs)], "k": 10}}}}
 
             def filtered_body_es(i):
                 return {
@@ -793,21 +850,23 @@ def main() -> None:
                 }
 
             results.append(bench_query(
-                es, "Elasticsearch 7.10.2", es_index, "match_bm25", match_body_es, runs, size, hardware))
+                es, "OpenSearch 2.11", es_index, "match_bm25", match_body_es, runs, size, hardware))
             results.append(bench_query(
-                es, "Elasticsearch 7.10.2", es_index, "filtered", filtered_body_es, runs, size, hardware))
-            meta["rss_mb"]["Elasticsearch_jvm_heap_after_search"] = es.jvm_heap_mb()
-            meta["rss_mb"]["Elasticsearch_container_rss_after_search"] = es.container_rss_mb()
-            meta["rss_mb"]["Elasticsearch 7.10.2"] = es.container_rss_mb()
+                es, "OpenSearch 2.11", es_index, "filtered", filtered_body_es, runs, size, hardware))
+            results.append(bench_query(
+                es, "OpenSearch 2.11", es_index, "knn", knn_body_es, runs, size, hardware, extra_meta={"dim": dim}))
+            meta["rss_mb"]["OpenSearch_jvm_heap_after_search"] = es.jvm_heap_mb()
+            meta["rss_mb"]["OpenSearch_container_rss_after_search"] = es.container_rss_mb()
+            meta["rss_mb"]["OpenSearch 2.11"] = es.container_rss_mb()
             es.delete_index(es_index)
         except RuntimeError as e:
-            meta["notes"].append(f"Elasticsearch run failed: {e}")
+            meta["notes"].append(f"OpenSearch run failed: {e}")
             print(f"  !! {e}")
         finally:
             if es is not None:
                 es.stop()
     else:
-        meta["notes"].append("Elasticsearch skipped (--skip-es)")
+        meta["notes"].append("OpenSearch skipped (--skip-es)")
         meta["es_version"] = "skipped"
         meta["es_build"] = "n/a"
 

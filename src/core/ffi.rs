@@ -17,54 +17,75 @@ lazy_static! {
 }
 
 pub struct HyperStreamSession {
-    reader: HybridReader,
+    reader: Option<HybridReader>, // Used if no filter
+    path: String,
+    filter_str: Option<String>,
     current_batches: Vec<arrow::record_batch::RecordBatch>,
     current_idx: usize,
 }
 
 impl HyperStreamSession {
-    pub fn new(path: &str) -> anyhow::Result<Self> {
-        // Path expected: s3://bucket/path/to/segment_001.parquet or file:///path/to/file.parquet
-
-        // 1. Extract Parent (Store Root) and Segment ID
-        let (parent_uri, segment_id) = if let Some(idx) = path.rfind('/') {
-            let parent = &path[..idx];
-            let filename = &path[idx + 1..];
-            let seg_id = filename.strip_suffix(".parquet").unwrap_or(filename);
-            (parent, seg_id)
+    pub fn new(path: &str, row_selection: Option<String>) -> anyhow::Result<Self> {
+        let filter_str = row_selection.filter(|s| !s.trim().is_empty());
+        if filter_str.is_some() {
+            // If there's a filter, we rely on DataFusion in next_batch, so we don't need HybridReader.
+            Ok(Self {
+                reader: None,
+                path: path.to_string(),
+                filter_str,
+                current_batches: vec![],
+                current_idx: 0,
+            })
         } else {
-            // No slash? assume current dir? Unlikely for URI.
-            (".", path)
-        };
+            // Fallback to HybridReader if no filter is provided
+            let (parent_uri, segment_id) = if let Some(idx) = path.rfind('/') {
+                let parent = &path[..idx];
+                let filename = &path[idx + 1..];
+                let seg_id = filename.strip_suffix(".parquet").unwrap_or(filename);
+                (parent, seg_id)
+            } else {
+                (".", path)
+            };
 
-        // 2. Create Store pointing to parent directory
-        let store = create_object_store(parent_uri)?;
-
-        // 3. Config with just the ID
-        let config = SegmentConfig::new("", segment_id);
-
-        let reader = HybridReader::new(config, store, path);
-        Ok(Self {
-            reader,
-            current_batches: vec![],
-            current_idx: 0,
-        })
+            let store = create_object_store(parent_uri)?;
+            let config = SegmentConfig::new("", segment_id);
+            let reader = HybridReader::new(config, store, path);
+            Ok(Self {
+                reader: Some(reader),
+                path: path.to_string(),
+                filter_str: None,
+                current_batches: vec![],
+                current_idx: 0,
+            })
+        }
     }
 
     pub fn next_batch(&mut self) -> Option<arrow::record_batch::RecordBatch> {
-        // Simple buffering logic: load everything once?
-        // Or implement async stream polling in sync context.
         if self.current_batches.is_empty() {
-            // Load from Reader (blocking on global runtime)
-            // In real impl, keep the stream open.
             let res = RUNTIME.block_on(async {
-                // FFI reads all columns by default
-                let mut stream = self.reader.stream_all(None).await?;
-                let mut batches = Vec::new();
-                while let Some(batch_result) = stream.next().await {
-                    batches.push(batch_result?);
+                if let Some(ref filter) = self.filter_str {
+                    // Use DataFusion to apply the filter
+                    let ctx = datafusion::prelude::SessionContext::new();
+                    ctx.register_parquet("segment", &self.path, Default::default())
+                        .await?;
+                    let query = format!("SELECT * FROM segment WHERE {}", filter);
+                    let df = ctx.sql(&query).await?;
+                    let mut stream = df.execute_stream().await?;
+                    let mut batches = Vec::new();
+                    while let Some(batch_result) = stream.next().await {
+                        batches.push(batch_result?);
+                    }
+                    Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(batches)
+                } else if let Some(ref reader) = self.reader {
+                    let mut stream = reader.stream_all(None).await?;
+                    let mut batches = Vec::new();
+                    while let Some(batch_result) = stream.next().await {
+                        batches.push(batch_result?);
+                    }
+                    Ok(batches)
+                } else {
+                    Ok(vec![])
                 }
-                Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(batches)
             });
             match res {
                 Ok(batches) => {
@@ -88,32 +109,43 @@ impl HyperStreamSession {
     }
 }
 
-/// Native method implementation for `com.hyperstreamdb.trino.HyperStreamDBPageSource.openSession`
 #[no_mangle]
 pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_openSession(
     mut env: JNIEnv,
     _class: JClass,
     path: JString,
+    row_selection: JString,
 ) -> jlong {
     let path_str: String = match env.get_string(&path) {
         Ok(s) => s.into(),
         Err(_) => return 0,
     };
 
-    // Bounds check: reject empty paths and paths exceeding 4KB (reasonable limit for a URI)
+    let row_selection_str: Option<String> = if row_selection.is_null() {
+        None
+    } else {
+        match env.get_string(&row_selection) {
+            Ok(s) => Some(s.into()),
+            Err(_) => None,
+        }
+    };
+
     if path_str.is_empty() || path_str.len() > 4096 {
         tracing::warn!("FFI: Path validation failed (empty or exceeds 4KB limit)");
         return 0;
     }
-    // Reject paths with NULL bytes (common FFI injection)
     if path_str.contains('\0') {
         tracing::warn!("FFI: Path contains NULL bytes");
         return 0;
     }
 
-    tracing::info!("FFI: Opening Session to {}", path_str);
+    tracing::info!(
+        "FFI: Opening Session to {} with filter {:?}",
+        path_str,
+        row_selection_str
+    );
 
-    match HyperStreamSession::new(&path_str) {
+    match HyperStreamSession::new(&path_str, row_selection_str) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
             tracing::error!("FFI Error opening session: {}", e);
@@ -184,10 +216,21 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
     _class: JClass,
     table_uri: JString,
     max_split_size: jlong,
+    filter_str: JString,
 ) -> jstring {
     let uri: String = match env.get_string(&table_uri) {
         Ok(s) => s.into(),
         Err(_) => return std::ptr::null_mut(),
+    };
+
+    let filter: String = match env.get_string(&filter_str) {
+        Ok(s) => s.into(),
+        Err(_) => String::new(),
+    };
+    let filter_opt = if filter.is_empty() {
+        None
+    } else {
+        Some(filter.as_str())
     };
 
     // Bounds check: reject empty URIs and URIs exceeding 4KB
@@ -216,7 +259,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
     tracing::info!("FFI: Getting splits for {} (max size: {})", uri, split_size);
 
     let splits_json = match Table::new(uri.clone()) {
-        Ok(table) => match table.get_splits(split_size) {
+        Ok(table) => match table.get_splits(split_size, filter_opt) {
             Ok(splits) => serde_json::to_string(&splits).unwrap_or_else(|_| "[]".to_string()),
             Err(e) => {
                 tracing::error!("FFI Error getting splits: {}", e);

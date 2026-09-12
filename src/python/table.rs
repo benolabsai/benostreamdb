@@ -1376,6 +1376,9 @@ impl PyTable {
             None
         };
 
-        Ok(TOKIO_RUNTIME.block_on(self.table.explain(filter.as_deref(), vs_params.map(|p| vec![p]))))
+        Ok(TOKIO_RUNTIME.block_on(
+            self.table
+                .explain(filter.as_deref(), vs_params.map(|p| vec![p])),
+        ))
     }
 }

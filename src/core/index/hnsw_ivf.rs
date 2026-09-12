@@ -253,6 +253,7 @@ impl HnswIvfIndex {
         n_lists: Option<usize>,
         hnsw_m: Option<usize>,
         algo: &IndexAlgorithm,
+        offset: usize,
     ) -> Result<Self> {
         let start = std::time::Instant::now();
         if vectors.is_empty() {
@@ -328,7 +329,9 @@ impl HnswIvfIndex {
             .fold(
                 HashMap::<usize, Vec<(Vec<f32>, usize)>>::new,
                 |mut acc, (row_id, (vec, cluster_id))| {
-                    acc.entry(cluster_id).or_default().push((vec, row_id));
+                    acc.entry(cluster_id)
+                        .or_default()
+                        .push((vec, row_id + offset));
                     acc
                 },
             )
@@ -1442,9 +1445,15 @@ mod tests {
         }
 
         let algo = crate::core::manifest::IndexAlgorithm::hnsw();
-        let index =
-            HnswIvfIndex::build(vectors.clone(), VectorMetric::L2, Some(2), Some(16), &algo)
-                .unwrap();
+        let index = HnswIvfIndex::build(
+            vectors.clone(),
+            VectorMetric::L2,
+            Some(2),
+            Some(16),
+            &algo,
+            0,
+        )
+        .unwrap();
         let query = VectorValue::Float32(vectors[50].clone());
 
         // Unfiltered search (should find ID 50 easily since it's an exact match)

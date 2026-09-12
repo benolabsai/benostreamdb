@@ -214,7 +214,7 @@ impl ExecutionPlan for VectorScanExec {
                     vec![entry.clone()],
                     table.object_store(),
                     None,
-                    &table.table_uri(),
+                    table.table_uri(),
                     requests,
                 ).await {
                     Ok(batches) => {

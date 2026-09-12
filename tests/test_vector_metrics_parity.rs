@@ -111,7 +111,8 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
             search_device: None,
         };
 
-        let index = HnswIvfIndex::build(vectors.clone(), metric, Some(n_lists), Some(16), &algo)?;
+        let index =
+            HnswIvfIndex::build(vectors.clone(), metric, Some(n_lists), Some(16), &algo, 0)?;
 
         // Search with n_probe = n_lists to check fine HNSW search accuracy against exact ground truth
         let results = index.search(&VectorValue::Float32(query.clone()), k, n_lists, None)?;
