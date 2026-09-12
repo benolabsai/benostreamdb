@@ -55,8 +55,47 @@ impl IndexFileKey {
     }
 }
 
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub enum CachedIndex {
+    Bytes(Vec<u8>),
+    Hnsw(Arc<hyperstreamdb::core::index::hnsw_ivf::HnswGraph>),
+}
+
+#[cfg(test)]
+impl PartialEq for CachedIndex {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bytes(a), Self::Bytes(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for CachedIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bytes(v) => write!(f, "Bytes({:?})", v),
+            Self::Hnsw(_) => write!(f, "Hnsw(...)"),
+        }
+    }
+}
+
+impl CachedIndex {
+    pub fn size_bytes(&self) -> u64 {
+        match self {
+            CachedIndex::Bytes(b) => b.len() as u64,
+            // HNSW graphs are typically ~1.5x the size of the raw bytes due to pointer overhead
+            // We approximate this by picking a reasonable average if we don't have the exact byte count
+            CachedIndex::Hnsw(_) => 1024 * 1024 * 10, // Default 10MB approx
+        }
+    }
+}
+
 struct Entry {
-    bytes: Vec<u8>,
+    data: CachedIndex,
     size: u64,
     #[allow(dead_code)]
     last_access: Instant,
@@ -100,17 +139,17 @@ impl IndexFileCache {
 
     /// The configured byte cap.
     pub fn max_size(&self) -> u64 {
-        self.inner.lock().unwrap().max_size
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).max_size
     }
 
     /// Total bytes currently cached.
     pub fn current_size(&self) -> u64 {
-        self.inner.lock().unwrap().current_size
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).current_size
     }
 
     /// Number of cached entries.
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap().entries.len()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).entries.len()
     }
 
     /// Whether the cache is empty.
@@ -120,21 +159,21 @@ impl IndexFileCache {
 
     /// Look up a cached file, marking it most-recently-used. Returns a clone of
     /// the bytes on a hit, or `None` on a miss.
-    pub fn get(&self, key: &IndexFileKey) -> Option<Vec<u8>> {
-        let mut inner = self.inner.lock().unwrap();
+    pub fn get(&self, key: &IndexFileKey) -> Option<CachedIndex> {
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         // Move to the back (most-recent) of the LRU order.
         if let Some(pos) = inner.order.iter().position(|k| k == key) {
             inner.order.swap_remove(pos);
             inner.order.push(key.clone());
         }
-        inner.entries.get(key).map(|e| e.bytes.clone())
+        inner.entries.get(key).map(|e| e.data.clone())
     }
 
     /// Insert (or replace) a file, then evict least-recently-used entries until
     /// the cache is within its byte cap.
-    pub fn put(&self, key: IndexFileKey, bytes: Vec<u8>) {
-        let size = bytes.len() as u64;
-        let mut inner = self.inner.lock().unwrap();
+    pub fn put(&self, key: IndexFileKey, data: CachedIndex) {
+        let size = data.size_bytes();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
 
         // Replace an existing entry: account for the size delta first.
         if let Some(old) = inner.entries.remove(&key) {
@@ -147,7 +186,7 @@ impl IndexFileCache {
         inner.entries.insert(
             key.clone(),
             Entry {
-                bytes,
+                data,
                 size,
                 last_access: Instant::now(),
             },
@@ -174,7 +213,7 @@ impl IndexFileCache {
     /// Remove all entries for an index (e.g. after `DELETE /{index}` or a
     /// refresh that rewrites its segments). Returns the number removed.
     pub fn invalidate_index(&self, index: &str) -> usize {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<IndexFileKey> = inner
             .entries
             .keys()
@@ -198,7 +237,7 @@ impl IndexFileCache {
     /// than `version` (a refresh bumped the version, so older segments' cached
     /// files are stale). Returns the number removed.
     pub fn invalidate_older_versions(&self, index: &str, version: u64) -> usize {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<IndexFileKey> = inner
             .entries
             .keys()
@@ -242,8 +281,14 @@ mod tests {
     #[test]
     fn put_then_get_roundtrips() {
         let cache = IndexFileCache::with_capacity(1024);
-        cache.put(key("i", "s", "c", "f", 1), vec![1, 2, 3]);
-        assert_eq!(cache.get(&key("i", "s", "c", "f", 1)), Some(vec![1, 2, 3]));
+        cache.put(
+            key("i", "s", "c", "f", 1),
+            CachedIndex::Bytes(vec![1, 2, 3]),
+        );
+        assert_eq!(
+            cache.get(&key("i", "s", "c", "f", 1)),
+            Some(CachedIndex::Bytes(vec![1, 2, 3]))
+        );
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.current_size(), 3);
     }
@@ -251,22 +296,28 @@ mod tests {
     #[test]
     fn distinct_keys_are_distinct_entries() {
         let cache = IndexFileCache::with_capacity(4096);
-        cache.put(key("i", "s1", "c", "f", 1), vec![1]);
-        cache.put(key("i", "s2", "c", "f", 1), vec![2]);
-        cache.put(key("i", "s1", "c", "f", 2), vec![3]); // newer manifest version
+        cache.put(key("i", "s1", "c", "f", 1), CachedIndex::Bytes(vec![1]));
+        cache.put(key("i", "s2", "c", "f", 1), CachedIndex::Bytes(vec![2]));
+        cache.put(key("i", "s1", "c", "f", 2), CachedIndex::Bytes(vec![3])); // newer manifest version
         assert_eq!(cache.len(), 3);
-        assert_eq!(cache.get(&key("i", "s1", "c", "f", 1)), Some(vec![1]));
-        assert_eq!(cache.get(&key("i", "s1", "c", "f", 2)), Some(vec![3]));
+        assert_eq!(
+            cache.get(&key("i", "s1", "c", "f", 1)),
+            Some(CachedIndex::Bytes(vec![1]))
+        );
+        assert_eq!(
+            cache.get(&key("i", "s1", "c", "f", 2)),
+            Some(CachedIndex::Bytes(vec![3]))
+        );
     }
 
     #[test]
     fn evicts_lru_when_over_cap() {
         // Cap of 10 bytes; each entry is 4 bytes.
         let cache = IndexFileCache::with_capacity(10);
-        cache.put(key("i", "a", "c", "f", 1), vec![0; 4]);
-        cache.put(key("i", "b", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i", "a", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i", "b", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         // Third insert pushes to 12 > 10, evicting the LRU ("a").
-        cache.put(key("i", "c", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i", "c", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         assert!(cache.get(&key("i", "a", "c", "f", 1)).is_none());
         assert!(cache.get(&key("i", "b", "c", "f", 1)).is_some());
         assert!(cache.get(&key("i", "c", "c", "f", 1)).is_some());
@@ -276,11 +327,11 @@ mod tests {
     #[test]
     fn access_refreshes_lru_order() {
         let cache = IndexFileCache::with_capacity(10);
-        cache.put(key("i", "a", "c", "f", 1), vec![0; 4]);
-        cache.put(key("i", "b", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i", "a", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i", "b", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         // Touch "a" so "b" becomes the LRU.
         let _ = cache.get(&key("i", "a", "c", "f", 1));
-        cache.put(key("i", "c", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i", "c", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         // "b" (now LRU) is evicted, "a" survives.
         assert!(cache.get(&key("i", "b", "c", "f", 1)).is_none());
         assert!(cache.get(&key("i", "a", "c", "f", 1)).is_some());
@@ -289,9 +340,9 @@ mod tests {
     #[test]
     fn replace_same_key_does_not_double_count_size() {
         let cache = IndexFileCache::with_capacity(1024);
-        cache.put(key("i", "s", "c", "f", 1), vec![0; 8]);
+        cache.put(key("i", "s", "c", "f", 1), CachedIndex::Bytes(vec![0; 8]));
         assert_eq!(cache.current_size(), 8);
-        cache.put(key("i", "s", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i", "s", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         assert_eq!(cache.current_size(), 4);
         assert_eq!(cache.len(), 1);
     }
@@ -299,9 +350,9 @@ mod tests {
     #[test]
     fn invalidate_index_removes_only_that_index() {
         let cache = IndexFileCache::with_capacity(4096);
-        cache.put(key("i1", "s", "c", "f", 1), vec![0; 4]);
-        cache.put(key("i1", "s2", "c", "f", 1), vec![0; 4]);
-        cache.put(key("i2", "s", "c", "f", 1), vec![0; 4]);
+        cache.put(key("i1", "s", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i1", "s2", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i2", "s", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
         let removed = cache.invalidate_index("i1");
         assert_eq!(removed, 2);
         assert!(cache.get(&key("i1", "s", "c", "f", 1)).is_none());
@@ -312,9 +363,9 @@ mod tests {
     #[test]
     fn invalidate_older_versions_keeps_current() {
         let cache = IndexFileCache::with_capacity(4096);
-        cache.put(key("i", "s", "c", "f", 1), vec![0; 4]);
-        cache.put(key("i", "s", "c", "f", 2), vec![0; 4]);
-        cache.put(key("i", "s", "c", "f", 3), vec![0; 4]);
+        cache.put(key("i", "s", "c", "f", 1), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i", "s", "c", "f", 2), CachedIndex::Bytes(vec![0; 4]));
+        cache.put(key("i", "s", "c", "f", 3), CachedIndex::Bytes(vec![0; 4]));
         // A refresh bumped the version to 3; versions < 3 are stale.
         let removed = cache.invalidate_older_versions("i", 3);
         assert_eq!(removed, 2);

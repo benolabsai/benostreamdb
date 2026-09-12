@@ -32,21 +32,16 @@ pub struct ColumnIndexConfig {
 }
 
 /// Strategy for labeling unnamed or numerically named columns during first write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LabelPattern {
     /// Excel style: A, B, C... AA, AB... (Default for premium UX)
+    #[default]
     ExcelAlpha,
     /// Polars style: column_1, column_2...
     Polars,
     /// Pandas style: 0, 1, 2...
     Pandas,
-}
-
-impl Default for LabelPattern {
-    fn default() -> Self {
-        Self::ExcelAlpha
-    }
 }
 
 /// Indexing state and configuration for a Table

@@ -206,8 +206,8 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     }
     let mut distv = vec![0; len];
     io_in.read_exact(distv.as_mut_slice())?;
-    let distname = String::from_utf8(distv)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let distname =
+        String::from_utf8(distv).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     log::debug!("distance name {:?} ", distname);
     descr.distname = distname;
     // reload of type name
@@ -221,8 +221,8 @@ pub fn load_description(io_in: &mut dyn Read) -> io::Result<Description> {
     }
     let mut tnamev = vec![0; len];
     io_in.read_exact(tnamev.as_mut_slice())?;
-    let t_name = String::from_utf8(tnamev)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let t_name =
+        String::from_utf8(tnamev).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     log::debug!("T type name {:?} ", t_name);
     descr.t_name = t_name;
     log::debug!(" end of description load \n");
@@ -376,7 +376,10 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     if magic != MAGICDATAP {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("magic not equal to MAGICDATAP in load_point, point_id : {:?}", origin_id),
+            format!(
+                "magic not equal to MAGICDATAP in load_point, point_id : {:?}",
+                origin_id
+            ),
         ));
     }
     // read origin id
@@ -532,13 +535,19 @@ fn load_point_indexation<
             if l != p_id.0 as usize {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("layer mismatch during reload: expected {}, got {}", l, p_id.0),
+                    format!(
+                        "layer mismatch during reload: expected {}, got {}",
+                        l, p_id.0
+                    ),
                 ));
             }
             if r != p_id.1 as usize {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("rank mismatch during reload: expected {}, got {}", r, p_id.1),
+                    format!(
+                        "rank mismatch during reload: expected {}, got {}",
+                        r, p_id.1
+                    ),
                 ));
             }
             // store neoghbour info of this point
@@ -710,7 +719,10 @@ pub fn load_hnsw<
     if dimension != description.dimension {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("data dimension incoherent: {} vs {}", dimension, description.dimension),
+            format!(
+                "data dimension incoherent: {} vs {}",
+                dimension, description.dimension
+            ),
         ));
     }
     //
@@ -787,7 +799,10 @@ pub fn load_hnsw_with_dist<
     if dimension != description.dimension {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("data dimension incoherent: {} vs {}", dimension, description.dimension),
+            format!(
+                "data dimension incoherent: {} vs {}",
+                dimension, description.dimension
+            ),
         ));
     }
     //

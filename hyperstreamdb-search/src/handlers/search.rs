@@ -737,7 +737,7 @@ pub async fn search_core(
                 // own BM25 index; the result shape (rows + trailing distance
                 // column) is preserved, which is acceptable for v1.
                 let batches = table
-                    .read_async(req.filter.as_deref(), Some(vp.clone()), None)
+                    .read_async(req.filter.as_deref(), Some(vec![vp.clone()]), None)
                     .await
                     .map_err(translate_search_error)?;
                 (batches, ScoreKind::Distance, Some(vp.k))
@@ -1132,12 +1132,28 @@ mod tests {
 
     #[tokio::test]
     async fn search_match_bm25() {
+        let _ = tracing_subscriber::fmt()
+            .with_test_writer()
+            .with_max_level(tracing::Level::DEBUG)
+            .try_init();
         let tmp = tempfile::tempdir().unwrap();
         let root = format!("file://{}", tmp.path().display());
         let state = AppState::new(root, "test-cluster".into());
         std::fs::create_dir_all(tmp.path().join("docs")).unwrap();
 
+        crate::handlers::indices::create_index_core(&state, "docs", None)
+            .await
+            .unwrap();
+        crate::handlers::mapping::put_mapping_core(
+            &state,
+            "docs",
+            &json!({"properties": {"body": {"type": "text"}}, "indexes": {"body": "bm25"}}),
+        )
+        .await
+        .unwrap();
+
         index_docs(&state, "docs", &[
+
             json!({"title": "alpha", "body": "quick brown fox", "category": "animal", "age": 10}),
             json!({"title": "beta", "body": "lazy dog sleeps", "category": "animal", "age": 20}),
             json!({"title": "gamma", "body": "the cat purred", "category": "animal", "age": 30}),
@@ -1254,6 +1270,17 @@ mod tests {
         let root = format!("file://{}", tmp.path().display());
         let state = AppState::new(root, "test-cluster".into());
         std::fs::create_dir_all(tmp.path().join("f")).unwrap();
+
+        crate::handlers::indices::create_index_core(&state, "f", None)
+            .await
+            .unwrap();
+        crate::handlers::mapping::put_mapping_core(
+            &state,
+            "f",
+            &json!({"properties": {"body": {"type": "text"}}, "indexes": {"body": "bm25"}}),
+        )
+        .await
+        .unwrap();
 
         index_docs(
             &state,
