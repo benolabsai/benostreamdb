@@ -1284,10 +1284,121 @@ impl HybridReader {
         // Fetch Rows - use resolved path
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
+        let cache_key = format!("{}/{}", self.root_uri, pq_path_str);
 
+        // --- HOT ROW CACHE (FAST PATH) ---
+        let mut cached_full_batch = crate::core::cache::BLOCK_CACHE
+            .get_with_metrics(&cache_key, "block_cache")
+            .await;
+
+        if cached_full_batch.is_none() {
+            let object_meta = self
+                .store
+                .head(&pq_path)
+                .await
+                .context("Failed to get segment metadata")?;
+
+            if object_meta.size < 500 * 1024 * 1024 {
+                let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location.clone());
+                let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
+                let schema = b.schema().clone();
+                let mut stream = b.build()?;
+
+                let mut batches = Vec::new();
+                use futures::StreamExt;
+                while let Some(batch_res) = stream.next().await {
+                    if let Ok(b) = batch_res {
+                        batches.push(b);
+                    }
+                }
+
+                if !batches.is_empty() {
+                    if let Ok(combined) = arrow::compute::concat_batches(&schema, &batches) {
+                        let arc_batch = std::sync::Arc::new(combined);
+                        crate::core::cache::BLOCK_CACHE
+                            .insert(cache_key.clone(), arc_batch.clone())
+                            .await;
+                        cached_full_batch = Some(arc_batch);
+                    }
+                }
+            }
+        }
+
+        if let Some(batch) = cached_full_batch {
+            let row_ids: Vec<u32> = bitmap.iter().collect();
+            let indices = arrow::array::UInt32Array::from(row_ids.clone());
+
+            if let Ok(mut final_batch) = arrow::compute::take_record_batch(&batch, &indices) {
+                // Schema Evolution Mapping
+                if let Some(target) = &target_schema {
+                    let mut new_columns = Vec::new();
+                    for field in target.fields() {
+                        if let Ok(col) = final_batch.column_by_name(field.name()).ok_or(()) {
+                            if col.data_type() != field.data_type() {
+                                let casted = arrow::compute::cast(col, field.data_type())?;
+                                new_columns.push(casted);
+                            } else {
+                                new_columns.push(col.clone());
+                            }
+                        } else {
+                            let null_arr =
+                                arrow::array::new_null_array(field.data_type(), final_batch.num_rows());
+                            new_columns.push(null_arr);
+                        }
+                    }
+                    final_batch =
+                        arrow::record_batch::RecordBatch::try_new(target.clone(), new_columns)?;
+                }
+
+                let mut batch_distances = Vec::with_capacity(row_ids.len());
+                for row_id in &row_ids {
+                    batch_distances.push(row_distances.get(row_id).copied().unwrap_or(f32::MAX));
+                }
+
+                let distance_array =
+                    std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
+                let mut fields = final_batch.schema().fields().to_vec();
+                fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+                    "distance",
+                    arrow::datatypes::DataType::Float32,
+                    true,
+                )));
+                let mut columns = final_batch.columns().to_vec();
+                columns.push(distance_array);
+                final_batch = arrow::record_batch::RecordBatch::try_new(
+                    std::sync::Arc::new(arrow::datatypes::Schema::new(fields)),
+                    columns,
+                )?;
+
+                if let Some(expr) = filter {
+                    let planner = crate::core::planner::QueryPlanner::new();
+                    if let Ok(mask) = planner.evaluate_expr(&final_batch, expr) {
+                        let prev_rows = final_batch.num_rows();
+                        final_batch = arrow::compute::filter_record_batch(&final_batch, &mask)?;
+                        let mut filtered_distances = Vec::with_capacity(final_batch.num_rows());
+                        for i in 0..prev_rows {
+                            if mask.value(i) {
+                                filtered_distances.push(batch_distances[i]);
+                            }
+                        }
+                        batch_distances = filtered_distances;
+                    } else {
+                        tracing::debug!("Post-filter evaluate_expr failed");
+                    }
+                }
+
+                if final_batch.num_rows() > 0 {
+                    return Ok(vec![(final_batch, batch_distances)]);
+                } else {
+                    return Ok(vec![]);
+                }
+            }
+        }
+
+        // --- FALLBACK: STANDARD ROW SELECTION FETCH ---
         let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
             .get_with_metrics(
-                &format!("{}/{}", self.root_uri, pq_path_str),
+                &cache_key,
                 "parquet_meta",
             )
             .await
@@ -1319,7 +1430,7 @@ impl HybridReader {
             let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
             crate::core::cache::PARQUET_META_CACHE
                 .insert(
-                    format!("{}/{}", self.root_uri, pq_path_str),
+                    cache_key.clone(),
                     (b.metadata().clone(), size as usize),
                 )
                 .await;
