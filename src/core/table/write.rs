@@ -107,14 +107,16 @@ impl Table {
     /// Async implementation of write using the table's configured durability mode.
     #[tracing::instrument(skip(self, batches))]
     pub async fn write_async(&self, batches: Vec<RecordBatch>) -> Result<()> {
-        self.write_with_durability_async(batches, self.durability).await
+        self.write_with_durability_async(batches, self.durability)
+            .await
     }
 
     /// Write batches with asynchronous durability (buffered in WAL worker without waiting for fsync).
     /// Best for maximum streaming ingestion throughput.
     #[tracing::instrument(skip(self, batches))]
     pub async fn write_buffered_async(&self, batches: Vec<RecordBatch>) -> Result<()> {
-        self.write_with_durability_async(batches, crate::core::table::WalDurability::Async).await
+        self.write_with_durability_async(batches, crate::core::table::WalDurability::Async)
+            .await
     }
 
     /// Explicitly flush and sync pending WAL writes to durable storage.
@@ -172,6 +174,7 @@ impl Table {
         }
 
         // 2. Primary Key Uniqueness Validation
+        let t_pk = std::time::Instant::now();
         let pk_cols = self.primary_key.read().clone();
         if !pk_cols.is_empty() {
             // Accelerated path for single-column Primary Keys
@@ -290,6 +293,9 @@ impl Table {
             }
         }
 
+        let pk_ms = t_pk.elapsed().as_millis();
+
+        let t_coerce = std::time::Instant::now();
         let mut target_schema = self.arrow_schema();
 
         if let Some(first_batch) = batches.first() {
@@ -416,7 +422,10 @@ impl Table {
             // This enables schema-on-write behavior
         }
 
+        let coerce_ms = t_coerce.elapsed().as_millis();
+
         // 1. Write-Ahead Log (Durability) & 2. Indexing (In-Memory) in PARALLEL
+        let t_wal = std::time::Instant::now();
         let wal = self.wal.clone();
         let memory_index = self.indexing.memory_index.clone();
         // Only use explicitly configured index columns — do NOT auto-detect by column name.
@@ -472,7 +481,8 @@ impl Table {
             .iter()
             .enumerate()
             .map(|(i, b)| {
-                crate::core::wal::tag_batch_with_wal_tx(b, tx_id, i as u64).unwrap_or_else(|_| b.clone())
+                crate::core::wal::tag_batch_with_wal_tx(b, tx_id, i as u64)
+                    .unwrap_or_else(|_| b.clone())
             })
             .collect();
         let batches_for_idx = batches.clone();
@@ -480,7 +490,9 @@ impl Table {
         let (wal_res, idx_res) = tokio::join!(
             // WAL Task — appends according to durability configuration (Sync waits for disk sync, Async batches)
             async move {
+                let t_wal_task = std::time::Instant::now();
                 let wal_lock = wal.lock().await;
+                let t_wal_lock = t_wal_task.elapsed().as_millis();
                 for batch in batches_for_wal {
                     match durability {
                         crate::core::table::WalDurability::Sync => {
@@ -492,11 +504,18 @@ impl Table {
                     }
                 }
                 wal_lock.should_compact()?;
+                let t_wal_total = t_wal_task.elapsed().as_millis();
+                tracing::debug!(
+                    wal_lock_ms = t_wal_lock,
+                    wal_total_ms = t_wal_total,
+                    "wal_task timing"
+                );
                 Ok::<(), anyhow::Error>(())
             },
             // Indexing Task
             async move {
                 let _t_idx = std::time::Instant::now();
+                let t_idx_task = std::time::Instant::now();
                 if let Some(col_name) = target_col {
                     let mut idx_lock = memory_index.write();
 
@@ -547,13 +566,25 @@ impl Table {
                         }
                     }
                 }
+                tracing::debug!(
+                    idx_task_ms = t_idx_task.elapsed().as_millis(),
+                    "idx_task timing"
+                );
                 Ok::<(), anyhow::Error>(())
             }
         );
 
         wal_res?;
         idx_res?;
+        let wal_idx_ms = t_wal.elapsed().as_millis();
         // -----------------------------
+        tracing::debug!(
+            rows = total_rows,
+            pk_ms,
+            coerce_ms,
+            wal_idx_ms,
+            "write_with_durability_async phase timing"
+        );
 
         let _write_buffer_len = {
             let mut buffer = self.write_buffer.write();
@@ -644,9 +675,80 @@ impl Table {
             .unwrap_or_default();
         let sequence_number = manifest.version as i64;
 
+        // Consolidate batches of compatible schemas before partitioning/writing
+        // so single-row inserts from streaming/REST ingest don't create thousands of 1-row files!
+        let consolidated_batches: Vec<RecordBatch> = {
+            let mut groups: Vec<(arrow::datatypes::SchemaRef, Vec<RecordBatch>)> = Vec::new();
+            for b in batches_to_write {
+                if b.num_rows() == 0 {
+                    continue;
+                }
+                let mut placed = false;
+                for (schema, list) in groups.iter_mut() {
+                    if schema == &b.schema() {
+                        list.push(b.clone());
+                        placed = true;
+                        break;
+                    }
+                }
+                if !placed {
+                    groups.push((b.schema(), vec![b.clone()]));
+                }
+            }
+            let mut res = Vec::new();
+            for (schema, list) in groups {
+                if list.len() == 1 {
+                    if let Some(first) = list.into_iter().next() {
+                        res.push(first);
+                    }
+                } else if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
+                    res.push(merged);
+                } else {
+                    res.extend(list);
+                }
+            }
+            res
+        };
+
+        // Align every batch to the table's full evolved schema so that
+        // schema-evolved columns (e.g. a column added by a later doc) are
+        // present in EVERY segment — with NULLs where a doc didn't have the
+        // field. Without this, docs written before the column existed produce
+        // segments missing the column, and reads concatenate the segments
+        // dropping the column's values (data loss on schema evolution).
+        let table_schema = self.arrow_schema();
+        let aligned_batches: Vec<RecordBatch> = consolidated_batches
+            .into_iter()
+            .map(|b| {
+                if b.schema() == table_schema {
+                    b
+                } else {
+                    let mut cols = Vec::with_capacity(table_schema.fields().len());
+                    for field in table_schema.fields() {
+                        let col = if let Some(c) = b.column_by_name(field.name()) {
+                            c.clone()
+                        } else {
+                            arrow::array::new_null_array(field.data_type(), b.num_rows())
+                        };
+                        cols.push(col);
+                    }
+                    match RecordBatch::try_new(table_schema.clone(), cols) {
+                        Ok(aligned) => aligned,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "flush: failed to align batch to table schema; writing as-is"
+                            );
+                            b
+                        }
+                    }
+                }
+            })
+            .collect();
+
         let mut partitioned_batches = Vec::new();
-        for batch in batches_to_write {
-            let sorted_batch = self.apply_sort_order(&batch)?;
+        for batch in &aligned_batches {
+            let sorted_batch = self.apply_sort_order(batch)?;
             let batch_with_metadata = if manifest.format_version >= 3 {
                 self.add_v3_metadata_columns(&sorted_batch, sequence_number)?
             } else {
@@ -655,6 +757,45 @@ impl Table {
             let mut pb = spec.partition_batch(&batch_with_metadata)?;
             partitioned_batches.append(&mut pb);
         }
+
+        // Group by partition_values so multiple batches going to the same partition are coalesced
+        let mut grouped_partitions: Vec<(HashMap<String, Value>, Vec<RecordBatch>)> = Vec::new();
+        for (pv, b) in partitioned_batches {
+            if b.num_rows() == 0 {
+                continue;
+            }
+            let mut placed = false;
+            for (p_key, b_list) in grouped_partitions.iter_mut() {
+                if p_key == &pv {
+                    b_list.push(b.clone());
+                    placed = true;
+                    break;
+                }
+            }
+            if !placed {
+                grouped_partitions.push((pv, vec![b]));
+            }
+        }
+        let coalesced_partitions: Vec<(HashMap<String, Value>, RecordBatch)> = {
+            let mut res = Vec::new();
+            for (pv, list) in grouped_partitions {
+                if list.len() == 1 {
+                    if let Some(first) = list.into_iter().next() {
+                        res.push((pv, first));
+                    }
+                } else {
+                    let schema = list[0].schema();
+                    if let Ok(merged) = arrow::compute::concat_batches(&schema, &list) {
+                        res.push((pv, merged));
+                    } else {
+                        for b in list {
+                            res.push((pv.clone(), b));
+                        }
+                    }
+                }
+            }
+            res
+        };
 
         // Extract local path from URI for writer
         let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
@@ -680,7 +821,7 @@ impl Table {
                     .unwrap_or(16)
             })
             .min(64); // Cap to prevent resource exhaustion
-        let stream = futures::stream::iter(partitioned_batches.into_iter().map(
+        let stream = futures::stream::iter(coalesced_partitions.into_iter().map(
             |(partition_values, batch)| {
                 let base_path = base_path.to_string();
                 let spec = spec.clone();
@@ -890,22 +1031,27 @@ impl Table {
             let store_clone = self.store.clone();
             for (local_path_str, remote_path_str) in files_to_upload {
                 let local_path = std::path::Path::new(&local_path_str);
-                let mut file = tokio::fs::File::open(&local_path)
-                    .await
-                    .with_context(|| format!("Failed to open local staged file for upload: {}", local_path_str))?;
+                let mut file = tokio::fs::File::open(&local_path).await.with_context(|| {
+                    format!(
+                        "Failed to open local staged file for upload: {}",
+                        local_path_str
+                    )
+                })?;
                 let remote_path = object_store::path::Path::from(remote_path_str.as_str());
-                let mut upload = store_clone
-                    .put_multipart(&remote_path)
-                    .await
-                    .with_context(|| format!("Failed to initiate multipart upload to {}", remote_path_str))?;
+                let mut upload =
+                    store_clone
+                        .put_multipart(&remote_path)
+                        .await
+                        .with_context(|| {
+                            format!("Failed to initiate multipart upload to {}", remote_path_str)
+                        })?;
                 use tokio::io::AsyncReadExt;
                 let mut buf = vec![0; 8 * 1024 * 1024]; // 8MB chunk buffer
                 let mut total_uploaded = 0;
                 loop {
-                    let n = file
-                        .read(&mut buf)
-                        .await
-                        .with_context(|| format!("Failed to read local staged file: {}", local_path_str))?;
+                    let n = file.read(&mut buf).await.with_context(|| {
+                        format!("Failed to read local staged file: {}", local_path_str)
+                    })?;
                     if n == 0 {
                         break;
                     }
@@ -915,10 +1061,9 @@ impl Table {
                         .with_context(|| format!("Failed to upload part to {}", remote_path_str))?;
                     total_uploaded += n;
                 }
-                upload
-                    .complete()
-                    .await
-                    .with_context(|| format!("Failed to complete multipart upload to {}", remote_path_str))?;
+                upload.complete().await.with_context(|| {
+                    format!("Failed to complete multipart upload to {}", remote_path_str)
+                })?;
                 tracing::info!(
                     "Successfully uploaded staged file {} ({} bytes) to {}",
                     local_path_str,

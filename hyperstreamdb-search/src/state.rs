@@ -5,6 +5,7 @@
 
 use arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
+use hyperstreamdb::core::table::WalDurability;
 use hyperstreamdb::{HyperstreamError, Table};
 use object_store::ObjectStore;
 use prometheus::core::Collector;
@@ -102,6 +103,7 @@ impl AppState {
         let mut table = if table_exists(&uri).await {
             Table::builder(uri)
                 .with_index_all(true)
+                .with_durability(resolve_wal_durability())
                 .build_async()
                 .await
                 .map_err(|e| {
@@ -121,6 +123,7 @@ impl AppState {
             }
             Table::builder(uri)
                 .with_index_all(true)
+                .with_durability(resolve_wal_durability())
                 .build_async()
                 .await
                 .map_err(|e| {
@@ -226,7 +229,7 @@ impl AppState {
         file: &str,
         manifest_version: u64,
         object_path: &str,
-    ) -> Result<Vec<u8>, HyperstreamError> {
+    ) -> Result<crate::index_cache::CachedIndex, HyperstreamError> {
         let key = IndexFileKey::new(index, segment_id, column, file, manifest_version);
         if let Some(cached) = self.index_cache.get(&key) {
             return Ok(cached);
@@ -250,8 +253,9 @@ impl AppState {
             .index_fetch_bytes_total
             .with_label_values(&[file])
             .inc_by(bytes.len() as u64);
-        self.index_cache.put(key, bytes.to_vec());
-        Ok(bytes.to_vec())
+        let cached = crate::index_cache::CachedIndex::Bytes(bytes.to_vec());
+        self.index_cache.put(key, cached.clone());
+        Ok(cached)
     }
 }
 
@@ -440,6 +444,23 @@ pub(crate) async fn table_exists(uri: &str) -> bool {
             .await
             .is_ok(),
         Err(_) => false,
+    }
+}
+
+/// Resolve the WAL durability mode for search tables from
+/// `HYPERSEARCH_WAL_DURABILITY` (default `async`).
+///
+/// `async` hands writes to the background WAL worker (batched fsync) for
+/// maximum ingest throughput; `sync` fsyncs every write for the strongest
+/// crash guarantees. Unknown values fall back to `async`.
+fn resolve_wal_durability() -> WalDurability {
+    match std::env::var("HYPERSEARCH_WAL_DURABILITY")
+        .ok()
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+    {
+        Some(v) if v == "sync" => WalDurability::Sync,
+        _ => WalDurability::Async,
     }
 }
 

@@ -17,6 +17,7 @@ use axum::extract::{Path, State};
 use axum::response::Response;
 use hyperstreamdb::HyperstreamError;
 use serde_json::{Map, Value};
+use rayon::prelude::*;
 
 use crate::handlers::docs::{build_row_batch, translate_write_error, with_id, ID_COLUMN};
 use crate::infer;
@@ -46,51 +47,25 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
-    let mut items = Vec::new();
+        
+    struct RawAction<'a> {
+        action: Value,
+        source_line: Option<&'a str>,
+        line_num: usize,
+    }
+
+    let mut raw_actions = Vec::new();
     let mut i = 0;
     while i < lines.len() {
         let action: Value = serde_json::from_str(lines[i])
             .map_err(|e| bad_request(format!("bulk line {}: invalid action JSON: {e}", i + 1)))?;
-        let (op, meta) = match action.as_object().and_then(|o| o.iter().next()) {
-            Some((op, meta)) => (op.clone(), meta.clone()),
-            None => {
-                return Err(bad_request(format!(
-                    "bulk line {}: expected a single action object",
-                    i + 1
-                )))
-            }
+            
+        let is_delete = match action.as_object().and_then(|o| o.iter().next()) {
+            Some((op, _)) => op == "delete",
+            None => false, // let the parallel phase error out nicely
         };
-        if !matches!(op.as_str(), "index" | "create" | "delete") {
-            return Err(bad_request(format!(
-                "bulk line {}: unsupported action '{op}' (supported: index, create, delete)",
-                i + 1
-            )));
-        }
-        let meta_obj = meta.as_object().ok_or_else(|| {
-            bad_request(format!(
-                "bulk line {}: action meta must be an object",
-                i + 1
-            ))
-        })?;
-        let index = meta_obj
-            .get("_index")
-            .and_then(Value::as_str)
-            .or(default_index)
-            .ok_or_else(|| {
-                bad_request(format!(
-                    "bulk line {}: missing '_index' (use POST /<index>/_bulk or set _index)",
-                    i + 1
-                ))
-            })?
-            .to_string();
-        let id = meta_obj
-            .get("_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let doc = if op == "delete" {
-            // delete has no source line.
+        let source_line = if is_delete {
             None
         } else {
             i += 1;
@@ -100,16 +75,69 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
                     i
                 )));
             }
-            let source: Value = serde_json::from_str(lines[i]).map_err(|e| {
-                bad_request(format!("bulk line {}: invalid source JSON: {e}", i + 1))
-            })?;
-            Some(source)
+            Some(lines[i])
         };
 
-        items.push(BulkItem { op, index, id, doc });
+        raw_actions.push(RawAction {
+            action,
+            source_line,
+            line_num: i + 1 - if source_line.is_some() { 1 } else { 0 },
+        });
         i += 1;
     }
-    Ok(items)
+
+    raw_actions.into_par_iter().map(|raw| {
+        let (op, meta) = match raw.action.as_object().and_then(|o| o.iter().next()) {
+            Some((op, meta)) => (op.clone(), meta.clone()),
+            None => {
+                return Err(bad_request(format!(
+                    "bulk line {}: expected a single action object",
+                    raw.line_num
+                )))
+            }
+        };
+
+        if !matches!(op.as_str(), "index" | "create" | "delete") {
+            return Err(bad_request(format!(
+                "bulk line {}: unsupported action '{op}' (supported: index, create, delete)",
+                raw.line_num
+            )));
+        }
+        let meta_obj = meta.as_object().ok_or_else(|| {
+            bad_request(format!(
+                "bulk line {}: action meta must be an object",
+                raw.line_num
+            ))
+        })?;
+        let index = meta_obj
+            .get("_index")
+            .and_then(Value::as_str)
+            .or(default_index)
+            .ok_or_else(|| {
+                bad_request(format!(
+                    "bulk line {}: missing '_index' (use POST /<index>/_bulk or set _index)",
+                    raw.line_num
+                ))
+            })?
+            .to_string();
+        let id = meta_obj
+            .get("_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        let doc = match raw.source_line {
+            Some(src) => {
+                let source: Value = serde_json::from_str(src).map_err(|e| {
+                    bad_request(format!("bulk line {}: invalid source JSON: {e}", raw.line_num + 1))
+                })?;
+                Some(source)
+            }
+            None => None,
+        };
+
+        Ok(BulkItem { op, index, id, doc })
+    }).collect()
 }
 
 /// A per-item bulk outcome.
@@ -176,12 +204,21 @@ async fn write_index_docs(
     };
 
     // 1. Infer each document's schema, collecting per-item errors.
+    let t_infer = Instant::now();
+    let inferred: Vec<_> = items.par_iter().map(|(pos, item)| {
+        match infer::infer_schema(item.doc.as_ref().unwrap()) {
+            Ok(s) => Ok((*pos, *item, s)),
+            Err(e) => Err(err_result(*pos, item, 400, e.to_string())),
+        }
+    }).collect();
+
+    let infer_ms = t_infer.elapsed().as_millis();
     let mut doc_schemas: Vec<(usize, &BulkItem, arrow::datatypes::SchemaRef)> = Vec::new();
     let mut results: Vec<(usize, ItemResult)> = Vec::new();
-    for (pos, item) in items {
-        match infer::infer_schema(item.doc.as_ref().unwrap()) {
-            Ok(s) => doc_schemas.push((*pos, item, s)),
-            Err(e) => results.push(err_result(*pos, item, 400, e.to_string())),
+    for res in inferred {
+        match res {
+            Ok(s) => doc_schemas.push(s),
+            Err(e) => results.push(e),
         }
     }
     if doc_schemas.is_empty() {
@@ -192,7 +229,7 @@ async fn write_index_docs(
     let mut merged = doc_schemas[0].2.clone();
     for (_pos, _item, s) in &doc_schemas[1..] {
         match infer::merge_schemas(merged.as_ref(), s.as_ref()) {
-            Ok(m) => merged = Arc::new(m),
+            Ok(m) => merged = std::sync::Arc::new(m),
             Err(e) => {
                 for (pos, item, _s) in doc_schemas {
                     results.push(err_result(pos, item, 400, e.to_string()));
@@ -235,16 +272,24 @@ async fn write_index_docs(
     };
 
     // 5. Build one row batch per document (with `_id` injected).
-    let mut batches: Vec<(usize, &BulkItem, RecordBatch)> = Vec::new();
-    for (pos, item, _s) in doc_schemas {
+    let t_batch = Instant::now();
+    let batched: Vec<_> = doc_schemas.par_iter().map(|(pos, item, _s)| {
         let mut doc = item.doc.clone().unwrap();
         if let Err(e) = with_id(&mut doc, &item.id) {
-            results.push(err_result(pos, item, 400, e.to_string()));
-            continue;
+            return Err(err_result(*pos, *item, 400, e.to_string()));
         }
         match build_row_batch(&target, &doc) {
-            Ok(batch) => batches.push((pos, item, batch)),
-            Err(e) => results.push(err_result(pos, item, 400, e.to_string())),
+            Ok(batch) => Ok((*pos, *item, batch)),
+            Err(e) => Err(err_result(*pos, *item, 400, e.to_string())),
+        }
+    }).collect();
+
+    let batch_ms = t_batch.elapsed().as_millis();
+    let mut batches: Vec<(usize, &BulkItem, RecordBatch)> = Vec::new();
+    for res in batched {
+        match res {
+            Ok(b) => batches.push(b),
+            Err(e) => results.push(e),
         }
     }
     if batches.is_empty() {
@@ -252,8 +297,23 @@ async fn write_index_docs(
     }
 
     // 6. Batch write; on failure retry per-document to identify the cause.
+    // Coalesce the per-doc single-row batches into ONE large batch so the
+    // WAL receives a single append (not N tiny 1-row appends) — this was the
+    // dominant ingest cost (~70-90 ms/request for 3,333 docs).
+    let t_wal = Instant::now();
     let batch_vec: Vec<RecordBatch> = batches.iter().map(|(_, _, b)| b.clone()).collect();
-    match table.write_async(batch_vec).await {
+    let coalesced: Vec<RecordBatch> = if batch_vec.len() > 1 {
+        match arrow::compute::concat_batches(&batch_vec[0].schema(), &batch_vec) {
+            Ok(c) => vec![c],
+            Err(e) => {
+                tracing::warn!(error = %e, "bulk: failed to coalesce row batches; writing as-is");
+                batch_vec
+            }
+        }
+    } else {
+        batch_vec
+    };
+    match table.write_async(coalesced).await {
         Ok(()) => {
             for (pos, item, _b) in batches {
                 results.push(ok_result(pos, item));
@@ -271,6 +331,15 @@ async fn write_index_docs(
             }
         }
     }
+    let wal_ms = t_wal.elapsed().as_millis();
+    tracing::debug!(
+        index,
+        docs = items.len(),
+        infer_ms,
+        batch_ms,
+        wal_ms,
+        "write_index_docs timing"
+    );
     results
 }
 
@@ -291,7 +360,9 @@ pub async fn bulk_core(
     body: &str,
 ) -> Result<Value, HyperstreamError> {
     let started = Instant::now();
+    let t_parse = Instant::now();
     let items = parse_bulk(body, default_index)?;
+    let parse_ms = t_parse.elapsed().as_millis();
 
     // Group by index, preserving original positions.
     let mut by_index: BTreeMap<String, Vec<(usize, BulkItem)>> = BTreeMap::new();
@@ -304,6 +375,7 @@ pub async fn bulk_core(
 
     let mut results: Vec<Option<ItemResult>> = (0..items.len()).map(|_| None).collect();
 
+    let t_write = Instant::now();
     for (index, group) in by_index {
         let existed_before = table_exists(&state.index_uri(&index)).await;
         // Split off deletes (no source) — they are 501 in v1.
@@ -333,6 +405,14 @@ pub async fn bulk_core(
             results[pos] = Some(res);
         }
     }
+    let write_ms = t_write.elapsed().as_millis();
+    tracing::debug!(
+        docs = items.len(),
+        parse_ms,
+        write_ms,
+        total_ms = started.elapsed().as_millis(),
+        "bulk_core timing"
+    );
 
     let mut item_values = Vec::new();
     let mut errors = false;

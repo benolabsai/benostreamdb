@@ -208,9 +208,16 @@ impl WriteAheadLog {
                                 }
 
                                 if let Some(writer) = &mut writer_opt {
+                                    let t_wal_write = std::time::Instant::now();
+                                    let rows = batch.num_rows();
                                     if let Err(e) = writer.write(&batch) {
                                         let _ = reply_tx.send(Err(anyhow::anyhow!("WAL write failed: {}", e)));
                                     } else {
+                                        tracing::debug!(
+                        rows,
+                        wal_writer_write_ms = t_wal_write.elapsed().as_millis(),
+                        "wal_writer write timing"
+                    );
                                         pending_syncs.push(reply_tx);
                                         batch_count += 1;
 
@@ -341,13 +348,15 @@ impl WriteAheadLog {
                                 .duration_since(std::time::UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_nanos();
-                            let target_path = dir.join(format!("log_{:020}_{:08}.arrow", ts, segment_counter));
+                            let target_path =
+                                dir.join(format!("log_{:020}_{:08}.arrow", ts, segment_counter));
                             segment_counter += 1;
 
                             if let Ok(file) = OpenOptions::new()
                                 .create(true)
                                 .append(true)
-                                .open(&target_path) {
+                                .open(&target_path)
+                            {
                                 if let Ok(w) = StreamWriter::try_new(file, &batch.schema()) {
                                     current_schema = Some(batch.schema());
                                     writer_opt = Some(w);
@@ -678,6 +687,63 @@ impl Drop for WriteAheadLog {
                 }
             }
         }
+    }
+}
+
+/// A StreamingBuffer aggregates a continuous stream of row batches and periodically flushes them
+/// via the Table's WAL and commits to Iceberg snapshots based on a size threshold or time interval.
+pub struct StreamingBuffer {
+    tx: mpsc::Sender<RecordBatch>,
+}
+
+impl StreamingBuffer {
+    pub fn new(
+        table: Arc<crate::core::table::Table>,
+        batch_size_threshold: usize,
+        interval_ms: u64,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel::<RecordBatch>(1024);
+
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(tokio::time::Duration::from_millis(interval_ms));
+            let mut buffered_rows = 0;
+
+            loop {
+                tokio::select! {
+                    Some(batch) = rx.recv() => {
+                        let rows = batch.num_rows();
+                        if let Err(e) = table.write_async(vec![batch]).await {
+                            tracing::error!("StreamingBuffer write error: {}", e);
+                        }
+                        buffered_rows += rows;
+
+                        if buffered_rows >= batch_size_threshold {
+                            if let Err(e) = table.commit_async().await {
+                                tracing::error!("StreamingBuffer commit error: {}", e);
+                            }
+                            buffered_rows = 0;
+                        }
+                    }
+                    _ = tick.tick() => {
+                        if buffered_rows > 0 {
+                            if let Err(e) = table.commit_async().await {
+                                tracing::error!("StreamingBuffer commit error: {}", e);
+                            }
+                            buffered_rows = 0;
+                        }
+                    }
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    pub async fn insert(&self, batch: RecordBatch) -> Result<()> {
+        self.tx
+            .send(batch)
+            .await
+            .map_err(|_| anyhow::anyhow!("StreamingBuffer channel closed"))
     }
 }
 
