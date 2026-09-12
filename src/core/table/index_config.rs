@@ -470,9 +470,7 @@ impl Table {
                         continue;
                     }
 
-                    let algorithms = inferred_specs
-                        .entry(col_name.clone())
-                        .or_insert_with(Vec::new);
+                    let algorithms = inferred_specs.entry(col_name.clone()).or_default();
 
                     let alg = match index_file.index_type.as_str() {
                         "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {

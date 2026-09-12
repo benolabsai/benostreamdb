@@ -112,10 +112,6 @@ impl crate::core::segment::HybridSegmentWriter {
                         _ => crate::core::index::VectorMetric::L2,
                     };
 
-                    let hnsw_ivf_index =
-                        HnswIvfIndex::build(vectors.clone(), metric, None, None, algo)
-                            .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
-
                     let algo_id = match algo {
                         crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",
                         crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
@@ -124,29 +120,42 @@ impl crate::core::segment::HybridSegmentWriter {
                         _ => "idx",
                     };
 
-                    let suffix = if algos.len() > 1 {
-                        format!("{}.{}.{}", col_name, algo_id, idx)
-                    } else {
-                        format!("{}.{}", col_name, algo_id)
-                    };
-                    let local_base_path =
-                        local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
+                    let chunk_size = std::env::var("HYPERSTREAM_HNSW_CHUNK_SIZE")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(100_000)
+                        .max(1);
+                    for (chunk_idx, chunk) in vectors.chunks(chunk_size).enumerate() {
+                        let offset = chunk_idx * chunk_size;
+                        let hnsw_ivf_index =
+                            HnswIvfIndex::build(chunk.to_vec(), metric, None, None, algo, offset)
+                                .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
 
-                    let saved_files = hnsw_ivf_index
-                        .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
-                        .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
+                        let num_chunks = vectors.len().div_ceil(chunk_size);
+                        let suffix = if algos.len() > 1 || num_chunks > 1 {
+                            format!("{}.{}.{}_{}", col_name, algo_id, idx, chunk_idx)
+                        } else {
+                            format!("{}.{}", col_name, algo_id)
+                        };
+                        let local_base_path = local_staging_dir
+                            .join(format!("{}.{}", self.config.segment_id, suffix));
 
-                    {
-                        let mut meta = self.index_metadata.lock();
-                        meta.insert(
-                            format!("{}.{}", self.config.segment_id, suffix),
-                            algo.to_string(),
-                        );
-                    }
+                        let saved_files = hnsw_ivf_index
+                            .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
+                            .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
 
-                    {
-                        let mut files = self.generated_files.lock();
-                        files.extend(saved_files);
+                        {
+                            let mut meta = self.index_metadata.lock();
+                            meta.insert(
+                                format!("{}.{}", self.config.segment_id, suffix),
+                                algo.to_string(),
+                            );
+                        }
+
+                        {
+                            let mut files = self.generated_files.lock();
+                            files.extend(saved_files);
+                        }
                     }
                 }
             } else {

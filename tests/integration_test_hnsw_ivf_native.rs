@@ -43,6 +43,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
         Some(10),
         Some(16),
         &algo,
+        0,
     )?;
 
     // 4. Save Index to Store
@@ -192,7 +193,14 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
         complexity: 32,
         quality: 8,
     };
-    let index = HnswIvfIndex::build(vectors.clone(), VectorMetric::L2, Some(4), Some(16), &algo)?;
+    let index = HnswIvfIndex::build(
+        vectors.clone(),
+        VectorMetric::L2,
+        Some(4),
+        Some(16),
+        &algo,
+        0,
+    )?;
 
     // Save using the multi-file layout (same as the production writer path).
     let temp_dir = tempfile::tempdir()?;

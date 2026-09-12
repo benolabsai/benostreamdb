@@ -724,21 +724,28 @@ impl HybridReader {
                                 .map(|(a, b)| (a - b) * (a - b))
                                 .sum::<f32>(),
                             VectorMetric::Cosine => {
-                                let dot: f32 = v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum();
+                                let dot: f32 =
+                                    v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum();
                                 let mag_v: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                                let mag_q: f32 = q_vec_clone.iter().map(|x| x * x).sum::<f32>().sqrt();
+                                let mag_q: f32 =
+                                    q_vec_clone.iter().map(|x| x * x).sum::<f32>().sqrt();
                                 1.0 - (dot / (mag_v * mag_q + 1e-10))
                             }
-                            VectorMetric::InnerProduct => {
-                                -v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum::<f32>()
-                            }
+                            VectorMetric::InnerProduct => -v
+                                .iter()
+                                .zip(q_vec_clone.iter())
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>(),
                             VectorMetric::L1 => v
                                 .iter()
                                 .zip(q_vec_clone.iter())
                                 .map(|(a, b)| (a - b).abs())
                                 .sum::<f32>(),
                             VectorMetric::Hamming => {
-                                v.iter().zip(q_vec_clone.iter()).filter(|(a, b)| a != b).count() as f32
+                                v.iter()
+                                    .zip(q_vec_clone.iter())
+                                    .filter(|(a, b)| a != b)
+                                    .count() as f32
                             }
                             VectorMetric::Jaccard => {
                                 let mut intersection = 0.0;
@@ -875,37 +882,28 @@ impl HybridReader {
                 .index_files
                 .iter()
                 .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+                .cloned()
                 .collect();
 
-            let vector_idx_info = if vector_indices.is_empty() {
-                None
-            } else {
-                let mut sorted = vector_indices.clone();
-                sorted.sort_by_key(|f| match f.blob_type.as_deref() {
+            // Pick the preferred algorithm, then collect ALL chunks for it
+            // (chunked builds write one HNSW-IVF index per 100k-vector chunk,
+            // each registered as a separate IndexFile with the same blob_type).
+            let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
+                match f.blob_type.as_deref() {
                     Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
                     Some("hnsw_pq") => 1,
                     Some("hnsw_ivf") => 2,
                     _ => 3,
-                });
-                Some(sorted[0])
-            };
-
-            let idx_matches = if let Some(idx_info) = vector_idx_info {
-                match self
-                    .search_hnsw_ivf(idx_info, query, k, &None, metric, ef_search)
-                    .await
-                {
-                    Ok(m) => m,
-                    Err(e) => {
-                        tracing::error!(
-                            "Vector index listed in manifest failed, falling back to flat scan: {}",
-                            e
-                        );
-                        self.vector_search_flat(column, query, k, &None, metric)
-                            .await?
-                    }
                 }
-            } else {
+            };
+            let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
+            let chunk_indices: Vec<_> = vector_indices
+                .iter()
+                .filter(|f| algo_rank(*f) == best_rank)
+                .cloned()
+                .collect();
+
+            let idx_matches = if chunk_indices.is_empty() {
                 let idx_path = self.resolve_object_path(column).to_string();
                 let idx_info = crate::core::manifest::IndexFile {
                     file_path: idx_path,
@@ -922,6 +920,44 @@ impl HybridReader {
                         self.vector_search_flat(column, query, k, &None, metric)
                             .await?
                     }
+                }
+            } else {
+                // Search ALL chunks for the preferred algorithm in parallel,
+                // then merge the top-k results by row_id (chunks have
+                // non-overlapping row_id ranges due to the build offset).
+                let query_c = query.clone();
+                let metric_c = metric;
+                let ef_c = ef_search;
+                let k_c = k;
+                let futures: Vec<_> = chunk_indices
+                    .iter()
+                    .map(|idx_info| {
+                        let idx = idx_info.clone();
+                        let q = query_c.clone();
+                        async move { self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c).await }
+                    })
+                    .collect();
+                let results = futures::future::join_all(futures).await;
+                let mut merged: Vec<(usize, f32)> = Vec::new();
+                let mut any_ok = false;
+                for r in results {
+                    match r {
+                        Ok(m) => {
+                            any_ok = true;
+                            merged.extend(m);
+                        }
+                        Err(e) => {
+                            tracing::warn!("HNSW chunk search failed: {}", e);
+                        }
+                    }
+                }
+                if !any_ok {
+                    self.vector_search_flat(column, query, k, &None, metric).await?
+                } else {
+                    // Sort by distance ascending (best first) and take top-k.
+                    merged.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    merged.truncate(k);
+                    merged
                 }
             };
 

@@ -57,8 +57,10 @@ impl Table {
         manifest_manager.update_identifier_fields(field_ids).await?;
 
         // Update in-memory state
-        let mut pk = self.primary_key.write();
-        *pk = columns;
+        {
+            let mut pk = self.primary_key.write();
+            *pk = columns;
+        }
 
         // Update in-memory schema ref (it's slightly stale now, but will refresh on next use)
         // or we could force a reload.
@@ -125,7 +127,7 @@ impl Table {
         next_ids.push(field_id);
 
         // Validate uniqueness before committing
-        self._validate_pk_uniqueness(&next_ids, &latest_schema)
+        self._validate_pk_uniqueness(&next_ids, latest_schema)
             .await?;
 
         // Atomic commit to manifest

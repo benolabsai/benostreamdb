@@ -131,12 +131,14 @@ async fn test_compaction_precondition_aborts_on_missing_candidate() -> Result<()
         ..Default::default()
     };
     manifest
-        .commit(&[entry_a.clone()], &[], CommitMetadata::default())
+        .commit(std::slice::from_ref(&entry_a), &[], CommitMetadata::default())
         .await?;
 
     // Verify snapshot v1 contains file A
     let (_, entries_v1, _) = manifest.load_latest_full().await?;
-    assert!(entries_v1.iter().any(|e| e.file_path == "data/file_a.parquet"));
+    assert!(entries_v1
+        .iter()
+        .any(|e| e.file_path == "data/file_a.parquet"));
 
     // Attempt compaction replacing file_a AND a non-existent file_b with require_remove_paths_exist = true
     let entry_c = ManifestEntry {
@@ -145,8 +147,10 @@ async fn test_compaction_precondition_aborts_on_missing_candidate() -> Result<()
         record_count: 200,
         ..Default::default()
     };
-    let mut commit_meta = CommitMetadata::default();
-    commit_meta.require_remove_paths_exist = true;
+    let commit_meta = CommitMetadata {
+        require_remove_paths_exist: true,
+        ..Default::default()
+    };
 
     let stale_remove_paths = vec![
         "data/file_a.parquet".to_string(),
@@ -171,7 +175,9 @@ async fn test_compaction_precondition_aborts_on_missing_candidate() -> Result<()
     // Verify file A is STILL intact in active files (no partial removal)
     let (_, entries_after, _) = manifest.load_latest_full().await?;
     assert!(
-        entries_after.iter().any(|e| e.file_path == "data/file_a.parquet"),
+        entries_after
+            .iter()
+            .any(|e| e.file_path == "data/file_a.parquet"),
         "Active files must remain unchanged after aborted compaction commit"
     );
 
@@ -193,7 +199,11 @@ async fn test_maintenance_staging_and_wal_exclusion() -> Result<()> {
     table.commit_async().await?;
 
     // Manually create staging and WAL dummy files
-    let staging_path = temp_dir.path().join("_staging").join("indexes").join("idx_1.bin");
+    let staging_path = temp_dir
+        .path()
+        .join("_staging")
+        .join("indexes")
+        .join("idx_1.bin");
     std::fs::create_dir_all(staging_path.parent().unwrap())?;
     std::fs::write(&staging_path, b"in-flight index data")?;
 
@@ -264,7 +274,10 @@ async fn test_wal_durability_modes() -> Result<()> {
         let table = Table::new_async(uri2).await?;
         let rows = table.read_async(None, None, None).await?;
         let total: usize = rows.iter().map(|b| b.num_rows()).sum();
-        assert_eq!(total, 30, "Buffered async with flush_wal_async must recover 30 rows");
+        assert_eq!(
+            total, 30,
+            "Buffered async with flush_wal_async must recover 30 rows"
+        );
     }
 
     Ok(())
@@ -297,7 +310,10 @@ async fn test_write_buffer_preservation_on_flush_error() -> Result<()> {
 
     // Attempt flush — this must fail due to permission error
     let flush_res = table.flush_async().await;
-    assert!(flush_res.is_err(), "Flush must fail when storage is read-only");
+    assert!(
+        flush_res.is_err(),
+        "Flush must fail when storage is read-only"
+    );
 
     // Restore permissions so cleanup and retry can proceed
     std::fs::set_permissions(table_path, original_perms)?;

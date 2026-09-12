@@ -41,6 +41,7 @@ pub struct DataFileInfo {
     pub has_scalar_indexes: bool,
     pub has_vector_indexes: bool,
     pub indexed_columns: Vec<String>,
+    pub index_files: Vec<crate::core::manifest::IndexFile>,
 }
 
 /// Split information (for Trino split-level parallelism)
@@ -140,6 +141,7 @@ impl Table {
                     has_scalar_indexes,
                     has_vector_indexes,
                     indexed_columns,
+                    index_files: entry.index_files.clone(),
                 });
             }
             Ok(results)
@@ -197,6 +199,7 @@ impl Table {
                 has_scalar_indexes,
                 has_vector_indexes,
                 indexed_columns,
+                index_files: entry.index_files.clone(),
             });
         }
         Ok(results)
@@ -207,11 +210,55 @@ impl Table {
     // -----------------------------------------------------------------------
 
     /// Get splits for parallel reading (index-aware)
-    pub fn get_splits(&self, max_split_size: usize) -> Result<Vec<Split>> {
+    pub fn get_splits(&self, max_split_size: usize, filter: Option<&str>) -> Result<Vec<Split>> {
         let files = self.list_data_files()?;
+
+        let qf = filter.and_then(QueryFilter::parse);
+        let qf_ref = qf.as_ref();
+
         let mut splits = Vec::new();
 
-        for file in files {
+        let filtered_files = self.runtime().block_on(async {
+            let mut valid_files = Vec::new();
+            for file in files {
+                let mut skip_file = false;
+
+                if let Some(query_filter) = qf_ref {
+                    // Sidecar Index Pushdown (Bitmap/Inverted)
+                    if file.indexed_columns.contains(&query_filter.column)
+                        && file.has_scalar_indexes
+                    {
+                        // Extract segment_id from file_path
+                        let parts: Vec<&str> = file.file_path.split('/').collect();
+                        let segment_id = parts.last().unwrap_or(&"").replace(".parquet", "");
+
+                        let mut config = SegmentConfig::new("", &segment_id);
+                        config = config
+                            .with_parquet_path(file.file_path.clone())
+                            .with_index_files(file.index_files.clone())
+                            .with_file_size(file.file_size_bytes);
+
+                        let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+
+                        // Check bitmap
+                        if let Ok(Some(bitmap)) =
+                            reader.get_scalar_filter_bitmap(query_filter).await
+                        {
+                            if bitmap.is_empty() {
+                                skip_file = true;
+                            }
+                        }
+                    }
+                }
+
+                if !skip_file {
+                    valid_files.push(file);
+                }
+            }
+            valid_files
+        });
+
+        for file in filtered_files {
             if file.file_size_bytes > max_split_size as u64 {
                 let num_splits = (file.file_size_bytes / max_split_size as u64) + 1;
                 for i in 0..num_splits {
@@ -245,10 +292,52 @@ impl Table {
     }
 
     /// Get splits for parallel reading (Index-aware, Async)
-    pub async fn get_splits_async(&self, max_split_size: usize) -> Result<Vec<Split>> {
+    pub async fn get_splits_async(
+        &self,
+        max_split_size: usize,
+        filter: Option<&str>,
+    ) -> Result<Vec<Split>> {
         let files = self.list_data_files_async().await?;
+
+        let qf = filter.and_then(QueryFilter::parse);
+        let qf_ref = qf.as_ref();
+
         let mut splits = Vec::new();
+
+        let mut valid_files = Vec::new();
         for file in files {
+            let mut skip_file = false;
+
+            if let Some(query_filter) = qf_ref {
+                // Sidecar Index Pushdown (Bitmap/Inverted)
+                if file.indexed_columns.contains(&query_filter.column) && file.has_scalar_indexes {
+                    // Extract segment_id from file_path
+                    let parts: Vec<&str> = file.file_path.split('/').collect();
+                    let segment_id = parts.last().unwrap_or(&"").replace(".parquet", "");
+
+                    let mut config = SegmentConfig::new("", &segment_id);
+                    config = config
+                        .with_parquet_path(file.file_path.clone())
+                        .with_index_files(file.index_files.clone())
+                        .with_file_size(file.file_size_bytes);
+
+                    let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+
+                    // Check bitmap
+                    if let Ok(Some(bitmap)) = reader.get_scalar_filter_bitmap(query_filter).await {
+                        if bitmap.is_empty() {
+                            skip_file = true;
+                        }
+                    }
+                }
+            }
+
+            if !skip_file {
+                valid_files.push(file);
+            }
+        }
+
+        for file in valid_files {
             if file.file_size_bytes > max_split_size as u64 {
                 let num_splits = (file.file_size_bytes / max_split_size as u64) + 1;
                 for i in 0..num_splits {

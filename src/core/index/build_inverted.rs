@@ -440,10 +440,7 @@ impl crate::core::segment::HybridSegmentWriter {
                 let is_bm25 = config
                     .map(|c| {
                         c.algorithms.iter().any(|a| {
-                            matches!(
-                                a,
-                                crate::core::manifest::IndexAlgorithm::Bm25 { .. }
-                            )
+                            matches!(a, crate::core::manifest::IndexAlgorithm::Bm25 { .. })
                         })
                     })
                     .unwrap_or(false);

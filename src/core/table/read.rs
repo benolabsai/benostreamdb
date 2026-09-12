@@ -466,15 +466,18 @@ impl Table {
                 .find(|s| s.schema_id == manifest.current_schema_id);
 
             let single_bm25_col = if filtered_cols.len() == 1 {
-                let col = filtered_cols.iter().next().unwrap();
-                current_schema.and_then(|s| {
-                    s.fields.iter().find(|f| {
-                        &f.name == col
-                            && f.indexes
-                                .iter()
-                                .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }))
-                    })
-                }).map(|f| f.name.clone())
+                filtered_cols.iter().next().cloned().and_then(|col| {
+                    current_schema
+                        .and_then(|s| {
+                            s.fields.iter().find(|f| {
+                                &f.name == &col
+                                    && f.indexes
+                                        .iter()
+                                        .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }))
+                            })
+                        })
+                        .map(|f| f.name.clone())
+                })
             } else {
                 None
             };
@@ -513,10 +516,7 @@ impl Table {
                     }
                 };
 
-                let keyword_params = KeywordSearchParams::new(
-                    target_col,
-                    extracted_query,
-                );
+                let keyword_params = KeywordSearchParams::new(target_col, extracted_query);
 
                 let first_vs_param = vs_params_list.first().cloned();
                 let k = first_vs_param.as_ref().map(|p| p.k).unwrap_or(10);

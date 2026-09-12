@@ -389,16 +389,20 @@ impl HybridReader {
                                     ok = val == min_s || val.eq_ignore_ascii_case(min_s);
                                 } else {
                                     if filter.min_inclusive {
-                                        ok &= val >= min_s || val.to_lowercase() >= min_s.to_lowercase();
+                                        ok &= val >= min_s
+                                            || val.to_lowercase() >= min_s.to_lowercase();
                                     } else {
-                                        ok &= val > min_s || val.to_lowercase() > min_s.to_lowercase();
+                                        ok &= val > min_s
+                                            || val.to_lowercase() > min_s.to_lowercase();
                                     }
                                     if let Some(max_val) = &filter.max {
                                         if let Some(max_s) = max_val.as_str() {
                                             if filter.max_inclusive {
-                                                ok &= val <= max_s || val.to_lowercase() <= max_s.to_lowercase();
+                                                ok &= val <= max_s
+                                                    || val.to_lowercase() <= max_s.to_lowercase();
                                             } else {
-                                                ok &= val < max_s || val.to_lowercase() < max_s.to_lowercase();
+                                                ok &= val < max_s
+                                                    || val.to_lowercase() < max_s.to_lowercase();
                                             }
                                         }
                                     }
