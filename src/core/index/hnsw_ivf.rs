@@ -1036,13 +1036,17 @@ impl HnswIvfIndex {
         let fetch_concurrency = 16;
         let root_path_clone = root_path.clone();
 
-        let quantizer_clone = quantizer.clone();
-
-        let bodies = futures::stream::iter(cluster_ids)
+        // Phase 1: Load all cluster bytes in parallel (I/O-bound, via futures).
+        struct ClusterBytes {
+            cluster_id: usize,
+            graph: bytes::Bytes,
+            data: bytes::Bytes,
+            mapping: bytes::Bytes,
+        }
+        let byte_futures = futures::stream::iter(cluster_ids.clone())
             .map(move |cluster_id| {
                 let root_path = root_path_clone.clone();
                 let dc = disk_cache.clone();
-                let q_inner = quantizer_clone.clone();
                 async move {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let data_key = format!("{}.cluster_{}.hnsw.data", root_path, cluster_id);
@@ -1053,22 +1057,38 @@ impl HnswIvfIndex {
                     let res_data = dc.get_bytes(&data_key).await?;
                     let res_mapping = dc.get_bytes(&mapping_key).await?;
 
-                    let graph_cursor = Cursor::new(res_graph);
-                    let data_cursor = Cursor::new(res_data);
-                    let mut graph_reader = std::io::BufReader::new(graph_cursor);
-                    let mut data_reader = std::io::BufReader::new(data_cursor);
+                    Ok(ClusterBytes {
+                        cluster_id,
+                        graph: res_graph,
+                        data: res_data,
+                        mapping: res_mapping,
+                    })
+                }
+            })
+            .buffer_unordered(fetch_concurrency);
+        let cluster_bytes: Vec<Result<ClusterBytes>> = byte_futures.collect().await;
 
-                    let description =
-                        crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
-                            .map_err(|e| {
-                                anyhow::anyhow!("Failed to load HNSW description: {}", e)
-                            })?;
+        // Phase 2: Deserialize all HNSW graphs in parallel (CPU-bound, via rayon).
+        let quantizer_for_deser = quantizer.clone();
+        let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> =
+            cluster_bytes.into_par_iter().map(|cb_res| {
+                let cb = cb_res?;
+                let cluster_id = cb.cluster_id;
 
-                    let metric = metric; // Use the metric loaded from centroids metadata
-                                         // For now we assume L2 if not specified or derive from path?
-                                         // Better: HnswIvfIndex should save metric in centroids parquet metadata.
+                let graph_cursor = Cursor::new(cb.graph);
+                let data_cursor = Cursor::new(cb.data);
+                let mut graph_reader = std::io::BufReader::new(graph_cursor);
+                let mut data_reader = std::io::BufReader::new(data_cursor);
 
-                    let hnsw = if let Some(q_impl) = q_inner {
+                let description =
+                    crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to load HNSW description: {}", e)
+                        })?;
+
+                let metric = metric; // Use the metric loaded from centroids metadata
+
+                let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
                         match q_impl {
                             QuantizerImpl::TurboQuant(q) => {
                                 if q.bits() == 4 {
@@ -1167,31 +1187,27 @@ impl HnswIvfIndex {
                         }
                     };
 
-                    let map_builder = ParquetRecordBatchReaderBuilder::try_new(res_mapping)?;
-                    let map_reader = map_builder.build()?;
-                    let batches: Vec<RecordBatch> = map_reader
-                        .map(|r| r.map_err(anyhow::Error::from))
-                        .collect::<Result<Vec<_>>>()?;
-                    if batches.is_empty() {
-                        return Err(anyhow::anyhow!("No data in mapping file"));
-                    }
-                    let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-                    let row_id_array = batch
-                        .column(0)
-                        .as_primitive::<arrow::datatypes::UInt32Type>();
-                    let row_id_mapping: Vec<usize> =
-                        row_id_array.values().iter().map(|&x| x as usize).collect();
-
-                    Ok((cluster_id, (hnsw, row_id_mapping)))
+                let map_builder = ParquetRecordBatchReaderBuilder::try_new(cb.mapping)?;
+                let map_reader = map_builder.build()?;
+                let batches: Vec<RecordBatch> = map_reader
+                    .map(|r| r.map_err(anyhow::Error::from))
+                    .collect::<Result<Vec<_>>>()?;
+                if batches.is_empty() {
+                    return Err(anyhow::anyhow!("No data in mapping file"));
                 }
-            })
-            .buffer_unordered(fetch_concurrency);
+                let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
+                let row_id_array = batch
+                    .column(0)
+                    .as_primitive::<arrow::datatypes::UInt32Type>();
+                let row_id_mapping: Vec<usize> =
+                    row_id_array.values().iter().map(|&x| x as usize).collect();
 
-        type ClusterResult = (usize, (HnswGraph, Vec<usize>));
-        let results: Vec<Result<ClusterResult>> = bodies.collect().await;
+                Ok((cluster_id, (hnsw, row_id_mapping)))
+            })
+            .collect();
 
         let mut cluster_graphs = HashMap::new();
-        for res in results {
+        for res in deser_results {
             let (cid, val) = res?;
             cluster_graphs.insert(cid, val);
         }
