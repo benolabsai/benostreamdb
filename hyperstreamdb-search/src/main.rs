@@ -8,6 +8,7 @@
 
 use axum::routing::{get, post, put};
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -16,6 +17,14 @@ use hyperstreamdb_search::state::{resolve_storage_uri, AppState};
 
 #[tokio::main]
 async fn main() {
+    let num_threads = std::env::var("RAYON_NUM_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| std::cmp::max(1, std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) / 2));
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .unwrap_or_else(|e| tracing::warn!("Failed to initialize rayon thread pool: {}", e));
     // Structured-logging-only panic hook (no println in this crate).
     std::panic::set_hook(Box::new(|info| {
         tracing::error!(panic = ?info, "hypersearch panicked");
@@ -121,7 +130,8 @@ async fn main() {
             state.clone(),
             metrics::track_request,
         ))
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
 
     // Qdrant-compatible API on 6333
     let qdrant_app = Router::new()
@@ -149,7 +159,8 @@ async fn main() {
             post(hyperstreamdb_search::handlers::qdrant::delete_points),
         )
         .with_state(state.clone())
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
 
     let qdrant_bind = std::env::var("QDRANT_BIND").unwrap_or_else(|_| bind.clone());
     let qdrant_port: u16 = std::env::var("QDRANT_PORT")
