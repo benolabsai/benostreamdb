@@ -35,6 +35,7 @@ uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 chrono = "0.4"
 object_store = { version = "0.12.4", features = ["aws", "azure", "gcp", "http"] }
 rayon = "1.12.0"
+dhat = "0.3"
 
 [features]
 default = []

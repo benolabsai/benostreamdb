@@ -202,7 +202,15 @@ impl TableBuilder {
             data_store: None,
             label_pattern: crate::core::table::LabelPattern::default(),
             wal_dir: None,
-            durability: crate::core::table::WalDurability::default(),
+            durability: std::env::var("HYPERSTREAM_WAL_DURABILITY")
+                .or_else(|_| std::env::var("HYPERSEARCH_WAL_DURABILITY"))
+                .ok()
+                .as_deref()
+                .map(|v| match v.to_ascii_lowercase().as_str() {
+                    "async" => crate::core::table::WalDurability::Async,
+                    _ => crate::core::table::WalDurability::Sync,
+                })
+                .unwrap_or_default(),
         }
     }
 

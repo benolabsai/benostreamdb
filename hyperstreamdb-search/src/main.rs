@@ -13,10 +13,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use hyperstreamdb_search::handlers::{bulk, cluster, docs, indices, mapping, metrics, search};
-use hyperstreamdb_search::state::{resolve_storage_uri, AppState};
+use hyperstreamdb_search::state::{resolve_catalog, resolve_storage_uri, AppState};
+
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[tokio::main]
 async fn main() {
+    let _profiler = dhat::Profiler::new_heap();
     let num_threads = std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -59,10 +63,17 @@ async fn main() {
         "Hardware acceleration initialized"
     );
 
-    let state = Arc::new(AppState::with_compute(
+    let (catalog_opt, catalog_ns) = resolve_catalog()
+        .await
+        .map(|(cat, ns)| (Some(cat), ns))
+        .unwrap_or((None, "default".to_string()));
+
+    let state = Arc::new(AppState::with_catalog(
         resolve_storage_uri(),
         cluster_uuid,
         compute_ctx,
+        catalog_opt,
+        catalog_ns,
     ));
 
     // Optional NRT convenience: periodically flush every index so newly

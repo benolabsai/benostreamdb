@@ -13,3 +13,4 @@ demo/
 benchmarks/
 __pycache__/
 *.pyc
+!target/release/hypersearch

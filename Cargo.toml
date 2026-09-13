@@ -58,7 +58,7 @@ metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 [dependencies]
 # core columnar memory format
-arrow = { version = "57.2.0", features = ["ffi", "pyarrow"] }
+arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }
 lazy_static = "1.4"
 arrow-array = "57.2.0"
 arrow-schema = "57.2.0"
@@ -150,6 +150,7 @@ sha2 = "0.10"
 wgpu = { version = "0.20.0", optional = true }
 pollster = { version = "0.4.0", optional = true }
 metrics-exporter-prometheus = { version = "0.18.3", optional = true }
+dhat = "0.3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
@@ -209,7 +210,8 @@ debug = 0
 opt-level = 3
 lto = "thin"
 codegen-units = 16          # Balance compile speed vs runtime perf (1 = fastest binary, 256 = fastest compile)
-strip = "debuginfo"         # Keep symbols for crash backtraces, strip DWARF from binary size
+debug = 1
+strip = "none"         # Keep symbols for crash backtraces, strip DWARF from binary size
 
 [profile.release-lto]
 inherits = "release"

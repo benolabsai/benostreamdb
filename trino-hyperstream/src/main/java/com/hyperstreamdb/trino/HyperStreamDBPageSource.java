@@ -34,7 +34,7 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
     }
 
     // JNI Declarations
-    private native long openSession(String path);
+    private native long openSession(String path, String rowSelection);
 
     // Updated signature: returns 1 for success/has_more, 0 for done/empty
     private native long readBatch(long handle, long outArrayPtr, long outSchemaPtr);
@@ -52,7 +52,7 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
             if (HyperStreamDBJNIBridge.isLoaded()) {
                 HyperStreamDBJNIBridge.setGpuContext(this.gpuDevice);
             }
-            this.nativeHandle = openSession(split.getPath());
+            this.nativeHandle = openSession(split.getPath(), split.getRowSelection());
         } catch (UnsatisfiedLinkError e) {
             System.err.println("JNI openSession not found. using mock handle.");
             this.nativeHandle = 12345;

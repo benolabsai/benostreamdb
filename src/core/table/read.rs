@@ -693,6 +693,11 @@ impl Table {
         let expr_arc = expr.map(Arc::new);
         let concurrency = config
             .max_parallel_readers
+            .or_else(|| {
+                std::env::var("HYPERSTREAM_MAX_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
             .unwrap_or_else(|| {
                 std::thread::available_parallelism()
                     .map(|n| n.get())

@@ -37,6 +37,10 @@ pub struct AppState {
     pub index_cache: IndexFileCache,
     /// Hardware acceleration compute context (CPU, CUDA, ROCm, Intel, MPS).
     pub compute: hyperstreamdb::core::index::gpu::ComputeContext,
+    /// Optional external Iceberg catalog (AWS Glue, Nessie, REST, Hive, Unity).
+    pub catalog: Option<Arc<dyn hyperstreamdb::core::catalog::Catalog>>,
+    /// Namespace for table operations in the external catalog (default: "default").
+    pub catalog_namespace: String,
     /// Serializes open/create so concurrent first-use requests for the same
     /// index share one `Table` instance (no forked write buffers / WALs).
     open_gate: Arc<Mutex<()>>,
@@ -56,6 +60,22 @@ impl AppState {
         cluster_uuid: String,
         compute: hyperstreamdb::core::index::gpu::ComputeContext,
     ) -> Self {
+        Self::with_catalog(
+            storage_root,
+            cluster_uuid,
+            compute,
+            None,
+            "default".to_string(),
+        )
+    }
+
+    pub fn with_catalog(
+        storage_root: String,
+        cluster_uuid: String,
+        compute: hyperstreamdb::core::index::gpu::ComputeContext,
+        catalog: Option<Arc<dyn hyperstreamdb::core::catalog::Catalog>>,
+        catalog_namespace: String,
+    ) -> Self {
         Self {
             storage_root,
             cluster_uuid,
@@ -63,6 +83,8 @@ impl AppState {
             metrics: Metrics::new(),
             index_cache: IndexFileCache::from_env(),
             compute,
+            catalog,
+            catalog_namespace,
             open_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -100,10 +122,20 @@ impl AppState {
         // BM25/HNSW indexes that `_search` relies on; `Table::builder`
         // works for existing tables, while new ones still need
         // `create_async` for the manifest/Iceberg init.
+        let mut builder = Table::builder(uri.clone())
+            .with_index_all(true)
+            .with_durability(resolve_wal_durability());
+
+        if let Some(catalog) = &self.catalog {
+            builder = builder.with_catalog(
+                Arc::clone(catalog),
+                &self.catalog_namespace,
+                index,
+            );
+        }
+
         let mut table = if table_exists(&uri).await {
-            Table::builder(uri)
-                .with_index_all(true)
-                .with_durability(resolve_wal_durability())
+            builder
                 .build_async()
                 .await
                 .map_err(|e| {
@@ -111,7 +143,7 @@ impl AppState {
                 })?
         } else {
             let schema = schema.clone().unwrap_or_else(empty_schema);
-            match Table::create_async(uri.clone(), schema).await {
+            match Table::create_async(uri.clone(), schema.clone()).await {
                 Ok(_) => {}
                 // Lost a create race with another request: re-open instead.
                 Err(e) if e.to_string().contains("already exists") => {}
@@ -121,9 +153,42 @@ impl AppState {
                     )))
                 }
             }
-            Table::builder(uri)
-                .with_index_all(true)
-                .with_durability(resolve_wal_durability())
+
+            // Register table in the external Iceberg catalog if configured
+            if let Some(catalog) = &self.catalog {
+                match catalog.table_exists(&self.catalog_namespace, index).await {
+                    Ok(false) => {
+                        if let Err(e) = catalog
+                            .create_table(&self.catalog_namespace, index, schema, Some(&uri))
+                            .await
+                        {
+                            tracing::warn!(
+                                index = %index,
+                                namespace = %self.catalog_namespace,
+                                error = %e,
+                                "Failed to register new table in external catalog; storage table created"
+                            );
+                        } else {
+                            tracing::info!(
+                                index = %index,
+                                namespace = %self.catalog_namespace,
+                                "Registered new search index table in external Iceberg catalog"
+                            );
+                        }
+                    }
+                    Ok(true) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            index = %index,
+                            namespace = %self.catalog_namespace,
+                            error = %e,
+                            "Error checking external catalog table existence"
+                        );
+                    }
+                }
+            }
+
+            builder
                 .build_async()
                 .await
                 .map_err(|e| {
@@ -419,10 +484,12 @@ pub fn default_storage_uri() -> String {
     }
 }
 
-/// Resolve `HYPERSEARCH_STORAGE_URI` (defaulting to `file://~/.hyperstreamdb/search`),
+/// Resolve `HYPERSEARCH_STORAGE_URI` (or fallback `HYPERSTREAM_STORAGE_URI`, defaulting to `file://~/.hyperstreamdb/search`),
 /// expanding a leading `~` into `$HOME`.
 pub fn resolve_storage_uri() -> String {
-    let raw = std::env::var("HYPERSEARCH_STORAGE_URI").unwrap_or_else(|_| default_storage_uri());
+    let raw = std::env::var("HYPERSEARCH_STORAGE_URI")
+        .or_else(|_| std::env::var("HYPERSTREAM_STORAGE_URI"))
+        .unwrap_or_else(|_| default_storage_uri());
     let trimmed = raw.trim_end_matches('/');
     if trimmed == "~" || trimmed.starts_with("~/") {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -448,13 +515,14 @@ pub(crate) async fn table_exists(uri: &str) -> bool {
 }
 
 /// Resolve the WAL durability mode for search tables from
-/// `HYPERSEARCH_WAL_DURABILITY` (default `async`).
+/// `HYPERSEARCH_WAL_DURABILITY` or `HYPERSTREAM_WAL_DURABILITY` (default `async`).
 ///
 /// `async` hands writes to the background WAL worker (batched fsync) for
 /// maximum ingest throughput; `sync` fsyncs every write for the strongest
 /// crash guarantees. Unknown values fall back to `async`.
 fn resolve_wal_durability() -> WalDurability {
     match std::env::var("HYPERSEARCH_WAL_DURABILITY")
+        .or_else(|_| std::env::var("HYPERSTREAM_WAL_DURABILITY"))
         .ok()
         .as_deref()
         .map(str::to_ascii_lowercase)
@@ -462,6 +530,122 @@ fn resolve_wal_durability() -> WalDurability {
         Some(v) if v == "sync" => WalDurability::Sync,
         _ => WalDurability::Async,
     }
+}
+
+/// Resolve external Iceberg catalog configuration from environment variables or hyperstream.toml.
+///
+/// Precedence:
+/// 1. `HYPERSEARCH_CATALOG_TYPE` / `HYPERSTREAM_CATALOG_TYPE` (explicit environment variables)
+/// 2. `hyperstream.toml` / `HYPERSTREAM_CONFIG` (via `CatalogConfig::load_default()`)
+///
+/// Returns `Some((Arc<dyn Catalog>, namespace))` if configured, or `None` for path-based Iceberg mode.
+pub async fn resolve_catalog() -> Option<(Arc<dyn hyperstreamdb::core::catalog::Catalog>, String)> {
+    use hyperstreamdb::core::catalog::{create_catalog_async, CatalogConfig, CatalogType};
+    use std::str::FromStr;
+
+    // 1. Check environment variables
+    let type_env = std::env::var("HYPERSEARCH_CATALOG_TYPE")
+        .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_TYPE"))
+        .ok();
+
+    if let Some(type_str) = type_env {
+        match CatalogType::from_str(&type_str) {
+            Ok(cat_type) => {
+                let mut config_map = HashMap::new();
+
+                // URL / URI
+                if let Ok(u) = std::env::var("HYPERSEARCH_CATALOG_URL")
+                    .or_else(|_| std::env::var("HYPERSEARCH_CATALOG_URI"))
+                    .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_URL"))
+                    .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_URI"))
+                {
+                    config_map.insert("url".to_string(), u.clone());
+                    config_map.insert("uri".to_string(), u);
+                }
+
+                // Token / Credential / Prefix / Catalog ID
+                if let Ok(tok) = std::env::var("HYPERSEARCH_CATALOG_TOKEN")
+                    .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_TOKEN"))
+                {
+                    config_map.insert("token".to_string(), tok);
+                }
+                if let Ok(cred) = std::env::var("HYPERSEARCH_CATALOG_CREDENTIAL")
+                    .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_CREDENTIAL"))
+                {
+                    config_map.insert("credential".to_string(), cred);
+                }
+                if let Ok(pfx) = std::env::var("HYPERSEARCH_CATALOG_PREFIX") {
+                    config_map.insert("prefix".to_string(), pfx);
+                }
+                if let Ok(cid) = std::env::var("HYPERSEARCH_CATALOG_ID") {
+                    config_map.insert("catalog_id".to_string(), cid);
+                }
+
+                let namespace = std::env::var("HYPERSEARCH_CATALOG_NAMESPACE")
+                    .or_else(|_| std::env::var("HYPERSTREAM_CATALOG_NAMESPACE"))
+                    .unwrap_or_else(|_| "default".to_string());
+
+                match create_catalog_async(cat_type, config_map).await {
+                    Ok(boxed_catalog) => {
+                        let arc_catalog: Arc<dyn hyperstreamdb::core::catalog::Catalog> =
+                            Arc::from(boxed_catalog);
+                        tracing::info!(
+                            catalog_type = ?cat_type,
+                            namespace = %namespace,
+                            "Initialized external Iceberg catalog from environment"
+                        );
+                        return Some((arc_catalog, namespace));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            catalog_type = ?cat_type,
+                            error = %e,
+                            "Failed to initialize external catalog from environment; falling back to path-based Iceberg"
+                        );
+                        return None;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    catalog_type = %type_str,
+                    error = %e,
+                    "Invalid HYPERSEARCH_CATALOG_TYPE; falling back to path-based Iceberg"
+                );
+                return None;
+            }
+        }
+    }
+
+    // 2. Check hyperstream.toml / default configuration file
+    if let Ok(cat_config) = CatalogConfig::load_default() {
+        let namespace = cat_config
+            .config
+            .get("namespace")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+
+        match create_catalog_async(cat_config.catalog_type, cat_config.config).await {
+            Ok(boxed_catalog) => {
+                let arc_catalog: Arc<dyn hyperstreamdb::core::catalog::Catalog> =
+                    Arc::from(boxed_catalog);
+                tracing::info!(
+                    catalog_type = ?cat_config.catalog_type,
+                    namespace = %namespace,
+                    "Initialized external Iceberg catalog from configuration file"
+                );
+                return Some((arc_catalog, namespace));
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to initialize external catalog from config file; falling back to path-based Iceberg"
+                );
+            }
+        }
+    }
+
+    None
 }
 
 fn empty_schema() -> SchemaRef {
@@ -506,5 +690,27 @@ mod tests {
 
         assert_eq!(state.metrics.index_cache_hits_total.get(), 1);
         assert_eq!(state.metrics.index_cache_misses_total.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_catalog_lifecycle() {
+        // 1. Unset -> None
+        std::env::remove_var("HYPERSEARCH_CATALOG_TYPE");
+        std::env::remove_var("HYPERSTREAM_CATALOG_TYPE");
+        assert!(resolve_catalog().await.is_none());
+
+        // 2. Set REST catalog -> Some
+        std::env::set_var("HYPERSEARCH_CATALOG_TYPE", "rest");
+        std::env::set_var("HYPERSEARCH_CATALOG_URL", "http://localhost:8181/api/catalog/v1");
+        std::env::set_var("HYPERSEARCH_CATALOG_NAMESPACE", "analytics");
+
+        let resolved = resolve_catalog().await;
+        assert!(resolved.is_some());
+        let (_, ns) = resolved.unwrap();
+        assert_eq!(ns, "analytics");
+
+        std::env::remove_var("HYPERSEARCH_CATALOG_TYPE");
+        std::env::remove_var("HYPERSEARCH_CATALOG_URL");
+        std::env::remove_var("HYPERSEARCH_CATALOG_NAMESPACE");
     }
 }

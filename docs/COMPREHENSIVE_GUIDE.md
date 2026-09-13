@@ -1,9 +1,9 @@
 # HyperStreamDB Comprehensive Guide
 
-**Version:** 0.1.10 (Alpha)  
-**Last Updated:** 2026-04-03
+**Version:** 0.7.0+  
+**Last Updated:** September 2026
 
-HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
+HyperStreamDB is a serverless, indexed streaming lakehouse database combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar roaring bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage (S3, GCS, Azure, Local).
 
 ---
 
@@ -11,13 +11,15 @@ HyperStreamDB is a serverless, hybrid-search database optimized for high-perform
 
 HyperStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.
 
-*   **Storage-Native**: Data and indices are stored as Parquet and custom index files in your object store.
-*   **Serverless**: No long-running daemons required. Operations spin up, execute, and spin down.
-*   **Hybrid Indices**:
-    *   **HNSW-IVF**: For approximate nearest neighbor (vector) search.
-    *   **Inverted Index**: For ultra-fast scalar filtering on high-cardinality columns.
-    *   **Roaring Bitmaps**: For boolean and categorical filtering.
-*   **Engine**: Built on Rust with Apache Arrow and DataFusion for vectorized query execution.
+*   **Storage-Native**: Authoritative open table format (Apache Iceberg V2 & V3) storing raw data in standard Parquet files.
+*   **Advisory Index Overlays**: Reconstructible sidecar index files attached directly to Parquet data:
+    *   **HNSW-IVF**: Approximate nearest neighbor vector search with dynamic metric support (`L2`, `Cosine`, `InnerProduct`, `L1`, `Hamming`, `Jaccard`).
+    *   **TurboQuant™ (TQ4 & TQ8)**: Built-in scalar quantization using Fast Walsh-Hadamard Transforms for up to 8x memory compression.
+    *   **Inverted Index & BM25 Okapi**: Full-text and keyword search sidecars with term frequency and document length normalization.
+    *   **Roaring Bitmaps**: For boolean, categorical, and composite multi-column filtering.
+    *   **Hot Row Cache**: Sub-millisecond scattered row fetches directly bypassing disk I/O on vector candidate lookups.
+*   **Dual REST Search API (`hypersearch`)**: Concurrently exposes OpenSearch/Elasticsearch 7.10 (port 9200) and Qdrant Vector API (port 6333) from a single shared engine.
+*   **Engine**: Built in Rust with Apache Arrow and DataFusion for vectorized query execution.
 
 ---
 
@@ -27,8 +29,10 @@ HyperStreamDB decouples compute from storage, allowing for infinite scaling and 
 Prerequisites: Rust toolchain (latest stable).
 
 ```bash
-# Build from source
+# Build engine and search server from source
 cargo build --release
+
+# Install Python bindings
 pip install . 
 ```
 
@@ -40,7 +44,7 @@ import pyarrow as pa
 import pandas as pd
 import numpy as np
 
-# 1. Create a Table with AG News Schema
+# 1. Create a Table with Schema
 schema = pa.schema([
     ('id', pa.int32()), 
     ('label', pa.int32()),   # 1:World, 2:Sports, 3:Business, 4:Sci/Tech
@@ -49,9 +53,9 @@ schema = pa.schema([
     ('embedding', pa.list_(pa.float32(), 384)) # SBERT/all-MiniLM-L6-v2 size
 ])
 
-table = hdb.Table.create("file:///tmp/ag_news", schema)
+table = hdb.Table.create("file:///tmp/news_db", schema)
 
-# 2. Ingest Real Data (Example: AG News Sample)
+# 2. Ingest Real Data
 df = pd.DataFrame({
     'id': [1, 2],
     'label': [3, 4],
@@ -64,7 +68,6 @@ table.write(df)
 table.commit()
 
 # 3. Hybrid Search (Scalar + Vector)
-# Search for "Space" related news in "Sci/Tech" category (label=4)
 query_vec = np.random.rand(384).tolist()
 results = table.search(
     vector_column="embedding",
@@ -79,37 +82,20 @@ print(results.to_pandas()[['title', 'description']])
 
 ## 3. Key Features
 
-### 3.1 SQL Support
+### 3.1 SQL Support & pgvector Operators
 HyperStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.
-
-#### Basic SQL Queries
 
 ```python
 session = hdb.Session()
 session.register_table("my_table", table)
 
 df = session.sql("""
-    SELECT id, content 
-    FROM my_table 
-    WHERE id > 500 
-    ORDER BY id DESC 
-    LIMIT 10
-""")
-```
-
-#### pgvector SQL Operators
-
-HyperStreamDB provides full pgvector compatibility for vector operations:
-
-```python
-# Vector similarity search with distance operators
-results = session.sql("""
     SELECT id, content,
            embedding <-> '[0.1, 0.2, 0.3]'::vector AS l2_distance,
            embedding <=> '[0.1, 0.2, 0.3]'::vector AS cosine_distance
-    FROM documents
-    WHERE category = 'science'
-    ORDER BY l2_distance
+    FROM my_table 
+    WHERE category = 'science' 
+    ORDER BY l2_distance 
     LIMIT 10
 """)
 ```
@@ -122,146 +108,109 @@ results = session.sql("""
 - `<~>` Hamming distance
 - `<%>` Jaccard distance
 
-**Vector Aggregations**:
-```python
-# Compute category centroids
-results = session.sql("""
-    SELECT category, 
-           vector_avg(embedding) AS centroid,
-           COUNT(*) AS doc_count
-    FROM documents
-    GROUP BY category
-""")
-```
-
-**Configuration Parameters**:
-```python
-# Tune search accuracy/speed tradeoff
-session.set_config("hnsw.ef_search", 128)  # Higher = more accurate
-session.set_config("ivf.probes", 20)       # Higher = more accurate
-```
-
-See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for complete documentation.
-
-### 3.2 Hardware Acceleration
-The indexing engine supports hardware acceleration for multiple backends:
-*   **CUDA**: NVIDIA GPUs (Linux, Windows via WSL2)
-*   **Metal**: Apple Silicon (MPS)
-*   **ROCm**: AMD GPUs
-*   **Intel**: AVX-512 optimizations
-
-Enable via `Cargo.toml` features or environment detection.
-
-## 3.3 Multi-Catalog Support
-
-HyperStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.
-
-Below is a detailed example using the Hive Metastore, followed by short-form examples for other supported catalogs. Full integration guides for each will be provided in future updates.
-
-### Hive Metastore (Detailed Example)
-
-Connecting to a Hive Metastore allows you to resolve table names to storage locations automatically.
+### 3.2 Multi-Vector Search & Reciprocal Rank Fusion (RRF)
+Search and rank across multiple embedding columns simultaneously (e.g. text embedding + image embedding) using Reciprocal Rank Fusion:
 
 ```python
-import hyperstreamdb as hdb
-
-# Load a table from Hive Metastore
-table = hdb.Table.from_hive(
-    address="thrift://localhost:9083", 
-    namespace="default", 
-    table="my_analytics_table"
+# Multi-vector search combined via RRF
+results = table.multi_vector_search(
+    queries=[
+        {"column": "text_emb", "query": text_vec, "k": 20, "metric": "cosine"},
+        {"column": "image_emb", "query": image_vec, "k": 20, "metric": "l2"}
+    ],
+    top_k=10,
+    rrf_k=60
 )
-
-# Any writes will now be atomically committed back to Hive
-df = table.to_pandas(filter="status = 'active'")
 ```
 
-### AWS Glue, Nessie, and REST Catalogs
-
-HyperStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:
+### 3.3 Composite Scalar Roaring Bitmap Indexes
+Accelerate multi-column point and range queries (e.g. `(tenant_id, status)`):
 
 ```python
-# AWS Glue (Native AWS Integration)
-table = hdb.Table.from_glue(namespace="prod", table="users")
-
-# Project Nessie (Git-like Versioning)
-table = hdb.Table.from_nessie(nessie_url, namespace="dev", table="experiments")
-
-# Iceberg REST Catalog (Standard API)
-table = hdb.Table.from_rest(rest_url, namespace="marketing", table="campaigns")
-
-# Unity Catalog (Databricks Ecosystem)
-table = hdb.Table.from_unity(unity_url, namespace="main", table="gold_data")
+# Create composite index
+table.create_composite_index(
+    columns=["tenant_id", "status"],
+    algorithm="composite_bitmap"
+)
 ```
 
-For more details on advanced configurations and authentication (Kerberos, SASL, IAM), see the [Configuration Guide](./CONFIGURATION.md) or the [Catalog Usage Guide](./catalog_usage.md).
+### 3.4 Dual REST Search API (`hypersearch`)
+Run standard OpenSearch / Elasticsearch 7.10 clients or Qdrant vector clients directly against HyperStreamDB:
 
----
-
-## 4. Operational Tooling
-
-A dedicated CLI `hdb` is provided for management.
-
-### CLI Commands
 ```bash
-# Inspect table metadata/stats
-hdb table inspect --uri s3://bucket/table
-
-# Compaction (Merge small files)
-hdb table compact --uri s3://bucket/table
-
-# Vacuum (Cleanup old files)
-hdb table vacuum --uri s3://bucket/table --older-than-days 7
+# Start dual REST gateway (OpenSearch on :9200, Qdrant on :6333)
+cargo run -p hyperstreamdb-search --bin hypersearch
 ```
 
-### Metrics & Tracing
-*   **Metrics**: Prometheus endpoint compatible. Tracks ingestion rates, query latency, and compaction times.
-*   **Tracing**: OpenTelemetry (OTLP) support.
-    *   Enable: `export JAEGER_ENABLED=true`
-    *   Sends traces to `localhost:4317` (OTLP/gRPC).
+- **OpenSearch / Elasticsearch (Port 9200)**: Supports `_bulk`, `_search` (BM25, kNN, hybrid RRF), `_mapping`, `_cat/indices`, and index management.
+- **Qdrant Vector API (Port 6333)**: Supports collection management, point upsert, and vector similarity search.
 
----
+### 3.5 TurboQuant™ (TQ4 / TQ8) Quantization
+Built-in scalar quantization reduces HNSW memory consumption by up to 8x:
 
-## 5. Performance Tips
-
-1.  **Index Everything**: Ensure vector columns have HNSW indices and scalar filter columns have Inverted indices.
-    *   `table.create_index("col", index_type="hnsw")`
-2.  **Projection**: Always specify `columns=[...]` in `read` operations to avoid reading unused large embeddings.
-3.  **Compaction**: Run compaction regularly to keep file count low and query performance high.
-
----
-
-## 6. Roadmap Status
-
-| Feature | Status |
-|---------|--------|
-| Core Vector Search | ✅ |
-| Hybrid Filtering | ✅ |
-| Native Partitioning | ✅ |
-| Hardware Accel (GPU) | ✅ |
-| SQL Engine | ✅ |
-| Catalogs (Glue/Unity/etc) | ✅ |
-| CLI & Observability | ✅ |
-| Spark/Trino Connectors | 🚧 (APIs ready) |
-
----
-
-## 7. Partitioning Strategy
-
-HyperStreamDB supports coarse-grained pruning via table partitioning. This allows the query planner to skip entire directories of data without reading file headers.
-
-### Creating a Partitioned Table
 ```python
-spec = {
-    "fields": [
-        {"name": "category", "transform": "identity"}
-    ]
-}
-table = hdb.Table.create_partitioned("s3://bucket/table", schema, spec)
+# Register 8-bit TurboQuant index (4x memory reduction)
+table.add_index("embedding", "hnsw_tq8")
+
+# Register 4-bit TurboQuant index (8x memory reduction)
+table.add_index("embedding", "hnsw_tq4")
 ```
 
-### Benefits
-*   **Massive Scale**: Scan millions of files in milliseconds by pruning based on high-level keys.
-*   **S3 Lifecycle**: Easily move old partitions (e.g., `date=2023`) to colder storage classes.
-*   **Isolation**: Writes to different partitions never conflict, enabling high-concurrency ingestion.
+### 3.6 Hardware Acceleration
+The indexing engine supports hardware acceleration across multiple backends:
+*   **CUDA**: NVIDIA GPUs (`cudarc`)
+*   **Metal**: Apple Silicon (MPS via WGPU)
+*   **ROCm**: AMD GPUs
+*   **Intel**: AVX-512 and XPU runtime SIMD dispatch
 
+---
+
+## 4. Multi-Catalog & Enterprise Governance
+
+HyperStreamDB integrates seamlessly with standard data catalogs for table discovery and atomic commits:
+
+*   **Apache Polaris & Lakekeeper**: Full OAuth2 client credentials grant flow (`/v1/oauth/tokens`) with automatic background token refresh.
+*   **Project Nessie**: Git-like branching, merging, and versioning for lakehouse tables.
+*   **AWS Glue**: Managed serverless metadata and optimistic locking.
+*   **Hive Metastore (HMS)**: Thrift-based catalog integration for Hadoop/Spark environments.
+*   **Unity Catalog**: REST catalog for Databricks ecosystems.
+
+Example connecting to Apache Polaris REST catalog with OAuth2:
+```python
+table = hdb.Table.from_rest(
+    url="https://polaris.example.com/api/catalog/v1",
+    namespace="production",
+    table="events",
+    credential="CLIENT_ID:CLIENT_SECRET",
+    scope="PRINCIPAL_ROLE:ALL"
+)
+```
+
+---
+
+## 5. Operational Tooling & Observability
+
+### CLI Commands (`hyperstream`)
+```bash
+# Inspect table metadata and partitions
+hyperstream table inspect --uri s3://bucket/table
+
+# Compaction (Merge small Parquet files)
+hyperstream table compact --uri s3://bucket/table
+
+# Clean up unreferenced snapshots
+hyperstream table expire-snapshots --uri s3://bucket/table --older-than-days 7
+```
+
+### Prometheus Metrics & Tracing
+- **Prometheus**: Exposed on `GET /metrics` on the search server or client metrics.
+- **Tracing**: OpenTelemetry (OTLP) export via `JAEGER_ENABLED=true`.
+
+---
+
+## 6. Performance Best Practices
+
+1. **Leverage Hot Row Cache**: `HYPERSTREAM_BLOCK_CACHE_GB` defaults to 1 GB (proven rock-solid under 4GB container constraints during 1M document scaling tests), caching candidate record batches in memory for sub-2ms kNN search.
+2. **Column Projection**: Always specify `columns=[...]` in scalar reads to skip reading large high-dimensional vector embeddings.
+3. **Use TurboQuant for Large Vector Sets**: TQ8 and TQ4 provide 4x–8x memory savings with negligible recall loss.
+4. **Regular Compaction**: Run `table.compact()` to merge fragmented segments and maintain optimal HNSW graph structures.

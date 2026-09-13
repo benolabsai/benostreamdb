@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow::array::RecordBatch;
+
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::Response;
@@ -19,7 +19,7 @@ use hyperstreamdb::HyperstreamError;
 use serde_json::{Map, Value};
 use rayon::prelude::*;
 
-use crate::handlers::docs::{build_row_batch, translate_write_error, with_id, ID_COLUMN};
+use crate::handlers::docs::{translate_write_error, with_id, ID_COLUMN};
 use crate::infer;
 use crate::state::{table_exists, AppState};
 
@@ -271,57 +271,51 @@ async fn write_index_docs(
         }
     };
 
-    // 5. Build one row batch per document (with `_id` injected).
+    // 5. Inject `_id` into all documents and build a single multi-row batch.
     let t_batch = Instant::now();
-    let batched: Vec<_> = doc_schemas.par_iter().map(|(pos, item, _s)| {
+    let mut docs = Vec::with_capacity(doc_schemas.len());
+    let mut valid_items = Vec::with_capacity(doc_schemas.len());
+    for (pos, item, _s) in &doc_schemas {
         let mut doc = item.doc.clone().unwrap();
         if let Err(e) = with_id(&mut doc, &item.id) {
-            return Err(err_result(*pos, *item, 400, e.to_string()));
-        }
-        match build_row_batch(&target, &doc) {
-            Ok(batch) => Ok((*pos, *item, batch)),
-            Err(e) => Err(err_result(*pos, *item, 400, e.to_string())),
-        }
-    }).collect();
-
-    let batch_ms = t_batch.elapsed().as_millis();
-    let mut batches: Vec<(usize, &BulkItem, RecordBatch)> = Vec::new();
-    for res in batched {
-        match res {
-            Ok(b) => batches.push(b),
-            Err(e) => results.push(e),
+            results.push(err_result(*pos, item, 400, e.to_string()));
+        } else {
+            docs.push(doc);
+            valid_items.push((*pos, *item));
         }
     }
-    if batches.is_empty() {
+
+    if valid_items.is_empty() {
         return results;
     }
 
-    // 6. Batch write; on failure retry per-document to identify the cause.
-    // Coalesce the per-doc single-row batches into ONE large batch so the
-    // WAL receives a single append (not N tiny 1-row appends) — this was the
-    // dominant ingest cost (~70-90 ms/request for 3,333 docs).
-    let t_wal = Instant::now();
-    let batch_vec: Vec<RecordBatch> = batches.iter().map(|(_, _, b)| b.clone()).collect();
-    let coalesced: Vec<RecordBatch> = if batch_vec.len() > 1 {
-        match arrow::compute::concat_batches(&batch_vec[0].schema(), &batch_vec) {
-            Ok(c) => vec![c],
-            Err(e) => {
-                tracing::warn!(error = %e, "bulk: failed to coalesce row batches; writing as-is");
-                batch_vec
+    let batch = match crate::handlers::docs::build_multi_row_batch(&target, &docs) {
+        Ok(b) => b,
+        Err(e) => {
+            for (pos, item) in valid_items {
+                results.push(err_result(pos, item, 400, e.to_string()));
             }
+            return results;
         }
-    } else {
-        batch_vec
     };
-    match table.write_async(coalesced).await {
+    let batch_ms = t_batch.elapsed().as_millis();
+
+    // 6. Batch write
+    // The WAL receives a single append (not N tiny 1-row appends) — this avoids 
+    // the heavy arrow::compute::concat_batches step which dominated ingest cost.
+    let t_wal = Instant::now();
+    match table.write_async(vec![batch.clone()]).await {
         Ok(()) => {
-            for (pos, item, _b) in batches {
+            for (pos, item) in valid_items {
                 results.push(ok_result(pos, item));
             }
         }
         Err(_e) => {
-            for (pos, item, batch) in batches {
-                match table.write_async(vec![batch]).await {
+            // On failure, retry per-document by slicing the batch to identify the cause
+            for i in 0..batch.num_rows() {
+                let (pos, item) = valid_items[i];
+                let single = batch.slice(i, 1);
+                match table.write_async(vec![single]).await {
                     Ok(()) => results.push(ok_result(pos, item)),
                     Err(e2) => {
                         let t2 = translate_write_error(e2);

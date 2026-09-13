@@ -600,9 +600,9 @@ impl Table {
             let total_bytes: usize = buffer.iter().map(|b| b.get_array_memory_size()).sum();
 
             let cache_gb: usize = std::env::var("HYPERSTREAM_CACHE_GB")
-                .unwrap_or_else(|_| "2".to_string())
+                .unwrap_or_else(|_| "1".to_string())
                 .parse()
-                .unwrap_or(2);
+                .unwrap_or(1);
             let limit_bytes = cache_gb * 1024 * 1024 * 1024;
 
             total_bytes > limit_bytes

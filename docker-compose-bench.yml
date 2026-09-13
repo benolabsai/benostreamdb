@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    container_name: bench_opensearch
+    environment:
+      - discovery.type=single-node
+      - OPENSEARCH_JAVA_OPTS=-Xms2g -Xmx2g
+      - DISABLE_SECURITY_PLUGIN=true
+    ports:
+      - "9200:9200"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+
+  hypersearch:
+    image: ubuntu:26.04
+    container_name: bench_hypersearch
+    command: /app/hypersearch
+    volumes:
+      - ./target/release/hypersearch:/app/hypersearch:ro
+      - ./hsdbg_bench_data:/tmp/hsdbg_bench
+    environment:
+      - HYPERSEARCH_BIND=0.0.0.0
+      - HYPERSEARCH_PORT=19299
+      - HYPERSEARCH_STORAGE_URI=file:///tmp/hsdbg_bench
+      - HYPERSTREAM_BLOCK_CACHE_GB=1
+      - HYPERSTREAM_CACHE_GB=1
+      - RUST_LOG=info
+      - RAYON_NUM_THREADS=4
+    ports:
+      - "19299:19299"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G

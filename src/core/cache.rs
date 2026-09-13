@@ -160,9 +160,9 @@ pub static INDEX_CACHE: Lazy<Cache<String, Arc<RoaringBitmap>>> = Lazy::new(|| {
 
 pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
     let cache_gb: u64 = std::env::var("HYPERSTREAM_CACHE_GB")
-        .unwrap_or_else(|_| "2".to_string())
+        .unwrap_or_else(|_| "1".to_string())
         .parse()
-        .unwrap_or(2);
+        .unwrap_or(1);
 
     // Allocate 10% of global cache to Byte Cache (max 512MB)
     let limit_bytes = (cache_gb * 1024 * 1024 * 1024 / 10).min(512 * 1024 * 1024);
@@ -190,11 +190,11 @@ pub static HNSW_CACHE: Lazy<Cache<String, Arc<Hnsw<f32, DistL2>>>> = Lazy::new(|
 /// Cache for HNSW-IVF hybrid indexes
 /// These are more memory-efficient than plain HNSW since they only load needed clusters
 pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(|| {
-    // Default to 2GB cache if not set
+    // Default to 1GB cache if not set
     let cache_gb: u64 = std::env::var("HYPERSTREAM_CACHE_GB")
-        .unwrap_or_else(|_| "2".to_string())
+        .unwrap_or_else(|_| "1".to_string())
         .parse()
-        .unwrap_or(2);
+        .unwrap_or(1);
 
     // Convert to KB to avoid u32 overflow in weigher (moka requirement)
     // u32::MAX KB = 4TB, which is plenty for a single item.
@@ -211,9 +211,9 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
 
 pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = Lazy::new(|| {
     let cache_gb: u64 = std::env::var("HYPERSTREAM_CACHE_GB")
-        .unwrap_or_else(|_| "2".to_string())
+        .unwrap_or_else(|_| "1".to_string())
         .parse()
-        .unwrap_or(2);
+        .unwrap_or(1);
 
     // Allocate 25% of global cache to Inverted Index Cache
     let limit_bytes = cache_gb * 1024 * 1024 * 1024 / 4;
@@ -262,11 +262,11 @@ pub static BLOOM_FILTER_CACHE: Lazy<Cache<String, Arc<Sbbf>>> = Lazy::new(|| {
 /// Doris-inspired Block Cache for decoded RecordBatches.
 /// Bypasses Parquet decoding/decompression for frequently accessed blocks.
 pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
-    // Default to 4GB cache if not set
+    // Default to 1GB cache if not set
     let cache_gb: u64 = std::env::var("HYPERSTREAM_BLOCK_CACHE_GB")
-        .unwrap_or_else(|_| "4".to_string())
+        .unwrap_or_else(|_| "1".to_string())
         .parse()
-        .unwrap_or(4);
+        .unwrap_or(1);
 
     let max_kb = cache_gb * 1024 * 1024;
 

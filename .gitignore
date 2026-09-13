@@ -110,3 +110,23 @@ venv_demo/
 .env
 
 COMMERCIALIZATION_STRATEGY.md
+
+# Benchmark scratch & local test artifacts
+benchmarks/competitive/data/
+docker/data/
+hsdbg_bench_data/
+measure_disk.py
+parse_dhat.py
+populate.py
+run_*.sh
+test_bench.sh
+bench_*.py
+run_benchmark.py
+*.pid
+*.patch
+dhat-heap.json
+test_bm25*
+*_output.txt
+mem_report.txt
+benchmark_raw.json
+docs/roo_task_*.md

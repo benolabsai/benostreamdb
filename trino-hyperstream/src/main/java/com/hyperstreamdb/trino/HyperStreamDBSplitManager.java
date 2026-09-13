@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
+import java.util.Optional;
 
 public class HyperStreamDBSplitManager implements ConnectorSplitManager {
     private final String gpuDevice;
@@ -26,10 +27,9 @@ public class HyperStreamDBSplitManager implements ConnectorSplitManager {
 
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    // Check ffi.rs for signature: getSplits(String uri, long maxSplitSize) ->
-    // String json
+    // Check ffi.rs for signature: getSplits(String uri, long maxSplitSize, String filter) -> String json
     // Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_getSplits
-    private native String getSplits(String uri, long maxSplitSize);
+    private native String getSplits(String uri, long maxSplitSize, String filter);
 
     @Override
     public ConnectorSplitSource getSplits(
@@ -43,8 +43,10 @@ public class HyperStreamDBSplitManager implements ConnectorSplitManager {
         String tableName = tableHandle.getTableName();
         // Assuming simplistic URI mapping for PoC
         String uri = "s3://default/" + tableHandle.getSchemaName() + "/" + tableName;
+        
+        String filter = tableHandle.getFilterString().orElse("");
 
-        System.out.println("HyperStreamDBSplitManager: Computing splits for " + uri);
+        System.out.println("HyperStreamDBSplitManager: Computing splits for " + uri + " with filter: " + filter);
         
         // Configure GPU backend before computing splits
         if (HyperStreamDBJNIBridge.isLoaded()) {
@@ -53,7 +55,7 @@ public class HyperStreamDBSplitManager implements ConnectorSplitManager {
 
         try {
             // Default 64MB split size
-            String jsonResult = getSplits(uri, 64 * 1024 * 1024);
+            String jsonResult = getSplits(uri, 64 * 1024 * 1024, filter);
 
             if (jsonResult == null || jsonResult.isEmpty() || jsonResult.equals("[]")) {
                 return new FixedSplitSource(List.of());
