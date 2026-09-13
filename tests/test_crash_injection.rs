@@ -131,7 +131,11 @@ async fn test_compaction_precondition_aborts_on_missing_candidate() -> Result<()
         ..Default::default()
     };
     manifest
-        .commit(std::slice::from_ref(&entry_a), &[], CommitMetadata::default())
+        .commit(
+            std::slice::from_ref(&entry_a),
+            &[],
+            CommitMetadata::default(),
+        )
         .await?;
 
     // Verify snapshot v1 contains file A

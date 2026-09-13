@@ -48,7 +48,10 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
         Field::new("id", DataType::Int32, false),
         Field::new(
             "embedding",
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim as i32),
+            DataType::FixedSizeList(
+                Arc::new(Field::new("item", DataType::Float32, true)),
+                dim as i32,
+            ),
             false,
         ),
     ]));
@@ -68,10 +71,9 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
         schema.clone(),
         vec![
             Arc::new(Int32Array::from(ids)),
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                vectors,
-                dim as i32,
-            )),
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vectors, dim as i32),
+            ),
         ],
     )?;
 
@@ -84,14 +86,16 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     // Query closest to the LAST vector (id=24, in chunk 3).
     let hits = table
         .query()
-        .vector_search("embedding", VectorValue::Float32(vec![9.0, 9.0, 9.0, 9.0]), 1)
+        .vector_search(
+            "embedding",
+            VectorValue::Float32(vec![9.0, 9.0, 9.0, 9.0]),
+            1,
+        )
         .to_batches()
         .await?;
 
     assert!(!hits.is_empty(), "expected at least one hit");
-    let id_col = hits[0]
-        .column_by_name("id")
-        .expect("id column present");
+    let id_col = hits[0].column_by_name("id").expect("id column present");
     let id_arr = id_col
         .as_any()
         .downcast_ref::<Int32Array>()

@@ -941,7 +941,10 @@ impl HybridReader {
                     .map(|idx_info| {
                         let idx = idx_info.clone();
                         let q = query_c.clone();
-                        async move { self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c).await }
+                        async move {
+                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c)
+                                .await
+                        }
                     })
                     .collect();
                 let results = futures::future::join_all(futures).await;
@@ -959,10 +962,12 @@ impl HybridReader {
                     }
                 }
                 if !any_ok {
-                    self.vector_search_flat(column, query, k, &None, metric).await?
+                    self.vector_search_flat(column, query, k, &None, metric)
+                        .await?
                 } else {
                     // Sort by distance ascending (best first) and take top-k.
-                    merged.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    merged
+                        .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                     merged.truncate(k);
                     merged
                 }
@@ -1336,8 +1341,9 @@ impl HybridReader {
                 let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
                 let options = ArrowReaderOptions::default();
                 let arrow_meta = ArrowReaderMetadata::try_new(meta.clone(), options)?;
-                let builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
-                
+                let builder =
+                    ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
+
                 // Read all batches without row selection
                 let mut stream = builder.build()?;
                 let mut all_batches = Vec::new();
@@ -1345,7 +1351,7 @@ impl HybridReader {
                 while let Some(batch) = stream.next().await {
                     all_batches.push(batch?);
                 }
-                
+
                 if !all_batches.is_empty() {
                     let full_batch = if all_batches.len() == 1 {
                         all_batches.into_iter().next().unwrap()
@@ -1353,7 +1359,9 @@ impl HybridReader {
                         arrow::compute::concat_batches(&all_batches[0].schema(), &all_batches)?
                     };
                     let arc_batch = std::sync::Arc::new(full_batch);
-                    crate::core::cache::BLOCK_CACHE.insert(cache_key.clone(), arc_batch.clone()).await;
+                    crate::core::cache::BLOCK_CACHE
+                        .insert(cache_key.clone(), arc_batch.clone())
+                        .await;
                     cached_batch_opt = Some(arc_batch);
                 }
             }
@@ -1411,16 +1419,20 @@ impl HybridReader {
                                 new_columns.push(col.clone());
                             }
                         } else {
-                            let null_arr =
-                                arrow::array::new_null_array(field.data_type(), final_batch.num_rows());
+                            let null_arr = arrow::array::new_null_array(
+                                field.data_type(),
+                                final_batch.num_rows(),
+                            );
                             new_columns.push(null_arr);
                         }
                     }
-                    final_batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), new_columns)?;
+                    final_batch =
+                        arrow::record_batch::RecordBatch::try_new(schema.clone(), new_columns)?;
                 }
 
                 // Add distance column
-                let distance_array = std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
+                let distance_array =
+                    std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
                 let mut fields = final_batch.schema().fields().to_vec();
                 fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
                     "distance",

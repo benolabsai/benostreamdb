@@ -139,17 +139,27 @@ impl IndexFileCache {
 
     /// The configured byte cap.
     pub fn max_size(&self) -> u64 {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).max_size
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .max_size
     }
 
     /// Total bytes currently cached.
     pub fn current_size(&self) -> u64 {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).current_size
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .current_size
     }
 
     /// Number of cached entries.
     pub fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).entries.len()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .len()
     }
 
     /// Whether the cache is empty.
