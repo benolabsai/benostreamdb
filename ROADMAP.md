@@ -539,6 +539,60 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 
 ---
 
+## Phase 9: Resource-Constrained Vector Benchmarking (4 GB RAM Matrix) ⏳ ACTIVE
+
+### Objectives
+- Validate sustained vector ingestion and sub-second hybrid query latency under strict container memory limits (`docker run --memory=4g --cpus=4`).
+- Document zero OOMs, zero GC pauses, and >95% Recall@10 on 1M vectors (768-dim Cohere/DBPedia and 64-dim Matryoshka embeddings).
+- Formalize HNSW-aware hierarchical LRU caching (pinning upper layers $L > 0$ and RoaringBitmap metadata; evicting layer-0 raw vector chunks).
+
+### Tasks
+- [ ] Reproducible Docker benchmark harness comparing HyperStreamDB (TQ8/TQ4) vs OpenSearch 2.x/3.x and LanceDB.
+- [ ] Automated measurement of RSS memory ceilings, ingest throughput (vectors/sec), and p95/p99 query latency.
+- [ ] Formal LRU cache budget configuration guide (`HYPERSTREAM_CACHE_CAP_BYTES`) ensuring predictable memory bounds on edge/container hosts.
+
+---
+
+## Phase 10: Streaming Commit, Delete Lifecycle & Concurrency Verification ⏳ ACTIVE
+
+### Objectives
+- Formally verify HNSW index overlay stability across immutable Iceberg snapshot commits, partition splits, and position/equality deletes.
+- Prove that position delete files mask deleted rows via RoaringBitmap masks during HNSW graph traversal without corrupting graph connectivity.
+
+### Tasks
+- [ ] Integration test suite for Iceberg V2 position delete masking in vector graph scans (`tests/verify_mor_vector_deletes.rs`).
+- [ ] Incremental sidecar index append vs. compaction coordination under concurrent streaming writes.
+- [ ] Architecture documentation detailing the interaction between persistent HNSW overlays and Iceberg transaction manifests.
+
+---
+
+## Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB) ⏳ ACTIVE
+
+### Objectives
+- Stress-test HyperStreamDB under real-world, massive enterprise data: 10+ years of SEC EDGAR filings (Form 4 XML insider transactions, 10-K/10-Q text and XBRL).
+- Validate high-cardinality metadata pre-filtering (CIK, SIC industry code, filing dates) combined with RoaringBitmaps and TQ8 HNSW vector search on a single 4 GB node.
+- Serve as the production-scale proving ground for HyperStreamDB core, powering downstream financial RAG applications including `edgarstreamdb` and the `OpenEDGAR` frontend (`github.com/rla3rd/openedgar`).
+
+### Tasks
+- [ ] Reference benchmark implementation in `examples/sec_edgar_scale_test.md`.
+- [ ] Zero-copy PyTorch tensor feeding via Arrow Flight SQL gateway for deep learning feature pipelines.
+- [ ] End-to-end verification of hybrid scalar-vector queries under high data skew and temporal partitioning.
+
+---
+
+## Phase 12: Client Ecosystem & Packaged Distribution ⏳ PLANNED
+
+### Objectives
+- Enable frictionless developer adoption via standard package managers and AI agent frameworks.
+- Provide first-class client libraries and upstream ecosystem connectors.
+
+### Tasks
+- [ ] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
+- [ ] Official LangChain vector store integration (`HyperStreamVectorStore`).
+- [ ] Official LlamaIndex vector store integration (`HyperStreamIndexStore`).
+
+---
+
 ## Success Metrics
 
 ### Performance (Measured 2026-01-18)
@@ -575,6 +629,12 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Phase 7: Cloud-Agnostic Concurrency & Durability** — `FileBasedLock` (`src/core/lock.rs`) using object storage CAS (`PutMode::Create`), OCC snapshot swaps with retries (`src/core/manifest/manager/commit.rs`), chaos testing (`tests/test_chaos.rs`).
 - **Phase 8: Documentation Suite** — Complete Sphinx / ReadTheDocs setup in `docs/` with developer guides for SQL, Python, Iceberg V2/V3, GPU, and Concurrency.
 
+**Active & Upcoming Phases (Phases 9–12)**:
+- **Phase 9: Resource-Constrained Vector Benchmarking (4 GB RAM Matrix)** — Validating sustained ingest & search under strict container limits against OpenSearch and LanceDB.
+- **Phase 10: Streaming Commit & Delete Lifecycle Verification** — Verifying HNSW overlay stability across immutable Iceberg snapshot commits and position delete masking.
+- **Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB)** — 10+ years of SEC filings as the high-cardinality multi-vector & Graph RAG testing ground.
+- **Phase 12: Client Ecosystem & Packaged Distribution** — Official PyPI wheels and LangChain/LlamaIndex vector store connectors.
+
 ---
 
 ## Questions & Decisions
@@ -596,5 +656,5 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 
 ---
 
-**Last Updated:** 2026-09-09  
-**Status:** Phases 1–8 COMPLETE ✅ | Active Next: Polaris REST OAuth2, Trino Sidecar Pushdown, Multi-Vector Search & Graph RAG  
+**Last Updated:** 2026-09-13  
+**Status:** Phases 1–8 COMPLETE ✅ | Active: Phases 9–11 (4GB RAM Benchmarks, Delete Lifecycles, SEC EDGAR Scale Lab) | Planned: Phase 12 (PyPI Wheels & Connectors)
