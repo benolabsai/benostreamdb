@@ -1219,11 +1219,16 @@ impl PyTable {
     }
 
     /// Get splits for parallel reading (Trino)
-    #[pyo3(signature = (max_split_size))]
-    fn get_splits(&self, py: Python<'_>, max_split_size: usize) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (max_split_size, filter=None))]
+    fn get_splits(
+        &self,
+        py: Python<'_>,
+        max_split_size: usize,
+        filter: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
         let splits = self
             .table
-            .get_splits(max_split_size)
+            .get_splits(max_split_size, filter.as_deref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
         let py_splits: Vec<PySplit> = splits
