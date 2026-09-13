@@ -11,13 +11,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-
 use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::response::Response;
 use hyperstreamdb::HyperstreamError;
-use serde_json::{Map, Value};
 use rayon::prelude::*;
+use serde_json::{Map, Value};
 
 use crate::handlers::docs::{translate_write_error, with_id, ID_COLUMN};
 use crate::infer;
@@ -47,7 +46,7 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
-        
+
     struct RawAction<'a> {
         action: Value,
         source_line: Option<&'a str>,
@@ -59,7 +58,7 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
     while i < lines.len() {
         let action: Value = serde_json::from_str(lines[i])
             .map_err(|e| bad_request(format!("bulk line {}: invalid action JSON: {e}", i + 1)))?;
-            
+
         let is_delete = match action.as_object().and_then(|o| o.iter().next()) {
             Some((op, _)) => op == "delete",
             None => false, // let the parallel phase error out nicely
@@ -86,58 +85,64 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
         i += 1;
     }
 
-    raw_actions.into_par_iter().map(|raw| {
-        let (op, meta) = match raw.action.as_object().and_then(|o| o.iter().next()) {
-            Some((op, meta)) => (op.clone(), meta.clone()),
-            None => {
-                return Err(bad_request(format!(
-                    "bulk line {}: expected a single action object",
-                    raw.line_num
-                )))
-            }
-        };
+    raw_actions
+        .into_par_iter()
+        .map(|raw| {
+            let (op, meta) = match raw.action.as_object().and_then(|o| o.iter().next()) {
+                Some((op, meta)) => (op.clone(), meta.clone()),
+                None => {
+                    return Err(bad_request(format!(
+                        "bulk line {}: expected a single action object",
+                        raw.line_num
+                    )))
+                }
+            };
 
-        if !matches!(op.as_str(), "index" | "create" | "delete") {
-            return Err(bad_request(format!(
-                "bulk line {}: unsupported action '{op}' (supported: index, create, delete)",
-                raw.line_num
-            )));
-        }
-        let meta_obj = meta.as_object().ok_or_else(|| {
-            bad_request(format!(
-                "bulk line {}: action meta must be an object",
-                raw.line_num
-            ))
-        })?;
-        let index = meta_obj
-            .get("_index")
-            .and_then(Value::as_str)
-            .or(default_index)
-            .ok_or_else(|| {
+            if !matches!(op.as_str(), "index" | "create" | "delete") {
+                return Err(bad_request(format!(
+                    "bulk line {}: unsupported action '{op}' (supported: index, create, delete)",
+                    raw.line_num
+                )));
+            }
+            let meta_obj = meta.as_object().ok_or_else(|| {
                 bad_request(format!(
-                    "bulk line {}: missing '_index' (use POST /<index>/_bulk or set _index)",
+                    "bulk line {}: action meta must be an object",
                     raw.line_num
                 ))
-            })?
-            .to_string();
-        let id = meta_obj
-            .get("_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            })?;
+            let index = meta_obj
+                .get("_index")
+                .and_then(Value::as_str)
+                .or(default_index)
+                .ok_or_else(|| {
+                    bad_request(format!(
+                        "bulk line {}: missing '_index' (use POST /<index>/_bulk or set _index)",
+                        raw.line_num
+                    ))
+                })?
+                .to_string();
+            let id = meta_obj
+                .get("_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let doc = match raw.source_line {
-            Some(src) => {
-                let source: Value = serde_json::from_str(src).map_err(|e| {
-                    bad_request(format!("bulk line {}: invalid source JSON: {e}", raw.line_num + 1))
-                })?;
-                Some(source)
-            }
-            None => None,
-        };
+            let doc = match raw.source_line {
+                Some(src) => {
+                    let source: Value = serde_json::from_str(src).map_err(|e| {
+                        bad_request(format!(
+                            "bulk line {}: invalid source JSON: {e}",
+                            raw.line_num + 1
+                        ))
+                    })?;
+                    Some(source)
+                }
+                None => None,
+            };
 
-        Ok(BulkItem { op, index, id, doc })
-    }).collect()
+            Ok(BulkItem { op, index, id, doc })
+        })
+        .collect()
 }
 
 /// A per-item bulk outcome.
@@ -205,12 +210,15 @@ async fn write_index_docs(
 
     // 1. Infer each document's schema, collecting per-item errors.
     let t_infer = Instant::now();
-    let inferred: Vec<_> = items.par_iter().map(|(pos, item)| {
-        match infer::infer_schema(item.doc.as_ref().unwrap()) {
-            Ok(s) => Ok((*pos, *item, s)),
-            Err(e) => Err(err_result(*pos, item, 400, e.to_string())),
-        }
-    }).collect();
+    let inferred: Vec<_> = items
+        .par_iter()
+        .map(
+            |(pos, item)| match infer::infer_schema(item.doc.as_ref().unwrap()) {
+                Ok(s) => Ok((*pos, *item, s)),
+                Err(e) => Err(err_result(*pos, item, 400, e.to_string())),
+            },
+        )
+        .collect();
 
     let infer_ms = t_infer.elapsed().as_millis();
     let mut doc_schemas: Vec<(usize, &BulkItem, arrow::datatypes::SchemaRef)> = Vec::new();
@@ -301,7 +309,7 @@ async fn write_index_docs(
     let batch_ms = t_batch.elapsed().as_millis();
 
     // 6. Batch write
-    // The WAL receives a single append (not N tiny 1-row appends) — this avoids 
+    // The WAL receives a single append (not N tiny 1-row appends) — this avoids
     // the heavy arrow::compute::concat_batches step which dominated ingest cost.
     let t_wal = Instant::now();
     match table.write_async(vec![batch.clone()]).await {

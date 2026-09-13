@@ -127,20 +127,13 @@ impl AppState {
             .with_durability(resolve_wal_durability());
 
         if let Some(catalog) = &self.catalog {
-            builder = builder.with_catalog(
-                Arc::clone(catalog),
-                &self.catalog_namespace,
-                index,
-            );
+            builder = builder.with_catalog(Arc::clone(catalog), &self.catalog_namespace, index);
         }
 
         let mut table = if table_exists(&uri).await {
-            builder
-                .build_async()
-                .await
-                .map_err(|e| {
-                    HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
-                })?
+            builder.build_async().await.map_err(|e| {
+                HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
+            })?
         } else {
             let schema = schema.clone().unwrap_or_else(empty_schema);
             match Table::create_async(uri.clone(), schema.clone()).await {
@@ -188,12 +181,9 @@ impl AppState {
                 }
             }
 
-            builder
-                .build_async()
-                .await
-                .map_err(|e| {
-                    HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
-                })?
+            builder.build_async().await.map_err(|e| {
+                HyperstreamError::internal(format!("failed to open index '{index}': {e}"))
+            })?
         };
 
         // Backfill BM25/HNSW indexes on segments committed before this
@@ -701,7 +691,10 @@ mod tests {
 
         // 2. Set REST catalog -> Some
         std::env::set_var("HYPERSEARCH_CATALOG_TYPE", "rest");
-        std::env::set_var("HYPERSEARCH_CATALOG_URL", "http://localhost:8181/api/catalog/v1");
+        std::env::set_var(
+            "HYPERSEARCH_CATALOG_URL",
+            "http://localhost:8181/api/catalog/v1",
+        );
         std::env::set_var("HYPERSEARCH_CATALOG_NAMESPACE", "analytics");
 
         let resolved = resolve_catalog().await;
