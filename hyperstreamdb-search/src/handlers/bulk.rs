@@ -312,8 +312,7 @@ async fn write_index_docs(
         }
         Err(_e) => {
             // On failure, retry per-document by slicing the batch to identify the cause
-            for i in 0..batch.num_rows() {
-                let (pos, item) = valid_items[i];
+            for (i, &(pos, item)) in valid_items.iter().enumerate().take(batch.num_rows()) {
                 let single = batch.slice(i, 1);
                 match table.write_async(vec![single]).await {
                     Ok(()) => results.push(ok_result(pos, item)),

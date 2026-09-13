@@ -470,7 +470,7 @@ impl Table {
                     current_schema
                         .and_then(|s| {
                             s.fields.iter().find(|f| {
-                                &f.name == &col
+                                f.name == col
                                     && f.indexes
                                         .iter()
                                         .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }))

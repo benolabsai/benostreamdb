@@ -5,7 +5,7 @@
 //! datasets). Uses a small `HYPERSTREAM_HNSW_CHUNK_SIZE` so a modest number
 //! of vectors produces multiple chunks.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use arrow::array::{FixedSizeListArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
@@ -15,11 +15,11 @@ use hyperstreamdb::core::table::Table;
 use tempfile::tempdir;
 
 /// Serialize tests that mutate the global HYPERSTREAM_HNSW_CHUNK_SIZE env var.
-static CHUNK_SIZE_LOCK: Mutex<()> = Mutex::new(());
+static CHUNK_SIZE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
-    let _guard = CHUNK_SIZE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = CHUNK_SIZE_LOCK.lock().await;
 
     // Use a tiny chunk size so 25 vectors -> 3 chunks (10, 10, 5).
     std::env::set_var("HYPERSTREAM_HNSW_CHUNK_SIZE", "10");
@@ -55,8 +55,8 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
 
     // 25 vectors. Vector at id=24 (last, in chunk 3) is [9.0, 9.0, 9.0, 9.0].
     // The query [9.0, 9.0, 9.0, 9.0] should match id=24 (in the LAST chunk).
-    let n = 25;
-    let ids: Vec<i32> = (0..n as i32).collect();
+    let n = 25i32;
+    let ids: Vec<i32> = (0..n).collect();
     let vectors: Vec<Option<Vec<Option<f32>>>> = (0..n)
         .map(|i| {
             let v = (i as f32) * 0.1;

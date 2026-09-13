@@ -906,7 +906,7 @@ impl HybridReader {
             let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
             let chunk_indices: Vec<_> = vector_indices
                 .iter()
-                .filter(|f| algo_rank(*f) == best_rank)
+                .filter(|f| algo_rank(f) == best_rank)
                 .cloned()
                 .collect();
 
