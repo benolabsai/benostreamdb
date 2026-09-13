@@ -108,8 +108,8 @@ venv_demo/
 .env
 
 COMMERCIALIZATION_STRATEGY.md
-business_plan.md
-business_plan.nd
+business_plan*
+business_plan/
 
 # Benchmark scratch & local test artifacts
 benchmarks/competitive/data/

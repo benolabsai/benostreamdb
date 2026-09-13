@@ -6,9 +6,9 @@
 //! and stores indexes under `HYPERSEARCH_STORAGE_URI`
 //! (default `file://~/.hyperstreamdb/search`).
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post, put};
 use axum::Router;
-use axum::extract::DefaultBodyLimit;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -24,7 +24,15 @@ async fn main() {
     let num_threads = std::env::var("RAYON_NUM_THREADS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| std::cmp::max(1, std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) / 2));
+        .unwrap_or_else(|| {
+            std::cmp::max(
+                1,
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+                    / 2,
+            )
+        });
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()

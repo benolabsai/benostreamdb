@@ -1070,8 +1070,9 @@ impl HnswIvfIndex {
 
         // Phase 2: Deserialize all HNSW graphs in parallel (CPU-bound, via rayon).
         let quantizer_for_deser = quantizer.clone();
-        let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> =
-            cluster_bytes.into_par_iter().map(|cb_res| {
+        let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> = cluster_bytes
+            .into_par_iter()
+            .map(|cb_res| {
                 let cb = cb_res?;
                 let cluster_id = cb.cluster_id;
 
@@ -1082,108 +1083,106 @@ impl HnswIvfIndex {
 
                 let description =
                     crate::core::index::hnsw_rs::hnswio::load_description(&mut graph_reader)
-                        .map_err(|e| {
-                            anyhow::anyhow!("Failed to load HNSW description: {}", e)
-                        })?;
+                        .map_err(|e| anyhow::anyhow!("Failed to load HNSW description: {}", e))?;
 
                 let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
-                        match q_impl {
-                            QuantizerImpl::TurboQuant(q) => {
-                                if q.bits() == 4 {
-                                    HnswGraph::TurboQuant4(
-                                        crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                            &mut graph_reader,
-                                            &description,
-                                            crate::core::index::distance::DistL2u4,
-                                            &mut data_reader,
-                                        )
-                                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                                    )
-                                } else {
-                                    HnswGraph::TurboQuant8(
-                                        crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                            &mut graph_reader,
-                                            &description,
-                                            crate::core::index::distance::DistL2u8,
-                                            &mut data_reader,
-                                        )
-                                        .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                                    )
-                                }
-                            }
-                            QuantizerImpl::Pq(pq) => {
-                                let dist = crate::core::index::pq::DistPqSdc {
-                                    pq: std::sync::Arc::new(pq.clone()),
-                                };
-                                HnswGraph::Pq(
+                    match q_impl {
+                        QuantizerImpl::TurboQuant(q) => {
+                            if q.bits() == 4 {
+                                HnswGraph::TurboQuant4(
                                     crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
                                         &mut graph_reader,
                                         &description,
-                                        dist,
+                                        crate::core::index::distance::DistL2u4,
+                                        &mut data_reader,
+                                    )
+                                    .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                                )
+                            } else {
+                                HnswGraph::TurboQuant8(
+                                    crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                        &mut graph_reader,
+                                        &description,
+                                        crate::core::index::distance::DistL2u8,
                                         &mut data_reader,
                                     )
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
                             }
                         }
-                    } else {
-                        match metric {
-                            VectorMetric::L2 => HnswGraph::L2(
+                        QuantizerImpl::Pq(pq) => {
+                            let dist = crate::core::index::pq::DistPqSdc {
+                                pq: std::sync::Arc::new(pq.clone()),
+                            };
+                            HnswGraph::Pq(
                                 crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
                                     &mut graph_reader,
                                     &description,
-                                    DistL2,
+                                    dist,
                                     &mut data_reader,
                                 )
                                 .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
-                            VectorMetric::Cosine => HnswGraph::Cosine(
-                                crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                    &mut graph_reader,
-                                    &description,
-                                    DistCosine,
-                                    &mut data_reader,
-                                )
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
-                            VectorMetric::InnerProduct => HnswGraph::Dot(
-                                crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                    &mut graph_reader,
-                                    &description,
-                                    DistDot,
-                                    &mut data_reader,
-                                )
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
-                            VectorMetric::L1 => HnswGraph::L1(
-                                crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                    &mut graph_reader,
-                                    &description,
-                                    DistL1,
-                                    &mut data_reader,
-                                )
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
-                            VectorMetric::Hamming => HnswGraph::Hamming(
-                                crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                    &mut graph_reader,
-                                    &description,
-                                    DistHamming,
-                                    &mut data_reader,
-                                )
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
-                            VectorMetric::Jaccard => HnswGraph::Jaccard(
-                                crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
-                                    &mut graph_reader,
-                                    &description,
-                                    DistJaccard,
-                                    &mut data_reader,
-                                )
-                                .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
-                            ),
+                            )
                         }
-                    };
+                    }
+                } else {
+                    match metric {
+                        VectorMetric::L2 => HnswGraph::L2(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistL2,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                        VectorMetric::Cosine => HnswGraph::Cosine(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistCosine,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                        VectorMetric::InnerProduct => HnswGraph::Dot(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistDot,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                        VectorMetric::L1 => HnswGraph::L1(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistL1,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                        VectorMetric::Hamming => HnswGraph::Hamming(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistHamming,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                        VectorMetric::Jaccard => HnswGraph::Jaccard(
+                            crate::core::index::hnsw_rs::hnswio::load_hnsw_with_dist(
+                                &mut graph_reader,
+                                &description,
+                                DistJaccard,
+                                &mut data_reader,
+                            )
+                            .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
+                        ),
+                    }
+                };
 
                 let map_builder = ParquetRecordBatchReaderBuilder::try_new(cb.mapping)?;
                 let map_reader = map_builder.build()?;
@@ -1438,7 +1437,7 @@ impl HnswIvfIndex {
             size += mapping.len() * 8;
             let data_count = mapping.len();
             size += data_count * self.dim * 4;
-            // The HNSW graph structure in hnsw_rs uses Arc<RwLock<Point>> and 
+            // The HNSW graph structure in hnsw_rs uses Arc<RwLock<Point>> and
             // deeply nested Vecs for edges, creating massive heap allocation overhead.
             // Empirical profiling via dhat shows ~15-20KB per point at M=16.
             size += data_count * 20_000;
