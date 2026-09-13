@@ -3,6 +3,8 @@ package com.hyperstreamdb.trino;
 import io.trino.spi.connector.*;
 import io.trino.spi.type.VarcharType;
 import io.trino.spi.type.IntegerType;
+import io.trino.spi.predicate.Domain;
+import io.trino.spi.predicate.TupleDomain;
 
 import java.util.List;
 import java.util.Map;
@@ -51,5 +53,64 @@ public class HyperStreamDBMetadata implements ConnectorMetadata {
             ColumnHandle columnHandle) {
         HyperStreamDBColumnHandle handle = (HyperStreamDBColumnHandle) columnHandle;
         return new ColumnMetadata(handle.getColumnName(), handle.getColumnType());
+    }
+
+    @Override
+    public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(
+            ConnectorSession session,
+            ConnectorTableHandle table,
+            Constraint constraint) {
+        
+        HyperStreamDBTableHandle handle = (HyperStreamDBTableHandle) table;
+        TupleDomain<ColumnHandle> summary = constraint.getSummary();
+        
+        if (summary.isAll()) {
+            return Optional.empty();
+        }
+
+        // Simplistic predicate translation for PoC
+        StringBuilder filterBuilder = new StringBuilder();
+        if (summary.getDomains().isPresent()) {
+            Map<ColumnHandle, Domain> domains = summary.getDomains().get();
+            boolean first = true;
+            for (Map.Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
+                HyperStreamDBColumnHandle column = (HyperStreamDBColumnHandle) entry.getKey();
+                Domain domain = entry.getValue();
+                
+                if (domain.isSingleValue()) {
+                    if (!first) {
+                        filterBuilder.append(" AND ");
+                    }
+                    Object value = domain.getSingleValue();
+                    if (value instanceof io.airlift.slice.Slice) {
+                        value = ((io.airlift.slice.Slice) value).toStringUtf8();
+                        filterBuilder.append(column.getColumnName()).append(" = '").append(value).append("'");
+                    } else {
+                        filterBuilder.append(column.getColumnName()).append(" = ").append(value);
+                    }
+                    first = false;
+                }
+            }
+        }
+
+        if (filterBuilder.length() == 0) {
+            return Optional.empty();
+        }
+
+        String filterStr = filterBuilder.toString();
+        // If the handle already has this filter, don't apply it again
+        if (handle.getFilterString().isPresent() && handle.getFilterString().get().equals(filterStr)) {
+            return Optional.empty();
+        }
+
+        HyperStreamDBTableHandle newHandle = new HyperStreamDBTableHandle(
+                handle.getSchemaName(),
+                handle.getTableName(),
+                Optional.of(filterStr));
+
+        return Optional.of(new ConstraintApplicationResult<>(
+                newHandle,
+                summary, // return the summary as remaining constraint so Trino still evaluates it safely
+                false));
     }
 }

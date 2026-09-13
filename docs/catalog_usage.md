@@ -82,21 +82,38 @@ table = hdb.Table.from_glue(
 
 ---
 
-## 4. Iceberg REST Catalog
+## 4. Iceberg REST Catalog (Snowflake / Apache Polaris & Lakekeeper)
 
-The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, HyperStreamDB).
+The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, Snowflake, HyperStreamDB). HyperStreamDB natively supports the official Iceberg REST OpenAPI specification, including full OAuth2 client credentials authentication for **Snowflake / Apache Polaris** and **Lakekeeper**. Both Python direct table access and `hyperstreamdb-search` REST ingestion automatically synchronize new snapshots with Polaris.
 
-### Usage
+### Snowflake / Apache Polaris with OAuth2 Client Credentials
+```python
+import hyperstreamdb as hdb
+
+# Connect to Apache Polaris REST catalog using client credentials grant
+table = hdb.Table.from_rest(
+    url="https://polaris.example.com/api/catalog/v1",
+    namespace="production",
+    table="campaign_results",
+    credential="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>",
+    scope="PRINCIPAL_ROLE:ALL"
+)
+```
+
+HyperStreamDB automatically executes the OAuth2 `/v1/oauth/tokens` token exchange and caches the bearer token, refreshing it automatically within 60 seconds of expiration.
+
+### Static Token (Tabular / Nessie REST)
 ```python
 table = hdb.Table.from_rest(
     url="https://api.tabular.io/v1/",
     namespace="marketing",
     table="campaign_results",
-    token="YOUR_OAUTH_TOKEN"  # Optional OAuth2 token
+    token="YOUR_STATIC_BEARER_TOKEN"
 )
 ```
 
 ---
 
 ## Next Steps
-More detailed guides for authentication (Kerberos, OAuth2, IAM Roles) and advanced branching workflows are coming in future releases.
+* For zero-copy querying in Snowflake via Apache Polaris, see the [Snowflake + Polaris Integration Guide](SNOWFLAKE_POLARIS_GUIDE.md).
+* For cluster configuration or setting up catalog properties via `hyperstream.toml`, see the [Configuration Guide](CONFIGURATION.md).

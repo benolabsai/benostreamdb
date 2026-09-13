@@ -94,7 +94,12 @@ impl QueryConfig {
         num_vectors_per_segment: usize,
         embedding_dim: usize,
     ) -> usize {
-        if let Some(manual) = self.max_parallel_readers {
+        let manual_readers = self.max_parallel_readers.or_else(|| {
+            std::env::var("HYPERSTREAM_MAX_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+        });
+        if let Some(manual) = manual_readers {
             return manual;
         }
 
@@ -104,9 +109,9 @@ impl QueryConfig {
         // Reserve 50% of RAM for HNSW loading
         let ram_for_hnsw = available_ram / 2;
 
-        // Memory per segment: vectors × dims × 4 bytes × 1.5 (HNSW graph overhead)
+        // Memory per segment: vectors × dims × 4 bytes + (vectors × 20,000 bytes HNSW overhead)
         let bytes_per_vector = embedding_dim * 4;
-        let memory_per_segment = (num_vectors_per_segment * bytes_per_vector * 3) / 2; // 1.5x factor
+        let memory_per_segment = num_vectors_per_segment * (bytes_per_vector + 20_000);
 
         if memory_per_segment == 0 {
             return 4; // Fallback
@@ -733,6 +738,24 @@ mod tests {
         let config2 = config1.clone();
 
         assert_eq!(config1.max_parallel_readers, config2.max_parallel_readers);
+    }
+
+    #[test]
+    fn test_auto_detect_respects_env_var() {
+        std::env::set_var("HYPERSTREAM_MAX_CONCURRENCY", "12");
+        let config = QueryConfig::new();
+        let readers = config.auto_detect_parallel_readers(1_000, 128);
+        assert_eq!(readers, 12);
+        std::env::remove_var("HYPERSTREAM_MAX_CONCURRENCY");
+    }
+
+    #[test]
+    fn test_manual_override_precedes_env_var() {
+        std::env::set_var("HYPERSTREAM_MAX_CONCURRENCY", "12");
+        let config = QueryConfig::new().with_max_parallel_readers(5);
+        let readers = config.auto_detect_parallel_readers(1_000, 128);
+        assert_eq!(readers, 5);
+        std::env::remove_var("HYPERSTREAM_MAX_CONCURRENCY");
     }
 
     #[test]

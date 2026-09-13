@@ -112,6 +112,35 @@ pub(crate) fn build_row_batch(
     })
 }
 
+pub(crate) fn build_multi_row_batch(
+    target_schema: &Schema,
+    docs: &[Value],
+) -> Result<RecordBatch, HyperstreamError> {
+    let mut cols = Vec::with_capacity(target_schema.fields().len());
+    for field in target_schema.fields() {
+        let values: Vec<Option<Value>> = docs
+            .iter()
+            .map(|doc| {
+                doc.as_object()
+                    .and_then(|obj| obj.get(field.name()))
+                    .filter(|v| !v.is_null())
+                    .cloned()
+            })
+            .collect();
+        let col = infer::value_to_array(field.name(), field.data_type(), &values).map_err(
+            |e: InferError| HyperstreamError::SchemaIncompatible {
+                reason: e.to_string(),
+            },
+        )?;
+        cols.push(col);
+    }
+    RecordBatch::try_new(Arc::new(target_schema.clone()), cols).map_err(|e| {
+        HyperstreamError::SchemaIncompatible {
+            reason: format!("failed to build multi-row batch: {e}"),
+        }
+    })
+}
+
 /// Index a document: generate or accept an id, infer/merge the schema,
 /// and write one row through the table's write buffer.
 ///

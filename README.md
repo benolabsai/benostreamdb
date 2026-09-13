@@ -38,7 +38,7 @@ Authoritative Storage        Advisory Index Overlay
 | **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
 | **Native SQL** | ❌ No | ✅ DataFusion |
 | **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
-| **Query Engines** | Spark/Trino | Spark/Trino/Python |
+| **Query Engines** | Spark/Trino | Rust/Python/Spark/Trino |
 
 ## ⚡ Iceberg V2/V3 Compatibility
 
@@ -211,11 +211,23 @@ LIMIT 10;
 -- <=>  Cosine  
 -- <#>  Inner Product
 -- <+>  L1 (Manhattan)
--- <~>  Hamming
--- <%>  Jaccard
+-- <~>  Hamming (direct on ::vector)
+-- <%>  Jaccard (direct on ::vector)
 ```
 
-See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation.
+> **💡 pgvector Compatibility Note on `<~>` (Hamming) & `<%>` (Jaccard):**  
+> In HyperStreamDB, `<~>` and `<%>` operate directly on standard float `::vector` embeddings (evaluating binary indicator sets and quantized vectors) for developer convenience. In upstream PostgreSQL `pgvector`, these two operators are restricted exclusively to the `bit` data type.  
+> 
+> **PostgreSQL Conversion Equivalent:**
+> ```sql
+> -- HyperStreamDB:
+> SELECT * FROM documents ORDER BY embedding <~> '[1, 0, 1]'::vector LIMIT 10;
+> 
+> -- PostgreSQL (pgvector 0.7.0+): requires binary_quantize() to produce bit types
+> SELECT * FROM documents ORDER BY binary_quantize(embedding) <~> binary_quantize('[1, 0, 1]'::vector) LIMIT 10;
+> ```
+
+See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation and conversion guide.
 
 ### Basic Usage
 
@@ -412,7 +424,29 @@ table.compact()
 
 ## 📊 Production Benchmarks & Verification
 
-HyperStreamDB performance has been validated across large-scale synthetic and real-world datasets:
+HyperStreamDB performance has been validated across large-scale synthetic, real-world datasets, and head-to-head competitive benchmarks against industry-standard engines like **OpenSearch 2.11**:
+
+### 🚀 Competitive Benchmarks: HyperStreamDB vs. OpenSearch 2.11 (4 CPUs, 4GB RAM)
+
+Conducted under identical, strictly constrained container environments (4 CPU cores, 4GB RAM, 64-dimensional float32 vectors, Wikipedia text payloads):
+
+| Benchmark Scale | Metric / Operation | HyperStreamDB (p50) | HyperStreamDB (p99) | OpenSearch 2.11 (p50) | OpenSearch 2.11 (p99) | Advantage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **100K Documents** | `knn` HNSW Vector Search | **1.94 ms** | **4.26 ms** | 4.29 ms | 62.58 ms | **14.7x faster p99** |
+| **100K Documents** | Total Storage Required | **~26.0 MB** | — | ~185.4 MB | — | **7.1x less disk space** |
+| **100K Documents** | `match` BM25 Search | 3.96 ms | 4.75 ms | **2.91 ms** | **4.33 ms** | Competitive (<5ms) |
+| **1M Documents** | `knn` HNSW Vector Search | **1.91 ms** | **3.74 ms** | 8.26 ms | 478.77 ms | **128x faster p99 (zero tail spikes)** |
+| **1M Documents** | Total Storage Required | **~280 MB** | — | ~1,852 MB (1.85 GB) | — | **6.6x less disk space** |
+| **1M Documents** | Ingestion Rate | 4,613 docs/s | — | **9,221 docs/s** | — | OpenSearch defers merges |
+
+> **Key Architectural Takeaways:**
+> - **Ironclad Vector Latency Stability**: At 1M vectors, OpenSearch tail latency collapses to **478.77 ms** due to JVM garbage collection pauses and Lucene segment merging. HyperStreamDB query latency stays completely flat (**1.91 ms p50 / 3.74 ms p99**) thanks to its Hot Row Cache bypassing disk I/O on scattered row lookups.
+> - **Zero Data Duplication (6.6x–7x Storage Savings)**: OpenSearch requires maintaining a separate primary data lake *plus* duplicating all vectors into amplified Lucene index files (~1.85 GB total). HyperStreamDB **is** the data lake, writing compressed Parquet files with compact `.hnsw` sidecar files (~280 MB total).
+> - **Instant Stateless Cold Starts**: HyperStreamDB eliminates the JVM boot, translog replay, and Lucene warmup delays of clustered search engines—memory mapping Parquet and `.hnsw` sidecars directly from the OS page cache for immediate query readiness.
+>
+> 📖 *For complete test methodology, memory safety metrics, and replication scripts, see the [Benchmarking Guide](docs/BENCHMARKING.md).*
+
+### Workload & Engine Baselines
 
 | Dataset / Workload | Metric | Performance | Notes |
 | :--- | :--- | :--- | :--- |
@@ -428,6 +462,10 @@ To run the integration and benchmark suite:
 ```bash
 # Criterion micro-benchmarks
 cargo bench
+
+# Competitive 100k/1M OpenSearch benchmarks
+./run_comparison.sh
+./run_1m_comparison.sh
 
 # Integration benchmarks
 python tests/integration/test_nyc_taxi.py
@@ -701,16 +739,20 @@ reindex, ILM, snapshots, auth, multi-node. See
 - [x] Optimistic Concurrency Control (OCC) with atomic snapshot swaps and retries
 - [x] Resilient chaos recovery (transparent fallback to Parquet scans on index corruption)
 - [x] Comprehensive documentation suite in `docs/` (Sphinx/ReadTheDocs, pgvector SQL, Python API, GPU guides)
+- [x] 100k / 1M doc competitive benchmarks vs OpenSearch 2.11 / Elasticsearch 7.10
+- [x] Apache Polaris & Lakekeeper REST catalog integration with Snowflake zero-copy querying ([Guide](docs/SNOWFLAKE_POLARIS_GUIDE.md))
+- [x] Multi-vector search (simultaneous multi-embedding column search with Reciprocal Rank Fusion)
+- [x] Composite scalar indexes (multi-column composite roaring bitmaps)
+- [x] Community TurboQuant™ (TQ4 / TQ8) scalar quantization
 
 ### 🔄 In Progress
-- [ ] 100k / 1M doc competitive benchmarks vs Elasticsearch 7.10 (local disk & MinIO S3)
-- [ ] Apache Polaris REST catalog integration (OAuth2 client credentials)
+- [ ] Trino connector sidecar index predicate pushdown (direct `.hnsw` and `.idx` pre-filtering)
+- [ ] Micro-batch streaming ingest buffer (5–30s Iceberg snapshot buffer for Kafka/Kinesis)
 
 ### 📋 Planned
-- [ ] Trino connector sidecar index predicate pushdown (direct `.hnsw` and `.idx` pre-filtering)
-- [ ] Multi-vector search (simultaneous multi-embedding column search with combined score ranking)
-- [ ] Composite scalar indexes (multi-column composite roaring bitmaps)
+- [ ] Zero-copy Arrow IPC vector index traversal for Spark/Trino
 - [ ] Universal GPU PyPI wheel with `cudarc` runtime dynamic loading and automated CUDA CI
+- [ ] Native Lakehouse Graph Analytics & Graph RAG SQL functions
 
 ## 🤝 Contributing
 

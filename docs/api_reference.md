@@ -52,6 +52,22 @@ df = table.to_pandas(
     }
 )
 
+# Multi-vector search with Reciprocal Rank Fusion (RRF)
+results = table.multi_vector_search(
+    queries=[
+        {"column": "text_embedding", "query": text_vec, "k": 20, "metric": "cosine"},
+        {"column": "image_embedding", "query": image_vec, "k": 20, "metric": "l2"}
+    ],
+    top_k=10,
+    rrf_k=60
+)
+
+# Composite scalar index (multi-column roaring bitmap)
+table.create_composite_index(
+    columns=["tenant_id", "status"],
+    algorithm="composite_bitmap"
+)
+
 # Maintenance
 table.compact()
 table.expire_snapshots(retain_last=10)
@@ -195,29 +211,47 @@ LIMIT 10;
 
 ### GPU Context Configuration
 
+HyperStreamDB supports GPU acceleration across NVIDIA CUDA, AMD ROCm, Apple Metal (MPS), and Intel XPU. You can configure execution devices using PyTorch-style strings (`"cuda:0"`) or explicit parameters (`device_id=0` / `index=0`).
+
 ```python
 import hyperstreamdb as hdb
 
-# Auto-detect best backend
-ctx = hdb.GPUContext.auto_detect()
+# 1. Auto-detect best available GPU backend
+device = hdb.Device("auto")
+print(f"Auto-selected: {device.backend}, device_id: {device.index}")
 
-# Specify backend explicitly
+# 2. Specify backend and device index explicitly
+device = hdb.Device("cuda:0")              # First NVIDIA GPU
+device = hdb.Device("cuda", index=1)       # Second NVIDIA GPU
+device = hdb.Device("rocm:0")              # AMD ROCm GPU
+device = hdb.Device("mps")                 # Apple Silicon (always index 0)
+device = hdb.Device("xpu:0")               # Intel discrete / integrated GPU
+device = hdb.Device("cpu")                 # Force CPU execution
+
+# Or using GPUContext API
 ctx = hdb.GPUContext("cuda", device_id=0)
-ctx = hdb.GPUContext("rocm", device_id=0)
-ctx = hdb.GPUContext("mps")
-ctx = hdb.GPUContext("intel")
 
-# List available backends
-backends = ctx.list_available_backends()
+# 3. Query system availability & performance stats
+print("Available backends:", hdb.Device.list_available_backends())
 
-# Performance monitoring
-stats = ctx.get_stats()
-print(f"GPU time: {stats['total_gpu_time_ms']}ms")
-print(f"Kernel launches: {stats['kernel_launches']}")
-ctx.reset_stats()
+stats = device.get_stats()
+print(f"GPU compute time: {stats['total_gpu_time_ms']}ms")
+print(f"Kernel launches: {stats['total_kernel_launches']}")
+device.reset_stats()
 ```
 
-See [GPU Setup Guide](GPU_SETUP_GUIDE.md) for installation and configuration.
+#### How to Find the Proper `device_id` Manually
+
+To determine the exact integer `device_id` or index on your machine, run the hardware tool matching your GPU:
+
+| Hardware Vendor | CLI Command to Inspect Device IDs | Output Column / Identification |
+|:---|:---|:---|
+| **NVIDIA (CUDA)** | `nvidia-smi` | The leftmost **`GPU`** column (`0`, `1`, `2`...) corresponds directly to `device_id`.<br>Scriptable: `nvidia-smi --query-gpu=index,name,memory.total --format=csv` |
+| **AMD (ROCm)** | `rocm-smi` or `rocminfo` | Look for **`GPU[0]`**, **`GPU[1]`** in `rocm-smi` or **`Device [Node 1]`** in `rocminfo`. |
+| **Intel (XPU / Level Zero)** | `clinfo -l` or `sycl-ls` | Lists OpenCL/OneAPI devices indexed starting from `0`. |
+| **Apple Silicon (MPS)** | `system_profiler SPDisplaysDataType` | Apple Silicon uses unified memory with a single integrated GPU; `device_id` is always **`0`** (`"mps"`). |
+
+See [GPU Setup Guide](GPU_SETUP_GUIDE.md) for full driver prerequisites and kernel benchmarks.
 
 ### Vector Index Configuration
 
@@ -244,6 +278,43 @@ table.add_index(
 ```
 
 See [Vector Configuration Guide](VECTOR_CONFIGURATION.md) for tuning parameters.
+
+## REST Search APIs (`hyperstreamdb-search`)
+
+HyperStreamDB provides a dual-protocol HTTP gateway exposing OpenSearch / Elasticsearch 7.10 compatibility alongside the Qdrant Vector API from a single server:
+
+### Starting the Server
+```bash
+cargo run -p hyperstreamdb-search --bin hypersearch
+```
+
+### OpenSearch / Elasticsearch 7.10 Endpoints (Port 9200)
+
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/` | Cluster status, version string, and hardware acceleration metadata. |
+| `GET` | `/_cluster/health`, `/_health` | Cluster and store health status. |
+| `GET` | `/_cat/indices` | Tabular index metadata (doc count, store size, health). |
+| `PUT` | `/{index}` | Create an index with optional schema mapping and index type registration. |
+| `GET` | `/{index}/_mapping` | Retrieve Arrow-to-Elasticsearch mapping. |
+| `POST` | `/{index}/_doc` | Ingest single document with automatic schema evolution. |
+| `POST` | `/_bulk`, `/{index}/_bulk` | High-throughput NDJSON bulk write (`index`, `create`, `delete`). |
+| `POST` | `/{index}/_search` | Query endpoint supporting `match` (BM25), `knn` (HNSW), hybrid RRF, and filters. |
+| `POST` | `/{index}/_refresh` | Trigger immediate memtable flush and Iceberg snapshot commit. |
+| `GET` | `/metrics` | Prometheus metrics scrape endpoint. |
+
+> [!NOTE]
+> **Data Lake Catalog Synchronization**: Every search index created via `PUT /{index}` or auto-created on ingest is stored as an Apache Iceberg (v2) table. When an external catalog is configured (e.g. **Snowflake / Apache Polaris**, Project Nessie, AWS Glue, Hive Metastore, Unity Catalog), document ingestion via `_bulk` and `_doc` automatically commits snapshots to the catalog via Iceberg Atomic Swap, keeping Spark, Trino, and Snowflake in sync with real-time updates.
+
+
+### Qdrant Vector Endpoints (Port 6333)
+
+| Method | Endpoint | Description |
+|:---|:---|:---|
+| `GET` | `/collections` | List available vector collections. |
+| `PUT` | `/collections/{name}` | Create a vector collection with vector parameters (dimension, distance). |
+| `PUT` | `/collections/{name}/points` | Upsert vector points with payload metadata. |
+| `POST` | `/collections/{name}/points/search` | Approximate nearest neighbor vector search with optional payload filters. |
 
 ## Error Handling
 
