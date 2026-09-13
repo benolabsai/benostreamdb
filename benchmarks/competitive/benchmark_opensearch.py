@@ -18,9 +18,16 @@ and a local ``hypersearch`` binary, feeds both the same document stream
 Fairness notes:
   * Both systems receive one document per POST (no ``_bulk`` on hypersearch),
     an explicit refresh before search, and run on the same host.
+  * Both systems run in Docker containers with an **equal resource budget**:
+    ``--mem-gb`` (default 4 GiB) and ``--cpus`` (default 4). ES gets a
+    50%-of-budget JVM heap; hypersearch's in-process caches
+    (``HYPERSTREAM_BLOCK_CACHE_GB`` / ``HYPERSTREAM_CACHE_GB``) are sized to
+    the same budget.
   * ES runs single-node, 1 shard, 0 replicas, refresh disabled during ingest
-    (the standard way to measure ES ingest), with the image's default 1 GiB
-    JVM heap.
+    (the standard way to measure ES ingest).
+  * The Wikipedia document stream is cached locally
+    (``data/wiki_20231101_en.jsonl``) so both systems see identical docs
+    without HuggingFace rate limits.
   * The ``embedding`` field is part of the hypersearch payload only: ES 7.10
     has no ``dense_vector`` type, so shipping 64 floats per document to a
     7.10 search cluster would not represent any real workload. Every other
@@ -136,13 +143,36 @@ def percentiles(latencies_ms: List[float]) -> Dict:
 # --------------------------------------------------------------------------
 
 
+LOCAL_WIKI_JSONL = Path(__file__).resolve().parent / "data" / "wiki_20231101_en.jsonl"
+
+
 def get_documents_from_hf(dataset_name, size, dim):
-    from datasets import load_dataset
     import random
-    
+
     docs = []
+
+    # Local cache first: identical docs on every run, no HF rate limits.
+    if dataset_name == "wiki" and LOCAL_WIKI_JSONL.exists():
+        print(f"Loading {size} docs from local cache {LOCAL_WIKI_JSONL.name}...")
+        emb_rng = random.Random(777)
+        with open(LOCAL_WIKI_JSONL) as f:
+            for i, line in enumerate(f):
+                if i >= size:
+                    break
+                item = json.loads(line)
+                docs.append({
+                    "title": item["title"][:200],
+                    "body": item["body"][:2000],
+                    "category": "general",
+                    "price": 0.0,
+                    "ts": "2026-01-01T00:00:00Z",
+                    "embedding": [emb_rng.random() for _ in range(dim)],
+                })
+        return docs
+
+    from datasets import load_dataset
     print(f"Loading {size} docs from {dataset_name} (streaming)...")
-    
+
     if dataset_name == "wiki":
         ds = load_dataset("wikimedia/wikipedia", "20231101.en", split="train", streaming=True)
         title_col = "title"
@@ -178,17 +208,32 @@ def get_documents_from_hf(dataset_name, size, dim):
 # --------------------------------------------------------------------------
 
 class Hypersearch:
-    """Spawned ``hypersearch`` binary on a free local port."""
+    """``hypersearch`` on a free local port.
 
-    def __init__(self, port: int, storage_uri: str, is_cloud: bool = False):
+    By default runs in a memory/CPU-capped Docker container (image
+    ``hypersearch-bench:latest``, built from ``docker/Dockerfile.search-bench``)
+    so it gets the same hardware budget as the OpenSearch container.
+    ``containerized=False`` falls back to spawning the native binary.
+    """
+
+    HS_CONTAINER = "hypersearch-bench"
+
+    def __init__(self, port: int, storage_uri: str, is_cloud: bool = False,
+                 mem_gb: int = 4, cpus: int = 4, containerized: bool = True):
         self.base = f"http://127.0.0.1:{port}"
         self.storage_uri = storage_uri
         self.is_cloud = is_cloud
+        self.mem_gb = mem_gb
+        self.cpus = cpus
+        self.containerized = containerized
         env = {
-            **os.environ,
             "HYPERSEARCH_BIND": "127.0.0.1",
             "HYPERSEARCH_PORT": str(port),
             "HYPERSEARCH_STORAGE_URI": storage_uri,
+            # Equal-memory-budget: size in-process caches to the shared budget.
+            "HYPERSTREAM_BLOCK_CACHE_GB": str(max(1, mem_gb // 4)),
+            "HYPERSTREAM_CACHE_GB": str(max(1, mem_gb // 8)),
+            "RUST_LOG": "info",
         }
         if is_cloud or storage_uri.startswith("s3://"):
             endpoint = os.environ.get("AWS_ENDPOINT_URL", "http://127.0.0.1:9000")
@@ -202,12 +247,42 @@ class Hypersearch:
             env["AWS_REGION"] = os.environ.get("AWS_REGION", "us-east-1")
             env["AWS_ALLOW_HTTP"] = "true"
 
-        self.proc = subprocess.Popen(
-            [str(BINARY)],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        if containerized:
+            # Local file storage: mount the host dir at /data in the container.
+            mounts: List[str] = []
+            if storage_uri.startswith("file://"):
+                host_dir = storage_uri[len("file://"):]
+                env["HYPERSEARCH_STORAGE_URI"] = "file:///data"
+                mounts = ["-v", f"{host_dir}:/data"]
+            env_args: List[str] = []
+            for k, v in env.items():
+                env_args += ["-e", f"{k}={v}"]
+            subprocess.run(["docker", "rm", "-f", self.HS_CONTAINER], capture_output=True)
+            self.proc = subprocess.run(
+                [
+                    "docker", "run", "-d", "--name", self.HS_CONTAINER,
+                    "--network", "host",
+                    "--memory", f"{mem_gb}g",
+                    "--memory-swap", f"{mem_gb}g",
+                    "--cpus", str(cpus),
+                    *mounts,
+                    *env_args,
+                    "hypersearch-bench:latest",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if self.proc.returncode != 0:
+                raise RuntimeError(f"docker run failed: {self.proc.stderr.strip()[:500]}")
+            self.pid = None
+        else:
+            self.proc = subprocess.Popen(
+                [str(BINARY)],
+                env={**os.environ, **env},
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            self.pid = self.proc.pid
         self.session = requests.Session()
         deadline = time.time() + HYPERSEARCH_STARTUP_DEADLINE_S
         ready = False
@@ -221,7 +296,14 @@ class Hypersearch:
             time.sleep(0.25)
         if not ready:
             self.stop()
-            raise RuntimeError(f"hypersearch did not become ready within {HYPERSEARCH_STARTUP_DEADLINE_S:.0f}s")
+            detail = ""
+            if containerized:
+                logs = subprocess.run(
+                    ["docker", "logs", "--tail", "40", self.HS_CONTAINER],
+                    capture_output=True, text=True)
+                detail = f" container logs: {logs.stdout[-500:]}"
+            raise RuntimeError(
+                f"hypersearch did not become ready within {HYPERSEARCH_STARTUP_DEADLINE_S:.0f}s{detail}")
         self.info = self.session.get(self.base + "/", timeout=5).json()
 
     def index_doc(self, index: str, doc: Dict) -> requests.Response:
@@ -234,8 +316,20 @@ class Hypersearch:
         return self.session.post(self.base + f"/{index}/_search", json=body, timeout=HTTP_TIMEOUT_S)
 
     def rss_mb(self) -> Optional[float]:
+        if self.containerized:
+            try:
+                r = subprocess.run(
+                    ["docker", "stats", "--no-stream", "--format", "{{.MemUsage}}", self.HS_CONTAINER],
+                    capture_output=True, text=True, timeout=15)
+                usage = r.stdout.strip().split(" / ")[0]
+                for suffix, mult in (("GiB", 1024.0), ("MiB", 1.0), ("KiB", 1.0 / 1024), ("B", 1.0 / 1024 / 1024)):
+                    if usage.endswith(suffix):
+                        return round(float(usage[: -len(suffix)]) * mult, 1)
+            except Exception:
+                pass
+            return None
         try:
-            for line in Path(f"/proc/{self.proc.pid}/status").read_text().splitlines():
+            for line in Path(f"/proc/{self.pid}/status").read_text().splitlines():
                 if line.startswith("VmRSS:"):
                     return round(int(line.split()[1]) / 1024.0, 1)
         except OSError:
@@ -280,6 +374,9 @@ class Hypersearch:
         return bd["total_mb"] if bd["total_mb"] > 0 else None
 
     def stop(self) -> None:
+        if self.containerized:
+            subprocess.run(["docker", "rm", "-f", self.HS_CONTAINER], capture_output=True)
+            return
         try:
             self.proc.terminate()
             self.proc.wait(timeout=10)
@@ -293,16 +390,21 @@ class Hypersearch:
 class OpenSearch:
     """Docker-managed single-node OpenSearch 2.11 (security off)."""
 
-    def __init__(self, image: str, port: int, keep: bool = False):
+    def __init__(self, image: str, port: int, keep: bool = False, mem_gb: int = 4, cpus: int = 4):
         # Remove any stale container from a previous run.
         subprocess.run(["docker", "rm", "-f", ES_CONTAINER], capture_output=True)
+        heap_gb = max(1, mem_gb // 2)  # 50%-of-budget JVM heap convention
         self.proc = subprocess.run(
             [
                 "docker", "run", "-d", "--name", ES_CONTAINER,
                 "-p", f"{port}:9200",
+                "--memory", f"{mem_gb}g",
+                "--memory-swap", f"{mem_gb}g",
+                "--cpus", str(cpus),
                 "-e", "discovery.type=single-node",
                 "-e", "DISABLE_SECURITY_PLUGIN=true",
                 "-e", "OPENSEARCH_INITIAL_ADMIN_PASSWORD=my-strong-password123!",
+                "-e", f"OPENSEARCH_JAVA_OPTS=-Xms{heap_gb}g -Xmx{heap_gb}g",
                 image,
             ],
             capture_output=True,
@@ -677,7 +779,11 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
             "- ES refresh does little work (segments are indexed during ingest); hypersearch refresh "
             "includes BM25/HNSW index build, so refresh times are not like-for-like.\n"
             f"- hypersearch is a **{build_type}** build; ES uses the stock Docker image.\n"
-            "- Both systems run on the same host; ES JVM heap is the image default (1 GiB).\n\n"
+            f"- Equal resource budget: **{meta.get('memory_budget_gb', 'n/a')} GiB RAM / "
+            f"{meta.get('cpu_budget', 'n/a')} CPUs** for both systems "
+            f"(ES: container cap + {meta.get('es_jvm_heap_gb', 'n/a')} GiB JVM heap; "
+            f"hypersearch: {'container cap + ' if meta.get('hs_containerized') else ''}"
+            f"in-process caches sized to the same budget).\n\n"
         )
         if meta.get("notes"):
             f.write("## Notes\n\n")
@@ -707,6 +813,12 @@ def main() -> None:
     parser.add_argument("--es-port", type=int, default=None, help="host port for ES (default: auto)")
     parser.add_argument("--keep-es", action="store_true", help="do not remove the ES container at the end")
     parser.add_argument("--es-image", default=ES_IMAGE_DEFAULT, help="ES docker image")
+    parser.add_argument("--mem-gb", type=int, default=4,
+                        help="equal memory budget in GiB for both systems (default 4)")
+    parser.add_argument("--cpus", type=int, default=4,
+                        help="equal CPU budget for both systems (default 4)")
+    parser.add_argument("--no-container", action="store_true",
+                        help="run hypersearch natively instead of in a capped container")
     parser.add_argument("--output-dir", default=str(RESULTS_DIR), help="results output directory")
     args = parser.parse_args()
 
@@ -715,13 +827,22 @@ def main() -> None:
     else:
         size, dim, runs = args.size, args.dim, args.runs
 
-    if not BINARY.exists():
-        raise SystemExit(f"{BINARY} not found; run `cargo build -p hyperstreamdb-search --bin hypersearch` first")
+    if args.no_container:
+        if not BINARY.exists():
+            raise SystemExit(f"{BINARY} not found; run `cargo build -p hyperstreamdb-search --bin hypersearch` first")
+    else:
+        img = subprocess.run(["docker", "image", "inspect", "hypersearch-bench:latest"], capture_output=True)
+        if img.returncode != 0:
+            raise SystemExit(
+                "hypersearch-bench:latest image not found; run "
+                "`docker build -f docker/Dockerfile.search-bench -t hypersearch-bench:latest .` first")
 
     print("=" * 72)
     print("OpenSearch 2.11 vs HyperStreamDB — REST benchmark")
     print("=" * 72)
-    print(f"size={size} dim={dim} runs={runs} storage={args.storage} skip_es={args.skip_es} binary={BINARY.name}")
+    print(f"size={size} dim={dim} runs={runs} storage={args.storage} skip_es={args.skip_es} "
+          f"mem_budget={args.mem_gb}GiB cpus={args.cpus} "
+          f"hypersearch={'container' if not args.no_container else BINARY.name}")
 
     hardware = get_hardware_info()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -751,6 +872,11 @@ def main() -> None:
         "storage_breakdown": {},
         "es_version": "n/a",
         "es_build": "n/a",
+        "memory_budget_gb": args.mem_gb,
+        "cpu_budget": args.cpus,
+        "hs_containerized": not args.no_container,
+        "hs_cache_gb": {"block": max(1, args.mem_gb // 4), "cache": max(1, args.mem_gb // 8)},
+        "es_jvm_heap_gb": max(1, args.mem_gb // 2),
     }
 
     # ---------------- hypersearch ----------------
@@ -765,7 +891,8 @@ def main() -> None:
 
     hs = None
     try:
-        hs = Hypersearch(free_port(), storage_uri, is_cloud=(args.storage == "cloud"))
+        hs = Hypersearch(free_port(), storage_uri, is_cloud=(args.storage == "cloud"),
+                         mem_gb=args.mem_gb, cpus=args.cpus, containerized=not args.no_container)
         hs_index = "bench-hs-" + uuid.uuid4().hex[:8]
         results += bench_ingest(hs, "HyperStreamDB", hs_index, docs, exclude_embedding=False, hardware=hardware)
         meta["hs_version"] = hs.info["version"]["number"]
@@ -813,7 +940,8 @@ def main() -> None:
         es = None
         es_port = args.es_port or free_port()
         try:
-            es = OpenSearch(args.es_image, es_port, keep=args.keep_es)
+            es = OpenSearch(args.es_image, es_port, keep=args.keep_es,
+                            mem_gb=args.mem_gb, cpus=args.cpus)
             es_index = "bench-es-" + uuid.uuid4().hex[:8]
             es.create_index(es_index, dim)
             results += bench_ingest(es, "OpenSearch 2.11", es_index, docs, exclude_embedding=False,

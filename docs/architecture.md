@@ -1,49 +1,75 @@
-# Architecture
+# Architecture: The Indexed Lakehouse
 
-HyperStreamDB is a **Universal Vector & Metadata Streaming** storage engine. It bridges the gap between streaming data management and high-dimensional vector indexing by providing an "Overlay Index" on top of standard file formats (Parquet).
+HyperStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer.
+
+```text
+               Iceberg Table
+                     │
+       ┌─────────────┴──────────────┐
+       │                            │
+Authoritative Storage        Advisory Index Overlay
+       │                            │
+  Parquet Files              Bitmap / Bloom / BM25 / HNSW / TQ
+```
 
 ## Core Philosophy
 
 **"Your Data is Standard. Your Index is Custom."**
 
-HyperStreamDB adds a sophisticated sidecar index (Roaring + HNSW) *on top* of standard files.
-*   **Compatibility**: You can still read your data with standard tools (Spark, Presto, Pandas) at normal speed.
-*   **Performance**: HyperStreamDB-aware readers get **O(log n)** lookup speed using inverted and vector indexes.
+HyperStreamDB attaches persistent, reconstructible sidecar index files *alongside* standard Parquet files:
+*   **100% Format Compatibility**: Standard data engines (Spark, Trino, DuckDB, Pandas) read the underlying Parquet and Iceberg tables directly at native speed.
+*   **O(log N) Accelerated Retrieval**: HyperStreamDB-aware query engines and REST search gateways leverage inverted bitmap and vector indexes for low-latency queries directly on object storage.
+*   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results.
 
-## Storage Layout: The "Hybrid Segment"
+---
 
-Data is written in immutable **Segments**. Each segment is a self-contained unit comprising:
+## Storage Layout: Hybrid Segments
 
-### Ingestion Pipeline: Delayed Indexing
+Data is stored in immutable **Segments**, structured as:
 
-HyperStreamDB uses a **non-blocking ingestion architecture** similar to modern vector databases like LanceDB to achieve maximum throughput:
-- **Instant Flush**: Incoming data is written directly to high-performance Parquet files for immediate durability.
-- **Background Indexing**: High-dimensional vector indexes (HNSW-IVF) are built asynchronously in the background using a parallelized worker pool (Rayon + Parallel PQ) that scales to all available CPU cores.
-- **Atomic Patching**: Once background builds complete, the segment manifest is atomically patched to register the new indexes without stopping active writes.
+1.  **Authoritative Raw Data**:
+    *   `segment_id.parquet`: Columnar data written with ZSTD compression and dictionary encoding.
+2.  **Advisory Indexes**:
+    *   `segment_id.col.inv.parquet`: Inverted Indexes (RoaringBitmaps) for scalar filtering.
+    *   `segment_id.col1_col2.comp.parquet`: Composite Roaring Bitmaps for multi-column predicates.
+    *   `segment_id.col.bm25.parquet`: BM25 inverted index sidecar with document lengths.
+    *   `segment_id.col.centroids.parquet`: Vector IV-centroids for IVF clustering.
+    *   `segment_id.col.cluster_N.hnsw.graph`: HNSW graph sidecars (supporting float32 or TurboQuant TQ4/TQ8 packed vectors).
+3.  **Iceberg Table Metadata**:
+    *   `_manifest/v{N}.avro`: Iceberg V2/V3 snapshot manifests.
+    *   `_metadata/v{N}.metadata.json`: Iceberg table schema, sort orders, and partition specs.
 
-1.  **Raw Data**:
-    *   `segment_id.parquet`: Main data storage.
-2.  **Indexes**:
-    *   **`segment_id.col.inv.parquet`**: Inverted Indexes (RoaringBitmaps inside Parquet) for scalar filtering.
-    *   **`segment_id.col.centroids.parquet`**: Vector IV-centroids for IVF indexing.
-    *   **`segment_id.col.cluster_N.hnsw.graph`**: Vector Graph (HNSW) for similarity search.
+---
 
-## The Streaming Read Path
+## Ingestion Pipeline: Non-Blocking Indexing & Async WAL
 
-HyperStreamDB enables "Pre-Filtered Vector Search" by combining scalar pruning with vector search.
+HyperStreamDB achieves high ingestion throughput while maintaining real-time queryability:
 
-1.  **Scalar Pruning**: The reader loads the inverted index for the filtered column (e.g., `category`) and identifies relevant rows using efficient bitmap operations.
-2.  **Restricted Vector Search**:
-    *   If selectivity is high (few rows match), exact distance calculation is performed on candidate vectors.
-    *   If selectivity is low, a graph traversal (HNSW) is performed rooted at the candidates.
+1.  **Memtable & Async WAL**: Incoming records write to an in-memory batch buffer with adaptive or immediate WAL fsync durability.
+2.  **Parquet Flushes**: Records flush to compressed Parquet files for immediate durability.
+3.  **Background Indexing**: High-dimensional vector graphs (HNSW-IVF) and full-text indexes build asynchronously across a Rayon thread pool without blocking writes.
+4.  **Atomic Manifest Snapshot**: Once background index construction completes, the manifest is atomically swapped via Optimistic Concurrency Control (OCC) or distributed CAS locks (`FileBasedLock`).
 
-## Implementation Strategy
+---
 
-*   **Core Engine**: Written in **Rust** for zero-overhead, embeddability (Lambda, Browser via WASM), and low-level system control.
-*   **Bindings**: 
-    *   **Python**: For data science and AI agents (via PyO3).
-    *   **Trino/Spark**: For distributed SQL and ETL (via JNI & Arrow C Data Interface).
+## The Read Path & Hot Row Cache
 
-## "Serverless Index-Streaming"
+HyperStreamDB combines scalar pre-filtering, vector search, and in-memory caching for ultra-low latencies:
 
-HyperStreamDB enables the **Client** to become the database engine. By streaming lightweight, aligned indexes first, a stateless client can perform complex, indexed queries over massive datasets directly from S3, paying **zero** compute cost when idle.
+1.  **Scalar Pruning**: Query planner evaluates inverted index sidecars, producing a candidate row bitmap.
+2.  **Vector / Keyword Scoring**:
+    *   **Vector Search**: Traverses HNSW graph sidecars, evaluating candidates with dynamic SIMD metrics.
+    *   **Full-Text Search**: Scores terms using BM25 Okapi sidecars.
+    *   **Hybrid RRF**: Combines ranks from vector and keyword search using Reciprocal Rank Fusion ($1 / (k + \text{rank} + 1)$).
+3.  **Hot Row Cache (`BLOCK_CACHE`)**:
+    *   Decoded Parquet `RecordBatch` chunks are held in an in-memory LRU block cache.
+    *   Scattered kNN candidate row fetches resolve directly from memory in sub-millisecond time, completely bypassing disk I/O and eliminating tail latency spikes.
+
+---
+
+## Multi-Protocol Search Gateway (`hypersearch`)
+
+HyperStreamDB exposes its columnar storage and index overlays via standard REST protocols:
+*   **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for `_search`, `_bulk`, `_mapping`, and `_cat/indices`.
+*   **Qdrant Vector API (Port 6333)**: Compatibility for point upserts and vector similarity search.
+*   **Arrow Flight SQL (Port 50051)**: Low-latency zero-copy gRPC queries for analytical tools.
