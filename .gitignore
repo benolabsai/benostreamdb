@@ -39,8 +39,6 @@ _metadata/
 .maven/
 
 # Compiled native binaries
-fuzz_murmur3
-debug_murmur3
 test_pgvector_sql_integration
 
 # Test database directories
