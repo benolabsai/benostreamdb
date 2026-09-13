@@ -1086,8 +1086,6 @@ impl HnswIvfIndex {
                             anyhow::anyhow!("Failed to load HNSW description: {}", e)
                         })?;
 
-                let metric = metric; // Use the metric loaded from centroids metadata
-
                 let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
                         match q_impl {
                             QuantizerImpl::TurboQuant(q) => {
