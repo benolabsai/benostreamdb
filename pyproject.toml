@@ -50,6 +50,10 @@ src = ["maturin>=1.7"]
 Homepage = "https://github.com/rla3rd/hyperstreamdb"
 Repository = "https://github.com/rla3rd/hyperstreamdb"
 
+[project.scripts]
+hyperstreamdb = "hyperstreamdb.cli:main"
+
+
 [tool.maturin]
 features = ["python"]
 # Build both the Rust library and Python bindings (multi-version compatible)
