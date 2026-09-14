@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.hyperstreamdb.search</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Change to the path where hyperstream-search is installed -->
+        <string>/usr/local/bin/hyperstream-search</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>info</string>
+        <key>QDRANT_BIND</key>
+        <string>0.0.0.0</string>
+        <key>QDRANT_PORT</key>
+        <string>6333</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/hyperstream-search.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/hyperstream-search.err</string>
+</dict>
+</plist>
