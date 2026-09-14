@@ -1,0 +1,16 @@
+[Unit]
+Description=HyperStreamDB Search Node (Qdrant API & ES API)
+After=network.target
+
+[Service]
+Type=simple
+# Change to the path where hyperstream-search is installed
+ExecStart=/usr/local/bin/hyperstream-search
+Restart=always
+RestartSec=3
+Environment="RUST_LOG=info"
+Environment="QDRANT_BIND=0.0.0.0"
+Environment="QDRANT_PORT=6333"
+
+[Install]
+WantedBy=multi-user.target
