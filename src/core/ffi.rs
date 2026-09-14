@@ -612,3 +612,137 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGp
 
     1 // true
 }
+
+// -----------------------------------------------------------------------------
+// Vector Index Traversal JNI Bridge (Spark & Trino)
+// -----------------------------------------------------------------------------
+use arrow::array::{Int64Array, Float32Array, StructArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use std::sync::Arc;
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_vectorSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    segment_id: JString,
+    column: JString,
+    k: jint,
+    query_vector_ptr: jlong,
+    query_vector_len: jint,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jint {
+    vector_search_impl(
+        &mut env,
+        table_uri,
+        segment_id,
+        column,
+        k,
+        query_vector_ptr,
+        query_vector_len,
+        out_array_ptr,
+        out_schema_ptr,
+        "Spark"
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_vectorSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    segment_id: JString,
+    column: JString,
+    k: jint,
+    query_vector_ptr: jlong,
+    query_vector_len: jint,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jint {
+    vector_search_impl(
+        &mut env,
+        table_uri,
+        segment_id,
+        column,
+        k,
+        query_vector_ptr,
+        query_vector_len,
+        out_array_ptr,
+        out_schema_ptr,
+        "Trino"
+    )
+}
+
+fn vector_search_impl(
+    env: &mut JNIEnv,
+    table_uri: JString,
+    segment_id: JString,
+    column: JString,
+    k: jint,
+    query_vector_ptr: jlong,
+    query_vector_len: jint,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+    engine: &str
+) -> jint {
+    if query_vector_ptr == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::error!("FFI({}): vectorSearch called with null pointers", engine);
+        return -1;
+    }
+
+    let uri: String = env.get_string(&table_uri).unwrap_or_default().into();
+    let seg_id: String = env.get_string(&segment_id).unwrap_or_default().into();
+    let col: String = env.get_string(&column).unwrap_or_default().into();
+
+    let query_slice = unsafe {
+        std::slice::from_raw_parts(query_vector_ptr as *const f32, query_vector_len as usize)
+    };
+
+    tracing::info!("FFI({}): vectorSearch on {}/{} col={} k={} vector_len={}", engine, uri, seg_id, col, k, query_vector_len);
+
+    // Mock implementation for the Zero-Copy Arrow IPC bridge validation
+    // In a full implementation, we would `mmap` the .hnsw.graph file and traverse it directly.
+    
+    let mut row_ids = Vec::with_capacity(k as usize);
+    let mut distances = Vec::with_capacity(k as usize);
+
+    for i in 0..k {
+        row_ids.push(i as i64);
+        distances.push(0.1 * (i as f32));
+    }
+
+    let row_id_array = Arc::new(Int64Array::from(row_ids)) as Arc<dyn arrow::array::Array>;
+    let dist_array = Arc::new(Float32Array::from(distances)) as Arc<dyn arrow::array::Array>;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("_row_id", DataType::Int64, false),
+        Field::new("_distance", DataType::Float32, false),
+    ]));
+
+    let batch = match arrow::record_batch::RecordBatch::try_new(schema, vec![row_id_array, dist_array]) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI({}): Failed to create RecordBatch: {}", engine, e);
+            return -1;
+        }
+    };
+
+    let struct_array: StructArray = batch.into();
+    let array_data = struct_array.to_data();
+
+    let (ffi_array, ffi_schema) = match arrow::ffi::to_ffi(&array_data) {
+        Ok(tuple) => tuple,
+        Err(e) => {
+            tracing::error!("FFI({}): Error exporting to C Data Interface: {}", engine, e);
+            return -1;
+        }
+    };
+
+    unsafe {
+        std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
+        std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
+    }
+
+    k
+}
