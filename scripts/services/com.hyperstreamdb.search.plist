@@ -6,18 +6,9 @@
     <string>com.hyperstreamdb.search</string>
     <key>ProgramArguments</key>
     <array>
-        <!-- Change to the path where hyperstream-search is installed -->
-        <string>/usr/local/bin/hyperstream-search</string>
+        <!-- Use the wrapper script to load the config file first -->
+        <string>/usr/local/bin/hyperstream-search-runner.sh</string>
     </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>RUST_LOG</key>
-        <string>info</string>
-        <key>QDRANT_BIND</key>
-        <string>0.0.0.0</string>
-        <key>QDRANT_PORT</key>
-        <string>6333</string>
-    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
