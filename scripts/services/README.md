@@ -8,7 +8,18 @@ By default, the Qdrant-compatible REST API is exposed on `http://localhost:6333`
 
 ## Automated Installation (Linux & macOS)
 
-The easiest way to install the background service is to run the provided installer script.
+### Method 1: Using the Python CLI (Recommended)
+
+If you have installed the `hyperstreamdb` Python package via PyPI, you can install and configure the background service directly from the terminal:
+
+```bash
+sudo hyperstreamdb install-service
+```
+This automatically detects your OS and installs the required `systemd` or `launchd` configuration files. (Note: you must have the `hyperstream-search` binary built or installed at `/usr/local/bin/hyperstream-search`, or pass `--binary-path`).
+
+### Method 2: Using the Shell Scripts
+
+If you are building from source and prefer not to use the Python CLI:
 
 Ensure you have built the `hyperstream-search` binary first:
 ```bash
@@ -54,7 +65,12 @@ After changing the configuration file, you must restart the service:
 
 ## Uninstallation
 
-To completely remove the service, configuration, and binary, run:
+To completely remove the service, configuration, and binary, you can use the Python CLI:
+```bash
+sudo hyperstreamdb uninstall-service
+```
+
+Or you can use the included script:
 ```bash
 ./uninstall.sh
 ```
