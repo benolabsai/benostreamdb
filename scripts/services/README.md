@@ -1,52 +1,53 @@
-# HyperStreamDB Background Services
+# HyperStreamDB Search Background Services
 
-This directory contains configuration files to run `hyperstream-search` natively in the background, allowing it to start automatically on system boot.
+This directory contains configuration files and an installer script to run `hyperstream-search` natively in the background, allowing it to start automatically on system boot.
 
-Running natively provides the best performance and enables direct GPU (CUDA/wgpu) access without needing to configure complex Docker GPU passthrough like the NVIDIA Container Toolkit.
+Running natively provides the best performance and enables direct GPU (CUDA/wgpu) access without needing to configure complex Docker GPU passthrough.
 
 By default, the Qdrant-compatible REST API is exposed on `http://localhost:6333`.
 
-## Prerequisites
-Ensure `hyperstream-search` is built and installed to a known location, such as `/usr/local/bin/hyperstream-search`. If it's installed somewhere else, please edit the path in the respective service file before installation.
+## Automated Installation (Linux & macOS)
 
-## Linux (systemd)
+The easiest way to install the background service is to run the provided installer script.
 
-1. Copy the `.service` file to the systemd directory:
-   ```bash
-   sudo cp hyperstream-search.service /etc/systemd/system/
-   ```
-2. Reload the systemd daemon:
-   ```bash
-   sudo systemctl daemon-reload
-   ```
-3. Enable the service to start automatically on boot:
-   ```bash
-   sudo systemctl enable hyperstream-search.service
-   ```
-4. Start the service immediately:
-   ```bash
-   sudo systemctl start hyperstream-search.service
-   ```
-5. Check logs:
-   ```bash
-   sudo journalctl -u hyperstream-search.service -f
-   ```
+Ensure you have built the `hyperstream-search` binary first:
+```bash
+cargo build --release -p hyperstreamdb-search
+```
 
-## macOS (launchd)
+Then run the installer:
+```bash
+./install.sh
+```
 
-1. Copy the `.plist` file to the LaunchDaemons directory (requires admin) or LaunchAgents (for user only). For system-wide:
-   ```bash
-   sudo cp com.hyperstreamdb.search.plist /Library/LaunchDaemons/
-   ```
-2. Set correct permissions:
-   ```bash
-   sudo chown root:wheel /Library/LaunchDaemons/com.hyperstreamdb.search.plist
-   ```
-3. Load and start the service:
-   ```bash
-   sudo launchctl load -w /Library/LaunchDaemons/com.hyperstreamdb.search.plist
-   ```
-4. Check logs:
-   ```bash
-   tail -f /tmp/hyperstream-search.log
-   ```
+The script will automatically detect your OS, install the binary to `/usr/local/bin`, and configure the background service (`systemd` for Linux, `launchd` for macOS).
+
+## Configuration
+
+The background service uses a centralized configuration file where you can adjust environment variables (such as enabling GPU, changing ports, or configuring storage).
+
+- **Linux**: Edit `/etc/hyperstreamdb/hyperstream-search.conf`
+- **macOS**: Edit `/usr/local/etc/hyperstreamdb/hyperstream-search.conf`
+
+After changing the configuration file, you must restart the service:
+
+- **Linux**:
+  ```bash
+  sudo systemctl restart hyperstream-search.service
+  ```
+- **macOS**:
+  ```bash
+  sudo launchctl unload -w /Library/LaunchDaemons/com.hyperstreamdb.search.plist
+  sudo launchctl load -w /Library/LaunchDaemons/com.hyperstreamdb.search.plist
+  ```
+
+## Viewing Logs
+
+- **Linux**:
+  ```bash
+  sudo journalctl -u hyperstream-search.service -f
+  ```
+- **macOS**:
+  ```bash
+  tail -f /tmp/hyperstream-search.log
+  ```
