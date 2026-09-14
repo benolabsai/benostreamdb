@@ -697,6 +697,16 @@ curl -X POST localhost:9200/articles/_search -H 'content-type: application/json'
      -d '{"query":{"match":{"body":"HyperStreamDB"}}}'
 ```
 
+**Running as a Background Service**
+
+For production deployments on Linux and macOS, you can easily install `hyperstream-search` as a native background daemon (`systemd` or `launchd`) so it runs continuously and starts on boot:
+
+```bash
+# Ensure the binary is built and available at /usr/local/bin/hyperstream-search
+sudo hyperstreamdb install-service
+```
+This will automatically generate the configuration file and start the service. See [scripts/services/README.md](scripts/services/README.md) for full configuration and uninstallation details.
+
 **Supported:** cluster/health/cat/stats, index CRUD, mapping GET/PUT, `_doc`, `_bulk`,
 `_refresh`, `_search` (`match` BM25, `knn` HNSW, hybrid RRF, `filter`/`bool` with
 `term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering,
