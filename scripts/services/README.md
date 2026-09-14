@@ -51,3 +51,10 @@ After changing the configuration file, you must restart the service:
   ```bash
   tail -f /tmp/hyperstream-search.log
   ```
+
+## Uninstallation
+
+To completely remove the service, configuration, and binary, run:
+```bash
+./uninstall.sh
+```
