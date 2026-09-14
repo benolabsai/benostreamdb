@@ -19,6 +19,9 @@ public class HyperStreamDBJNIBridge {
 
     // GPU context configuration
     public static native boolean setGpuContext(String deviceType);
+
+    // Vector Search
+    public static native int vectorSearch(String table, String segmentId, String column, int k, long queryVectorPtr, int queryVectorLen, long outArrayPtr, long outSchemaPtr);
     
     // We can migrate other JNI methods here in the future if needed
 }
