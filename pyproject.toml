@@ -59,6 +59,6 @@ python-source = "python"
 bindings = "pyo3"
 sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
 # Optimizations for WHEEL builds
-strip = false
+strip = true
 # Use sccache if available during build
 sccache = false
