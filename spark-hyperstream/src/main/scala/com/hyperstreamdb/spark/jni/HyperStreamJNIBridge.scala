@@ -10,6 +10,7 @@ class HyperStreamJNIBridge private () {
   @native def queryIndexIn(table: String, column: String, valuesJson: String): String
   @native def commitPositionDeletes(table: String, deletesJson: String): Boolean
   @native def setGpuContext(deviceType: String): Boolean
+  @native def vectorSearch(table: String, segmentId: String, column: String, k: Int, queryVectorPtr: Long, queryVectorLen: Int, outArrayPtr: Long, outSchemaPtr: Long): Int
 
 }
 
