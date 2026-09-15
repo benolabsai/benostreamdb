@@ -30,6 +30,7 @@ pub struct HybridSegmentWriter {
     pub(crate) inverted_data:
         parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
+    pub(crate) vector_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) file_checksum: parking_lot::Mutex<Option<String>>,
 }
 
@@ -45,6 +46,7 @@ impl HybridSegmentWriter {
             index_configs: HashMap::new(),
             inverted_data: parking_lot::Mutex::new(HashMap::new()),
             index_metadata: parking_lot::Mutex::new(HashMap::new()),
+            vector_data: parking_lot::Mutex::new(HashMap::new()),
             file_checksum: parking_lot::Mutex::new(None),
         }
     }
@@ -582,6 +584,93 @@ impl HybridSegmentWriter {
             }
 
             tracing::info!("  Inverted Index written to storage: {}", full_path_str);
+        }
+
+        // 2. Process Vector Index Buffers (Out of Core)
+        let vector_data = {
+            let mut vector_lock = self.vector_data.lock();
+            std::mem::take(&mut *vector_lock)
+        };
+
+        for (col_name, tmp_path) in vector_data {
+            tracing::info!("Finishing Vector Index for column '{}' from out-of-core file", col_name);
+            let mut algos = self
+                .index_configs
+                .get(&col_name)
+                .map(|c| c.algorithms.clone())
+                .unwrap_or_else(|| {
+                    self.config
+                        .column_algorithms
+                        .get(&col_name)
+                        .cloned()
+                        .unwrap_or_default()
+                });
+            if algos.is_empty() {
+                algos.push(crate::core::manifest::IndexAlgorithm::default());
+            }
+
+            for (idx, algo) in algos.iter().enumerate() {
+                let metric = match algo {
+                    crate::core::manifest::IndexAlgorithm::Hnsw { metric, .. }
+                    | crate::core::manifest::IndexAlgorithm::HnswPq { metric, .. }
+                    | crate::core::manifest::IndexAlgorithm::HnswTq4 { metric, .. }
+                    | crate::core::manifest::IndexAlgorithm::HnswTq8 { metric, .. } => metric
+                        .parse::<crate::core::index::VectorMetric>()
+                        .with_context(|| {
+                            format!("Invalid vector metric for {}: {}", col_name, metric)
+                        })?,
+                    _ => crate::core::index::VectorMetric::L2,
+                };
+                
+                let algo_id = match algo {
+                    crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",
+                    crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
+                    crate::core::manifest::IndexAlgorithm::HnswTq4 { .. } => "tq4",
+                    crate::core::manifest::IndexAlgorithm::HnswTq8 { .. } => "tq8",
+                    _ => "idx",
+                };
+
+                let hnsw_ivf_index = crate::core::index::hnsw_ivf::HnswIvfIndex::build_from_file(
+                    &tmp_path,
+                    metric,
+                    None,
+                    None,
+                    algo,
+                )?;
+                
+                let suffix = if algos.len() > 1 {
+                    format!("{}.{}.{}", col_name, algo_id, idx)
+                } else {
+                    format!("{}.{}", col_name, algo_id)
+                };
+                
+                // Get the staging directory from the tmp_path
+                let tmp_path_buf = std::path::PathBuf::from(&tmp_path);
+                let local_staging_dir = tmp_path_buf.parent().unwrap();
+                
+                let local_base_path = local_staging_dir
+                    .join(format!("{}.{}", self.config.segment_id, suffix));
+
+                let saved_files = hnsw_ivf_index
+                    .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
+                    .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
+
+                {
+                    let mut meta = self.index_metadata.lock();
+                    meta.insert(
+                        format!("{}.{}", self.config.segment_id, suffix),
+                        algo.to_string(),
+                    );
+                }
+
+                {
+                    let mut files = self.generated_files.lock();
+                    files.extend(saved_files);
+                }
+            }
+
+            // Cleanup the temporary raw vector file
+            let _ = std::fs::remove_file(&tmp_path);
         }
 
         Ok(())

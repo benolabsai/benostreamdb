@@ -39,6 +39,9 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
     // Updated signature: returns 1 for success/has_more, 0 for done/empty
     private native long readBatch(long handle, long outArrayPtr, long outSchemaPtr);
 
+    private native void closeSession(long handle);
+
+
     private final String gpuDevice;
 
     public HyperStreamDBPageSource(HyperStreamDBSplit split, List<ColumnHandle> columns, String gpuDevice) {
@@ -146,6 +149,14 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
     @Override
     public void close() throws IOException {
         System.out.println("Closing HyperStreamDBPageSource handle: " + nativeHandle);
+        try {
+            if (nativeHandle != 0 && nativeHandle != 12345) {
+                closeSession(nativeHandle);
+                nativeHandle = 0;
+            }
+        } catch (UnsatisfiedLinkError e) {
+            System.err.println("JNI closeSession not found.");
+        }
         allocator.close();
     }
 }

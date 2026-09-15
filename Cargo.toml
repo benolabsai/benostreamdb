@@ -73,6 +73,7 @@ apache-avro = "0.17"
 zstd = "0.13"
 hex = "0.4"
 ed25519-dalek = "2.1"
+bytemuck = "1.16"
 
 # async runtime
 tokio = { version = "1.36", features = ["full"] }

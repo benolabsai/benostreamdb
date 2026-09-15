@@ -186,6 +186,7 @@ pub struct TableBuilder {
     label_pattern: crate::core::table::LabelPattern,
     wal_dir: Option<std::path::PathBuf>,
     durability: crate::core::table::WalDurability,
+    streaming_flush_interval: Option<std::time::Duration>,
 }
 
 impl TableBuilder {
@@ -211,6 +212,10 @@ impl TableBuilder {
                     _ => crate::core::table::WalDurability::Sync,
                 })
                 .unwrap_or_default(),
+            streaming_flush_interval: std::env::var("HYPERSTREAM_STREAMING_FLUSH_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(std::time::Duration::from_secs),
         }
     }
 
@@ -263,6 +268,11 @@ impl TableBuilder {
 
     pub fn with_auto_label_columns(mut self, pattern: crate::core::table::LabelPattern) -> Self {
         self.label_pattern = pattern;
+        self
+    }
+
+    pub fn with_streaming_flush_interval(mut self, interval: std::time::Duration) -> Self {
+        self.streaming_flush_interval = Some(interval);
         self
     }
 
@@ -374,6 +384,11 @@ impl TableBuilder {
 
         table.sync_primary_key_from_schema_async().await.ok();
         let _ = table.infer_index_metadata_from_physical_async().await;
+
+        if let Some(interval) = self.streaming_flush_interval {
+            table.start_streaming_flush_task(interval);
+        }
+
         Ok(table)
     }
 

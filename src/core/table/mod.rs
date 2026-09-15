@@ -177,6 +177,46 @@ impl Table {
         TableBuilder::new(uri).with_index_all(true).build()
     }
 
+    /// Starts a background task to automatically flush the write buffer at the specified interval.
+    pub fn start_streaming_flush_task(&self, interval: std::time::Duration) {
+        let bg_table = self.clone();
+        let future = async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+
+                // If autocommit strong count is exactly 1, only this task holds it.
+                // This means all external references to the Table are gone.
+                if std::sync::Arc::strong_count(&bg_table.autocommit) == 1 {
+                    tracing::debug!("All table references dropped, stopping streaming ingest task");
+                    break;
+                }
+
+                let is_empty = {
+                    let buffer = bg_table.write_buffer.read();
+                    buffer.is_empty()
+                };
+
+                if !is_empty {
+                    tracing::info!("Micro-batch timer elapsed. Flushing buffer to Iceberg snapshot.");
+                    if let Err(e) = bg_table.commit_async().await {
+                        tracing::error!("Background flush failed: {}", e);
+                    }
+                }
+            }
+        };
+
+        let handle = if let Some(rt) = &self.rt {
+            rt.spawn(future)
+        } else {
+            tokio::spawn(future)
+        };
+        
+        if let Ok(mut tasks) = self.background_tasks.try_lock() {
+            tasks.push(handle);
+        }
+    }
+
     pub async fn new_async(uri: String) -> Result<Self> {
         if let Some((base_url, prefix, namespace, table_name)) = Self::detect_iceberg_rest(&uri) {
             tracing::info!(

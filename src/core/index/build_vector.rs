@@ -1,4 +1,4 @@
-use crate::core::index::hnsw_ivf::HnswIvfIndex;
+
 use anyhow::{Context, Result};
 use arrow::array::Array;
 use rayon::prelude::*;
@@ -78,85 +78,27 @@ impl crate::core::segment::HybridSegmentWriter {
                 .map(|cols| cols.iter().any(|c| c == col_name))
                 .unwrap_or(false);
             if self.config.index_all || in_config {
-                let mut algos = self
-                    .index_configs
-                    .get(col_name)
-                    .map(|c| c.algorithms.clone())
-                    .unwrap_or_else(|| {
-                        self.config
-                            .column_algorithms
-                            .get(col_name)
-                            .cloned()
-                            .unwrap_or_default()
-                    });
-
-                // If it's a vector column but no specific algorithms were provided, use the global default (TurboQuant 8-bit)
-                if algos.is_empty() {
-                    tracing::info!(
-                        "No index algorithm specified for {}; defaulting to hnsw_tq8",
-                        col_name
-                    );
-                    algos.push(crate::core::manifest::IndexAlgorithm::default());
+                let tmp_path = local_staging_dir.join(format!("{}.{}.tmp.vec.bin", self.config.segment_id, col_name));
+                
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&tmp_path)
+                    .context("Failed to open vector temp file")?;
+                    
+                use std::io::Write;
+                let dim = vectors[0].len() as u32;
+                for (i, vec) in vectors.iter().enumerate() {
+                    let global_row_id = (_row_offset + i) as u32;
+                    file.write_all(&global_row_id.to_le_bytes())?;
+                    file.write_all(&dim.to_le_bytes())?;
+                    let vec_bytes = bytemuck::cast_slice(vec);
+                    file.write_all(vec_bytes)?;
                 }
-
-                for (idx, algo) in algos.iter().enumerate() {
-                    let metric = match algo {
-                        crate::core::manifest::IndexAlgorithm::Hnsw { metric, .. }
-                        | crate::core::manifest::IndexAlgorithm::HnswPq { metric, .. }
-                        | crate::core::manifest::IndexAlgorithm::HnswTq4 { metric, .. }
-                        | crate::core::manifest::IndexAlgorithm::HnswTq8 { metric, .. } => metric
-                            .parse::<crate::core::index::VectorMetric>()
-                            .with_context(|| {
-                                format!("Invalid vector metric for {}: {}", col_name, metric)
-                            })?,
-                        _ => crate::core::index::VectorMetric::L2,
-                    };
-
-                    let algo_id = match algo {
-                        crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",
-                        crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
-                        crate::core::manifest::IndexAlgorithm::HnswTq4 { .. } => "tq4",
-                        crate::core::manifest::IndexAlgorithm::HnswTq8 { .. } => "tq8",
-                        _ => "idx",
-                    };
-
-                    let chunk_size = std::env::var("HYPERSTREAM_HNSW_CHUNK_SIZE")
-                        .ok()
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(100_000)
-                        .max(1);
-                    for (chunk_idx, chunk) in vectors.chunks(chunk_size).enumerate() {
-                        let offset = chunk_idx * chunk_size;
-                        let hnsw_ivf_index =
-                            HnswIvfIndex::build(chunk.to_vec(), metric, None, None, algo, offset)
-                                .map_err(|e| anyhow::anyhow!("HNSW-IVF build failed: {}", e))?;
-
-                        let num_chunks = vectors.len().div_ceil(chunk_size);
-                        let suffix = if algos.len() > 1 || num_chunks > 1 {
-                            format!("{}.{}.{}_{}", col_name, algo_id, idx, chunk_idx)
-                        } else {
-                            format!("{}.{}", col_name, algo_id)
-                        };
-                        let local_base_path = local_staging_dir
-                            .join(format!("{}.{}", self.config.segment_id, suffix));
-
-                        let saved_files = hnsw_ivf_index
-                            .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
-                            .map_err(|e| anyhow::anyhow!("HNSW-IVF save failed: {}", e))?;
-
-                        {
-                            let mut meta = self.index_metadata.lock();
-                            meta.insert(
-                                format!("{}.{}", self.config.segment_id, suffix),
-                                algo.to_string(),
-                            );
-                        }
-
-                        {
-                            let mut files = self.generated_files.lock();
-                            files.extend(saved_files);
-                        }
-                    }
+                
+                {
+                    let mut v_data = self.vector_data.lock();
+                    v_data.insert(col_name.to_string(), tmp_path.to_str().unwrap().to_string());
                 }
             } else {
                 tracing::info!(

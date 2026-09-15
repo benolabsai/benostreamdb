@@ -1,15 +1,9 @@
 //! Api for external language.  
 //! This file provides a trait to be used as an opaque pointer for C or Julia calls used in file libext.rs
 
-use std::fs::OpenOptions;
-use std::io::prelude::*;
-use std::io::BufWriter;
-use std::path::PathBuf;
-
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::core::index::hnsw_rs::hnsw::*;
-use crate::core::index::hnsw_rs::hnswio::*;
 
 pub trait AnnT {
     /// type of data vectors
@@ -35,7 +29,7 @@ pub trait AnnT {
 
 impl<T, D> AnnT for Hnsw<T, D>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync,
+    T: Serialize + DeserializeOwned + Clone + Send + Sync + crate::core::index::hnsw_rs::arrow_ipc::ArrowType,
     D: Distance<T> + Send + Sync,
 {
     type Val = T;
@@ -59,55 +53,14 @@ where
     ) -> Vec<Vec<Neighbour>> {
         self.parallel_search(data, knbn, ef_s)
     }
-    /// The main entry point to do a dump.  
-    /// It will generate two files one for the graph part of the data. The other for the real data points of the structure.
     fn file_dump(&self, filename: &String) -> Result<i32, String> {
         log::debug!("\n in file_dump : {:?}", filename);
-        //
         let mut graphname = filename.clone();
         graphname.push_str(".hnsw.graph");
-        let graphpath = PathBuf::from(graphname);
-        let fileres = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&graphpath);
-        if fileres.is_err() {
-            log::error!(
-                "api::file_dump could not open file {:?}",
-                graphpath.as_os_str()
-            );
-            println!(
-                "api::file_dump: could not open file {:?}",
-                graphpath.as_os_str()
-            );
-            return Err("api::file_dump could not open file".to_string());
-        }
-        let graphfile = fileres.unwrap();
-        //
-        let mut dataname = filename.clone();
-        dataname.push_str(".hnsw.data");
-        let datapath = PathBuf::from(dataname);
-        let fileres = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&datapath);
-        if fileres.is_err() {
-            println!(
-                "api::file_dumpcould not open file {:?}",
-                datapath.as_os_str()
-            );
-            return Err("api::file_dump could not open file".to_string());
-        }
-        let datafile = fileres.unwrap();
-        let mut graphbufw = BufWriter::with_capacity(50_000_000, graphfile);
-        let mut databufw = BufWriter::with_capacity(50_000_000, datafile);
-        let res = self.dump(DumpMode::Full, &mut graphbufw, &mut databufw);
-        graphbufw.flush().unwrap();
-        databufw.flush().unwrap();
+        let buffer = crate::core::index::hnsw_rs::arrow_ipc::dump_arrow_ipc(self)?;
+        std::fs::write(&graphname, buffer).map_err(|e| e.to_string())?;
         log::debug!("\n end of dump");
-        res
+        Ok(1)
     } // end of dump
 } // end of impl block AnnT for Hnsw<T,D>
 
