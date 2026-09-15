@@ -495,8 +495,8 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 - [ ] **[Free] OpenSearch API (Port 9200)**: Extend `_search` DSL with `graph_neighbors` filter clause.
 
 ### 6. Packaging, Hardware & CI
-- [ ] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS.
-- [ ] **[Free] GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers.
+- [x] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
+- [x] **[Free] GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
 
 ### 7. Codebase Intelligence & Model Context Protocol (MCP) Server
 
