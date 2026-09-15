@@ -462,37 +462,37 @@ The following items represent the active, vetted roadmap for HyperStreamDB. Spec
 Native graph analytics on Iceberg edge tables with sidecar index acceleration. Replaces the need for Neo4j + Pinecone combos or Spark GraphX for knowledge graph and Graph RAG workloads. All core graph features ship in the free Community edition.
 
 #### 5a. [Free] Edge Table Schema Convention
-- [ ] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source_id, target_id, relation, weight, embeddings).
-- [ ] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source_id` and `target_id` columns (Roaring Bitmap) for O(1) edge lookups.
-- [ ] **[Free] Best Practices Guide**: Document edge table conventions (partitioning by relation type, sort order by source_id).
+- [ ] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source_id, target_id, relation, weight, embeddings). (v0.8.0)
+- [ ] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source_id` and `target_id` columns (Roaring Bitmap) for O(1) edge lookups. (v0.8.0)
+- [ ] **[Free] Best Practices Guide**: Document edge table conventions (partitioning by relation type, sort order by source_id). (v0.8.0)
 
 #### 5b. [Free] Graph SQL Functions (DataFusion UDFs)
-- [ ] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table.
-- [ ] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection.
-- [ ] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval.
-- [ ] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard and overlap similarity via sidecar bitmap intersection.
-- [ ] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Component labeling via iterative label propagation.
-- [ ] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation.
+- [ ] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table. (v0.8.0)
+- [ ] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection. (v0.8.0)
+- [ ] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval. (v0.8.0)
+- [ ] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard and overlap similarity via sidecar bitmap intersection. (v0.8.0)
+- [ ] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Component labeling via iterative label propagation. (v0.8.0)
+- [ ] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation. (v0.8.0)
 
 #### 5c. [Free] Graph RAG Pipeline Integration
-- [ ] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, community_col)`**: Combined graph + vector search (local and global modes).
-- [ ] **[Free] Community Summarization Workflow**: SQL-driven pipeline to GROUP BY community_id and produce summary embeddings for global search.
+- [ ] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, community_col)`**: Combined graph + vector search (local and global modes). (v0.8.0)
+- [ ] **[Free] Community Summarization Workflow**: SQL-driven pipeline to GROUP BY community_id and produce summary embeddings for global search. (v0.8.0)
 
 #### 5d. [Free] Python API
-- [ ] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores.
-- [ ] **[Free] `table.communities(algorithm='louvain', resolution=1.0)`**: Community assignments.
-- [ ] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges.
-- [ ] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10)`**: Combined graph + vector results.
-- [ ] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph` for ecosystem visualization.
+- [ ] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores. (v0.8.0)
+- [ ] **[Free] `table.communities(algorithm='louvain', resolution=1.0)`**: Community assignments. (v0.8.0)
+- [ ] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges. (v0.8.0)
+- [ ] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10)`**: Combined graph + vector results. (v0.8.0)
+- [ ] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph` for ecosystem visualization. (v0.8.0)
 
 #### 5e. [Free] dbt Macros (`dbt-hyperstreamdb`)
-- [ ] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table.
-- [ ] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain') }}`**: Materialize community assignments.
-- [ ] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction.
+- [ ] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table. (v0.8.0)
+- [ ] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain') }}`**: Materialize community assignments. (v0.8.0)
+- [ ] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction. (v0.8.0)
 
 #### 5f. [Free] Search Gateway Graph Endpoints
-- [ ] **[Free] Qdrant API (Port 6333)**: Extend `/points/search` with `graph_filter` parameter for neighborhood-scoped vector search.
-- [ ] **[Free] OpenSearch API (Port 9200)**: Extend `_search` DSL with `graph_neighbors` filter clause.
+- [ ] **[Free] Qdrant API (Port 6333)**: Extend `/points/search` with `graph_filter` parameter for neighborhood-scoped vector search. (v0.8.0)
+- [ ] **[Free] OpenSearch API (Port 9200)**: Extend `_search` DSL with `graph_neighbors` filter clause. (v0.8.0)
 
 ### 6. Packaging, Hardware & CI
 - [x] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
@@ -501,28 +501,28 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 ### 7. Codebase Intelligence & Model Context Protocol (MCP) Server
 
 #### 7a. [Free] MCP Server Implementation (`hyperstream-mcp`)
-- [ ] **[Free] Protocol Support**: Standard Model Context Protocol (JSON-RPC over stdio and SSE).
-- [ ] **[Free] Tool: `code_search`**: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks.
-- [ ] **[Free] Tool: `find_symbol`**: Sub-millisecond exact definition and reference lookups powered by String Inverted Index.
-- [ ] **[Free] Tool: `get_context`**: Extract relevant code blocks, AST parent contexts, and neighboring functions.
-- [ ] **[Free] Tool: `code_graph`**: Query imports, calls, and dependency relationships via sidecar graph tables.
-- [ ] **[Free] Language Parsers**: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++).
+- [ ] **[Free] Protocol Support**: Standard Model Context Protocol (JSON-RPC over stdio and SSE). (v0.9.0)
+- [ ] **[Free] Tool: `code_search`**: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks. (v0.9.0)
+- [ ] **[Free] Tool: `find_symbol`**: Sub-millisecond exact definition and reference lookups powered by String Inverted Index. (v0.9.0)
+- [ ] **[Free] Tool: `get_context`**: Extract relevant code blocks, AST parent contexts, and neighboring functions. (v0.9.0)
+- [ ] **[Free] Tool: `code_graph`**: Query imports, calls, and dependency relationships via sidecar graph tables. (v0.9.0)
+- [ ] **[Free] Language Parsers**: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++). (v0.9.0)
 
 #### 7b. [Free] Git-Diff Incremental CI Indexer
-- [ ] **[Free] CLI Subcommand `hyperstream index`**:
+- [ ] **[Free] CLI Subcommand `hyperstream index`**: (v0.9.0)
   - `--repo <path>`: Target repository directory.
   - `--diff-since <ref>`: Git diff mode (e.g. `HEAD~1`, `origin/main`) to only re-index changed files.
   - `--target <uri>`: Target storage URI (`file:///...`, `s3://...`).
-- [ ] **[Free] Incremental Parquet & Overlay Appends**: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps.
-- [ ] **[Free] Official GitHub Action (`hyperstreamdb/index-action@v1`)**: Ready-to-use GitHub Action for PR and merge workflows.
-- [ ] **[Free] GitLab CI & Jenkins Examples**: Provide standard CI pipeline configurations.
+- [ ] **[Free] Incremental Parquet & Overlay Appends**: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps. (v0.9.0)
+- [ ] **[Free] Official GitHub Action (`hyperstreamdb/index-action@v1`)**: Ready-to-use GitHub Action for PR and merge workflows. (v0.9.0)
+- [ ] **[Free] GitLab CI & Jenkins Examples**: Provide standard CI pipeline configurations. (v0.9.0)
 
 #### 7c. Feature Tiering: Local vs. Remote Lakehouse
-- [ ] **[Free] Local Storage Backends**: Direct support for local filesystem (`file://`) and developer MinIO instances.
-- [ ] **[Free] Local MCP Server & Tooling**: Full stdio/SSE MCP protocol support for local developer desktop tools (Cursor, Claude, Roo Code).
-- [ ] **[Free] Git-Diff Incremental Indexing Engine**: Fast incremental AST chunking and overlay generation on individual developer machines.
-- [ ] **[Paid] Remote Cloud Object Storage Integration**: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`).
-- [ ] **[Paid] Centralized Team Knowledge Cache**: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution.
+- [ ] **[Free] Local Storage Backends**: Direct support for local filesystem (`file://`) and developer MinIO instances. (v0.9.0)
+- [ ] **[Free] Local MCP Server & Tooling**: Full stdio/SSE MCP protocol support for local developer desktop tools (Cursor, Claude, Roo Code). (v0.9.0)
+- [ ] **[Free] Git-Diff Incremental Indexing Engine**: Fast incremental AST chunking and overlay generation on individual developer machines. (v0.9.0)
+- [ ] **[Paid] Remote Cloud Object Storage Integration**: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`). (v0.9.0)
+- [ ] **[Paid] Centralized Team Knowledge Cache**: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution. (v0.9.0)
 
 ### 8. Enterprise Security & Compliance [Paid]
 - [ ] **[Paid] Row-Level Security (RLS) & Multi-Tenancy**: Sidecar-level tenant bitmap isolation (`.idx` intersection before reading Parquet).
