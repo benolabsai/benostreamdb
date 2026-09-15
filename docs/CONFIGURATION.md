@@ -50,6 +50,7 @@ HyperStreamDB is designed to be highly configurable through environment variable
 | `HYPERSTREAM_WAL_COMPACT_MB` | File size threshold in MB before triggering WAL log segment compaction. | `1024` (1 GB) |
 | `HYPERSTREAM_WAL_SYNC_BATCH_SIZE`| Appended operations batch size before triggering a WAL sync flush. | `10` |
 | `HYPERSTREAM_WAL_SYNC_INTERVAL_MS`| Maximum elapsed milliseconds between background WAL sync flushes. | `100` |
+| `HYPERSTREAM_STREAMING_FLUSH_INTERVAL_SECS`| Background timer interval in seconds to automatically flush write buffers to Iceberg snapshots. | None |
 
 ### Search Gateway (`hyperstreamdb-search`)
 

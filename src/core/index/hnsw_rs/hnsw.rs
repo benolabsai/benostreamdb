@@ -224,9 +224,9 @@ impl<T: Clone + Send + Sync> Point<T> {
 pub(crate) struct PointWithOrder<T: Clone + Send + Sync> {
     /// the identificateur of the point for which we store a distance to a point for which
     ///  we made a request.
-    point_ref: Arc<Point<T>>,
+    pub point_ref: Arc<Point<T>>,
     /// The distance to a point_ref to the request point (not represented in the structure)
-    dist_to_ref: f32,
+    pub dist_to_ref: f32,
 }
 
 impl<T: Clone + Send + Sync> PartialEq for PointWithOrder<T> {

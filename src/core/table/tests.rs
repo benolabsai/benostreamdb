@@ -165,3 +165,50 @@ async fn test_admin_ops() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_streaming_flush_interval() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    let uri = format!("file://{}", path);
+
+    // Create a table using the builder directly to configure streaming flush
+    let table = TableBuilder::new(uri.clone())
+        .with_streaming_flush_interval(std::time::Duration::from_millis(500))
+        .build_async()
+        .await?;
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+
+    // Write data WITHOUT explicitly calling commit_async()
+    table.write_async(vec![batch]).await?;
+
+    // The data should be in the write buffer, not on disk yet.
+    {
+        let buffer = table.write_buffer.read();
+        assert!(!buffer.is_empty(), "Data should be buffered");
+    }
+
+    // Wait for the background task to trigger the flush (interval is 500ms)
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // The buffer should now be empty because the background task committed it
+    {
+        let buffer = table.write_buffer.read();
+        assert!(buffer.is_empty(), "Buffer should be empty after streaming flush");
+    }
+
+    // The data should be readable from disk
+    let batches = table.read_async(None, None, None).await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
+
+    Ok(())
+}

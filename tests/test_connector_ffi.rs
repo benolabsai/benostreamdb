@@ -58,7 +58,7 @@ async fn test_connector_simulation() -> Result<(), Box<dyn std::error::Error>> {
 
     // Coordinator
     let table = Table::new_async(table_uri.to_string()).await?;
-    let splits = table.get_splits_async(1024).await?;
+    let splits = table.get_splits_async(1024, None).await?;
 
     println!("Got {} splits", splits.len());
     // Expect at least 2 splits (one per file/commit)
@@ -80,7 +80,7 @@ async fn test_connector_simulation() -> Result<(), Box<dyn std::error::Error>> {
                 // Note: In real Spark/Trino, this happens in a thread that is NOT a Tokio async runtime thread.
                 // Hence why HyperStreamSession uses its own RUNTIME.block_on internally.
                 // spawn_blocking moves us to a thread where blocking is allowed.
-                let mut session = HyperStreamSession::new(path).expect("Failed to create session");
+                let mut session = HyperStreamSession::new(path, None).expect("Failed to create session");
 
                 while let Some(batch) = session.next_batch() {
                     println!("Read batch with {} rows", batch.num_rows());

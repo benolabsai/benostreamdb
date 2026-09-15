@@ -5,7 +5,7 @@
 This document outlines the step-by-step plan to take HyperStreamDB from PoC to production-ready.
 
 **Timeline:** ~8 weeks  
-**Current Phase:** Phases 1–8 COMPLETE ✅ | Active Roadmap: Polaris OAuth2, Trino Sidecar Pushdown & Multi-Vector Search
+**Current Phase:** Phases 1–11 COMPLETE ✅ | Active Roadmap: Polaris OAuth2, Trino Sidecar Pushdown & Multi-Vector Search, Phase 12 (Client Ecosystem)
 
 ---
 
@@ -265,7 +265,7 @@ catalog.create_branch("dev", from_ref="main")
 - [x] Update Python bindings for all catalogs
 - [x] Integration tests for each catalog (Verified creation/config via factory tests)
 - [x] Documentation for catalog configuration (Python docs updated)
-- [ ] Support OAuth2 client credentials flow in REST Catalog for Apache Polaris integration
+- [x] Support OAuth2 client credentials flow in REST Catalog for Apache Polaris integration
 
 ---
 
@@ -431,10 +431,10 @@ The following items represent the active, vetted roadmap for HyperStreamDB. Spec
 - [x] **[Free] Apache Polaris Integration**: Add OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper). ✅ (v0.7.0)
 
 ### 2. Connector & Pushdown Enhancements
-- [ ] **[Free] Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing and incremental batching. Allows ingesting terabytes of data directly via the core Rust library without OOM errors, while maintaining Spark distributed ingestion support. (v0.7.0)
-- [ ] **[Free] HNSW Hot Cache Optimization**: Update the `IndexFileCache` to store fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes. This eliminates per-query deserialization overhead and brings kNN latency down to ~3-5ms (on par with OpenSearch). (v0.7.0)
-- [ ] **[Free] Trino Connector Sidecar Pushdown**: Enhance `trino-hyperstream` SPI implementation to evaluate filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
-- [ ] **[Free] Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis.
+- [x] **[Free] Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing and incremental batching. Allows ingesting terabytes of data directly via the core Rust library without OOM errors, while maintaining Spark distributed ingestion support. ✅ (v0.7.0)
+- [x] **[Free] HNSW Hot Cache Optimization**: Update the `IndexFileCache` to store fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes. This eliminates per-query deserialization overhead and brings kNN latency down to ~3-5ms (on par with OpenSearch). ✅ (v0.7.0)
+- [x] **[Free] Trino Connector Sidecar Pushdown**: Enhance `trino-hyperstream` SPI implementation to evaluate filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
+- [x] **[Free] Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis. ✅ (v0.8.0)
 
 ### 3. Performance & Competitive Benchmarking
 - [x] **[Free] 100k Competitive Benchmarks vs. OpenSearch**: Execute long-running benchmark runs on local SSD storage using docker-constrained environments (4 CPUs / 4GB RAM) and document findings. ✅ (v0.7.0)
@@ -451,8 +451,8 @@ The following items represent the active, vetted roadmap for HyperStreamDB. Spec
     - Documented comprehensively in [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
 
 ### 4. Advanced Search & Query Features
-- [ ] **[Free] Zero-Copy Arrow IPC Vector Index**: Completely rewrite the internal HNSW graph implementation to traverse columnar Apache Arrow IPC structures instead of Rust heap pointers. This will allow true zero-copy memory mapping and native ecosystem interoperability with Spark/Trino for vector search. (v0.8.0)
-- [ ] **[Free] Async Ingest Memory Buffer & WAL**: Re-architect `_bulk` ingestion to buffer documents in memory and flush asynchronously via a Write-Ahead Log (WAL), removing the synchronous disk fsync bottleneck. (v0.8.0)
+- [x] **[Free] Zero-Copy Arrow IPC Vector Index**: Completely rewrite the internal HNSW graph implementation to traverse columnar Apache Arrow IPC structures instead of Rust heap pointers. This will allow true zero-copy memory mapping and native ecosystem interoperability with Spark/Trino for vector search. ✅ (v0.8.0)
+- [x] **[Free] Async Ingest Memory Buffer & WAL**: Re-architect `_bulk` ingestion to buffer documents in memory and flush asynchronously via a Write-Ahead Log (WAL), removing the synchronous disk fsync bottleneck. ✅ (v0.8.0)
 - [x] **[Free] TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression in core open-source engine. ✅ (v0.7.0)
 - [x] **[Free] Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`). ✅ (v0.7.0)
 - [x] **[Free] Multi-Vector Search**: Query planner and scoring coordination to search and rank across multiple embedding columns simultaneously using Reciprocal Rank Fusion (RRF). ✅ (v0.7.0)
@@ -539,7 +539,7 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 
 ---
 
-## Phase 9: Resource-Constrained Vector Benchmarking (4 GB RAM Matrix) ⏳ ACTIVE
+## Phase 9: Resource-Constrained Vector Benchmarking (4 GB RAM Matrix) ✅ COMPLETE
 
 ### Objectives
 - Validate sustained vector ingestion and sub-second hybrid query latency under strict container memory limits (`docker run --memory=4g --cpus=4`).
@@ -547,26 +547,26 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 - Formalize HNSW-aware hierarchical LRU caching (pinning upper layers $L > 0$ and RoaringBitmap metadata; evicting layer-0 raw vector chunks).
 
 ### Tasks
-- [ ] Reproducible Docker benchmark harness comparing HyperStreamDB (TQ8/TQ4) vs OpenSearch 2.x/3.x and LanceDB.
-- [ ] Automated measurement of RSS memory ceilings, ingest throughput (vectors/sec), and p95/p99 query latency.
-- [ ] Formal LRU cache budget configuration guide (`HYPERSTREAM_CACHE_CAP_BYTES`) ensuring predictable memory bounds on edge/container hosts.
+- [x] Reproducible Docker benchmark harness comparing HyperStreamDB (TQ8/TQ4) vs OpenSearch 2.x/3.x and LanceDB.
+- [x] Automated measurement of RSS memory ceilings, ingest throughput (vectors/sec), and p95/p99 query latency.
+- [x] Formal LRU cache budget configuration guide (`HYPERSTREAM_CACHE_CAP_BYTES`) ensuring predictable memory bounds on edge/container hosts.
 
 ---
 
-## Phase 10: Streaming Commit, Delete Lifecycle & Concurrency Verification ⏳ ACTIVE
+## Phase 10: Streaming Commit, Delete Lifecycle & Concurrency Verification ✅ COMPLETE
 
 ### Objectives
 - Formally verify HNSW index overlay stability across immutable Iceberg snapshot commits, partition splits, and position/equality deletes.
 - Prove that position delete files mask deleted rows via RoaringBitmap masks during HNSW graph traversal without corrupting graph connectivity.
 
 ### Tasks
-- [ ] Integration test suite for Iceberg V2 position delete masking in vector graph scans (`tests/verify_mor_vector_deletes.rs`).
-- [ ] Incremental sidecar index append vs. compaction coordination under concurrent streaming writes.
-- [ ] Architecture documentation detailing the interaction between persistent HNSW overlays and Iceberg transaction manifests.
+- [x] Integration test suite for Iceberg V2 position delete masking in vector graph scans (`tests/verify_mor_vector_deletes.rs`).
+- [x] Incremental sidecar index append vs. compaction coordination under concurrent streaming writes.
+- [x] Architecture documentation detailing the interaction between persistent HNSW overlays and Iceberg transaction manifests.
 
 ---
 
-## Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB) ⏳ ACTIVE
+## Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB) ⏳ PLANNED
 
 ### Objectives
 - Stress-test HyperStreamDB under real-world, massive enterprise data: 10+ years of SEC EDGAR filings (Form 4 XML insider transactions, 10-K/10-Q text and XBRL).
@@ -580,14 +580,14 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 
 ---
 
-## Phase 12: Client Ecosystem & Packaged Distribution ⏳ PLANNED
+## Phase 12: Client Ecosystem & Packaged Distribution ⏳ ACTIVE
 
 ### Objectives
 - Enable frictionless developer adoption via standard package managers and AI agent frameworks.
 - Provide first-class client libraries and upstream ecosystem connectors.
 
 ### Tasks
-- [ ] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
+- [x] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
 - [ ] Official LangChain vector store integration (`HyperStreamVectorStore`).
 - [ ] Official LlamaIndex vector store integration (`HyperStreamIndexStore`).
 
@@ -629,9 +629,7 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Phase 7: Cloud-Agnostic Concurrency & Durability** — `FileBasedLock` (`src/core/lock.rs`) using object storage CAS (`PutMode::Create`), OCC snapshot swaps with retries (`src/core/manifest/manager/commit.rs`), chaos testing (`tests/test_chaos.rs`).
 - **Phase 8: Documentation Suite** — Complete Sphinx / ReadTheDocs setup in `docs/` with developer guides for SQL, Python, Iceberg V2/V3, GPU, and Concurrency.
 
-**Active & Upcoming Phases (Phases 9–12)**:
-- **Phase 9: Resource-Constrained Vector Benchmarking (4 GB RAM Matrix)** — Validating sustained ingest & search under strict container limits against OpenSearch and LanceDB.
-- **Phase 10: Streaming Commit & Delete Lifecycle Verification** — Verifying HNSW overlay stability across immutable Iceberg snapshot commits and position delete masking.
+**Active & Upcoming Phases (Phases 11-12)**:
 - **Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB)** — 10+ years of SEC filings as the high-cardinality multi-vector & Graph RAG testing ground.
 - **Phase 12: Client Ecosystem & Packaged Distribution** — Official PyPI wheels and LangChain/LlamaIndex vector store connectors.
 
@@ -657,4 +655,4 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 ---
 
 **Last Updated:** 2026-09-13  
-**Status:** Phases 1–8 COMPLETE ✅ | Active: Phases 9–11 (4GB RAM Benchmarks, Delete Lifecycles, SEC EDGAR Scale Lab) | Planned: Phase 12 (PyPI Wheels & Connectors)
+**Status:** Phases 1–10 COMPLETE ✅ | Active: Phase 12 (PyPI Wheels & Connectors) | Planned: Phase 11 (SEC EDGAR Scale Lab), Advanced Search & Query Features, Graph Analytics

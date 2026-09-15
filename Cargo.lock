@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "hyperstreamdb"
-version = "0.7.0"
+version = "0.8.0-alpha.1"
 dependencies = [
  "ahash",
  "anyhow",
@@ -3674,6 +3674,7 @@ dependencies = [
  "axum 0.7.9",
  "base64 0.22.1",
  "bincode",
+ "bytemuck",
  "bytes",
  "chrono",
  "clap",

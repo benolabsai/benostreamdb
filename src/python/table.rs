@@ -24,12 +24,16 @@ pub struct PyTable {
 }
 
 impl PyTable {
-    pub fn new_internal(uri: &str, device: Option<Py<PyDevice>>) -> Result<Self, anyhow::Error> {
-        let mut table = TOKIO_RUNTIME.block_on(
-            Table::builder(uri.to_string())
-                .with_runtime(TOKIO_RUNTIME.clone())
-                .build_async(),
-        )?;
+    pub fn new_internal(
+        uri: &str,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut builder = Table::builder(uri.to_string()).with_runtime(TOKIO_RUNTIME.clone());
+        if let Some(secs) = streaming_flush_interval_secs {
+            builder = builder.with_streaming_flush_interval(std::time::Duration::from_secs(secs));
+        }
+        let mut table = TOKIO_RUNTIME.block_on(builder.build_async())?;
         table.rt = Some(TOKIO_RUNTIME.clone());
         Ok(PyTable { table, device })
     }
@@ -40,13 +44,15 @@ impl PyTable {
         namespace: &str,
         table_name: &str,
         device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
     ) -> Result<Self, anyhow::Error> {
-        let mut table = TOKIO_RUNTIME.block_on(
-            Table::builder(uri.to_string())
-                .with_runtime(TOKIO_RUNTIME.clone())
-                .with_catalog(catalog, namespace, table_name)
-                .build_async(),
-        )?;
+        let mut builder = Table::builder(uri.to_string())
+            .with_runtime(TOKIO_RUNTIME.clone())
+            .with_catalog(catalog, namespace, table_name);
+        if let Some(secs) = streaming_flush_interval_secs {
+            builder = builder.with_streaming_flush_interval(std::time::Duration::from_secs(secs));
+        }
+        let mut table = TOKIO_RUNTIME.block_on(builder.build_async())?;
         table.rt = Some(TOKIO_RUNTIME.clone());
         Ok(PyTable { table, device })
     }
@@ -55,9 +61,13 @@ impl PyTable {
         uri: &str,
         schema: arrow::datatypes::SchemaRef,
         device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
     ) -> Result<Self, anyhow::Error> {
         let mut table = TOKIO_RUNTIME.block_on(Table::create_async(uri.to_string(), schema))?;
         table.rt = Some(TOKIO_RUNTIME.clone());
+        if let Some(secs) = streaming_flush_interval_secs {
+            table.start_streaming_flush_task(std::time::Duration::from_secs(secs));
+        }
         Ok(PyTable { table, device })
     }
 }
@@ -66,28 +76,38 @@ impl PyTable {
 #[allow(deprecated)]
 impl PyTable {
     #[new]
-    #[pyo3(signature = (uri, device=None))]
-    fn new(uri: &str, device: Option<Py<PyDevice>>) -> PyResult<Self> {
-        Self::new_internal(uri, device)
+    #[pyo3(signature = (uri, device=None, streaming_flush_interval_secs=None))]
+    fn new(
+        uri: &str,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> PyResult<Self> {
+        Self::new_internal(uri, device, streaming_flush_interval_secs)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
     /// Create a new table with an explicit schema
     #[staticmethod]
-    #[pyo3(signature = (uri, schema, device=None))]
-    fn create(uri: &str, schema: Bound<'_, PyAny>, device: Option<Py<PyDevice>>) -> PyResult<Self> {
+    #[pyo3(signature = (uri, schema, device=None, streaming_flush_interval_secs=None))]
+    fn create(
+        uri: &str,
+        schema: Bound<'_, PyAny>,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> PyResult<Self> {
         let rust_schema = extract_schema(schema)?;
-        Self::create_internal(uri, rust_schema, device)
+        Self::create_internal(uri, rust_schema, device, streaming_flush_interval_secs)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
     #[staticmethod]
-    #[pyo3(signature = (uri, schema, partition_spec, device=None))]
+    #[pyo3(signature = (uri, schema, partition_spec, device=None, streaming_flush_interval_secs=None))]
     fn create_partitioned(
         uri: &str,
         schema: Bound<'_, PyAny>,
         partition_spec: Bound<'_, PyAny>,
         device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
     ) -> PyResult<Self> {
         let rust_schema = extract_schema(schema)?;
         let rust_spec = extract_partition_spec(partition_spec)?;
@@ -103,6 +123,10 @@ impl PyTable {
         // CRITICAL: Attach the runtime to the table so sync methods don't panic
         table.rt = Some(TOKIO_RUNTIME.clone());
         tracing::debug!("Rust Table created with global runtime");
+
+        if let Some(secs) = streaming_flush_interval_secs {
+            table.start_streaming_flush_task(std::time::Duration::from_secs(secs));
+        }
 
         Ok(PyTable { table, device })
     }
