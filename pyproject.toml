@@ -32,6 +32,7 @@ classifiers = [
 dependencies = [
     "pyarrow>=14.0.0",
     "numpy>=1.20.0",
+    "pandas>=1.5.0",
 ]
 
 [project.optional-dependencies]

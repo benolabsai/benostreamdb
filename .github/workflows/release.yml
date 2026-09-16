@@ -79,7 +79,7 @@ jobs:
           sudo ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
           echo "/usr/local/cuda/lib64/stubs" | sudo tee /etc/ld.so.conf.d/cuda-stubs.conf
           sudo ldconfig
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
