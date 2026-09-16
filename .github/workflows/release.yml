@@ -137,7 +137,7 @@ jobs:
       - name: Install maturin and build
         if: steps.filter.outputs.code == 'true'
         run: |
-          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis requests "pyiceberg[sql-sqlite]"
+          pip install maturin pyarrow numpy pandas pytest pytest-asyncio anyio hypothesis requests "pyiceberg[sql-sqlite]" networkx cffi scikit-learn
           maturin build --features python
           pip install target/wheels/hyperstreamdb-*.whl
 
