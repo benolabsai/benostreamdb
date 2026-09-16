@@ -35,6 +35,12 @@ Key Features
    guides/GPU_SETUP_GUIDE
    guides/CONFIGURATION
    guides/CONCURRENCY
+   guides/graph_rag_edge_tables
+   guides/ICEBERG_V2_V3_API
+   guides/PGVECTOR_SQL_GUIDE
+   guides/SNOWFLAKE_POLARIS_GUIDE
+   guides/DORIS_OPTIMIZATION_PATTERNS
+   guides/BENCHMARKING
 
 .. toctree::
    :maxdepth: 2
