@@ -27,7 +27,7 @@ use super::{Quantizer, QuantizerImpl, VectorMetric, VectorValue};
 use crate::core::index::hnsw_rs::prelude::*;
 use crate::core::manifest::IndexAlgorithm;
 use crate::core::puffin::PuffinReader;
-use arrow::array::{Array, AsArray};
+use arrow::array::{Array, ArrayRef};
 use arrow::record_batch::RecordBatch;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
@@ -98,7 +98,7 @@ pub enum HnswGraph {
     TurboQuant4(Hnsw<u8, crate::core::index::distance::DistL2u4>),
     SparseDot(Hnsw<crate::core::index::SparseVector, DistSparseDot>),
     Pq(Hnsw<u8, crate::core::index::pq::DistPqSdc>),
-    
+
     // Arrow IPC variants (read-only)
     L2Arrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<f32, DistL2>),
     CosineArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<f32, DistCosine>),
@@ -107,10 +107,27 @@ pub enum HnswGraph {
     HammingArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<f32, DistHamming>),
     JaccardArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<f32, DistJaccard>),
     BinaryHammingArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, DistHammingPacked>),
-    TurboQuant8Arrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, crate::core::index::distance::DistL2u8>),
-    TurboQuant4Arrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, crate::core::index::distance::DistL2u4>),
-    SparseDotArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<crate::core::index::SparseVector, DistSparseDot>),
-    PqArrow(crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, crate::core::index::pq::DistPqSdc>),
+    TurboQuant8Arrow(
+        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<
+            u8,
+            crate::core::index::distance::DistL2u8,
+        >,
+    ),
+    TurboQuant4Arrow(
+        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<
+            u8,
+            crate::core::index::distance::DistL2u4,
+        >,
+    ),
+    SparseDotArrow(
+        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<
+            crate::core::index::SparseVector,
+            DistSparseDot,
+        >,
+    ),
+    PqArrow(
+        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw<u8, crate::core::index::pq::DistPqSdc>,
+    ),
 }
 
 impl HnswGraph {
@@ -144,7 +161,9 @@ impl HnswGraph {
             (HnswGraph::L1Arrow(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             (HnswGraph::HammingArrow(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
             (HnswGraph::JaccardArrow(h), VectorValue::Float32(q)) => h.search(q, k, ef, filter),
-            (HnswGraph::BinaryHammingArrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
+            (HnswGraph::BinaryHammingArrow(h), VectorValue::Binary(q)) => {
+                h.search(q, k, ef, filter)
+            }
             (HnswGraph::TurboQuant8Arrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::TurboQuant4Arrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
             (HnswGraph::PqArrow(h), VectorValue::Binary(q)) => h.search(q, k, ef, filter),
@@ -175,13 +194,19 @@ impl HnswGraph {
             (HnswGraph::Pq(h), VectorValue::Binary(v)) => h.insert_slice((&v, local_id)),
             (HnswGraph::SparseDot(h), VectorValue::Sparse(v)) => h.insert_slice((&[v], local_id)),
             (HnswGraph::L2(h), VectorValue::Float16(v)) => h.insert_slice((&v, local_id)),
-            
+
             // Arrow IPC variants are read-only
-            (HnswGraph::L2Arrow(_), _) | (HnswGraph::CosineArrow(_), _) | (HnswGraph::DotArrow(_), _) | 
-            (HnswGraph::L1Arrow(_), _) | (HnswGraph::HammingArrow(_), _) | (HnswGraph::JaccardArrow(_), _) | 
-            (HnswGraph::BinaryHammingArrow(_), _) | (HnswGraph::TurboQuant8Arrow(_), _) | 
-            (HnswGraph::TurboQuant4Arrow(_), _) | (HnswGraph::SparseDotArrow(_), _) | 
-            (HnswGraph::PqArrow(_), _) => {
+            (HnswGraph::L2Arrow(_), _)
+            | (HnswGraph::CosineArrow(_), _)
+            | (HnswGraph::DotArrow(_), _)
+            | (HnswGraph::L1Arrow(_), _)
+            | (HnswGraph::HammingArrow(_), _)
+            | (HnswGraph::JaccardArrow(_), _)
+            | (HnswGraph::BinaryHammingArrow(_), _)
+            | (HnswGraph::TurboQuant8Arrow(_), _)
+            | (HnswGraph::TurboQuant4Arrow(_), _)
+            | (HnswGraph::SparseDotArrow(_), _)
+            | (HnswGraph::PqArrow(_), _) => {
                 tracing::error!("Cannot insert into read-only Arrow IPC HnswGraph");
             }
 
@@ -199,16 +224,22 @@ impl HnswGraph {
             HnswGraph::Cosine(h) => h.parallel_insert_slice(&data),
             HnswGraph::Dot(h) => h.parallel_insert_slice(&data),
             HnswGraph::L1(h) => h.parallel_insert_slice(&data),
-            
+
             // Arrow IPC variants are read-only
-            HnswGraph::L2Arrow(_) | HnswGraph::CosineArrow(_) | HnswGraph::DotArrow(_) | 
-            HnswGraph::L1Arrow(_) | HnswGraph::HammingArrow(_) | HnswGraph::JaccardArrow(_) | 
-            HnswGraph::BinaryHammingArrow(_) | HnswGraph::TurboQuant8Arrow(_) | 
-            HnswGraph::TurboQuant4Arrow(_) | HnswGraph::SparseDotArrow(_) | 
-            HnswGraph::PqArrow(_) => {
+            HnswGraph::L2Arrow(_)
+            | HnswGraph::CosineArrow(_)
+            | HnswGraph::DotArrow(_)
+            | HnswGraph::L1Arrow(_)
+            | HnswGraph::HammingArrow(_)
+            | HnswGraph::JaccardArrow(_)
+            | HnswGraph::BinaryHammingArrow(_)
+            | HnswGraph::TurboQuant8Arrow(_)
+            | HnswGraph::TurboQuant4Arrow(_)
+            | HnswGraph::SparseDotArrow(_)
+            | HnswGraph::PqArrow(_) => {
                 tracing::error!("Cannot insert into read-only Arrow IPC HnswGraph");
             }
-            
+
             _ => {
                 // Fallback to sequential for other types
                 for (v, id) in data {
@@ -266,13 +297,19 @@ impl HnswGraph {
                 .file_dump(&path_string)
                 .map(|_| ())
                 .map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>),
-            HnswGraph::L2Arrow(_) | HnswGraph::CosineArrow(_) | HnswGraph::DotArrow(_) | 
-            HnswGraph::L1Arrow(_) | HnswGraph::HammingArrow(_) | HnswGraph::JaccardArrow(_) | 
-            HnswGraph::BinaryHammingArrow(_) | HnswGraph::TurboQuant8Arrow(_) | 
-            HnswGraph::TurboQuant4Arrow(_) | HnswGraph::SparseDotArrow(_) | 
-            HnswGraph::PqArrow(_) => {
-                Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Cannot dump read-only Arrow IPC HnswGraph")) as Box<dyn std::error::Error>)
-            }
+            HnswGraph::L2Arrow(_)
+            | HnswGraph::CosineArrow(_)
+            | HnswGraph::DotArrow(_)
+            | HnswGraph::L1Arrow(_)
+            | HnswGraph::HammingArrow(_)
+            | HnswGraph::JaccardArrow(_)
+            | HnswGraph::BinaryHammingArrow(_)
+            | HnswGraph::TurboQuant8Arrow(_)
+            | HnswGraph::TurboQuant4Arrow(_)
+            | HnswGraph::SparseDotArrow(_)
+            | HnswGraph::PqArrow(_) => Err(Box::new(std::io::Error::other(
+                "Cannot dump read-only Arrow IPC HnswGraph",
+            )) as Box<dyn std::error::Error>),
         }
     }
 }
@@ -303,9 +340,7 @@ fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetr
             VectorMetric::L2 | VectorMetric::Cosine => {
                 crate::core::index::distance::l2_distance_squared(vec, c)
             }
-            VectorMetric::InnerProduct => {
-                -crate::core::index::distance::dot_product(vec, c)
-            }
+            VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(vec, c),
             VectorMetric::L1 => crate::core::index::distance::l1_distance(vec, c),
             VectorMetric::Hamming => crate::core::index::distance::hamming_distance(vec, c),
             VectorMetric::Jaccard => crate::core::index::distance::jaccard_distance(vec, c),
@@ -333,30 +368,36 @@ impl HnswIvfIndex {
         let mut n_vectors = 0;
         let mut dim = 0;
         let mut vectors_sampled = Vec::new();
-        
+
         use std::io::Read;
         let mut id_buf = [0u8; 4];
         let mut dim_buf = [0u8; 4];
         let max_samples = 100_000;
-        
+
         // Pass 1: Count and Sample
         loop {
-            if file.read_exact(&mut id_buf).is_err() { break; }
-            if file.read_exact(&mut dim_buf).is_err() { break; }
+            if file.read_exact(&mut id_buf).is_err() {
+                break;
+            }
+            if file.read_exact(&mut dim_buf).is_err() {
+                break;
+            }
             let current_dim = u32::from_le_bytes(dim_buf) as usize;
-            if dim == 0 { dim = current_dim; }
-            
+            if dim == 0 {
+                dim = current_dim;
+            }
+
             let mut vec_buf = vec![0u8; current_dim * 4];
             file.read_exact(&mut vec_buf)?;
-            
+
             n_vectors += 1;
-            
+
             if vectors_sampled.len() < max_samples {
                 let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
                 vectors_sampled.push(vec.to_vec());
             }
         }
-        
+
         if n_vectors == 0 {
             anyhow::bail!("No vectors found in temp file");
         }
@@ -377,9 +418,9 @@ impl HnswIvfIndex {
             .max(1);
 
         let hnsw_m = hnsw_m.unwrap_or(16);
-        
+
         let (centroids, _) = simple_kmeans(&vectors_sampled, n_lists, 10)?;
-        
+
         let quantizer = match algo {
             IndexAlgorithm::HnswTq8 { .. } => Some(QuantizerImpl::TurboQuant(
                 TurboQuantEncoder::train(&vectors_sampled, 8)?,
@@ -389,8 +430,15 @@ impl HnswIvfIndex {
             )),
             IndexAlgorithm::HnswPq { compression, .. } => {
                 let subspaces = dim / compression;
-                let config = PqConfig { m: subspaces, k: 256, dim };
-                Some(QuantizerImpl::Pq(PqEncoder::train(&vectors_sampled, config)?))
+                let config = PqConfig {
+                    m: subspaces,
+                    k: 256,
+                    dim,
+                };
+                Some(QuantizerImpl::Pq(PqEncoder::train(
+                    &vectors_sampled,
+                    config,
+                )?))
             }
             _ => None,
         };
@@ -399,21 +447,29 @@ impl HnswIvfIndex {
         let mut cluster_files = HashMap::new();
         for c in 0..n_lists {
             let c_path = format!("{}.cluster_{}.bin", tmp_path, c);
-            let f = std::fs::OpenOptions::new().create(true).write(true).open(&c_path)?;
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&c_path)?;
             cluster_files.insert(c, (c_path, f));
         }
 
         let mut file = std::fs::File::open(tmp_path)?;
         use std::io::Write;
-        
+
         let mut progress = 0;
         loop {
-            if file.read_exact(&mut id_buf).is_err() { break; }
-            if file.read_exact(&mut dim_buf).is_err() { break; }
+            if file.read_exact(&mut id_buf).is_err() {
+                break;
+            }
+            if file.read_exact(&mut dim_buf).is_err() {
+                break;
+            }
             let mut vec_buf = vec![0u8; dim * 4];
             file.read_exact(&mut vec_buf)?;
             let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
-            
+
             let best_cluster = find_closest_centroid(vec, &centroids, metric);
             if let Some((_, ref mut f)) = cluster_files.get_mut(&best_cluster) {
                 f.write_all(&id_buf)?;
@@ -424,28 +480,30 @@ impl HnswIvfIndex {
                 tracing::info!("Bucketed {}/{} vectors...", progress, n_vectors);
             }
         }
-        
+
         // Pass 3: Build HNSW graphs per bucket
         let mut cluster_graphs = HashMap::new();
         let ef_construction = (hnsw_m * 2).max(40);
         let max_layers = 16;
-        
+
         // We do this sequentially or lightly parallel since each bucket could be somewhat large
         // But doing it sequentially uses strictly bounded memory (1 bucket at a time)
         for (c, (c_path, _)) in cluster_files {
             let mut f = std::fs::File::open(&c_path)?;
             let mut c_vectors = Vec::new();
             let mut c_row_ids = Vec::new();
-            
+
             loop {
-                if f.read_exact(&mut id_buf).is_err() { break; }
+                if f.read_exact(&mut id_buf).is_err() {
+                    break;
+                }
                 let mut vec_buf = vec![0u8; dim * 4];
                 f.read_exact(&mut vec_buf)?;
                 let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
                 c_row_ids.push(u32::from_le_bytes(id_buf) as usize);
                 c_vectors.push(vec.to_vec());
             }
-            
+
             if !c_vectors.is_empty() {
                 let mut hnsw = if let Some(q) = quantizer.as_ref() {
                     match q {
@@ -583,14 +641,17 @@ impl HnswIvfIndex {
                         _ => {}
                     }
                 }
-                
+
                 cluster_graphs.insert(c, (hnsw, c_row_ids));
             }
-            
+
             let _ = std::fs::remove_file(&c_path);
         }
 
-        tracing::info!("HNSW-IVF out-of-core build complete in {:?}", start.elapsed());
+        tracing::info!(
+            "HNSW-IVF out-of-core build complete in {:?}",
+            start.elapsed()
+        );
 
         Ok(Self {
             centroids,
@@ -1093,12 +1154,76 @@ impl HnswIvfIndex {
         Ok(saved_files)
     }
 
+    fn extract_centroids_from_batch(batch: &RecordBatch) -> Result<Vec<Vec<f32>>> {
+        if batch.num_columns() == 0 {
+            return Ok(Vec::new());
+        }
+        let col = batch.column(0);
+        let mut centroids = Vec::new();
+
+        if let Some(list_arr) = col.as_any().downcast_ref::<arrow::array::ListArray>() {
+            for i in 0..list_arr.len() {
+                let values = list_arr.value(i);
+                if let Some(f32_arr) = values.as_any().downcast_ref::<arrow::array::Float32Array>()
+                {
+                    centroids.push(f32_arr.values().to_vec());
+                } else if let Some(f64_arr) =
+                    values.as_any().downcast_ref::<arrow::array::Float64Array>()
+                {
+                    centroids.push(f64_arr.values().iter().map(|&v| v as f32).collect());
+                }
+            }
+        } else if let Some(list_arr) = col.as_any().downcast_ref::<arrow::array::LargeListArray>() {
+            for i in 0..list_arr.len() {
+                let values = list_arr.value(i);
+                if let Some(f32_arr) = values.as_any().downcast_ref::<arrow::array::Float32Array>()
+                {
+                    centroids.push(f32_arr.values().to_vec());
+                } else if let Some(f64_arr) =
+                    values.as_any().downcast_ref::<arrow::array::Float64Array>()
+                {
+                    centroids.push(f64_arr.values().iter().map(|&v| v as f32).collect());
+                }
+            }
+        } else if let Some(flist_arr) = col
+            .as_any()
+            .downcast_ref::<arrow::array::FixedSizeListArray>()
+        {
+            for i in 0..flist_arr.len() {
+                let values = flist_arr.value(i);
+                if let Some(f32_arr) = values.as_any().downcast_ref::<arrow::array::Float32Array>()
+                {
+                    centroids.push(f32_arr.values().to_vec());
+                } else if let Some(f64_arr) =
+                    values.as_any().downcast_ref::<arrow::array::Float64Array>()
+                {
+                    centroids.push(f64_arr.values().iter().map(|&v| v as f32).collect());
+                }
+            }
+        }
+        Ok(centroids)
+    }
+
+    fn extract_row_id_mapping_from_col(col: &ArrayRef) -> Vec<usize> {
+        if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt32Array>() {
+            (0..arr.len()).map(|i| arr.value(i) as usize).collect()
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+            (0..arr.len()).map(|i| arr.value(i) as usize).collect()
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int64Array>() {
+            (0..arr.len()).map(|i| arr.value(i) as usize).collect()
+        } else if let Some(arr) = col.as_any().downcast_ref::<arrow::array::Int32Array>() {
+            (0..arr.len()).map(|i| arr.value(i) as usize).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     pub async fn load_puffin_async(store: Arc<dyn ObjectStore>, path: &str) -> Result<Arc<Self>> {
         let path_obj = Path::from(path);
         let bytes = store.get(&path_obj).await?.bytes().await?;
         let mut reader = PuffinReader::new(Cursor::new(bytes))?;
 
-        let mut centroids = Vec::new();
+        let mut centroids: Vec<Vec<f32>> = Vec::new();
         let mut cluster_graphs = HashMap::new();
         let mut dim = 0;
         let mut metric = VectorMetric::L2;
@@ -1124,12 +1249,7 @@ impl HnswIvfIndex {
                         .map(|r| r.map_err(anyhow::Error::from))
                         .collect::<Result<Vec<_>>>()?;
                     let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-                    let centroid_list = batch.column(0).as_list::<i32>();
-                    for j in 0..centroid_list.len() {
-                        let values = centroid_list.value(j);
-                        let float_array = values.as_primitive::<arrow::datatypes::Float32Type>();
-                        centroids.push(float_array.values().to_vec());
-                    }
+                    centroids = Self::extract_centroids_from_batch(&batch)?;
                     if !centroids.is_empty() {
                         dim = centroids[0].len();
                     }
@@ -1164,27 +1284,45 @@ impl HnswIvfIndex {
 
             let hnsw = match metric {
                 VectorMetric::L2 => HnswGraph::L2Arrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistL2)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistL2,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
                 VectorMetric::Cosine => HnswGraph::CosineArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistCosine)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistCosine,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
                 VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistDot)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistDot,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
                 VectorMetric::L1 => HnswGraph::L1Arrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistL1)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistL1,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
                 VectorMetric::Hamming => HnswGraph::HammingArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistHamming)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistHamming,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
                 VectorMetric::Jaccard => HnswGraph::JaccardArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistJaccard)
+                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                        &graph_bytes,
+                        DistJaccard,
+                    )
                     .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                 ),
             };
@@ -1197,11 +1335,7 @@ impl HnswIvfIndex {
                 .map(|r| r.map_err(anyhow::Error::from))
                 .collect::<Result<Vec<_>>>()?;
             let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-            let row_id_array = batch
-                .column(0)
-                .as_primitive::<arrow::datatypes::UInt32Type>();
-            let row_id_mapping: Vec<usize> =
-                row_id_array.values().iter().map(|&x| x as usize).collect();
+            let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
 
             cluster_graphs.insert(cid, (hnsw, row_id_mapping));
         }
@@ -1275,14 +1409,9 @@ impl HnswIvfIndex {
         }
         let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
 
-        let centroid_list = batch.column(0).as_list::<i32>();
-
-        let mut centroids = Vec::new();
-        for i in 0..centroid_list.len() {
-            let values = centroid_list.value(i);
-            let float_array = values.as_primitive::<arrow::datatypes::Float32Type>();
-            let centroid: Vec<f32> = float_array.values().to_vec();
-            centroids.push(centroid);
+        let centroids = Self::extract_centroids_from_batch(&batch)?;
+        if centroids.is_empty() {
+            anyhow::bail!("No centroids extracted from centroids file");
         }
 
         let n_lists = centroids.len();
@@ -1470,11 +1599,7 @@ impl HnswIvfIndex {
                     return Err(anyhow::anyhow!("No data in mapping file"));
                 }
                 let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-                let row_id_array = batch
-                    .column(0)
-                    .as_primitive::<arrow::datatypes::UInt32Type>();
-                let row_id_mapping: Vec<usize> =
-                    row_id_array.values().iter().map(|&x| x as usize).collect();
+                let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
 
                 Ok((cluster_id, (hnsw, row_id_mapping)))
             })
@@ -1507,7 +1632,6 @@ impl HnswIvfIndex {
     }
 
     pub fn load(base_path: &str) -> Result<Self> {
-        use arrow::array::{Array, AsArray};
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         use std::fs::File;
 
@@ -1529,14 +1653,9 @@ impl HnswIvfIndex {
         }
         let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
 
-        let centroid_list = batch.column(0).as_list::<i32>();
-
-        let mut centroids = Vec::new();
-        for i in 0..centroid_list.len() {
-            let values = centroid_list.value(i);
-            let float_array = values.as_primitive::<arrow::datatypes::Float32Type>();
-            let centroid: Vec<f32> = float_array.values().to_vec();
-            centroids.push(centroid);
+        let centroids = Self::extract_centroids_from_batch(&batch)?;
+        if centroids.is_empty() {
+            anyhow::bail!("No centroids extracted from centroids file");
         }
 
         let n_lists = centroids.len();
@@ -1608,27 +1727,45 @@ impl HnswIvfIndex {
             } else {
                 match metric {
                     VectorMetric::L2 => HnswGraph::L2Arrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistL2)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistL2,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                     VectorMetric::Cosine => HnswGraph::CosineArrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistCosine)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistCosine,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                     VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistDot)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistDot,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                     VectorMetric::L1 => HnswGraph::L1Arrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistL1)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistL1,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                     VectorMetric::Hamming => HnswGraph::HammingArrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistHamming)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistHamming,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                     VectorMetric::Jaccard => HnswGraph::JaccardArrow(
-                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&graph_bytes, DistJaccard)
+                        crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
+                            &graph_bytes,
+                            DistJaccard,
+                        )
                         .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
                     ),
                 }
@@ -1644,11 +1781,7 @@ impl HnswIvfIndex {
             }
             let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
 
-            let row_id_array = batch
-                .column(0)
-                .as_primitive::<arrow::datatypes::UInt32Type>();
-            let row_id_mapping: Vec<usize> =
-                row_id_array.values().iter().map(|&x| x as usize).collect();
+            let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
 
             cluster_graphs.insert(cluster_id, (hnsw, row_id_mapping));
         }

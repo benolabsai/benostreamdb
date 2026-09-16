@@ -78,7 +78,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     // 7. Perform Search (Skip InMemory search as we invoke LocalFileSystem later)
     let query = vectors[50].clone(); // Should match itself
     let k = 5;
-    let query_vector = query.clone();
+    let _query_vector = query.clone();
 
     // We skip searching with 'reader' (InMemory) because we haven't written the parquet file to 'store'.
     // let results = reader.vector_search_index("embedding", &query, k, None).await?;

@@ -462,43 +462,74 @@ The following items represent the active, vetted roadmap for HyperStreamDB. Spec
 Native graph analytics on Iceberg edge tables with sidecar index acceleration. Replaces the need for Neo4j + Pinecone combos or Spark GraphX for knowledge graph and Graph RAG workloads. All core graph features ship in the free Community edition.
 
 #### 5a. [Free] Edge Table Schema Convention
-- [ ] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source_id, target_id, relation, weight, embeddings). (v0.8.0)
-- [ ] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source_id` and `target_id` columns (Roaring Bitmap) for O(1) edge lookups. (v0.8.0)
-- [ ] **[Free] Best Practices Guide**: Document edge table conventions (partitioning by relation type, sort order by source_id). (v0.8.0)
+- [x] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source, target, relation, weight, embedding). ✅ (v0.8.0)
+- [x] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source` and `target` columns (Roaring Bitmap) and `embedding` (HNSW) for O(1) edge lookups and semantic vector search. ✅ (v0.8.0)
+- [x] **[Free] Best Practices Guide**: Document edge table conventions, NetworkX interop, and Graph RAG workflow in [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md). ✅ (v0.8.0)
 
 #### 5b. [Free] Graph SQL Functions (DataFusion UDFs)
-- [ ] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table. (v0.8.0)
-- [ ] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection. (v0.8.0)
-- [ ] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval. (v0.8.0)
-- [ ] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard and overlap similarity via sidecar bitmap intersection. (v0.8.0)
-- [ ] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Component labeling via iterative label propagation. (v0.8.0)
-- [ ] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation. (v0.8.0)
+- [x] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table. ✅ (v0.8.0)
+- [x] **[Free] `PERSONALIZED_PAGERANK(source, target, seeds, damping, max_iter, is_directed, [seed_weights])`**: Seed-biased teleportation PageRank with optional HippoRAG-style continuous vector similarity weights ($p_0(v) \propto w(v)$). ✅ (v0.8.0)
+- [x] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection with modularity resolution parameter $\gamma$. ✅ (v0.8.0)
+- [x] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval. ✅ (v0.8.0)
+- [x] **[Free] `SUBGRAPH(source, target, seed_nodes, hops, is_directed)`**: Induced multi-hop subgraph extraction with SQL predicate pushdown filtering on relations. ✅ (v0.8.0)
+- [x] **[Free] `CONNECTING_PATHS(source, target, seed_nodes, is_directed)`**: Multi-seed pairwise shortest connecting paths. ✅ (v0.8.0)
+- [x] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard, Adamic-Adar, Resource Allocation, and Preferential Attachment link prediction. ✅ (v0.8.0)
+- [x] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Weakly and Strongly Connected Components. ✅ (v0.8.0)
+- [x] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation. ✅ (v0.8.0)
+- [x] **[Free] `SHORTEST_PATH(source, target, start, end)`**: Breadth-first shortest pathfinding. ✅ (v0.8.0)
 
 #### 5c. [Free] Graph RAG Pipeline Integration
-- [ ] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, community_col)`**: Combined graph + vector search (local and global modes). (v0.8.0)
-- [ ] **[Free] Community Summarization Workflow**: SQL-driven pipeline to GROUP BY community_id and produce summary embeddings for global search. (v0.8.0)
+- [x] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, ...)`**: Combined graph + vector search (local and global modes). Supports HippoRAG continuous seed weighting, predicate/relation pruning (`allowed_relations`), and Dual Vector-Graph RAG (`search_edges=True`). ✅ (v0.8.0)
+- [x] **[Free] Community Summarization Workflow**: SQL-driven pipeline to detect Louvain communities, rank central hub entities, and materialize Iceberg community summaries. Supports hierarchical multi-level Louvain pyramids (`hierarchical=True`, `resolutions=[...]`, `level`, `parent_community_id`) for Microsoft GraphRAG parity. ✅ (v0.8.0)
+- [x] **[Free] Entity Equivalence Resolution**: Transitive alias and synonym resolution (`table.resolve_entities(relation='same_as')`) via Disjoint Set Union (DSU). ✅ (v0.8.0)
 
 #### 5d. [Free] Python API
-- [ ] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores. (v0.8.0)
-- [ ] **[Free] `table.communities(algorithm='louvain', resolution=1.0)`**: Community assignments. (v0.8.0)
-- [ ] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges. (v0.8.0)
-- [ ] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10)`**: Combined graph + vector results. (v0.8.0)
-- [ ] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph` for ecosystem visualization. (v0.8.0)
+- [x] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores. ✅ (v0.8.0)
+- [x] **[Free] `table.personalized_pagerank(seeds, alpha=0.85, seed_weights=None)`**: Continuous seed-weighted HippoRAG PPR scores. ✅ (v0.8.0)
+- [x] **[Free] `table.louvain_communities(resolution=1.0)`**: Community assignments with multi-resolution tuning. ✅ (v0.8.0)
+- [x] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges. ✅ (v0.8.0)
+- [x] **[Free] `table.subgraph(nodes, hops=2, is_directed=False, allowed_relations=None)`**: Extracted induced subgraph with relation pushdown. ✅ (v0.8.0)
+- [x] **[Free] `table.connecting_paths(nodes, directed=False)`**: Connecting paths across seeds. ✅ (v0.8.0)
+- [x] **[Free] `table.resolve_entities(relation='same_as')`**: Transitive equivalence closure mapping. ✅ (v0.8.0)
+- [x] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10, search_edges=False, ...)`**: Combined graph + vector results with `GraphRagResult` and prompt-ready `.format_context()`. ✅ (v0.8.0)
+- [x] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph`, `Graph`, or `MultiGraph` for ecosystem visualization. ✅ (v0.8.0)
 
 #### 5e. [Free] dbt Macros (`dbt-hyperstreamdb`)
-- [ ] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table. (v0.8.0)
-- [ ] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain') }}`**: Materialize community assignments. (v0.8.0)
-- [ ] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction. (v0.8.0)
+- [x] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table. ✅ (v0.8.0)
+- [x] **[Free] `{{ personalized_pagerank(ref('edges'), seeds=[...], [seed_weights]) }}`**: HippoRAG-style continuous seed-weighted PPR materialization. ✅ (v0.8.0)
+- [x] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain', resolution=1.0) }}`**: Materialize Louvain / Label Propagation community assignments. ✅ (v0.8.0)
+- [x] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction. ✅ (v0.8.0)
+- [x] **[Free] `{{ subgraph(ref('edges'), seeds=[...], hops=1) }}`**: Induced multi-hop subgraph extraction. ✅ (v0.8.0)
+- [x] **[Free] `{{ connecting_paths(ref('edges'), seeds=[...]) }}`**: Multi-seed connecting path chains. ✅ (v0.8.0)
+- [x] **[Free] `{{ shortest_path(ref('edges'), start, end) }}`**: Shortest path node sequences. ✅ (v0.8.0)
+- [x] **[Free] `{{ connected_components(ref('edges'), directed=false) }}`**: Weakly & strongly connected component clustering. ✅ (v0.8.0)
+- [x] **[Free] `{{ degree_centrality(ref('edges')) }}`**: In/out/total degree centrality distribution. ✅ (v0.8.0)
+- [x] **[Free] `{{ node_similarity(ref('edges'), node_a, node_b, method='jaccard') }}`**: Link prediction scores (Jaccard, Adamic-Adar, Resource Allocation, Preferential Attachment). ✅ (v0.8.0)
+- [x] **[Free] `{{ topological_sort(ref('edges')) }}`**: Directed acyclic graph execution ordering. ✅ (v0.8.0)
 
 #### 5f. [Free] Search Gateway Graph Endpoints
-- [ ] **[Free] Qdrant API (Port 6333)**: Extend `/points/search` with `graph_filter` parameter for neighborhood-scoped vector search. (v0.8.0)
-- [ ] **[Free] OpenSearch API (Port 9200)**: Extend `_search` DSL with `graph_neighbors` filter clause. (v0.8.0)
+- [x] **[Free] OpenSearch API (Port 9200)**: Implemented `_graph_search` DSL endpoint for OpenSearch gateway to enable multi-hop context retrieval. ✅ (v0.8.0)
+- [x] **[Free] Qdrant API (Port 6333)**: Retained strict Qdrant wire compatibility. Graph features are delegated to OpenSearch or treated as plugins. ✅ (v0.8.0)
+### 6. Correctness and Benchmarking Suite [Free]
 
-### 6. Packaging, Hardware & CI
+Ensure that all HyperStreamDB features maintain mathematical correctness and benchmark speed against established industry standards. This prevents regressions and builds trust in the database.
+
+#### 6a. [Free] Graph Algorithms Suite
+- [x] **[Free] Accuracy Validation**: Ensure PageRank, Louvain, Connected Components, and pathfinding results perfectly match NetworkX (Python) and petgraph (Rust). ✅ (v0.8.0)
+- [x] **[Free] Speed Profiling**: Continuous performance tracking (e.g., ensuring 10x-50x speedups vs NetworkX). ✅ (v0.8.0)
+
+#### 6b. [Free] Vector Search Suite
+- [x] **[Free] Recall vs Latency Benchmarks**: Establish standard HNSW and IVF-PQ tests against faiss and scikit-learn. ✅ (v0.8.0)
+- [x] **[Free] Distance Metric Correctness**: Validate L2, Cosine, and Inner Product calculations. ✅ (v0.8.0)
+
+#### 6c. [Free] SQL Aggregates Suite
+- [x] **[Free] Aggregate Consistency**: Verify DataFusion-powered UDFs against pandas / dask for edge cases (nulls, extreme values). ✅ (v0.8.0)
+
+### 7. Packaging, Hardware & CI
 - [x] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
 - [x] **[Free] GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
 
-### 7. Codebase Intelligence & Model Context Protocol (MCP) Server
+### 8. Codebase Intelligence & Model Context Protocol (MCP) Server
 
 #### 7a. [Free] MCP Server Implementation (`hyperstream-mcp`)
 - [ ] **[Free] Protocol Support**: Standard Model Context Protocol (JSON-RPC over stdio and SSE). (v0.9.0)
@@ -524,7 +555,7 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 - [ ] **[Paid] Remote Cloud Object Storage Integration**: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`). (v0.9.0)
 - [ ] **[Paid] Centralized Team Knowledge Cache**: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution. (v0.9.0)
 
-### 8. Enterprise Security & Compliance [Paid]
+### 9. Enterprise Security & Compliance [Paid]
 - [ ] **[Paid] Row-Level Security (RLS) & Multi-Tenancy**: Sidecar-level tenant bitmap isolation (`.idx` intersection before reading Parquet).
 - [ ] **[Paid] Dynamic Column Masking**: Role-based PII redaction on query and vector results.
 - [ ] **[Paid] Customer-Managed Encryption Keys (CMEK)**: Envelope encryption for sidecar index files via AWS KMS, GCP KMS, or HashiCorp Vault.
@@ -532,7 +563,7 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 - [ ] **[Paid] SIEM Telemetry Export**: Native connector export to Splunk, Datadog, and AWS CloudWatch.
 - [ ] **[Paid] Cross-Catalog Governance Propagation**: Unified RLS policies and audit synchronization across Polaris, Unity, and Glue catalogs.
 
-### 9. HyperStream Accelerator & Lifecycle Automation [Paid]
+### 10. HyperStream Accelerator & Lifecycle Automation [Paid]
 - [ ] **[Paid] Fused SIMD & Tensor Core Kernels**: Hand-crafted AVX-512, ARM SVE, and Hopper/Blackwell FP8/FP4 fused kernels.
 - [ ] **[Paid] GPUDirect Storage (GDS) Bypass**: Direct NVMe/S3 local cache streaming to GPU VRAM, bypassing host CPU/PCIe bottleneck.
 - [ ] **[Paid] Sidecar Lifecycle Manager**: Autonomous 3-format coordinated compaction (Iceberg manifests + Parquet bin-packing + HNSW/Bitmap sidecars) with cost-aware S3 scheduling and recall drift rebalancing.

@@ -1,15 +1,17 @@
 #![allow(unused)]
 #![allow(dead_code)]
 
-use std::fs::File;
-use std::sync::Arc;
-use arrow::array::{Array, ListArray, StructArray, UInt32Array, UInt64Array, UInt8Array, BinaryArray};
+use arrow::array::{
+    Array, BinaryArray, ListArray, StructArray, UInt32Array, UInt64Array, UInt8Array,
+};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
+use std::fs::File;
+use std::sync::Arc;
 
+use crate::core::index::hnsw_rs::arrow_ipc::ArrowType;
 use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::hnsw_rs::hnsw::Neighbour;
-use crate::core::index::hnsw_rs::arrow_ipc::ArrowType;
 
 pub struct ArrowHnsw<T: ArrowType, D: Distance<T>> {
     batch: RecordBatch,
@@ -30,15 +32,51 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
     pub fn load_from_bytes(bytes: &[u8], distance: D) -> Result<Self, String> {
         let cursor = std::io::Cursor::new(bytes);
         let mut reader = FileReader::try_new(cursor, None).map_err(|e| e.to_string())?;
-        
-        let batch = reader.next().ok_or("No batches in IPC file")?.map_err(|e| e.to_string())?;
-        
+
+        let batch = reader
+            .next()
+            .ok_or("No batches in IPC file")?
+            .map_err(|e| e.to_string())?;
+
         println!("Schema of loaded batch: {:#?}", batch.schema());
-        let data_id_array = Arc::new(batch.column(0).as_any().downcast_ref::<UInt64Array>().ok_or("Failed to downcast data_id column to UInt64Array")?.clone());
-        let vector_array = Arc::new(batch.column(1).as_any().downcast_ref::<BinaryArray>().ok_or_else(|| format!("expected BinaryArray for vector, got {:?}", batch.column(1).data_type()))?.clone());
-        let max_layer_array = Arc::new(batch.column(2).as_any().downcast_ref::<UInt8Array>().ok_or("Failed to downcast max_layer column to UInt8Array")?.clone());
-        let neighbors_array = Arc::new(batch.column(3).as_any().downcast_ref::<ListArray>().ok_or("Failed to downcast neighbors column to ListArray")?.clone());
-        
+        let data_id_array = Arc::new(
+            batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or("Failed to downcast data_id column to UInt64Array")?
+                .clone(),
+        );
+        let vector_array = Arc::new(
+            batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .ok_or_else(|| {
+                    format!(
+                        "expected BinaryArray for vector, got {:?}",
+                        batch.column(1).data_type()
+                    )
+                })?
+                .clone(),
+        );
+        let max_layer_array = Arc::new(
+            batch
+                .column(2)
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .ok_or("Failed to downcast max_layer column to UInt8Array")?
+                .clone(),
+        );
+        let neighbors_array = Arc::new(
+            batch
+                .column(3)
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or("Failed to downcast neighbors column to ListArray")?
+                .clone(),
+        );
+
         // Assume all vectors have the same dimension
         let dimension = if vector_array.len() > 0 {
             let b = vector_array.value(0);
@@ -72,32 +110,39 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             _marker: std::marker::PhantomData,
         })
     }
-    
+
     // Internal helper to get a vector slice safely using ArrowType trait
     pub fn get_vector(&self, idx: usize) -> &[T] {
         let bytes = self.vector_array.value(idx);
         T::from_bytes(bytes)
     }
-    
+
     fn get_neighbors(&self, point_idx: usize, layer: usize) -> Vec<u32> {
         let layers_list = self.neighbors_array.value(point_idx);
         let layers_list = layers_list.as_any().downcast_ref::<ListArray>().unwrap();
-        
+
         if layer >= layers_list.len() {
             return Vec::new();
         }
-        
+
         let neighbors_structs = layers_list.value(layer);
-        let neighbors_structs = neighbors_structs.as_any().downcast_ref::<StructArray>().unwrap();
-        let idx_array = neighbors_structs.column(0).as_any().downcast_ref::<UInt32Array>().unwrap();
-        
+        let neighbors_structs = neighbors_structs
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        let idx_array = neighbors_structs
+            .column(0)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+
         let mut result = Vec::with_capacity(neighbors_structs.len());
         for i in 0..neighbors_structs.len() {
             result.push(idx_array.value(i));
         }
         result
     }
-    
+
     fn search_layer(
         &self,
         query: &[T],
@@ -105,36 +150,38 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         ef: usize,
         layer: usize,
         filter: Option<&roaring::RoaringBitmap>,
-    ) -> std::collections::BinaryHeap<std::sync::Arc<crate::core::index::hnsw_rs::hnsw::PointWithOrder<T>>> {
+    ) -> std::collections::BinaryHeap<
+        std::sync::Arc<crate::core::index::hnsw_rs::hnsw::PointWithOrder<T>>,
+    > {
         let mut return_points = std::collections::BinaryHeap::new();
         if self.neighbors_array.len() == 0 {
             return return_points;
         }
 
         let dist_to_entry = self.distance.eval(query, self.get_vector(entry_point));
-        
+
         // visited points
         let mut visited = std::collections::HashSet::new();
         visited.insert(entry_point);
 
         // Min-heap for candidates (using negative distance)
         let mut candidate_points = std::collections::BinaryHeap::new();
-        
+
         // We need dummy points to reuse hnsw::PointWithOrder for binary heap
         let dummy_pt = |idx: usize, dist: f32| {
             let p = crate::core::index::hnsw_rs::hnsw::Point::new(
-                &[], 
-                self.data_id_array.value(idx) as usize, 
-                crate::core::index::hnsw_rs::hnsw::PointId(0, idx as i32)
+                &[],
+                self.data_id_array.value(idx) as usize,
+                crate::core::index::hnsw_rs::hnsw::PointId(0, idx as i32),
             );
             std::sync::Arc::new(crate::core::index::hnsw_rs::hnsw::PointWithOrder::new(
-                &std::sync::Arc::new(p), 
-                dist
+                &std::sync::Arc::new(p),
+                dist,
             ))
         };
 
         candidate_points.push(dummy_pt(entry_point, -dist_to_entry));
-        
+
         let mut entry_valid = true;
         if let Some(f) = filter {
             if !f.contains(self.data_id_array.value(entry_point) as u32) {
@@ -147,7 +194,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
 
         while !candidate_points.is_empty() {
             let c = candidate_points.pop().unwrap();
-            
+
             if let Some(f) = return_points.peek() {
                 if return_points.len() >= ef && -(c.dist_to_ref) > f.dist_to_ref {
                     break;
@@ -204,11 +251,17 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         return_points
     }
 
-    pub fn search(&self, query: &[T], knbn: usize, ef_s: usize, filter: Option<&roaring::RoaringBitmap>) -> Vec<crate::core::index::hnsw_rs::hnsw::Neighbour> {
+    pub fn search(
+        &self,
+        query: &[T],
+        knbn: usize,
+        ef_s: usize,
+        filter: Option<&roaring::RoaringBitmap>,
+    ) -> Vec<crate::core::index::hnsw_rs::hnsw::Neighbour> {
         if self.neighbors_array.len() == 0 {
             return Vec::new();
         }
-        
+
         let mut pivot = self.entry_point;
         let mut dist_to_entry = self.distance.eval(query, self.get_vector(pivot));
         let mut new_pivot = None;
@@ -236,7 +289,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
 
         let ef = ef_s.max(knbn);
         let mut neighbours_heap = self.search_layer(query, pivot, ef, 0, filter);
-        
+
         // Heap is a max-heap of distances. We want a sorted vector of increasing distances.
         let mut neighbours = Vec::with_capacity(neighbours_heap.len());
         while let Some(p) = neighbours_heap.pop() {

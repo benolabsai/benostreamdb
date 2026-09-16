@@ -211,6 +211,24 @@ impl PyTable {
         self.table.get_primary_key()
     }
 
+    /// Return the table schema as a PyArrow Schema.
+    #[getter]
+    fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let schema = self.table.arrow_schema();
+        super::helpers::arrow_schema_to_pyarrow(py, schema)
+    }
+
+    /// Return the list of column names in the table.
+    #[getter]
+    fn columns(&self) -> Vec<String> {
+        self.table
+            .arrow_schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
     /// Add a column to the primary key.
     fn add_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_primary_key(column)))
@@ -512,12 +530,16 @@ impl PyTable {
             let query_obj = vf.get_item("query")?.ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key")
             })?;
-            let query: Vec<f32> = query_obj.extract()?;
-            let mut params = VectorSearchParams::new(
-                &column,
-                crate::core::index::VectorValue::Float32(query),
-                k,
-            );
+            let vec_val = if let Ok(q_str) = query_obj.extract::<String>() {
+                crate::core::index::VectorValue::Keyword(q_str)
+            } else if let Ok(query) = query_obj.extract::<Vec<f32>>() {
+                crate::core::index::VectorValue::Float32(query)
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "vector_filter 'query' must be a List[float] for vector search or a str for BM25 text search",
+                ));
+            };
+            let mut params = VectorSearchParams::new(&column, vec_val, k);
 
             if let Ok(Some(metric_obj)) = vf.get_item("metric") {
                 if let Ok(metric_str) = metric_obj.extract::<String>() {
@@ -1107,6 +1129,209 @@ impl PyTable {
     ///
     /// Example:
     ///     table.sql("SELECT * FROM t WHERE id > 10")
+
+    #[pyo3(signature = (damping=0.85, iterations=30))]
+    fn pagerank(&self, py: Python<'_>, damping: f64, iterations: u32) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(pagerank(source, target, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (seeds, damping=0.85, iterations=30, directed=false, seed_weights=None))]
+    fn personalized_pagerank(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        damping: f64,
+        iterations: u32,
+        directed: bool,
+        seed_weights: Option<Vec<f64>>,
+    ) -> PyResult<Py<PyAny>> {
+        let seed_sql = if seeds.is_empty() {
+            "make_array()".to_string()
+        } else {
+            format!(
+                "make_array({})",
+                seeds
+                    .iter()
+                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let query = if let Some(weights) = seed_weights {
+            let weights_sql = if weights.is_empty() {
+                "make_array()".to_string()
+            } else {
+                format!(
+                    "make_array({})",
+                    weights
+                        .iter()
+                        .map(|w| format!("arrow_cast({}, 'Float64')", w))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            format!(
+                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
+                seed_sql, damping, iterations, directed, weights_sql
+            )
+        } else {
+            format!(
+                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
+                seed_sql, damping, iterations, directed
+            )
+        };
+        self.execute_sql(py, query)
+    }
+
+    fn shortest_path(&self, py: Python<'_>, start_node: u64, end_node: u64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(shortest_path(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
+        self.execute_sql(py, query)
+    }
+
+    fn connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, "SELECT unnest(connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS component FROM t".to_string())
+    }
+
+    fn strongly_connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS scc_id FROM t".to_string())
+    }
+
+    fn topological_sort(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, "SELECT unnest(topological_sort(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS node FROM t".to_string())
+    }
+
+    #[pyo3(signature = (node, hops=1))]
+    fn graph_neighbors(&self, py: Python<'_>, node: u64, hops: u32) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(graph_neighbors(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt32'))) AS neighbor FROM t", node, hops);
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (seeds, hops=1, directed=false))]
+    fn subgraph(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        hops: u32,
+        directed: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let seed_sql = if seeds.is_empty() {
+            "make_array()".to_string()
+        } else {
+            format!(
+                "make_array({})",
+                seeds
+                    .iter()
+                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let query = format!(
+            "SELECT unnest(subgraph(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'UInt32'), {})) FROM t",
+            seed_sql, hops, directed
+        );
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (seeds, directed=false))]
+    fn connecting_paths(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        directed: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let seed_sql = if seeds.is_empty() {
+            "make_array()".to_string()
+        } else {
+            format!(
+                "make_array({})",
+                seeds
+                    .iter()
+                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let query = format!(
+            "SELECT unnest(connecting_paths(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, {})) FROM t",
+            seed_sql, directed
+        );
+        self.execute_sql(py, query)
+    }
+
+    fn degree_centrality(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(
+            py,
+            "SELECT unnest(degree_centrality(source, target)) FROM t".to_string(),
+        )
+    }
+
+    #[pyo3(signature = (resolution=1.0))]
+    fn louvain_communities(&self, py: Python<'_>, resolution: f64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t", resolution);
+        self.execute_sql(py, query)
+    }
+
+    fn label_propagation_communities(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(
+            py,
+            "SELECT unnest(label_propagation(source, target)) AS community FROM t".to_string(),
+        )
+    }
+
+    fn modularity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, "SELECT modularity(source, target, source_community, target_community) AS modularity FROM t".to_string())
+    }
+
+    fn adamic_adar(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT adamic_adar(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        self.execute_sql(py, query)
+    }
+
+    fn preferential_attachment(
+        &self,
+        py: Python<'_>,
+        node1: u64,
+        node2: u64,
+    ) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT preferential_attachment(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        self.execute_sql(py, query)
+    }
+
+    fn resource_allocation(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT resource_allocation_index(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        self.execute_sql(py, query)
+    }
+
+    fn resource_allocation_index(
+        &self,
+        py: Python<'_>,
+        node1: u64,
+        node2: u64,
+    ) -> PyResult<Py<PyAny>> {
+        self.resource_allocation(py, node1, node2)
+    }
+
+    fn jaccard_coefficient(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT jaccard_coefficient(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        self.execute_sql(py, query)
+    }
+
+    fn clustering_coefficient(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(
+            py,
+            "SELECT unnest(clustering_coefficient(source, target)) FROM t".to_string(),
+        )
+    }
+
+    fn to_graphviz(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(
+            py,
+            "SELECT to_graphviz(source, target) AS dot FROM t".to_string(),
+        )
+    }
+
     fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
         let query = sanitize_sql(&query)?;
         let rt = self.table.runtime();
@@ -1140,12 +1365,48 @@ impl PyTable {
                     ctx.register_udaf(udf);
                 }
 
+                // Register Graph Aggregate functions
+                for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+                    ctx.register_udaf(udf);
+                }
+
                 // Execute
                 let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
-                let schema: arrow::datatypes::SchemaRef =
+                let mut schema: arrow::datatypes::SchemaRef =
                     std::sync::Arc::new(df.schema().as_arrow().clone());
                 let batches = df.collect().await.map_err(|e| e.to_string())?;
-                Ok((batches, schema))
+
+                let mut final_batches = Vec::new();
+                if !batches.is_empty() && batches[0].num_columns() == 1 {
+                    if let arrow::datatypes::DataType::Struct(fields) =
+                        batches[0].column(0).data_type()
+                    {
+                        let new_fields: Vec<Arc<arrow::datatypes::Field>> = fields.to_vec();
+                        schema = Arc::new(arrow::datatypes::Schema::new(new_fields.clone()));
+
+                        for b in &batches {
+                            if let Some(struct_arr) = b
+                                .column(0)
+                                .as_any()
+                                .downcast_ref::<arrow::array::StructArray>()
+                            {
+                                let mut cols = Vec::new();
+                                for i in 0..new_fields.len() {
+                                    cols.push(struct_arr.column(i).clone());
+                                }
+                                if let Ok(unpacked) = RecordBatch::try_new(schema.clone(), cols) {
+                                    final_batches.push(unpacked);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if final_batches.is_empty() {
+                    final_batches = batches;
+                }
+
+                Ok((final_batches, schema))
             });
 
         match batch_result {
@@ -1372,12 +1633,16 @@ impl PyTable {
             let query_obj = vf.get_item("query")?.ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key")
             })?;
-            let query: Vec<f32> = query_obj.extract()?;
-            let mut params = VectorSearchParams::new(
-                &column,
-                crate::core::index::VectorValue::Float32(query),
-                k,
-            );
+            let vec_val = if let Ok(q_str) = query_obj.extract::<String>() {
+                crate::core::index::VectorValue::Keyword(q_str)
+            } else if let Ok(query) = query_obj.extract::<Vec<f32>>() {
+                crate::core::index::VectorValue::Float32(query)
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "vector_filter 'query' must be a List[float] for vector search or a str for BM25 text search",
+                ));
+            };
+            let mut params = VectorSearchParams::new(&column, vec_val, k);
 
             // Parse optional metric parameter
             if let Ok(Some(metric_obj)) = vf.get_item("metric") {

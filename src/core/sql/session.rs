@@ -67,6 +67,11 @@ impl HyperStreamSession {
             ctx.register_udaf(udf);
         }
 
+        // Add Graph Aggregate Functions
+        for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+            ctx.register_udaf(udf);
+        }
+
         // Register vector operators (validates UDFs are present)
         crate::core::sql::vector_operators::register_vector_operators(&mut ctx)
             .expect("Failed to register vector operators");

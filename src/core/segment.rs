@@ -593,7 +593,10 @@ impl HybridSegmentWriter {
         };
 
         for (col_name, tmp_path) in vector_data {
-            tracing::info!("Finishing Vector Index for column '{}' from out-of-core file", col_name);
+            tracing::info!(
+                "Finishing Vector Index for column '{}' from out-of-core file",
+                col_name
+            );
             let mut algos = self
                 .index_configs
                 .get(&col_name)
@@ -621,7 +624,7 @@ impl HybridSegmentWriter {
                         })?,
                     _ => crate::core::index::VectorMetric::L2,
                 };
-                
+
                 let algo_id = match algo {
                     crate::core::manifest::IndexAlgorithm::Hnsw { .. } => "hnsw",
                     crate::core::manifest::IndexAlgorithm::HnswPq { .. } => "pq",
@@ -631,25 +634,21 @@ impl HybridSegmentWriter {
                 };
 
                 let hnsw_ivf_index = crate::core::index::hnsw_ivf::HnswIvfIndex::build_from_file(
-                    &tmp_path,
-                    metric,
-                    None,
-                    None,
-                    algo,
+                    &tmp_path, metric, None, None, algo,
                 )?;
-                
+
                 let suffix = if algos.len() > 1 {
                     format!("{}.{}.{}", col_name, algo_id, idx)
                 } else {
                     format!("{}.{}", col_name, algo_id)
                 };
-                
+
                 // Get the staging directory from the tmp_path
                 let tmp_path_buf = std::path::PathBuf::from(&tmp_path);
                 let local_staging_dir = tmp_path_buf.parent().unwrap();
-                
-                let local_base_path = local_staging_dir
-                    .join(format!("{}.{}", self.config.segment_id, suffix));
+
+                let local_base_path =
+                    local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
 
                 let saved_files = hnsw_ivf_index
                     .save(local_base_path.to_str().context("Invalid UTF-8 in path")?)
@@ -882,8 +881,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
 
-    #[test]
-    fn test_write_hybrid_segment() -> Result<()> {
+    #[tokio::test]
+    async fn test_write_hybrid_segment() -> Result<()> {
         // 1. Setup Data: Int32 Column + Vector Column
         let dim = 4;
         let num_rows = 10;
@@ -926,12 +925,15 @@ mod tests {
             "test_segment_001",
         )
         .with_index_all(true);
-        let writer = HybridSegmentWriter::new(config.clone());
+        let store: Arc<dyn object_store::ObjectStore> =
+            Arc::new(object_store::local::LocalFileSystem::new());
+        let writer = HybridSegmentWriter::new(config.clone()).with_store(store);
 
         writer.write_batch(&batch)?;
 
         // Build indexes (required for index files to be created)
         writer.build_indexes(&batch, 0)?;
+        writer.finish_indexing().await?;
 
         // 3. Verify Files
         let base = format!("{}/{}", config.base_path, config.segment_id);

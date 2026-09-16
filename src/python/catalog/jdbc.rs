@@ -57,7 +57,7 @@ impl PyJdbcCatalog {
             .block_on(async { self.client.load_table(&namespace, &table_name).await })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
 
-        PyTable::new_internal(&metadata.location, None)
+        PyTable::new_internal(&metadata.location, None, None)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 

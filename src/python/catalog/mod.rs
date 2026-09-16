@@ -192,6 +192,6 @@ pub fn load_default_catalog(py: Python<'_>) -> PyResult<Py<PyAny>> {
 
 #[pyfunction]
 pub fn open_table(_py: Python<'_>, uri: &str) -> PyResult<PyTable> {
-    PyTable::new_internal(uri, None)
+    PyTable::new_internal(uri, None, None)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
 }

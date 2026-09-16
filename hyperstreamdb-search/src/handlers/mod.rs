@@ -5,6 +5,7 @@
 pub mod bulk;
 pub mod cluster;
 pub mod docs;
+pub mod graph_search;
 pub mod indices;
 pub mod mapping;
 pub mod metrics;

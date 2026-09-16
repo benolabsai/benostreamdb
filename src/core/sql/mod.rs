@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod graph_udf;
 pub mod literal;
 pub mod optimizer;
 pub mod partition_rewriter;
