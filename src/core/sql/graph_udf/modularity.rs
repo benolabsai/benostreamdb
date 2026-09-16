@@ -182,7 +182,11 @@ impl Accumulator for ModularityAccumulator {
                 Some(a.value(idx) as i64)
             } else if let Some(a) = arr.as_any().downcast_ref::<arrow::array::Int32Array>() {
                 Some(a.value(idx) as i64)
-            } else { arr.as_any().downcast_ref::<arrow::array::UInt32Array>().map(|a| a.value(idx) as i64) }
+            } else {
+                arr.as_any()
+                    .downcast_ref::<arrow::array::UInt32Array>()
+                    .map(|a| a.value(idx) as i64)
+            }
         };
 
         let get_weight = |arr_opt: Option<&ArrayRef>, idx: usize| -> f64 {
