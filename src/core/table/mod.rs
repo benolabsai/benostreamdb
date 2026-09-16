@@ -198,7 +198,9 @@ impl Table {
                 };
 
                 if !is_empty {
-                    tracing::info!("Micro-batch timer elapsed. Flushing buffer to Iceberg snapshot.");
+                    tracing::info!(
+                        "Micro-batch timer elapsed. Flushing buffer to Iceberg snapshot."
+                    );
                     if let Err(e) = bg_table.commit_async().await {
                         tracing::error!("Background flush failed: {}", e);
                     }
@@ -211,7 +213,7 @@ impl Table {
         } else {
             tokio::spawn(future)
         };
-        
+
         if let Ok(mut tasks) = self.background_tasks.try_lock() {
             tasks.push(handle);
         }

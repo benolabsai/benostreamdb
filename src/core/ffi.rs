@@ -430,9 +430,18 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_que
     column: JString,
     values_json: JString,
 ) -> jstring {
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let col: String = env.get_string(&column).map(|s| s.into()).unwrap_or_default();
-    let vals: String = env.get_string(&values_json).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let col: String = env
+        .get_string(&column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let vals: String = env
+        .get_string(&values_json)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!(
         "FFI(Spark): queryIndexIn for table {}, column {}, keys: {}",
@@ -458,8 +467,14 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_com
     table_uri: JString,
     deletes_json: JString,
 ) -> jboolean {
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let _deletes: String = env.get_string(&deletes_json).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let _deletes: String = env
+        .get_string(&deletes_json)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!("FFI(Spark): commitPositionDeletes for table {}", uri);
 
@@ -477,9 +492,18 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_add
     column: JString,
     index_type: JString,
 ) -> jboolean {
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let col: String = env.get_string(&column).map(|s| s.into()).unwrap_or_default();
-    let idx_type: String = env.get_string(&index_type).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let col: String = env
+        .get_string(&column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let idx_type: String = env
+        .get_string(&index_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!(
         "FFI(Spark): addIndex for table {}, column {}, type: {}",
@@ -498,8 +522,14 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_bui
     table_uri: JString,
     segment_id: JString,
 ) -> jboolean {
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let seg_id: String = env.get_string(&segment_id).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let seg_id: String = env
+        .get_string(&segment_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!(
         "FFI(Spark): buildIndex for table {}, segment_id {}",
@@ -517,8 +547,14 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_set
     table_uri: JString,
     columns: JString,
 ) -> jboolean {
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let cols: String = env.get_string(&columns).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let cols: String = env
+        .get_string(&columns)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!(
         "FFI(Spark): setPrimaryKey for table {}, columns {}",
@@ -535,7 +571,10 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_set
     _class: JClass,
     device_type: JString,
 ) -> jboolean {
-    let device: String = env.get_string(&device_type).map(|s| s.into()).unwrap_or_default();
+    let device: String = env
+        .get_string(&device_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!("FFI(Spark): setGpuContext to {}", device);
 
@@ -544,19 +583,24 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_set
         "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
         "cpu" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Cpu,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "cuda" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Cuda,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "mps" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Mps,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "intel" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Intel,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "rocm" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Rocm,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         _ => {
             tracing::warn!(
                 "FFI(Spark): Unknown device type '{}', defaulting to auto",
@@ -577,7 +621,10 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGp
     _class: JClass,
     device_type: JString,
 ) -> jboolean {
-    let device: String = env.get_string(&device_type).map(|s| s.into()).unwrap_or_default();
+    let device: String = env
+        .get_string(&device_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     tracing::info!("FFI(Trino): setGpuContext to {}", device);
 
@@ -586,19 +633,24 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGp
         "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
         "cpu" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Cpu,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "cuda" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Cuda,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "mps" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Mps,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "intel" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Intel,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         "rocm" => crate::core::index::gpu::ComputeContext::from_backend(
             crate::core::index::gpu::ComputeBackend::Rocm,
-        ).unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
+        )
+        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
         _ => {
             tracing::warn!(
                 "FFI(Trino): Unknown device type '{}', defaulting to auto",
@@ -616,7 +668,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGp
 // -----------------------------------------------------------------------------
 // Vector Index Traversal JNI Bridge (Spark & Trino)
 // -----------------------------------------------------------------------------
-use arrow::array::{Int64Array, Float32Array, StructArray};
+use arrow::array::{Float32Array, Int64Array, StructArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
@@ -643,7 +695,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_vec
         query_vector_len,
         out_array_ptr,
         out_schema_ptr,
-        "Spark"
+        "Spark",
     )
 }
 
@@ -670,7 +722,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_vecto
         query_vector_len,
         out_array_ptr,
         out_schema_ptr,
-        "Trino"
+        "Trino",
     )
 }
 
@@ -684,22 +736,39 @@ fn vector_search_impl(
     query_vector_len: jint,
     out_array_ptr: jlong,
     out_schema_ptr: jlong,
-    engine: &str
+    engine: &str,
 ) -> jint {
     if query_vector_ptr == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
         tracing::error!("FFI({}): vectorSearch called with null pointers", engine);
         return -1;
     }
 
-    let uri: String = env.get_string(&table_uri).map(|s| s.into()).unwrap_or_default();
-    let seg_id: String = env.get_string(&segment_id).map(|s| s.into()).unwrap_or_default();
-    let col: String = env.get_string(&column).map(|s| s.into()).unwrap_or_default();
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let seg_id: String = env
+        .get_string(&segment_id)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let col: String = env
+        .get_string(&column)
+        .map(|s| s.into())
+        .unwrap_or_default();
 
     let query_slice = unsafe {
         std::slice::from_raw_parts(query_vector_ptr as *const f32, query_vector_len as usize)
     };
 
-    tracing::info!("FFI({}): vectorSearch on {}/{} col={} k={} vector_len={}", engine, uri, seg_id, col, k, query_vector_len);
+    tracing::info!(
+        "FFI({}): vectorSearch on {}/{} col={} k={} vector_len={}",
+        engine,
+        uri,
+        seg_id,
+        col,
+        k,
+        query_vector_len
+    );
 
     let idx_path_str = format!(".index/{}_{}", seg_id, col);
     let cache_key = format!("{}/{}", uri, idx_path_str);
@@ -722,7 +791,7 @@ fn vector_search_impl(
         })?;
 
         let query_vec = crate::core::index::VectorValue::Float32(query_slice.to_vec());
-        
+
         // Spawn blocking because HnswIvfIndex::search can be CPU intensive
         tokio::task::spawn_blocking(move || hnsw_ivf.search(&query_vec, k as usize, 10, None))
             .await
@@ -749,13 +818,14 @@ fn vector_search_impl(
         Field::new("_distance", DataType::Float32, false),
     ]));
 
-    let batch = match arrow::record_batch::RecordBatch::try_new(schema, vec![row_id_array, dist_array]) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("FFI({}): Failed to create RecordBatch: {}", engine, e);
-            return -1;
-        }
-    };
+    let batch =
+        match arrow::record_batch::RecordBatch::try_new(schema, vec![row_id_array, dist_array]) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("FFI({}): Failed to create RecordBatch: {}", engine, e);
+                return -1;
+            }
+        };
 
     let struct_array: StructArray = batch.into();
     let array_data = struct_array.to_data();
@@ -763,7 +833,11 @@ fn vector_search_impl(
     let (ffi_array, ffi_schema) = match arrow::ffi::to_ffi(&array_data) {
         Ok(tuple) => tuple,
         Err(e) => {
-            tracing::error!("FFI({}): Error exporting to C Data Interface: {}", engine, e);
+            tracing::error!(
+                "FFI({}): Error exporting to C Data Interface: {}",
+                engine,
+                e
+            );
             return -1;
         }
     };

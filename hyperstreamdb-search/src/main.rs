@@ -12,7 +12,9 @@ use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyperstreamdb_search::handlers::{bulk, cluster, docs, indices, mapping, metrics, search};
+use hyperstreamdb_search::handlers::{
+    bulk, cluster, docs, graph_search, indices, mapping, metrics, search,
+};
 use hyperstreamdb_search::state::{resolve_catalog, resolve_storage_uri, AppState};
 
 #[global_allocator]
@@ -144,6 +146,7 @@ async fn main() {
             "/:index/_search",
             post(search::search).get(search::search_get),
         )
+        .route("/:index/_graph_search", post(graph_search::graph_search))
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

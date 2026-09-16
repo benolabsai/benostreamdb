@@ -1,12 +1,11 @@
-use std::sync::Arc;
 use arrow::array::{
-    BinaryBuilder, ListBuilder, StructBuilder,
-    UInt32Builder, UInt64Builder, UInt8Builder,
-    Float32Builder
+    BinaryBuilder, Float32Builder, ListBuilder, StructBuilder, UInt32Builder, UInt64Builder,
+    UInt8Builder,
 };
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::FileWriter;
 use arrow::record_batch::RecordBatch;
+use std::sync::Arc;
 
 use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::hnsw_rs::hnsw::Hnsw;
@@ -26,8 +25,12 @@ impl ArrowType for f32 {
 }
 
 impl ArrowType for u8 {
-    fn as_bytes(slice: &[u8]) -> &[u8] { slice }
-    fn from_bytes(bytes: &[u8]) -> &[u8] { bytes }
+    fn as_bytes(slice: &[u8]) -> &[u8] {
+        slice
+    }
+    fn from_bytes(bytes: &[u8]) -> &[u8] {
+        bytes
+    }
 }
 
 impl ArrowType for crate::core::index::SparseVector {
@@ -39,25 +42,34 @@ impl ArrowType for crate::core::index::SparseVector {
     }
 }
 
-pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(
-    hnsw: &Hnsw<T, D>,
-) -> Result<Vec<u8>, String> {
-
+pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(hnsw: &Hnsw<T, D>) -> Result<Vec<u8>, String> {
     // 1. Define Schema
     let data_id_field = Field::new("data_id", DataType::UInt64, false);
-    
+
     let vector_field = Field::new("vector", DataType::Binary, false);
-    
+
     let max_layer_field = Field::new("max_layer", DataType::UInt8, false);
 
     let neighbor_fields = vec![
         Field::new("neighbor_idx", DataType::UInt32, false),
         Field::new("distance", DataType::Float32, false),
     ];
-    let neighbor_struct_field = Field::new("item", DataType::Struct(neighbor_fields.clone().into()), true);
-    
-    let inner_list_field = Field::new("item", DataType::List(Arc::new(neighbor_struct_field.clone())), true);
-    let neighbors_field = Field::new("neighbors", DataType::List(Arc::new(inner_list_field.clone())), false);
+    let neighbor_struct_field = Field::new(
+        "item",
+        DataType::Struct(neighbor_fields.clone().into()),
+        true,
+    );
+
+    let inner_list_field = Field::new(
+        "item",
+        DataType::List(Arc::new(neighbor_struct_field.clone())),
+        true,
+    );
+    let neighbors_field = Field::new(
+        "neighbors",
+        DataType::List(Arc::new(inner_list_field.clone())),
+        false,
+    );
 
     let schema = Arc::new(Schema::new(vec![
         data_id_field,
@@ -77,7 +89,7 @@ pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(
         vec![
             Box::new(UInt32Builder::new()),
             Box::new(Float32Builder::new()),
-        ]
+        ],
     );
     let inner_list_builder = ListBuilder::new(struct_builder);
     let mut neighbors_builder = ListBuilder::new(inner_list_builder);
@@ -113,15 +125,26 @@ pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(
         // Neighbors (List of Layers -> List of Structs)
         for i in 0..=max_layer_for_point as usize {
             let layer_neighbors = &ref_neighbors[i];
-            
+
             for neighbor in layer_neighbors.iter() {
                 // Struct has 2 fields: idx, distance
-                let idx = *point_id_to_idx.get(&neighbor.point_ref.get_point_id()).ok_or_else(|| format!("Neighbor point ID not found: {:?}", neighbor.point_ref.get_point_id()))?;
+                let idx = *point_id_to_idx
+                    .get(&neighbor.point_ref.get_point_id())
+                    .ok_or_else(|| {
+                        format!(
+                            "Neighbor point ID not found: {:?}",
+                            neighbor.point_ref.get_point_id()
+                        )
+                    })?;
                 let dist = neighbor.dist_to_ref;
-                
+
                 let sb = neighbors_builder.values().values();
-                sb.field_builder::<UInt32Builder>(0).ok_or("Failed to get UInt32Builder for neighbor_idx")?.append_value(idx);
-                sb.field_builder::<Float32Builder>(1).ok_or("Failed to get Float32Builder for distance")?.append_value(dist);
+                sb.field_builder::<UInt32Builder>(0)
+                    .ok_or("Failed to get UInt32Builder for neighbor_idx")?
+                    .append_value(idx);
+                sb.field_builder::<Float32Builder>(1)
+                    .ok_or("Failed to get Float32Builder for distance")?
+                    .append_value(dist);
                 sb.append(true);
             }
             neighbors_builder.values().append(true);
@@ -143,7 +166,8 @@ pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(
             max_layer_array,
             neighbors_array,
         ],
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
 
     // 5. Write to IPC Buffer
     let mut buffer = Vec::new();

@@ -16,14 +16,8 @@ fn main() {
         complexity: 32,
         quality: 8,
     };
-    let index = HnswIvfIndex::build(
-        vectors,
-        VectorMetric::L2,
-        Some(4),
-        Some(16),
-        &algo,
-        0,
-    ).unwrap();
+    let index =
+        HnswIvfIndex::build(vectors, VectorMetric::L2, Some(4), Some(16), &algo, 0).unwrap();
 
     let local_path = "/tmp/dump_test_index";
     std::fs::create_dir_all("/tmp").unwrap();
@@ -33,7 +27,7 @@ fn main() {
     let graph_path = format!("{}.cluster_0.hnsw.graph", local_path);
     println!("Reading: {}", graph_path);
     let f = File::open(graph_path).unwrap();
-    let mut reader = FileReader::try_new(f, None).unwrap();
+    let reader = FileReader::try_new(f, None).unwrap();
     let schema = reader.schema();
     println!("Schema of generated file: {:#?}", schema);
 }

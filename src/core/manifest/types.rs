@@ -691,6 +691,12 @@ impl SchemaField {
         let dt = match self.type_str.to_lowercase().as_str() {
             "int32" | "int" => arrow::datatypes::DataType::Int32,
             "int64" | "long" => arrow::datatypes::DataType::Int64,
+            "uint64" | "ulong" => arrow::datatypes::DataType::UInt64,
+            "uint32" | "uint" => arrow::datatypes::DataType::UInt32,
+            "uint16" => arrow::datatypes::DataType::UInt16,
+            "uint8" => arrow::datatypes::DataType::UInt8,
+            "int16" | "short" => arrow::datatypes::DataType::Int16,
+            "int8" | "byte" => arrow::datatypes::DataType::Int8,
             "utf8" | "string" => arrow::datatypes::DataType::Utf8,
             "float32" | "float" => arrow::datatypes::DataType::Float32,
             "float64" | "double" => arrow::datatypes::DataType::Float64,

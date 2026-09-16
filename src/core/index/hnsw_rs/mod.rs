@@ -26,5 +26,5 @@ fn init_log() -> u64 {
     let _ = builder.try_init();
     1
 }
-pub mod arrow_ipc;
 pub mod arrow_hnsw;
+pub mod arrow_ipc;

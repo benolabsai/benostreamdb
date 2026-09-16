@@ -235,8 +235,17 @@ impl ExecutionPlan for HyperStreamExec {
                 match table.read_write_buffer(query_filter.as_ref(), col_slice) {
                     Ok(batches) => {
                         for batch in batches {
-                            if batch.schema() != expected_schema_inner {
-                                yield Err(DataFusionError::Execution("Write buffer schema mismatch".to_string()));
+                            let mut schemas_match = batch.schema().fields().len() == expected_schema_inner.fields().len();
+                            if schemas_match {
+                                for (f1, f2) in batch.schema().fields().iter().zip(expected_schema_inner.fields().iter()) {
+                                    if f1.name() != f2.name() || f1.data_type() != f2.data_type() {
+                                        schemas_match = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !schemas_match {
+                                yield Err(DataFusionError::Execution(format!("Write buffer schema mismatch: expected {:?}, got {:?}", expected_schema_inner, batch.schema())));
                                 return;
                             }
                             yield Ok(batch);

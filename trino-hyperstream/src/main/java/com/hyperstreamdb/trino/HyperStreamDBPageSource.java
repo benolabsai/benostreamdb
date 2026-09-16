@@ -132,13 +132,27 @@ public class HyperStreamDBPageSource implements ConnectorPageSource {
             HyperStreamDBColumnHandle col = (HyperStreamDBColumnHandle) columns.get(i);
             BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(i);
 
-            // TODO: Match col.getColumnName() with root.getVector(name)
-            // For now, defaulting to Mock value as verification of flow
+            org.apache.arrow.vector.FieldVector vector = root.getVector(col.getColumnName());
+            
             for (int r = 0; r < rowCount; r++) {
-                if (col.getColumnName().equals("id")) {
-                    IntegerType.INTEGER.writeLong(blockBuilder, 42); // Placeholder
+                if (vector == null || vector.isNull(r)) {
+                    blockBuilder.appendNull();
+                    continue;
+                }
+                
+                io.trino.spi.type.Type trinoType = col.getColumnType();
+                Object obj = vector.getObject(r);
+                
+                if (trinoType instanceof io.trino.spi.type.IntegerType || trinoType instanceof io.trino.spi.type.BigintType) {
+                    trinoType.writeLong(blockBuilder, ((Number) obj).longValue());
+                } else if (trinoType instanceof io.trino.spi.type.DoubleType) {
+                    trinoType.writeDouble(blockBuilder, ((Number) obj).doubleValue());
+                } else if (trinoType instanceof io.trino.spi.type.RealType) {
+                    trinoType.writeLong(blockBuilder, Float.floatToRawIntBits(((Number) obj).floatValue()));
+                } else if (trinoType instanceof io.trino.spi.type.BooleanType) {
+                    trinoType.writeBoolean(blockBuilder, (Boolean) obj);
                 } else {
-                    VarcharType.VARCHAR.writeString(blockBuilder, "Real Arrow Flow");
+                    io.trino.spi.type.VarcharType.VARCHAR.writeString(blockBuilder, obj.toString());
                 }
             }
         }

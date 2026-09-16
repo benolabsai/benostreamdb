@@ -24,11 +24,15 @@ class HyperStreamScan(val delegate: Scan, val table: HyperStreamTable) extends S
   override def readSchema(): org.apache.spark.sql.types.StructType = delegate.readSchema()
 
   override def toBatch() = delegate.toBatch()
-  // TODO: we should intercept toBatch to use our filters
+  // Note: Filtering is handled earlier in filter() via JNI, which configures
+  // the Iceberg delegateBuilder appropriately. We can directly delegate toBatch.
 
   override def filterAttributes(): Array[NamedReference] = {
-    // We advertise all columns for runtime filtering so Spark gives us the broadcast keys
-    Array.empty // TODO: Return the primary key columns here to receive DynamicFilters
+    // We advertise primary key columns for runtime filtering so Spark gives us the broadcast keys
+    val pkString = Option(table.properties.get("primary_key")).getOrElse("id")
+    pkString.split(",").map(_.trim).map(col => 
+      org.apache.spark.sql.connector.expressions.FieldReference.column(col)
+    ).toArray
   }
 
   override def filter(filters: Array[Filter]): Unit = {

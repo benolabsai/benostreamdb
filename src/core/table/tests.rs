@@ -178,9 +178,7 @@ async fn test_streaming_flush_interval() -> Result<()> {
         .build_async()
         .await?;
 
-    let schema = Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-    ]);
+    let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
@@ -202,7 +200,10 @@ async fn test_streaming_flush_interval() -> Result<()> {
     // The buffer should now be empty because the background task committed it
     {
         let buffer = table.write_buffer.read();
-        assert!(buffer.is_empty(), "Buffer should be empty after streaming flush");
+        assert!(
+            buffer.is_empty(),
+            "Buffer should be empty after streaming flush"
+        );
     }
 
     // The data should be readable from disk

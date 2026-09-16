@@ -29,7 +29,12 @@ pub trait AnnT {
 
 impl<T, D> AnnT for Hnsw<T, D>
 where
-    T: Serialize + DeserializeOwned + Clone + Send + Sync + crate::core::index::hnsw_rs::arrow_ipc::ArrowType,
+    T: Serialize
+        + DeserializeOwned
+        + Clone
+        + Send
+        + Sync
+        + crate::core::index::hnsw_rs::arrow_ipc::ArrowType,
     D: Distance<T> + Send + Sync,
 {
     type Val = T;

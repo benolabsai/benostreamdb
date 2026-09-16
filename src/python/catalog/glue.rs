@@ -58,6 +58,7 @@ impl PyGlueCatalog {
             &database,
             &table_name,
             None,
+            None,
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }

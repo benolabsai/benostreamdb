@@ -1,4 +1,3 @@
-
 use anyhow::{Context, Result};
 use arrow::array::Array;
 use rayon::prelude::*;
@@ -78,14 +77,17 @@ impl crate::core::segment::HybridSegmentWriter {
                 .map(|cols| cols.iter().any(|c| c == col_name))
                 .unwrap_or(false);
             if self.config.index_all || in_config {
-                let tmp_path = local_staging_dir.join(format!("{}.{}.tmp.vec.bin", self.config.segment_id, col_name));
-                
+                let tmp_path = local_staging_dir.join(format!(
+                    "{}.{}.tmp.vec.bin",
+                    self.config.segment_id, col_name
+                ));
+
                 let mut file = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(&tmp_path)
                     .context("Failed to open vector temp file")?;
-                    
+
                 use std::io::Write;
                 let dim = vectors[0].len() as u32;
                 for (i, vec) in vectors.iter().enumerate() {
@@ -95,7 +97,7 @@ impl crate::core::segment::HybridSegmentWriter {
                     let vec_bytes = bytemuck::cast_slice(vec);
                     file.write_all(vec_bytes)?;
                 }
-                
+
                 {
                     let mut v_data = self.vector_data.lock();
                     v_data.insert(col_name.to_string(), tmp_path.to_str().unwrap().to_string());
