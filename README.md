@@ -38,6 +38,7 @@ Authoritative Storage        Advisory Index Overlay
 | **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
 | **Native SQL** | ❌ No | ✅ DataFusion |
 | **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
+| **Graph RAG & Analytics** | ❌ No | ✅ Native Edge Tables & UDFs |
 | **Query Engines** | Spark/Trino | Rust/Python/Spark/Trino |
 
 ## ⚡ Iceberg V2/V3 Compatibility
@@ -725,22 +726,18 @@ reindex, ILM, snapshots, auth, multi-node. See
 - [x] **Query Engine**: Native SQL support (DataFusion), Index Nested Loop Join, pgvector-compatible operators.
 - [x] **Catalog**: Multi-catalog support (Nessie, REST, AWS Glue, Hive Metastore, Unity, Polaris, Lakekeeper).
 - [x] **Vector Search**: Multi-backend GPU support (CUDA, ROCm, Metal, XPU), TurboQuant™ (TQ4/TQ8), Multi-vector search (RRF).
-- [x] **Advanced Search & Query**: Zero-Copy Arrow IPC Vector Index traversal and HNSW Hot Cache Optimization (sub-5ms kNN latency).
+- [x] **Advanced Search & Query**: Zero-Copy Arrow IPC Vector Index traversal, HNSW Hot Cache Optimization, Async Ingest Memory Buffer & WAL.
+- [x] **Graph RAG & Analytics**: Native graph analytics on Iceberg edge tables (PageRank, Community Detection, NetworkX interop).
 - [x] **APIs & Gateways**: OpenSearch 7.10 & Qdrant REST APIs (`hyperstreamdb-search`), Arrow Flight SQL Gateway (`hyperstreamdb-flight`).
 - [x] **Connectors**: Spark (V2) & Trino (SPI) connectors, Python Vector Distance API, Official dbt adapter.
 - [x] **Benchmarking & Validation**: 100k / 1M doc competitive benchmarks vs OpenSearch 2.11, Resource-Constrained Vector Benchmarking (4 GB RAM Matrix).
 - [x] **Lifecycle Verification**: Streaming Commit & Delete Lifecycle Verification (Iceberg V2 position delete masking in vector graph scans).
 
 ### 🔄 Active & In Progress
-- [x] **Trino Connector Pushdown**: Trino connector sidecar index predicate pushdown.
-- [x] **Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing.
-- [ ] **Client Ecosystem & Packaged Distribution**: Official PyPI wheels (Completed), LangChain & LlamaIndex integrations.
+- [ ] **Codebase Intelligence**: MCP Server Implementation, Git-Diff Incremental CI Indexer.
 
 ### 📋 Planned
-- [x] **Advanced Search & Query**: Async Ingest Memory Buffer & WAL.
-- [ ] **Graph RAG & Analytics**: Native graph analytics on Iceberg edge tables (PageRank, Community Detection, Graph RAG).
-- [ ] **Scale-Testing Lab**: SEC EDGAR & EdgarStreamDB massive scale validation (Phase 11).
-- [ ] **Codebase Intelligence**: MCP Server Implementation, Git-Diff Incremental CI Indexer.
+- [ ] **Client Ecosystem & Packaged Distribution**: LangChain & LlamaIndex integrations.
 - [ ] **Enterprise Features [Paid]**: Row-Level Security (RLS), Dynamic Column Masking, Customer-Managed Encryption Keys (CMEK), SIEM Export, Fused SIMD Kernels.
 
 *For a detailed breakdown of all phases, see [ROADMAP.md](ROADMAP.md).*
