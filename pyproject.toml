@@ -44,6 +44,8 @@ dev = [
     "networkx",
     "cffi",
     "scikit-learn",
+    "pandas",
+    "hypothesis",
 ]
 # Hardware acceleration extras
 all_gpu = []
