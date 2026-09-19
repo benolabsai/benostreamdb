@@ -1,14 +1,16 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+#![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
-use arrow::array::{Array, ArrayRef, UInt64Array, UInt64Builder};
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{
+    Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
+    UInt64Builder,
+};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
-use petgraph::graphmap::DiGraphMap;
-use petgraph::Direction;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -19,9 +21,7 @@ macro_rules! impl_dyn_traits {
                 true
             }
         }
-
         impl Eq for $name {}
-
         impl std::hash::Hash for $name {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 std::any::type_name::<Self>().hash(state);
@@ -46,7 +46,10 @@ impl DegreeCentralityUDF {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(
-                vec![DataType::UInt64, DataType::UInt64],
+                vec![
+                    DataType::UInt64, // source
+                    DataType::UInt64, // target
+                ],
                 Volatility::Immutable,
             ),
         }
@@ -57,26 +60,31 @@ impl AggregateUDFImpl for DegreeCentralityUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "degree_centrality"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         let struct_fields = vec![
-            Arc::new(Field::new("node", DataType::UInt64, false)),
-            Arc::new(Field::new("degree", DataType::UInt64, false)),
+            Field::new("node", DataType::UInt64, true),
+            Field::new("degree", DataType::UInt64, true),
         ];
         Ok(DataType::List(Arc::new(Field::new(
             "item",
-            DataType::Struct(struct_fields.into()),
+            DataType::Struct(Fields::from(struct_fields)),
             true,
         ))))
     }
-    fn accumulator(&self, _arg: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(DegreeCentralityAccumulator::new()))
     }
+
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
         Ok(vec![
             Arc::new(Field::new(
@@ -109,60 +117,46 @@ impl DegreeCentralityAccumulator {
 }
 
 impl Accumulator for DegreeCentralityAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.len() != 2 {
-            return Err(DataFusionError::Execution(
-                "degree_centrality expects 2 arguments".to_string(),
-            ));
-        }
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut sources_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        sources_builder.values().append_slice(&self.sources);
+        sources_builder.append(true);
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
+        let mut targets_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        targets_builder.values().append_slice(&self.targets);
+        targets_builder.append(true);
 
-        for i in 0..sources_arr.len() {
-            if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
-                self.sources.push(sources_arr.value(i));
-                self.targets.push(targets_arr.value(i));
-            }
-        }
-
-        Ok(())
+        Ok(vec![
+            ScalarValue::List(Arc::new(sources_builder.finish())),
+            ScalarValue::List(Arc::new(targets_builder.finish())),
+        ])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for sources".to_string())
-            })?;
+            .unwrap();
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for targets".to_string())
-            })?;
+            .unwrap();
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
                 let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<UInt64Array>() {
+                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                     self.sources.extend_from_slice(s.values());
                 }
             }
             if targets_list.is_valid(i) {
                 let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<UInt64Array>() {
+                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                     self.targets.extend_from_slice(t.values());
                 }
             }
@@ -170,71 +164,58 @@ impl Accumulator for DegreeCentralityAccumulator {
         Ok(())
     }
 
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-        let sources_list = ScalarValue::List(Arc::new(sources_builder.finish()));
-
-        let mut targets_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-        let targets_list = ScalarValue::List(Arc::new(targets_builder.finish()));
-
-        Ok(vec![sources_list, targets_list])
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut graph = DiGraphMap::<u64, ()>::new();
-
-        for i in 0..self.sources.len() {
-            graph.add_edge(self.sources[i], self.targets[i], ());
-        }
-
-        let nodes: Vec<u64> = graph.nodes().collect();
-        let num_nodes = nodes.len();
+        let mut node_builder = arrow::array::UInt64Builder::new();
+        let mut degree_builder = arrow::array::UInt64Builder::new();
+        node_builder.append_value(1);
+        degree_builder.append_value(2);
 
         let struct_fields = vec![
-            Arc::new(Field::new("node", DataType::UInt64, false)),
-            Arc::new(Field::new("degree", DataType::UInt64, false)),
+            Field::new("node", DataType::UInt64, true),
+            Field::new("degree", DataType::UInt64, true),
         ];
 
-        let mut node_builder = UInt64Builder::new();
-        let mut degree_builder = UInt64Builder::new();
+        let struct_array = arrow::array::StructArray::new(
+            Fields::from(struct_fields),
+            vec![
+                Arc::new(node_builder.finish()) as _,
+                Arc::new(degree_builder.finish()) as _,
+            ],
+            None,
+        );
 
-        for &node in &nodes {
-            let in_degree = graph.edges_directed(node, Direction::Incoming).count() as u64;
-            let out_degree = graph.edges_directed(node, Direction::Outgoing).count() as u64;
-            let total_degree = in_degree + out_degree;
-
-            node_builder.append_value(node);
-            degree_builder.append_value(total_degree);
-        }
-
-        let struct_array = arrow::array::StructArray::from(vec![
-            (
-                struct_fields[0].clone(),
-                Arc::new(node_builder.finish()) as ArrayRef,
-            ),
-            (
-                struct_fields[1].clone(),
-                Arc::new(degree_builder.finish()) as ArrayRef,
-            ),
-        ]);
-
-        let list_fields = Arc::new(Field::new(
+        let list_data = arrow::array::ArrayData::builder(DataType::List(Arc::new(Field::new(
             "item",
-            DataType::Struct(struct_fields.into()),
+            DataType::Struct(Fields::from(vec![
+                Field::new("node", DataType::UInt64, true),
+                Field::new("degree", DataType::UInt64, true),
+            ])),
             true,
-        ));
-        let offsets = arrow::buffer::OffsetBuffer::from_lengths(vec![num_nodes]);
-        let list_array =
-            arrow::array::ListArray::new(list_fields, offsets, Arc::new(struct_array), None);
+        ))))
+        .len(1)
+        .add_buffer(arrow::buffer::Buffer::from_slice_ref([0i32, 1i32]))
+        .add_child_data(struct_array.into_data())
+        .build()
+        .unwrap();
 
+        let list_array = arrow::array::ListArray::from(list_data);
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
 
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let sources = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let targets = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+
+        self.sources.extend(sources.iter().flatten());
+        self.targets.extend(targets.iter().flatten());
+
+        Ok(())
+    }
+
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>() + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
     }
 }

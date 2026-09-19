@@ -541,19 +541,18 @@ impl Table {
                                     if dim > 0 {
                                         *idx_lock = Some(InMemoryVectorIndex::new(dim));
                                     }
+                                } else if matches!(
+                                    col.data_type(),
+                                    arrow::datatypes::DataType::Time32(_)
+                                        | arrow::datatypes::DataType::Time64(_)
+                                ) {
+                                    // Time datatypes are not vectorizable; safely
+                                    // skip in-memory vector indexing for them.
+                                    tracing::debug!(
+                                        "Skipping in-memory vector index for Time datatype column '{}'",
+                                        col_name
+                                    );
                                 }
-                                // Time32 Not Supported
-                                /*
-                                else if let Some(time32) = col.as_any().downcast_ref::<arrow::array::Time32Array>() {
-                                    // This block is for indexing, not vector search, so dim is not applicable here.
-                                    // It should be handled by the `insert_batch` logic if Time32/Time64 indexing is supported.
-                                }
-                                */
-                                // Time64 Not Supported
-                                /*
-                                else if let Some(time64) = col.as_any().downcast_ref::<arrow::array::Time64Array>() {
-                                }
-                                */
                             }
                         }
                     }

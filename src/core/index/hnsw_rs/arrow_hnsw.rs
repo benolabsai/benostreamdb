@@ -4,9 +4,10 @@
 use arrow::array::{
     Array, BinaryArray, ListArray, StructArray, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::ipc::reader::FileReader;
+use arrow::buffer::Buffer;
 use arrow::record_batch::RecordBatch;
-use std::fs::File;
+use arrow_ipc::reader::{read_footer_length, FileDecoder};
+use arrow_ipc::{convert::fb_to_schema, root_as_footer};
 use std::sync::Arc;
 
 use crate::core::index::hnsw_rs::arrow_ipc::ArrowType;
@@ -24,19 +25,68 @@ pub struct ArrowHnsw<T: ArrowType, D: Distance<T>> {
     dimension: usize,
     entry_point: usize,
     max_layer: u8,
-    pub ipc_bytes: Vec<u8>,
     _marker: std::marker::PhantomData<T>,
 }
 
 impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
-    pub fn load_from_bytes(bytes: &[u8], distance: D) -> Result<Self, String> {
-        let cursor = std::io::Cursor::new(bytes);
-        let mut reader = FileReader::try_new(cursor, None).map_err(|e| e.to_string())?;
+    pub fn load_from_mmap(mmap: Arc<memmap2::Mmap>, distance: D) -> Result<Self, String> {
+        let buffer = unsafe {
+            Buffer::from_custom_allocation(
+                std::ptr::NonNull::new_unchecked(mmap.as_ptr() as *mut u8),
+                mmap.len(),
+                mmap.clone(),
+            )
+        };
+        Self::load_from_buffer(buffer, distance)
+    }
 
-        let batch = reader
-            .next()
-            .ok_or("No batches in IPC file")?
+    pub fn load_from_bytes(bytes: &[u8], distance: D) -> Result<Self, String> {
+        let buffer = Buffer::from(bytes);
+        Self::load_from_buffer(buffer, distance)
+    }
+
+    fn load_from_buffer(buffer: Buffer, distance: D) -> Result<Self, String> {
+        if buffer.len() < 10 {
+            return Err("IPC file too small".to_string());
+        }
+        let trailer_start = buffer.len() - 10;
+        let footer_len = read_footer_length(buffer[trailer_start..].try_into().unwrap())
+            .map_err(|e: arrow::error::ArrowError| e.to_string())?;
+
+        let footer = root_as_footer(&buffer[trailer_start - footer_len..trailer_start])
             .map_err(|e| e.to_string())?;
+
+        let schema = fb_to_schema(footer.schema().ok_or("No schema")?);
+
+        let mut decoder = FileDecoder::new(Arc::new(schema), footer.version());
+
+        if let Some(dicts) = footer.dictionaries() {
+            for block in dicts.iter() {
+                let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+                let data = buffer.slice_with_length(block.offset() as _, block_len);
+                decoder
+                    .read_dictionary(block, &data)
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        let batches: Vec<arrow_ipc::Block> = if let Some(rb) = footer.recordBatches() {
+            rb.iter().copied().collect()
+        } else {
+            Vec::new()
+        };
+
+        if batches.is_empty() {
+            return Err("No batches in IPC file".to_string());
+        }
+
+        let block = &batches[0];
+        let block_len = block.bodyLength() as usize + block.metaDataLength() as usize;
+        let data = buffer.slice_with_length(block.offset() as _, block_len);
+        let batch = decoder
+            .read_record_batch(block, &data)
+            .map_err(|e| e.to_string())?
+            .ok_or("Failed to read record batch")?;
 
         println!("Schema of loaded batch: {:#?}", batch.schema());
         let data_id_array = Arc::new(
@@ -106,7 +156,6 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             dimension,
             entry_point,
             max_layer,
-            ipc_bytes: bytes.to_vec(),
             _marker: std::marker::PhantomData,
         })
     }
