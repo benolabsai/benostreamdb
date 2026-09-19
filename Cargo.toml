@@ -71,6 +71,8 @@ serde_json = "1.0"
 toml = "0.8"
 apache-avro = "0.17"
 zstd = "0.13"
+bzip2 = "0.4.4"
+quick-xml = { version = "0.31", features = ["serialize"] }
 hex = "0.4"
 ed25519-dalek = "2.1"
 bytemuck = "1.16"
@@ -152,7 +154,9 @@ wgpu = { version = "0.20.0", optional = true }
 pollster = { version = "0.4.0", optional = true }
 metrics-exporter-prometheus = { version = "0.18.3", optional = true }
 dhat = "0.3"
-petgraph = "0.6"
+memmap2 = "0.9.11"
+arrow-ipc = "=57.3.1"
+tempfile = "3.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }

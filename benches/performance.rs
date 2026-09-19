@@ -114,6 +114,7 @@ fn bench_vector_search(c: &mut Criterion) {
                                 VectorMetric::L2,
                                 None,
                                 None,
+                                false,
                             )
                             .await
                             .unwrap(),
@@ -170,6 +171,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
                             VectorMetric::L2,
                             None,
                             None,
+                            false,
                         )
                         .await
                         .unwrap(),
