@@ -34,6 +34,10 @@ pub struct VectorSearchParams {
     pub probes: Option<usize>,
     /// Optimization: Metadata-only search (don't load vectors if stats alone guarantee match)
     pub stats_only: bool,
+    /// Whether to use memory mapping (mmap) for loading index segments
+    pub use_mmap: bool,
+    /// Optional maximum distance radius for early pruning.
+    pub radius: Option<f32>,
 }
 
 impl VectorSearchParams {
@@ -47,6 +51,8 @@ impl VectorSearchParams {
             ef_search: None,
             probes: None,
             stats_only: false,
+            use_mmap: true, // Default to true for zero-copy
+            radius: None,
         }
     }
 
@@ -418,7 +424,7 @@ impl QueryFilter {
     }
 }
 
-fn json_to_scalar(v: &Value) -> Expr {
+pub(crate) fn json_to_scalar(v: &Value) -> Expr {
     use datafusion::prelude::lit;
     match v {
         Value::Number(n) => {
@@ -622,7 +628,7 @@ fn json_value_to_scalar(
     }
 }
 
-fn scalar_to_json_value(scalar: &datafusion::scalar::ScalarValue) -> Option<Value> {
+pub(crate) fn scalar_to_json_value(scalar: &datafusion::scalar::ScalarValue) -> Option<Value> {
     use datafusion::scalar::ScalarValue;
     match scalar {
         ScalarValue::Int64(Some(i)) => Some(serde_json::json!(i)),
@@ -937,21 +943,30 @@ impl QueryPlanner {
         // If query point is very far from the bounding box of the segment's vectors.
         if let (Some(dim_min), Some(dim_max)) = (&vs.dim_min, &vs.dim_max) {
             if let crate::core::index::VectorValue::Float32(q_vec) = &params.query {
+                let mut total_diff_sq: f32 = 0.0;
+                let radius_sq = params.radius.map(|r| r.powi(2));
+
                 for (i, &q_val) in q_vec.iter().enumerate() {
                     if i < dim_min.len() && i < dim_max.len() {
                         if q_val < dim_min[i] {
-                            let _diff_sq = (dim_min[i] - q_val).powi(2);
-                            // Future optimization: accumulate diff_sq for early pruning threshold
+                            total_diff_sq += (dim_min[i] - q_val).powi(2);
                         } else if q_val > dim_max[i] {
-                            let _diff_sq = (q_val - dim_max[i]).powi(2);
+                            total_diff_sq += (q_val - dim_max[i]).powi(2);
+                        }
+                    }
+                    if let Some(r_sq) = radius_sq {
+                        if total_diff_sq > r_sq {
+                            metrics::counter!("hyperstreamdb.pruned.vector_bbox").increment(1);
+                            tracing::debug!(
+                                "  -> Pruned by vector bbox: {} > radius {}",
+                                total_diff_sq.sqrt(),
+                                r_sq.sqrt()
+                            );
+                            return false;
                         }
                     }
                 }
             }
-
-            // If minimum possible distance to ANY point in this segment's box is too high, prune.
-            // We need a threshold. For now, since we don't have global top-k yet, we just return true.
-            // But we're ready for threshold-based pruning!
         }
 
         true
@@ -1004,6 +1019,7 @@ impl QueryPlanner {
     pub fn might_match_condition(&self, entry: &ManifestEntry, filter: &QueryFilter) -> bool {
         if filter.negated {
             // Pruning negated conditions is coarse for now.
+            metrics::counter!("hyperstreamdb.kept.negated_condition").increment(1);
             return true;
         }
         // 1. Partition-level Pruning (Coarse-grained)
@@ -1024,6 +1040,7 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
+                    metrics::counter!("hyperstreamdb.pruned.partition_min").increment(1);
                     tracing::debug!(
                         "  -> Pruned by partition min: {} < {:?}",
                         entry_val,
@@ -1042,6 +1059,7 @@ impl QueryPlanner {
                         || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
+                    metrics::counter!("hyperstreamdb.pruned.partition_max").increment(1);
                     tracing::debug!(
                         "  -> Pruned by partition max: {} > {:?}",
                         entry_val,
@@ -1053,6 +1071,7 @@ impl QueryPlanner {
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
+                    metrics::counter!("hyperstreamdb.pruned.partition_in_list").increment(1);
                     tracing::debug!(
                         "  -> Pruned by partition values IN list: {:?} not in {:?}",
                         entry_val,
@@ -1066,6 +1085,7 @@ impl QueryPlanner {
         // 2. Statistics Pruning (Fine-grained)
         if let Some(stats) = entry.column_stats.get(&filter.column) {
             if stats.null_count == entry.record_count {
+                metrics::counter!("hyperstreamdb.pruned.stats_all_null").increment(1);
                 return false;
             }
 
@@ -1081,6 +1101,7 @@ impl QueryPlanner {
                     };
 
                     if too_small {
+                        metrics::counter!("hyperstreamdb.pruned.stats_max").increment(1);
                         return false;
                     }
                 }
@@ -1097,6 +1118,7 @@ impl QueryPlanner {
                             || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_large {
+                        metrics::counter!("hyperstreamdb.pruned.stats_min").increment(1);
                         return false;
                     }
                 }
@@ -1108,6 +1130,7 @@ impl QueryPlanner {
                 let max_val = stats.max.as_ref();
 
                 if min_val.is_none() && max_val.is_none() {
+                    metrics::counter!("hyperstreamdb.kept.missing_stats").increment(1);
                     return true;
                 }
 
@@ -1132,12 +1155,15 @@ impl QueryPlanner {
                 }
 
                 if !possible_match {
+                    metrics::counter!("hyperstreamdb.pruned.stats_in_list").increment(1);
                     return false;
                 }
             }
 
+            metrics::counter!("hyperstreamdb.kept.in_range").increment(1);
             true
         } else {
+            metrics::counter!("hyperstreamdb.kept.missing_stats").increment(1);
             true
         }
     }

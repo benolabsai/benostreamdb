@@ -1,0 +1,16 @@
+- [x] **1. Explain Plan Metrics for Pruning**
+  - [x] Add `hyperstreamdb.kept.negated_condition` in `src/core/planner.rs`.
+  - [x] Add `hyperstreamdb.kept.missing_stats` in `src/core/planner.rs`.
+  - [x] Add `hyperstreamdb.kept.in_range` in `src/core/planner.rs`.
+- [x] **2. Early Pruning for L2 Distance Scans**
+  - [x] Break early if `total_diff_sq > r.powi(2)` in `src/core/planner.rs`.
+- [x] **3. Graph Construction Profiling Hooks**
+  - [x] Wrap `insert_point` in `src/core/index/hnsw_rs/hnsw.rs` with `tracing` spans/events.
+  - [x] Wrap `search_layer` in `src/core/index/hnsw_rs/hnsw.rs` with `tracing` spans/events.
+- [x] **4. Row-Value In-List Pushdown**
+  - [x] Support `Expr::InList` in `PrimaryKeyFilter` in `src/core/table/primary_key.rs`.
+- [x] **5. Time32/Time64 Datatype Support**
+  - [x] Remove unsupported tech debt comments in `src/core/table/write.rs`.
+  - [x] Safely ignore Time datatypes for Vector Indexing.
+- [x] **6. Verification**
+  - [x] Run `cargo test` and format/clippy.
