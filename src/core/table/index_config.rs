@@ -128,6 +128,8 @@ impl Table {
             if let Some(first) = columns.first() {
                 target_col = first.clone();
             }
+        } else if let IndexAlgorithm::CsrGraph { src_column, .. } = &algorithm {
+            target_col = src_column.clone();
         }
 
         let field = latest_schema
@@ -160,6 +162,9 @@ impl Table {
             }
             IndexAlgorithm::Bloom { .. } => {
                 next_indexes.retain(|idx| !matches!(idx, IndexAlgorithm::Bloom { .. }));
+            }
+            IndexAlgorithm::CsrGraph { .. } => {
+                next_indexes.retain(|idx| !matches!(idx, IndexAlgorithm::CsrGraph { .. }));
             }
             _ => {
                 if !next_indexes.contains(&algorithm) {
@@ -229,9 +234,45 @@ impl Table {
     /// Remove all indexing strategies from a column.
     /// This is an atomic operation that commits a new manifest version.
     pub async fn drop_index(&self, column: String) -> Result<()> {
+        // Collect all file paths associated with this index from the current manifest
+        let manifest = self.manifest().await?;
+        let mut paths_to_delete = Vec::new();
+
+        for entry in &manifest.entries {
+            for idx in &entry.index_files {
+                if idx.column_name.as_deref() == Some(column.as_str()) {
+                    match idx.index_type.as_str() {
+                        "graph" => {
+                            paths_to_delete.push(format!("{}.graph.csr.offsets", idx.file_path));
+                            paths_to_delete.push(format!("{}.graph.csr.edges", idx.file_path));
+                        }
+                        "vector" => {
+                            // Base paths for vector indexes
+                            paths_to_delete.push(format!("{}.hnsw.graph", idx.file_path));
+                            paths_to_delete.push(format!("{}.hnsw.pq", idx.file_path));
+                        }
+                        _ => {
+                            paths_to_delete.push(idx.file_path.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Commit the manifest update dropping the index from the schema
         let mut updates = HashMap::new();
-        updates.insert(column, vec![]);
-        self.set_index_columns(updates).await
+        updates.insert(column.clone(), vec![]);
+        self.set_index_columns(updates).await?;
+
+        // Best-effort cleanup of index files
+        for path in paths_to_delete {
+            let p = object_store::path::Path::from(path.as_str());
+            if let Err(e) = self.store.delete(&p).await {
+                tracing::debug!("Failed to delete dropped index file {}: {}", path, e);
+            }
+        }
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

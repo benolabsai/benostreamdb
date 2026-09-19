@@ -199,6 +199,7 @@ impl ExecutionPlan for VectorScanExec {
                         vp.query.clone(),
                         vp.k,
                         vp.metric,
+                        vp.use_mmap,
                     )
                     .with_filter(filter_expr.clone())
                     .with_config(table.query_config().clone())

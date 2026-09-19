@@ -31,6 +31,7 @@ pub struct HybridSegmentWriter {
         parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) vector_data: parking_lot::Mutex<HashMap<String, String>>,
+    pub(crate) graph_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) file_checksum: parking_lot::Mutex<Option<String>>,
 }
 
@@ -47,6 +48,7 @@ impl HybridSegmentWriter {
             inverted_data: parking_lot::Mutex::new(HashMap::new()),
             index_metadata: parking_lot::Mutex::new(HashMap::new()),
             vector_data: parking_lot::Mutex::new(HashMap::new()),
+            graph_data: parking_lot::Mutex::new(HashMap::new()),
             file_checksum: parking_lot::Mutex::new(None),
         }
     }
@@ -143,6 +145,29 @@ impl HybridSegmentWriter {
                     offset: None,
                     length: None,
                 });
+            } else if filename.ends_with(".graph.csr.offsets")
+                || filename.ends_with(".graph.csr.edges")
+            {
+                let parts: Vec<&str> = filename.split('.').collect();
+                if parts.len() >= 4 {
+                    let col = parts[1].to_string();
+                    let manifest_path_raw = format!("{}.{}", parts[0], parts[1]);
+                    let new_index_file = crate::core::manifest::IndexFile {
+                        file_path: manifest_path_raw.clone(),
+                        index_type: "graph".to_string(),
+                        column_name: Some(col),
+                        blob_type: Some("csr_graph".to_string()),
+                        offset: None,
+                        length: None,
+                    };
+                    if !index_files.iter().any(|f| {
+                        f.file_path == new_index_file.file_path
+                            && f.index_type == new_index_file.index_type
+                            && f.column_name == new_index_file.column_name
+                    }) {
+                        index_files.push(new_index_file);
+                    }
+                }
             } else if filename.ends_with(".hnsw.graph") {
                 // Vector Index
                 let parts: Vec<&str> = filename.split('.').collect();
@@ -164,14 +189,22 @@ impl HybridSegmentWriter {
                         manifest_path_raw = manifest_path_raw[..c_idx].to_string();
                     }
 
-                    index_files.push(crate::core::manifest::IndexFile {
+                    let new_index_file = crate::core::manifest::IndexFile {
                         file_path: manifest_path_raw,
                         index_type: "vector".to_string(),
                         column_name: Some(col),
                         blob_type: algo_name,
                         offset: None,
                         length: None,
-                    });
+                    };
+
+                    if !index_files.iter().any(|f| {
+                        f.file_path == new_index_file.file_path
+                            && f.index_type == new_index_file.index_type
+                            && f.column_name == new_index_file.column_name
+                    }) {
+                        index_files.push(new_index_file);
+                    }
                 }
             }
         }
@@ -672,6 +705,63 @@ impl HybridSegmentWriter {
             let _ = std::fs::remove_file(&tmp_path);
         }
 
+        // 3. Process Graph Index Buffers
+        let graph_data = {
+            let mut graph_lock = self.graph_data.lock();
+            std::mem::take(&mut *graph_lock)
+        };
+
+        for (col_name, tmp_path) in graph_data {
+            tracing::info!(
+                "Finishing Graph Index for virtual column '{}' from tmp file",
+                col_name
+            );
+
+            // Get the staging directory from the tmp_path
+            let tmp_path_buf = std::path::PathBuf::from(&tmp_path);
+            let local_staging_dir = tmp_path_buf.parent().unwrap();
+
+            let local_base_path =
+                local_staging_dir.join(format!("{}.{}", self.config.segment_id, col_name));
+
+            let saved_files = crate::core::index::csr_graph::MmapCsrGraph::build_from_file(
+                &tmp_path_buf,
+                &local_base_path,
+            )
+            .map_err(|e| anyhow::anyhow!("Graph build failed: {}", e))?;
+
+            // Upload to ObjectStore
+            for local_file in &saved_files {
+                let file_name = std::path::Path::new(local_file)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
+
+                let target_path = format!("{}{}", parent_prefix, file_name);
+                let target_obj_path = object_store::path::Path::from(target_path.clone());
+
+                let buffer = std::fs::read(local_file)?;
+                store.put(&target_obj_path, buffer.into()).await?;
+
+                {
+                    let mut files = self.generated_files.lock();
+                    files.push(target_path);
+                }
+            }
+
+            {
+                let mut meta = self.index_metadata.lock();
+                meta.insert(
+                    format!("{}.{}", self.config.segment_id, col_name),
+                    "csr_graph".to_string(),
+                );
+            }
+
+            // Cleanup
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+
         Ok(())
     }
 
@@ -721,6 +811,7 @@ impl HybridSegmentWriter {
 
         // 2. Build Composite Indexes (Virtual Columns)
         let mut composite_tasks = Vec::new();
+        let mut graph_tasks = Vec::new();
         for (col_name, config) in &self.index_configs {
             if !config.enabled {
                 continue;
@@ -728,6 +819,12 @@ impl HybridSegmentWriter {
             for alg in &config.algorithms {
                 if let crate::core::manifest::IndexAlgorithm::CompositeBitmap { columns } = alg {
                     composite_tasks.push((col_name.clone(), columns.clone()));
+                } else if let crate::core::manifest::IndexAlgorithm::CsrGraph {
+                    src_column,
+                    dst_column,
+                } = alg
+                {
+                    graph_tasks.push((col_name.clone(), src_column.clone(), dst_column.clone()));
                 }
             }
         }
@@ -768,6 +865,43 @@ impl HybridSegmentWriter {
                 self.index_column(&col_name, &composite_array, row_offset)
             })?;
 
+        // 3. Build Graph Indexes
+        graph_tasks
+            .into_par_iter()
+            .try_for_each(|(col_name, src_col, dst_col)| {
+                let is_remote = self.config.base_path.contains("://")
+                    && !self.config.base_path.starts_with("file://");
+                let local_staging_dir = if is_remote {
+                    let temp_dir = std::env::temp_dir()
+                        .join("hyperstream_staging")
+                        .join(uuid::Uuid::new_v4().to_string());
+                    std::fs::create_dir_all(&temp_dir)?;
+                    temp_dir
+                } else {
+                    let path = self
+                        .config
+                        .base_path
+                        .strip_prefix("file://")
+                        .unwrap_or(&self.config.base_path);
+                    let p = std::path::PathBuf::from(path);
+                    if !path.is_empty() {
+                        std::fs::create_dir_all(&p)?;
+                    }
+                    p
+                };
+
+                std::fs::create_dir_all(&local_staging_dir)?;
+
+                self.build_graph_index(
+                    &col_name,
+                    batch,
+                    &src_col,
+                    &dst_col,
+                    row_offset,
+                    &local_staging_dir,
+                )
+            })?;
+
         Ok(())
     }
 
@@ -780,37 +914,41 @@ impl HybridSegmentWriter {
         row_offset: usize,
     ) -> Result<()> {
         // Apply per-column device override if specified
-        if let Some(device_str) = self.config.column_devices.get(col_name) {
+        let desired_device = self
+            .config
+            .column_devices
+            .get(col_name)
+            .or(self.config.default_device.as_ref());
+
+        if let Some(device_str) = desired_device {
             tracing::info!(
                 "Applying device override for column {}: {}",
                 col_name,
                 device_str
             );
-            if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
-                tracing::info!(
-                    "Successfully set global GPU context to {:?} for column {}",
-                    ctx.backend,
-                    col_name
-                );
-                set_thread_gpu_context(Some(ctx));
-            } else {
-                tracing::warn!("Failed to parse device string: {}", device_str);
+
+            // Avoid creating a new context if the existing one already matches the desired device backend.
+            // CudaDevice::new() allocates memory, so we want to reuse it.
+            let mut needs_new_context = true;
+            if let Some(existing_ctx) = crate::core::index::gpu::get_thread_gpu_context() {
+                if existing_ctx.backend_name() == device_str
+                    || (device_str == "auto" && existing_ctx.is_available())
+                {
+                    needs_new_context = false;
+                }
             }
-        } else if let Some(ref device_str) = self.config.default_device {
-            tracing::info!(
-                "Applying default device for column {}: {}",
-                col_name,
-                device_str
-            );
-            if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
-                tracing::info!(
-                    "Successfully set global GPU context to {:?} for column {}",
-                    ctx.backend,
-                    col_name
-                );
-                set_thread_gpu_context(Some(ctx));
-            } else {
-                tracing::warn!("Failed to parse default device string: {}", device_str);
+
+            if needs_new_context {
+                if let Ok(ctx) = ComputeContext::from_device_str(device_str) {
+                    tracing::info!(
+                        "Successfully set global GPU context to {:?} for column {}",
+                        ctx.backend,
+                        col_name
+                    );
+                    set_thread_gpu_context(Some(ctx));
+                } else {
+                    tracing::warn!("Failed to parse device string: {}", device_str);
+                }
             }
         }
 

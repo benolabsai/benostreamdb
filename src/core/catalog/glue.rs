@@ -198,7 +198,7 @@ impl Catalog for GlueCatalogClient {
                                     "{}/metadata/v{}.metadata.json",
                                     table_root.0,
                                     snapshot
-                                        .get("snapshot-id")
+                                        .get("sequence-number")
                                         .and_then(|v| v.as_i64())
                                         .unwrap_or(1)
                                 ));

@@ -5,7 +5,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use futures::StreamExt;
-use object_store::{path::Path, ObjectStore};
+use object_store::ObjectStore;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -27,20 +27,6 @@ impl ManifestManager {
         remove_paths: &[String],
         metadata: CommitMetadata,
     ) -> Result<Manifest> {
-        let cache_key = self.get_dir_cache_key();
-        let lock = COMMIT_LOCKS
-            .entry(cache_key)
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
-            .value()
-            .clone();
-
-        let _guard = lock.lock().await;
-
-        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock =
-            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
-        let _dist_guard = dist_lock.acquire().await?;
-
         let max_retries = 100;
         for attempt in 0..max_retries {
             let (current_manifest, current_ver) = self.load_latest_direct().await?;
@@ -280,11 +266,6 @@ impl ManifestManager {
 
     /// Commit a set of imported entries (merges with current state)
     pub async fn commit_imported_entries(&self, entries: Vec<ManifestEntry>) -> Result<Manifest> {
-        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock =
-            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
-        let _dist_guard = dist_lock.acquire().await?;
-
         let max_retries = 10;
         let mut attempt = 0;
         loop {

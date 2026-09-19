@@ -63,6 +63,7 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyUnityCatalog>()?;
     m.add_class::<python_binding::PyJdbcCatalog>()?;
     m.add_class::<python_binding::PySession>()?;
+    m.add_class::<python_binding::PyGraphAPI>()?;
 
     m.add_class::<python_binding::PyDataFileInfo>()?;
     m.add_class::<python_binding::PySplit>()?;

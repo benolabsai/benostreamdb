@@ -10,7 +10,7 @@ use super::fluent::TableQuery;
 use crate::core::index::gpu::get_thread_gpu_context;
 use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry, ManifestManager};
 use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner, VectorSearchParams};
-use crate::core::query::{execute_vector_search_with_config, QueryConfig, VectorSearchRequest};
+use crate::core::query::{QueryConfig, VectorSearchRequest};
 use crate::core::reader::HybridReader;
 use crate::SegmentConfig;
 use arrow::datatypes::Schema;
@@ -550,6 +550,7 @@ impl Table {
                         vs_params.query.clone(),
                         vs_params.k,
                         vs_params.metric,
+                        vs_params.use_mmap,
                     )
                     .with_filter(expr.clone())
                     .with_config(config.clone())
@@ -858,6 +859,7 @@ impl Table {
         columns: Option<&[&str]>,
         cached_iceberg_schema: Option<&crate::core::manifest::Schema>,
     ) -> Result<Vec<RecordBatch>> {
+        println!(">>> read_segment_expr called with entry={}, manifest_version={}, columns={:?}, expr={:?}", entry.file_path, manifest_version, columns, expr);
         let file_path_str = entry.file_path.clone();
         let segment_id = file_path_str
             .split('/')
@@ -918,7 +920,22 @@ impl Table {
                 .collect();
             Some(Arc::new(Schema::new(fields)))
         } else {
-            Some(full_schema)
+            Some(full_schema.clone())
+        };
+
+        let read_schema = if let (Some(cols), Some(e)) = (columns, expr) {
+            let mut read_cols: std::collections::HashSet<String> =
+                cols.iter().map(|s| s.to_string()).collect();
+            for ref_col in e.get_referenced_columns() {
+                read_cols.insert(ref_col.clone());
+            }
+            let fields: Vec<arrow::datatypes::Field> = read_cols
+                .iter()
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                .collect();
+            Some(Arc::new(Schema::new(fields)))
+        } else {
+            target_schema.clone()
         };
 
         if manifest_version == 0 || expr.is_none() {
@@ -938,9 +955,7 @@ impl Table {
         let mut index_used = false;
 
         for filter in &and_filters {
-            if let Ok(indexed_batches) = reader
-                .query_index_first(filter, target_schema.clone())
-                .await
+            if let Ok(indexed_batches) = reader.query_index_first(filter, read_schema.clone()).await
             {
                 batches = indexed_batches;
                 index_used = true;
@@ -982,7 +997,7 @@ impl Table {
                 }
             }
 
-            let mut stream = reader.stream_all(target_schema).await?;
+            let mut stream = reader.stream_all(read_schema).await?;
             while let Some(batch_result) = stream.next().await {
                 batches.push(batch_result?);
             }
@@ -994,7 +1009,17 @@ impl Table {
             match planner.filter_expr(&batch, expr) {
                 Ok(filtered) => {
                     if filtered.num_rows() > 0 {
-                        filtered_batches.push(filtered);
+                        let projected = if let Some(ts) = &target_schema {
+                            let indices: Vec<usize> = ts
+                                .fields()
+                                .iter()
+                                .filter_map(|f| filtered.schema().index_of(f.name()).ok())
+                                .collect();
+                            filtered.project(&indices).unwrap_or(filtered.clone())
+                        } else {
+                            filtered
+                        };
+                        filtered_batches.push(projected);
                     }
                 }
                 Err(e) => {
@@ -1118,13 +1143,12 @@ impl Table {
             params.query.clone(),
             params.k,
             params.metric,
+            params.use_mmap,
         )
         .with_ef_search(params.ef_search)
         .with_config(self.query_config.clone());
 
-        // For now, we reuse the existing vector search and convert RecordBatches to ScoredResults
-        // In a future optimization, we'll return ScoredResults directly from the reader to avoid Parquet I/O if possible
-        let batches = execute_vector_search_with_config(
+        let scored_results = crate::core::query::execute_vector_search_raw_with_config(
             all_entries,
             self.store.clone(),
             self.data_store.clone(),
@@ -1133,25 +1157,6 @@ impl Table {
         )
         .await?;
 
-        let mut scored_results = Vec::new();
-        for (segment_id, batch) in batches {
-            // RecordBatch results from vector search include a "distance" column
-            let dist_col = batch
-                .column(batch.num_columns() - 1)
-                .as_any()
-                .downcast_ref::<arrow::array::Float32Array>()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Missing distance column in vector search result")
-                })?;
-
-            for i in 0..batch.num_rows() {
-                scored_results.push(ScoredResult {
-                    segment_id: segment_id.clone(),
-                    row_id: i as u32,
-                    score: dist_col.value(i),
-                });
-            }
-        }
         crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
             .observe(start_time.elapsed().as_secs_f64());
         Ok(scored_results)

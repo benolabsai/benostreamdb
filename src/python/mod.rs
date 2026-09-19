@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 pub mod catalog;
+pub mod drift_bindings;
+pub mod graph;
 pub mod helpers;
 pub mod manifest;
 pub mod schema;
@@ -9,6 +11,8 @@ pub mod stats;
 pub mod table;
 
 pub use catalog::*;
+pub use drift_bindings::*;
+pub use graph::*;
 pub use helpers::*;
 pub use manifest::*;
 pub use schema::*;
@@ -33,6 +37,7 @@ pub fn migrate_hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<table::PyTable>()?;
     m.add_class::<stats::PyMergeMode>()?;
     m.add_class::<session::PySession>()?;
+    m.add_class::<graph::PyGraphAPI>()?;
 
     // Catalog classes
     m.add_class::<catalog::PyNessieCatalog>()?;

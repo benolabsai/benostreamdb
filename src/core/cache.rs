@@ -117,6 +117,47 @@ impl DiskCache {
             res.bytes().await.map_err(|e| anyhow::anyhow!(e))
         }
     }
+
+    pub async fn get_mmap(&self, path: &str) -> Result<Arc<memmap2::Mmap>> {
+        use sha2::{Digest, Sha256};
+
+        let cache_dir = self
+            .cache_dir
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Disk cache disabled, cannot memory map files"))?;
+
+        let mut hasher = Sha256::new();
+        hasher.update(path);
+        let hash = format!("{:x}", hasher.finalize());
+        let cache_path = cache_dir.join(&hash);
+
+        if tokio::fs::metadata(&cache_path).await.is_err() {
+            let b = self
+                .store
+                .get(&object_store::path::Path::from(path))
+                .await?
+                .bytes()
+                .await?;
+
+            // Atomic write: write to unique temp file then rename
+            let thread_id = format!("{:?}", std::thread::current().id());
+            let temp_name = format!("{}.{}.{:?}.tmp", hash, std::process::id(), thread_id);
+            let temp_path = cache_dir.join(temp_name);
+
+            use tokio::io::AsyncWriteExt;
+            if let Ok(mut f) = tokio::fs::File::create(&temp_path).await {
+                if f.write_all(&b).await.is_ok() {
+                    let _ = tokio::fs::rename(&temp_path, &cache_path).await;
+                } else {
+                    let _ = tokio::fs::remove_file(&temp_path).await;
+                }
+            }
+        }
+
+        let file = std::fs::File::open(&cache_path)?;
+        let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        Ok(Arc::new(mmap))
+    }
 }
 
 // Cache Keys

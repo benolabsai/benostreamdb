@@ -6,14 +6,14 @@ use pyo3::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyMergeMode {
     MergeOnRead,
-    MergeOnWrite,
+    CopyOnWrite,
 }
 
 impl From<PyMergeMode> for crate::core::table::MergeMode {
     fn from(mode: PyMergeMode) -> Self {
         match mode {
             PyMergeMode::MergeOnRead => crate::core::table::MergeMode::MergeOnRead,
-            PyMergeMode::MergeOnWrite => crate::core::table::MergeMode::MergeOnWrite,
+            PyMergeMode::CopyOnWrite => crate::core::table::MergeMode::CopyOnWrite,
         }
     }
 }

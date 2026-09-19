@@ -211,6 +211,14 @@ impl PyTable {
         self.table.get_primary_key()
     }
 
+    /// Access graph algorithms and graph manipulation APIs
+    #[getter]
+    fn graph(&self) -> super::graph::PyGraphAPI {
+        super::graph::PyGraphAPI {
+            table: self.table.clone(),
+        }
+    }
+
     /// Return the table schema as a PyArrow Schema.
     #[getter]
     fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -447,6 +455,7 @@ impl PyTable {
     ///         - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
     ///         - ef_search: int (optional) - HNSW ef parameter for search quality tuning
     ///         - probes: int (optional) - IVF probes parameter for search speed tuning
+    ///         - use_mmap: bool (optional) - Whether to use zero-copy memory mapping for graphs (default: True)
     ///     columns: Optional list of column names to read (skips others like embeddings)
     ///
     /// Returns:
@@ -897,7 +906,7 @@ impl PyTable {
             }
             self.table.write(batches)
         })
-        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+        .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Commit buffered writes to disk (automatically flushes first, then finalizes metadata)
@@ -1189,16 +1198,105 @@ impl PyTable {
         self.execute_sql(py, query)
     }
 
-    fn connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(py, "SELECT unnest(connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS component FROM t".to_string())
-    }
-
     fn strongly_connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(py, "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS scc_id FROM t".to_string())
+        let query = "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) FROM t";
+        self.execute_sql(py, query.to_string())
     }
 
-    fn topological_sort(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(py, "SELECT unnest(topological_sort(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) AS node FROM t".to_string())
+    #[pyo3(signature = (src_column, dst_column, max_iterations=100))]
+    fn connected_components(
+        &self,
+        py: Python<'_>,
+        src_column: &str,
+        dst_column: &str,
+        max_iterations: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let src_col = src_column.to_string();
+        let dst_col = dst_column.to_string();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                // Register table as 't'
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/hyperstream_cc");
+                let final_table =
+                    crate::core::algorithms::connected_components::compute_connected_components(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                        &src_col,
+                        &dst_col,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id AS node, component_id AS component FROM {}",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
+    }
+
+    #[pyo3(signature = (max_iterations=100))]
+    fn topological_sort(&self, py: Python<'_>, max_iterations: usize) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/hyperstream_ts");
+                let final_table =
+                    crate::core::algorithms::topological_sort::compute_topological_sort(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                // Sort by level ascending to get topological order
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id as node FROM {} ORDER BY level ASC",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
 
     #[pyo3(signature = (node, hops=1))]
@@ -1261,10 +1359,17 @@ impl PyTable {
     }
 
     fn degree_centrality(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(
-            py,
-            "SELECT unnest(degree_centrality(source, target)) FROM t".to_string(),
-        )
+        let query = "
+            SELECT node, COUNT(*) as degree 
+            FROM (
+                SELECT source as node FROM t
+                UNION ALL
+                SELECT target as node FROM t
+            )
+            GROUP BY node
+        "
+        .to_string();
+        self.execute_sql(py, query)
     }
 
     #[pyo3(signature = (resolution=1.0))]
@@ -1273,11 +1378,51 @@ impl PyTable {
         self.execute_sql(py, query)
     }
 
-    fn label_propagation_communities(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(
-            py,
-            "SELECT unnest(label_propagation(source, target)) AS community FROM t".to_string(),
-        )
+    #[pyo3(signature = (max_iterations=100))]
+    fn label_propagation_communities(
+        &self,
+        py: Python<'_>,
+        max_iterations: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                // Register table as 't'
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/hyperstream_lp");
+                let final_table =
+                    crate::core::algorithms::label_propagation::compute_label_propagation(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id AS node, label AS community FROM {}",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
 
     fn modularity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
@@ -1285,7 +1430,32 @@ impl PyTable {
     }
 
     fn adamic_adar(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT adamic_adar(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        let query = format!(
+            "
+            SELECT COALESCE(SUM(1.0 / LN(CAST(deg.degree AS DOUBLE))), 0.0) as score
+            FROM (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) start_neighbors
+            JOIN (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) end_neighbors
+            ON start_neighbors.neighbor = end_neighbors.neighbor
+            JOIN (
+                SELECT node_id, COUNT(*) as degree FROM (
+                    SELECT source as node_id FROM t
+                    UNION ALL
+                    SELECT target as node_id FROM t
+                ) GROUP BY node_id
+            ) deg
+            ON start_neighbors.neighbor = deg.node_id
+            WHERE deg.degree > 1
+        ",
+            node1, node1, node2, node2
+        );
         self.execute_sql(py, query)
     }
 
@@ -1295,12 +1465,37 @@ impl PyTable {
         node1: u64,
         node2: u64,
     ) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT preferential_attachment(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        let query = format!("SELECT preferential_attachment(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
         self.execute_sql(py, query)
     }
 
     fn resource_allocation(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT resource_allocation_index(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        let query = format!(
+            "
+            SELECT COALESCE(SUM(1.0 / CAST(deg.degree AS DOUBLE)), 0.0) as score
+            FROM (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) start_neighbors
+            JOIN (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) end_neighbors
+            ON start_neighbors.neighbor = end_neighbors.neighbor
+            JOIN (
+                SELECT node_id, COUNT(*) as degree FROM (
+                    SELECT source as node_id FROM t
+                    UNION ALL
+                    SELECT target as node_id FROM t
+                ) GROUP BY node_id
+            ) deg
+            ON start_neighbors.neighbor = deg.node_id
+            WHERE deg.degree > 0
+        ",
+            node1, node1, node2, node2
+        );
         self.execute_sql(py, query)
     }
 
@@ -1314,108 +1509,321 @@ impl PyTable {
     }
 
     fn jaccard_coefficient(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT jaccard_coefficient(source, target, arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        let query = format!(
+            "
+            WITH start_n AS (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION SELECT source AS neighbor FROM t WHERE target = {}
+            ),
+            end_n AS (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION SELECT source AS neighbor FROM t WHERE target = {}
+            ),
+            intersection_cnt AS (
+                SELECT COUNT(*) as cnt FROM start_n JOIN end_n ON start_n.neighbor = end_n.neighbor
+            ),
+            union_cnt AS (
+                SELECT COUNT(*) as cnt FROM (
+                    SELECT neighbor FROM start_n UNION SELECT neighbor FROM end_n
+                )
+            )
+            SELECT CAST(i.cnt AS DOUBLE) / NULLIF(CAST(u.cnt AS DOUBLE), 0.0) as score
+            FROM intersection_cnt i, union_cnt u
+        ",
+            node1, node1, node2, node2
+        );
         self.execute_sql(py, query)
     }
 
     fn clustering_coefficient(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(
-            py,
-            "SELECT unnest(clustering_coefficient(source, target)) FROM t".to_string(),
-        )
+        let query = "
+            WITH undirected_edges AS (
+                SELECT source, target FROM t
+                UNION
+                SELECT target AS source, source AS target FROM t
+            ),
+            degrees AS (
+                SELECT source AS node_id, COUNT(*) AS degree
+                FROM undirected_edges
+                GROUP BY source
+            ),
+            triangles AS (
+                SELECT e1.source AS node_id, CAST(COUNT(*) AS DOUBLE) AS num_triangles
+                FROM undirected_edges e1
+                JOIN undirected_edges e2 ON e1.target = e2.source
+                JOIN undirected_edges e3 ON e2.target = e3.source AND e3.target = e1.source
+                GROUP BY e1.source
+            )
+            SELECT 
+                d.node_id as node,
+                COALESCE(t.num_triangles / CAST(d.degree * (d.degree - 1) AS DOUBLE), 0.0) AS clustering_coefficient
+            FROM degrees d
+            LEFT JOIN triangles t ON d.node_id = t.node_id
+        ".to_string();
+        self.execute_sql(py, query)
     }
 
     fn to_graphviz(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(
-            py,
-            "SELECT to_graphviz(source, target) AS dot FROM t".to_string(),
-        )
-    }
-
-    fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
-        let query = sanitize_sql(&query)?;
         let rt = self.table.runtime();
-
-        let batch_result: Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> = rt
+        let result_string = rt
             .block_on(async {
+                use arrow::array::{Array, UInt64Array};
                 use datafusion::prelude::SessionContext;
-                let mut ctx = SessionContext::new();
 
-                // Register standard functions and aggregates
-                datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;
-                datafusion_functions_aggregate::register_all(&mut ctx)
-                    .map_err(|e| e.to_string())?;
-
-                let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
-
-                // Register table as 't' (short alias, safe from keywords)
-                let provider = Arc::new(crate::core::sql::HyperStreamTableProvider::new(Arc::new(
-                    self.table.clone(),
-                )));
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                // Register vector UDFs (dist_l2, dist_cosine, etc.)
-                for udf in crate::core::sql::vector_udf::all_vector_udfs() {
-                    ctx.register_udf(udf);
-                }
+                let df_nodes = ctx
+                    .sql("SELECT source as node FROM t UNION SELECT target as node FROM t")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let node_batches = df_nodes.collect().await.map_err(|e| e.to_string())?;
 
-                // Register Vector Aggregate functions (Additive in DF 52)
-                for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
-                    ctx.register_udaf(udf);
-                }
+                let mut dot = String::from("digraph {\n");
 
-                // Register Graph Aggregate functions
-                for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
-                    ctx.register_udaf(udf);
-                }
-
-                // Execute
-                let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
-                let mut schema: arrow::datatypes::SchemaRef =
-                    std::sync::Arc::new(df.schema().as_arrow().clone());
-                let batches = df.collect().await.map_err(|e| e.to_string())?;
-
-                let mut final_batches = Vec::new();
-                if !batches.is_empty() && batches[0].num_columns() == 1 {
-                    if let arrow::datatypes::DataType::Struct(fields) =
-                        batches[0].column(0).data_type()
-                    {
-                        let new_fields: Vec<Arc<arrow::datatypes::Field>> = fields.to_vec();
-                        schema = Arc::new(arrow::datatypes::Schema::new(new_fields.clone()));
-
-                        for b in &batches {
-                            if let Some(struct_arr) = b
-                                .column(0)
-                                .as_any()
-                                .downcast_ref::<arrow::array::StructArray>()
-                            {
-                                let mut cols = Vec::new();
-                                for i in 0..new_fields.len() {
-                                    cols.push(struct_arr.column(i).clone());
-                                }
-                                if let Ok(unpacked) = RecordBatch::try_new(schema.clone(), cols) {
-                                    final_batches.push(unpacked);
-                                }
-                            }
+                for batch in node_batches {
+                    let array = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap();
+                    for i in 0..array.len() {
+                        if !array.is_null(i) {
+                            let node = array.value(i);
+                            dot.push_str(&format!("    {} [ label = \"{}\" ]\n", node, node));
                         }
                     }
                 }
 
-                if final_batches.is_empty() {
-                    final_batches = batches;
+                let df_edges = ctx
+                    .sql("SELECT source, target FROM t")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let edge_batches = df_edges.collect().await.map_err(|e| e.to_string())?;
+
+                for batch in edge_batches {
+                    let src_array = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap();
+                    let tgt_array = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .unwrap();
+                    for i in 0..src_array.len() {
+                        if !src_array.is_null(i) && !tgt_array.is_null(i) {
+                            let src = src_array.value(i);
+                            let tgt = tgt_array.value(i);
+                            dot.push_str(&format!("    {} -> {} [ ]\n", src, tgt));
+                        }
+                    }
                 }
+                dot.push_str("}\n");
 
-                Ok((final_batches, schema))
-            });
+                Ok::<_, String>(dot)
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
 
-        match batch_result {
+        Ok(pyo3::types::PyString::new(py, &result_string).into())
+    }
+
+    #[pyo3(signature = (query, community_map, top_communities, graph_column=None, follow_up_fn=None, n_depth=2, k_followups=3, top_k=5, hops=2, confidence_threshold=0.0))]
+    fn drift_search(
+        &self,
+        py: Python<'_>,
+        query: String,
+        community_map: HashMap<u64, u64>,
+        top_communities: Vec<u64>,
+        graph_column: Option<String>,
+        follow_up_fn: Option<Py<PyAny>>,
+        n_depth: u32,
+        k_followups: usize,
+        top_k: usize,
+        hops: u32,
+        confidence_threshold: f64,
+    ) -> PyResult<Py<PyAny>> {
+        let params = crate::core::sql::graph_udf::drift_search::DriftSearchParams {
+            n_depth,
+            k_followups,
+            top_k,
+            hops,
+            alpha: 0.85,
+            confidence_threshold,
+        };
+
+        // If graph_column is provided, use MmapCsrGraph. Otherwise fallback to DiGraphMap
+        let result = if let Some(col) = graph_column {
+            let (_manifest, segments) = crate::python::helpers::TOKIO_RUNTIME
+                .block_on(async {
+                    let manifest = self.table.manifest().await.map_err(|e| e.to_string())?;
+                    let mut segments = Vec::new();
+                    let cache = crate::core::cache::DiskCache::new(self.table.store.clone());
+
+                    for entry in &manifest.entries {
+                        for idx in &entry.index_files {
+                            if idx.index_type == "graph"
+                                && idx.column_name.as_deref() == Some(col.as_str())
+                            {
+                                let offsets_str = format!("{}.graph.csr.offsets", idx.file_path);
+                                let edges_str = format!("{}.graph.csr.edges", idx.file_path);
+                                let dict_str = format!("{}.graph.csr.dict", idx.file_path);
+
+                                if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
+                                    cache.get_mmap(&offsets_str).await,
+                                    cache.get_mmap(&edges_str).await,
+                                    cache.get_mmap(&dict_str).await,
+                                ) {
+                                    let mmap_graph =
+                                        crate::core::index::csr_graph::MmapCsrGraph::from_mmaps(
+                                            offsets_mmap,
+                                            edges_mmap,
+                                            dict_mmap,
+                                        );
+                                    segments.push(mmap_graph);
+                                }
+                            }
+                        }
+                    }
+                    Ok::<_, String>((manifest, segments))
+                })
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+            let multi_graph = crate::core::index::csr_graph::MultiSegmentCsrGraph::new(segments);
+
+            #[allow(deprecated)]
+            py.allow_threads(move || {
+                let generator: Box<
+                    dyn crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
+                        + Send
+                        + Sync,
+                > = if let Some(cb) = follow_up_fn {
+                    Box::new(
+                        crate::python::drift_bindings::PythonCallbackFollowUpGenerator {
+                            callback: cb,
+                        },
+                    )
+                } else {
+                    Box::new(
+                        crate::core::sql::graph_udf::drift_search::HeuristicFollowUpGenerator {
+                            graph: &multi_graph,
+                            community_map: &community_map,
+                        },
+                    )
+                };
+
+                crate::core::sql::graph_udf::drift_search::execute_drift_search(
+                    &query,
+                    &multi_graph,
+                    &top_communities,
+                    generator.as_ref(),
+                    &params,
+                )
+            })
+        } else {
+            // Fallback to in-memory graph
+            let (batches, _) = self
+                .execute_sql_internal("SELECT source, target FROM t".to_string())
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+            let mut graph = crate::core::sql::graph_udf::drift_search::SimpleGraph {
+                adjacency: std::collections::HashMap::new(),
+            };
+
+            use arrow::array::Array;
+            for batch in batches {
+                let sources_casted =
+                    arrow::compute::cast(batch.column(0), &arrow::datatypes::DataType::UInt64)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                let targets_casted =
+                    arrow::compute::cast(batch.column(1), &arrow::datatypes::DataType::UInt64)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+                let sources = sources_casted
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .unwrap();
+                let targets = targets_casted
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .unwrap();
+
+                for i in 0..batch.num_rows() {
+                    if sources.is_valid(i) && targets.is_valid(i) {
+                        let s = sources.value(i);
+                        let t = targets.value(i);
+                        graph.adjacency.entry(s).or_default().push(t);
+                    }
+                }
+            }
+
+            #[allow(deprecated)]
+            py.allow_threads(move || {
+                let generator: Box<
+                    dyn crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
+                        + Send
+                        + Sync,
+                > = if let Some(cb) = follow_up_fn {
+                    Box::new(
+                        crate::python::drift_bindings::PythonCallbackFollowUpGenerator {
+                            callback: cb,
+                        },
+                    )
+                } else {
+                    Box::new(
+                        crate::core::sql::graph_udf::drift_search::HeuristicFollowUpGenerator {
+                            graph: &graph,
+                            community_map: &community_map,
+                        },
+                    )
+                };
+
+                crate::core::sql::graph_udf::drift_search::execute_drift_search(
+                    &query,
+                    &graph,
+                    &top_communities,
+                    generator.as_ref(),
+                    &params,
+                )
+            })
+        };
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("all_discovered_nodes", result.all_discovered_nodes)?;
+
+        let actions_list = pyo3::types::PyList::empty(py);
+        for action in result.actions {
+            let action_dict = pyo3::types::PyDict::new(py);
+            action_dict.set_item("action_id", action.action_id)?;
+            action_dict.set_item("query", action.query)?;
+            action_dict.set_item("query_seeds", action.query_seeds)?;
+            action_dict.set_item("score", action.score)?;
+            action_dict.set_item("nodes_discovered", action.nodes_discovered)?;
+            action_dict.set_item("is_complete", action.is_complete)?;
+            action_dict.set_item("parent_id", action.parent_id)?;
+            action_dict.set_item("round_num", action.round_num)?;
+            action_dict.set_item("children", action.children)?;
+            actions_list.append(action_dict)?;
+        }
+        dict.set_item("actions", actions_list)?;
+
+        Ok(dict.into())
+    }
+
+    fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+        match self.execute_sql_internal(query) {
             Ok((batches, schema)) => arrow_batches_to_pyarrow(py, batches, schema),
             Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
         }
     }
 
-    fn manifest(&self, py: Python<'_>) -> PyResult<PyObject> {
+    fn manifest(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         // Load manifest info from table
         let rt = self.table.runtime();
         let manifest_result =
@@ -1665,6 +2073,13 @@ impl PyTable {
                 }
             }
 
+            // Parse optional use_mmap parameter
+            if let Ok(Some(mmap_obj)) = vf.get_item("use_mmap") {
+                if let Ok(use_mmap) = mmap_obj.extract::<bool>() {
+                    params.use_mmap = use_mmap;
+                }
+            }
+
             Some(params)
         } else {
             None
@@ -1674,5 +2089,85 @@ impl PyTable {
             self.table
                 .explain(filter.as_deref(), vs_params.map(|p| vec![p])),
         ))
+    }
+}
+
+impl PyTable {
+    pub(crate) fn execute_sql_internal(
+        &self,
+        query: String,
+    ) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> {
+        let query = sanitize_sql(&query).map_err(|e| e.to_string())?;
+        let rt = self.table.runtime();
+
+        rt.block_on(async {
+            use datafusion::prelude::SessionContext;
+            let mut ctx = SessionContext::new();
+
+            // Register standard functions and aggregates
+            datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;
+            datafusion_functions_aggregate::register_all(&mut ctx).map_err(|e| e.to_string())?;
+
+            let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+
+            // Register table as 't' (short alias, safe from keywords)
+            let provider = Arc::new(crate::core::sql::HyperStreamTableProvider::new(Arc::new(
+                self.table.clone(),
+            )));
+            ctx.register_table("t", provider)
+                .map_err(|e| e.to_string())?;
+
+            // Register vector UDFs (dist_l2, dist_cosine, etc.)
+            for udf in crate::core::sql::vector_udf::all_vector_udfs() {
+                ctx.register_udf(udf);
+            }
+
+            // Register Vector Aggregate functions (Additive in DF 52)
+            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
+                ctx.register_udaf(udf);
+            }
+
+            // Register Graph Aggregate functions
+            for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+                ctx.register_udaf(udf);
+            }
+
+            // Execute
+            let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
+            let mut schema: arrow::datatypes::SchemaRef =
+                std::sync::Arc::new(df.schema().as_arrow().clone());
+            let batches = df.collect().await.map_err(|e| e.to_string())?;
+
+            let mut final_batches = Vec::new();
+            if !batches.is_empty() && batches[0].num_columns() == 1 {
+                if let arrow::datatypes::DataType::Struct(fields) = batches[0].column(0).data_type()
+                {
+                    let new_fields: Vec<Arc<arrow::datatypes::Field>> = fields.to_vec();
+                    schema = Arc::new(arrow::datatypes::Schema::new(new_fields.clone()));
+
+                    for b in &batches {
+                        if let Some(struct_arr) = b
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<arrow::array::StructArray>()
+                        {
+                            let mut cols = Vec::new();
+                            for i in 0..new_fields.len() {
+                                cols.push(struct_arr.column(i).clone());
+                            }
+                            if let Ok(unpacked) = RecordBatch::try_new(schema.clone(), cols) {
+                                final_batches.push(unpacked);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if final_batches.is_empty() {
+                final_batches = batches;
+            }
+
+            Ok((final_batches, schema))
+        })
     }
 }

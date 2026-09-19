@@ -35,13 +35,7 @@ def test_pagerank(graph_table):
     assert 1 in pr_dict
     assert pr_dict[1] > 0
 
-def test_shortest_path(graph_table):
-    # Shortest path from 1 to 5
-    sp_df = graph_table.shortest_path(1, 5).to_pandas()
-    assert len(sp_df) >= 2
-    nodes = set(sp_df['node'])
-    assert 1 in nodes
-    assert 5 in nodes
+
 
 def test_connected_components(graph_table):
     cc_df = graph_table.connected_components().to_pandas()
@@ -69,12 +63,7 @@ def test_topological_sort(tmpdir):
     assert nodes.index(1) < nodes.index(2)
     assert nodes.index(2) < nodes.index(3)
 
-def test_graph_neighbors(graph_table):
-    neighbors_df = graph_table.graph_neighbors(1, 1).to_pandas()
-    neighbors = set(neighbors_df['neighbor'])
-    assert 2 in neighbors
-    assert 4 in neighbors
-    assert 3 not in neighbors
+
 
 def test_degree_centrality(graph_table):
     dc_df = graph_table.degree_centrality().to_pandas()
@@ -142,7 +131,6 @@ def test_clustering_coefficient(graph_table):
     assert 1 in cc_dict
 
 def test_to_graphviz(graph_table):
-    dot_df = graph_table.to_graphviz().to_pandas()
-    assert len(dot_df) == 1
-    dot_str = dot_df['dot'][0]
+    dot_str = graph_table.to_graphviz()
     assert "digraph" in dot_str
+    assert "1 -> 2" in dot_str

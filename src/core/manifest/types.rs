@@ -412,6 +412,14 @@ pub enum IndexAlgorithm {
     CompositeBitmap {
         columns: Vec<String>,
     },
+    CsrGraph {
+        /// Source column (e.g. "src")
+        #[serde(default = "default_src_column")]
+        src_column: String,
+        /// Destination column (e.g. "dst")
+        #[serde(default = "default_dst_column")]
+        dst_column: String,
+    },
 }
 
 impl std::fmt::Display for IndexAlgorithm {
@@ -425,6 +433,7 @@ impl std::fmt::Display for IndexAlgorithm {
             IndexAlgorithm::Bloom { .. } => write!(f, "bloom"),
             IndexAlgorithm::Bitmap => write!(f, "bitmap"),
             IndexAlgorithm::CompositeBitmap { .. } => write!(f, "composite_bitmap"),
+            IndexAlgorithm::CsrGraph { .. } => write!(f, "csr_graph"),
         }
     }
 }
@@ -446,6 +455,12 @@ fn default_quality() -> usize {
 }
 fn default_compression() -> usize {
     8
+}
+fn default_src_column() -> String {
+    "src".to_string()
+}
+fn default_dst_column() -> String {
+    "dst".to_string()
 }
 
 impl IndexAlgorithm {
@@ -971,11 +986,6 @@ impl Manifest {
 }
 // Iceberg Target Manifest Size = 8MB
 pub(crate) const MANIFEST_TARGET_SIZE_BYTES: usize = 8 * 1024 * 1024;
-
-lazy_static::lazy_static! {
-    /// Global registry of commit locks to serialize manifest updates per directory.
-    pub(crate) static ref COMMIT_LOCKS: dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>> = dashmap::DashMap::new();
-}
 
 impl PartitionSpec {
     /// Convert partition values to a Hive-style path string

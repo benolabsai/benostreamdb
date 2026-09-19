@@ -12,6 +12,8 @@ pub struct VectorSearchParams {
     pub probes: Option<usize>,
     /// Optimization: Metadata-only search (don't load vectors if stats alone guarantee match)
     pub stats_only: bool,
+    /// Whether to use memory mapping (mmap) for loading index segments
+    pub use_mmap: bool,
 }
 
 impl VectorSearchParams {
@@ -25,6 +27,7 @@ impl VectorSearchParams {
             ef_search: None,
             probes: None,
             stats_only: false,
+            use_mmap: true, // Default to true for zero-copy
         }
     }
 
@@ -43,6 +46,12 @@ impl VectorSearchParams {
     /// Override the IVF `probes` parameter (higher = more partitions searched, slower).
     pub fn with_probes(mut self, probes: usize) -> Self {
         self.probes = Some(probes);
+        self
+    }
+
+    /// Set whether to use memory mapping for loading the index.
+    pub fn with_mmap(mut self, use_mmap: bool) -> Self {
+        self.use_mmap = use_mmap;
         self
     }
 }

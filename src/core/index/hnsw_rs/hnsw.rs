@@ -838,6 +838,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         layer: u8,
         filter: Option<&roaring::RoaringBitmap>,
     ) -> BinaryHeap<Arc<PointWithOrder<T>>> {
+        let _span = tracing::debug_span!("hnsw_search_layer", layer = layer, ef = ef).entered();
         //
         trace!(
             "entering search_layer with entry_point_id {:?} layer : {:?} ef {:?} ",
@@ -1001,7 +1002,8 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
     ///  The insertion method gives the point an internal id.  
     ///  The slice insertion makes integration with ndarray crate easier than the vector insertion
     pub fn insert_slice(&self, data_with_id: (&[T], usize)) {
-        //
+        let _span = tracing::debug_span!("hnsw_insert", origin_id = data_with_id.1).entered();
+        let _t_start = SystemTime::now();
         let (data, origin_id) = data_with_id;
         let keep_pruned = self.keep_pruned;
         // insert in indexation and get point_id adn generate a new entry_point if necessary

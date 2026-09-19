@@ -376,255 +376,335 @@ impl HybridReader {
 
                 // Perform range/value filtering on inverted index keys
                 for i in 0..batch.num_rows() {
-                    let key_ok = match (key_array.data_type(), &filter.min, &filter.max) {
-                        (arrow::datatypes::DataType::Utf8, Some(min_val), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::StringArray>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let mut ok = true;
-                            if let Some(min_s) = min_val.as_str() {
-                                if filter.min == filter.max {
-                                    ok = val == min_s || val.eq_ignore_ascii_case(min_s);
-                                } else {
-                                    if filter.min_inclusive {
-                                        ok &= val >= min_s
-                                            || val.to_lowercase() >= min_s.to_lowercase();
+                    let key_ok = if let Some(values) = &filter.values {
+                        match key_array.data_type() {
+                            arrow::datatypes::DataType::Utf8 => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::StringArray>()
+                                    .unwrap()
+                                    .value(i);
+                                let mut matched = values.iter().any(|v| {
+                                    if let Some(s) = v.as_str() {
+                                        val == s || val.eq_ignore_ascii_case(s)
                                     } else {
-                                        ok &= val > min_s
-                                            || val.to_lowercase() > min_s.to_lowercase();
+                                        false
                                     }
-                                    if let Some(max_val) = &filter.max {
-                                        if let Some(max_s) = max_val.as_str() {
-                                            if filter.max_inclusive {
-                                                ok &= val <= max_s
-                                                    || val.to_lowercase() <= max_s.to_lowercase();
-                                            } else {
-                                                ok &= val < max_s
-                                                    || val.to_lowercase() < max_s.to_lowercase();
+                                });
+                                if filter.negated {
+                                    matched = !matched;
+                                }
+                                matched
+                            }
+                            arrow::datatypes::DataType::Int32 => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Int32Array>()
+                                    .unwrap()
+                                    .value(i);
+                                let mut matched = values.iter().any(|v| {
+                                    if let Some(vi) = v.as_i64() {
+                                        val == vi as i32
+                                    } else {
+                                        false
+                                    }
+                                });
+                                if filter.negated {
+                                    matched = !matched;
+                                }
+                                matched
+                            }
+                            arrow::datatypes::DataType::Int64 => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Int64Array>()
+                                    .unwrap()
+                                    .value(i);
+                                let mut matched = values.iter().any(|v| {
+                                    if let Some(vi) = v.as_i64() {
+                                        val == vi
+                                    } else {
+                                        false
+                                    }
+                                });
+                                if filter.negated {
+                                    matched = !matched;
+                                }
+                                matched
+                            }
+                            _ => true,
+                        }
+                    } else {
+                        match (key_array.data_type(), &filter.min, &filter.max) {
+                            (arrow::datatypes::DataType::Utf8, Some(min_val), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::StringArray>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let mut ok = true;
+                                if let Some(min_s) = min_val.as_str() {
+                                    if filter.min == filter.max {
+                                        ok = val == min_s || val.eq_ignore_ascii_case(min_s);
+                                    } else {
+                                        if filter.min_inclusive {
+                                            ok &= val >= min_s
+                                                || val.to_lowercase() >= min_s.to_lowercase();
+                                        } else {
+                                            ok &= val > min_s
+                                                || val.to_lowercase() > min_s.to_lowercase();
+                                        }
+                                        if let Some(max_val) = &filter.max {
+                                            if let Some(max_s) = max_val.as_str() {
+                                                if filter.max_inclusive {
+                                                    ok &= val <= max_s
+                                                        || val.to_lowercase()
+                                                            <= max_s.to_lowercase();
+                                                } else {
+                                                    ok &= val < max_s
+                                                        || val.to_lowercase()
+                                                            < max_s.to_lowercase();
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                ok
                             }
-                            ok
-                        }
-                        (arrow::datatypes::DataType::Int32, Some(min_v), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::Int32Array>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let mut ok = true;
-                            if let Some(min_i) = min_v.as_i64() {
-                                let min_i = min_i as i32;
-                                if filter.min_inclusive {
-                                    ok &= val >= min_i;
-                                } else {
-                                    ok &= val > min_i;
+                            (arrow::datatypes::DataType::Int32, Some(min_v), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Int32Array>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let mut ok = true;
+                                if let Some(min_i) = min_v.as_i64() {
+                                    let min_i = min_i as i32;
+                                    if filter.min_inclusive {
+                                        ok &= val >= min_i;
+                                    } else {
+                                        ok &= val > min_i;
+                                    }
+                                    if ok {
+                                        let row_ids_str = row_ids_list
+                                            .value(i)
+                                            .as_any()
+                                            .downcast_ref::<arrow::array::UInt32Array>()
+                                            .map(|a| format!("{:?}", a.values()))
+                                            .unwrap_or_default();
+                                        tracing::debug!(
+                                            "inverted_index_match: col={}, val={}, row_ids={}",
+                                            filter.column,
+                                            val,
+                                            row_ids_str
+                                        );
+                                    }
                                 }
-                                if ok {
-                                    let row_ids_str = row_ids_list
-                                        .value(i)
+                                if let Some(max_v) = &filter.max {
+                                    if let Some(max_i) = max_v.as_i64() {
+                                        let max_i = max_i as i32;
+                                        if filter.max_inclusive {
+                                            ok &= val <= max_i;
+                                        } else {
+                                            ok &= val < max_i;
+                                        }
+                                    }
+                                }
+                                ok
+                            }
+                            (arrow::datatypes::DataType::Int64, Some(min_v), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Int64Array>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let mut ok = true;
+                                if let Some(min_i) = min_v.as_i64() {
+                                    if filter.min_inclusive {
+                                        ok &= val >= min_i;
+                                    } else {
+                                        ok &= val > min_i;
+                                    }
+                                }
+                                if let Some(max_v) = &filter.max {
+                                    if let Some(max_i) = max_v.as_i64() {
+                                        if filter.max_inclusive {
+                                            ok &= val <= max_i;
+                                        } else {
+                                            ok &= val < max_i;
+                                        }
+                                    }
+                                }
+                                ok
+                            }
+                            (arrow::datatypes::DataType::Float64, Some(min_v), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Float64Array>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let mut ok = true;
+                                if let Some(min_f) = min_v.as_f64() {
+                                    if filter.min_inclusive {
+                                        ok &= val >= min_f;
+                                    } else {
+                                        ok &= val > min_f;
+                                    }
+                                }
+                                if let Some(max_v) = &filter.max {
+                                    if let Some(max_f) = max_v.as_f64() {
+                                        if filter.max_inclusive {
+                                            ok &= val <= max_f;
+                                        } else {
+                                            ok &= val < max_f;
+                                        }
+                                    }
+                                }
+                                ok
+                            }
+                            (arrow::datatypes::DataType::Date32, Some(min_v), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Date32Array>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let mut ok = true;
+                                if let Some(min_s) = min_v.as_str() {
+                                    let min_date =
+                                        chrono::NaiveDate::parse_from_str(min_s, "%Y-%m-%d")
+                                            .unwrap_or(
+                                                chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                                    .unwrap(),
+                                            );
+                                    let min_i = (min_date
+                                        - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                                    .num_days()
+                                        as i32;
+                                    if filter.min_inclusive {
+                                        ok &= val >= min_i;
+                                    } else {
+                                        ok &= val > min_i;
+                                    }
+                                }
+                                if let Some(max_v) = &filter.max {
+                                    if let Some(max_s) = max_v.as_str() {
+                                        let max_date =
+                                            chrono::NaiveDate::parse_from_str(max_s, "%Y-%m-%d")
+                                                .unwrap_or(
+                                                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+                                                        .unwrap(),
+                                                );
+                                        let max_i = (max_date
+                                            - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+                                        .num_days()
+                                            as i32;
+                                        if filter.max_inclusive {
+                                            ok &= val <= max_i;
+                                        } else {
+                                            ok &= val < max_i;
+                                        }
+                                    }
+                                }
+                                ok
+                            }
+                            // Time32 range
+                            (arrow::datatypes::DataType::Time32(unit), Some(min), _) => {
+                                let val = match unit {
+                                    arrow::datatypes::TimeUnit::Second => key_array
                                         .as_any()
-                                        .downcast_ref::<arrow::array::UInt32Array>()
-                                        .map(|a| format!("{:?}", a.values()))
-                                        .unwrap_or_default();
-                                    tracing::debug!(
-                                        "inverted_index_match: col={}, val={}, row_ids={}",
-                                        filter.column,
-                                        val,
-                                        row_ids_str
-                                    );
-                                }
-                            }
-                            if let Some(max_v) = &filter.max {
-                                if let Some(max_i) = max_v.as_i64() {
-                                    let max_i = max_i as i32;
-                                    if filter.max_inclusive {
-                                        ok &= val <= max_i;
-                                    } else {
-                                        ok &= val < max_i;
-                                    }
-                                }
-                            }
-                            ok
-                        }
-                        (arrow::datatypes::DataType::Int64, Some(min_v), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::Int64Array>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let mut ok = true;
-                            if let Some(min_i) = min_v.as_i64() {
-                                if filter.min_inclusive {
-                                    ok &= val >= min_i;
-                                } else {
-                                    ok &= val > min_i;
-                                }
-                            }
-                            if let Some(max_v) = &filter.max {
-                                if let Some(max_i) = max_v.as_i64() {
-                                    if filter.max_inclusive {
-                                        ok &= val <= max_i;
-                                    } else {
-                                        ok &= val < max_i;
-                                    }
-                                }
-                            }
-                            ok
-                        }
-                        (arrow::datatypes::DataType::Float64, Some(min_v), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::Float64Array>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let mut ok = true;
-                            if let Some(min_f) = min_v.as_f64() {
-                                if filter.min_inclusive {
-                                    ok &= val >= min_f;
-                                } else {
-                                    ok &= val > min_f;
-                                }
-                            }
-                            if let Some(max_v) = &filter.max {
-                                if let Some(max_f) = max_v.as_f64() {
-                                    if filter.max_inclusive {
-                                        ok &= val <= max_f;
-                                    } else {
-                                        ok &= val < max_f;
-                                    }
-                                }
-                            }
-                            ok
-                        }
-                        (arrow::datatypes::DataType::Date32, Some(min_v), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::Date32Array>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let mut ok = true;
-                            if let Some(min_i) = min_v.as_i64() {
-                                let min_i = min_i as i32;
-                                if filter.min_inclusive {
-                                    ok &= val >= min_i;
-                                } else {
-                                    ok &= val > min_i;
-                                }
-                            }
-                            if let Some(max_v) = &filter.max {
-                                if let Some(max_i) = max_v.as_i64() {
-                                    let max_i = max_i as i32;
-                                    if filter.max_inclusive {
-                                        ok &= val <= max_i;
-                                    } else {
-                                        ok &= val < max_i;
-                                    }
-                                }
-                            }
-                            ok
-                        }
-                        // Time32 range
-                        (arrow::datatypes::DataType::Time32(unit), Some(min), _) => {
-                            let val = match unit {
-                                arrow::datatypes::TimeUnit::Second => key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Time32SecondArray>()
-                                    .map(|a| a.value(i)),
-                                arrow::datatypes::TimeUnit::Millisecond => key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Time32MillisecondArray>()
-                                    .map(|a| a.value(i)),
-                                _ => None,
-                            };
+                                        .downcast_ref::<arrow::array::Time32SecondArray>()
+                                        .map(|a| a.value(i)),
+                                    arrow::datatypes::TimeUnit::Millisecond => key_array
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::Time32MillisecondArray>()
+                                        .map(|a| a.value(i)),
+                                    _ => None,
+                                };
 
-                            if let Some(v) = val {
-                                let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
-                                if filter.min_inclusive {
-                                    v >= min_i
+                                if let Some(v) = val {
+                                    let min_i = min.as_i64().unwrap_or(i64::MIN) as i32;
+                                    if filter.min_inclusive {
+                                        v >= min_i
+                                    } else {
+                                        v > min_i
+                                    }
                                 } else {
-                                    v > min_i
+                                    true // Default to true if type check fails to avoid false negatives? Or false? usually false.
                                 }
-                            } else {
-                                true // Default to true if type check fails to avoid false negatives? Or false? usually false.
                             }
-                        }
-                        // Time64 range
-                        (arrow::datatypes::DataType::Time64(unit), Some(min), _) => {
-                            let val = match unit {
-                                arrow::datatypes::TimeUnit::Microsecond => key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Time64MicrosecondArray>()
-                                    .map(|a| a.value(i)),
-                                arrow::datatypes::TimeUnit::Nanosecond => key_array
-                                    .as_any()
-                                    .downcast_ref::<arrow::array::Time64NanosecondArray>()
-                                    .map(|a| a.value(i)),
-                                _ => None,
-                            };
+                            // Time64 range
+                            (arrow::datatypes::DataType::Time64(unit), Some(min), _) => {
+                                let val = match unit {
+                                    arrow::datatypes::TimeUnit::Microsecond => key_array
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::Time64MicrosecondArray>()
+                                        .map(|a| a.value(i)),
+                                    arrow::datatypes::TimeUnit::Nanosecond => key_array
+                                        .as_any()
+                                        .downcast_ref::<arrow::array::Time64NanosecondArray>()
+                                        .map(|a| a.value(i)),
+                                    _ => None,
+                                };
 
-                            if let Some(v) = val {
-                                let min_i = min.as_i64().unwrap_or(i64::MIN);
-                                if filter.min_inclusive {
-                                    v >= min_i
+                                if let Some(v) = val {
+                                    let min_i = min.as_i64().unwrap_or(i64::MIN);
+                                    if filter.min_inclusive {
+                                        v >= min_i
+                                    } else {
+                                        v > min_i
+                                    }
                                 } else {
-                                    v > min_i
+                                    true
                                 }
-                            } else {
-                                true
                             }
-                        }
-                        // Boolean equality
-                        (arrow::datatypes::DataType::Boolean, Some(min), _) => {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::BooleanArray>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            let target = min.as_bool().unwrap_or(false);
+                            // Boolean equality
+                            (arrow::datatypes::DataType::Boolean, Some(min), _) => {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::BooleanArray>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                let target = min.as_bool().unwrap_or(false);
 
-                            val == target
-                        }
-                        // Binary equality
-                        (arrow::datatypes::DataType::Binary, Some(min), Some(max))
-                            if min == max && filter.min_inclusive && filter.max_inclusive =>
-                        {
-                            let val = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::BinaryArray>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            // Assume filter value is string or bytes? JSON usually string.
-                            if let Some(s) = min.as_str() {
-                                val == s.as_bytes()
-                            } else {
-                                false
+                                val == target
                             }
-                        }
-                        // Decimal128 range (Best effort f64 comparison for now)
-                        (arrow::datatypes::DataType::Decimal128(_p, s), Some(min), _) => {
-                            let val_i128 = key_array
-                                .as_any()
-                                .downcast_ref::<arrow::array::Decimal128Array>()
-                                .context("Invalid cast")?
-                                .value(i);
-                            // Convert i128 to f64 for comparison against JSON number
-                            // Value = i128 / 10^scale
-                            let divisor = 10_f64.powi(*s as i32);
-                            let val_f64 = val_i128 as f64 / divisor;
+                            // Binary equality
+                            (arrow::datatypes::DataType::Binary, Some(min), Some(max))
+                                if min == max && filter.min_inclusive && filter.max_inclusive =>
+                            {
+                                let val = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::BinaryArray>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                // Assume filter value is string or bytes? JSON usually string.
+                                if let Some(s) = min.as_str() {
+                                    val == s.as_bytes()
+                                } else {
+                                    false
+                                }
+                            }
+                            // Decimal128 range (Best effort f64 comparison for now)
+                            (arrow::datatypes::DataType::Decimal128(_p, s), Some(min), _) => {
+                                let val_i128 = key_array
+                                    .as_any()
+                                    .downcast_ref::<arrow::array::Decimal128Array>()
+                                    .context("Invalid cast")?
+                                    .value(i);
+                                // Convert i128 to f64 for comparison against JSON number
+                                // Value = i128 / 10^scale
+                                let divisor = 10_f64.powi(*s as i32);
+                                let val_f64 = val_i128 as f64 / divisor;
 
-                            let min_f = min.as_f64().unwrap_or(f64::MIN);
-                            if filter.min_inclusive {
-                                val_f64 >= min_f
-                            } else {
-                                val_f64 > min_f
+                                let min_f = min.as_f64().unwrap_or(f64::MIN);
+                                if filter.min_inclusive {
+                                    val_f64 >= min_f
+                                } else {
+                                    val_f64 > min_f
+                                }
                             }
+                            _ => true,
                         }
-                        _ => true,
                     };
 
                     if key_ok {

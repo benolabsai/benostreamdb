@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+pub mod algorithms;
 pub mod cache;
 pub mod catalog;
 pub mod clustering;

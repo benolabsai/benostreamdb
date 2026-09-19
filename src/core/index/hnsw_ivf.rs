@@ -1030,8 +1030,15 @@ impl HnswIvfIndex {
             .collect();
 
         // Step 3: Merge and return top-k
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        println!("Candidates before sort/dedup: len={}", candidates.len());
+        candidates.sort_by(|a, b| {
+            match a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal) {
+                std::cmp::Ordering::Equal => a.0.cmp(&b.0),
+                other => other,
+            }
+        });
         candidates.dedup_by_key(|x| x.0); // Remove duplicates
+        println!("Candidates after dedup: len={}", candidates.len());
         candidates.truncate(k);
         let t_fine = t_fine_start.elapsed();
         tracing::debug!(
@@ -1356,14 +1363,19 @@ impl HnswIvfIndex {
         Ok(index_arc)
     }
 
-    pub async fn load_async(store: Arc<dyn ObjectStore>, base_path: &str) -> Result<Arc<Self>> {
-        Self::load_async_with_cache_key(store, base_path, base_path).await
+    pub async fn load_async(
+        store: Arc<dyn ObjectStore>,
+        base_path: &str,
+        use_mmap: bool,
+    ) -> Result<Arc<Self>> {
+        Self::load_async_with_cache_key(store, base_path, base_path, use_mmap).await
     }
 
     pub async fn load_async_with_cache_key(
         store: Arc<dyn ObjectStore>,
         base_path: &str,
         cache_key: &str,
+        use_mmap: bool,
     ) -> Result<Arc<Self>> {
         use crate::core::cache::{DiskCache, HNSW_IVF_CACHE};
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -1469,24 +1481,33 @@ impl HnswIvfIndex {
         }
 
         let fetch_concurrency = 16;
-        let root_path_clone = root_path.clone();
 
         // Phase 1: Load all cluster bytes in parallel (I/O-bound, via futures).
+        enum GraphData {
+            Mmap(Arc<memmap2::Mmap>),
+            Bytes(bytes::Bytes),
+        }
+
         struct ClusterBytes {
             cluster_id: usize,
-            graph: bytes::Bytes,
+            graph: GraphData,
             mapping: bytes::Bytes,
         }
+
         let byte_futures = futures::stream::iter(cluster_ids.clone())
-            .map(move |cluster_id| {
-                let root_path = root_path_clone.clone();
+            .map(|cluster_id| {
+                let root_path = root_path.clone();
                 let dc = disk_cache.clone();
                 async move {
                     let hnsw_key = format!("{}.cluster_{}.hnsw.graph", root_path, cluster_id);
                     let mapping_key =
                         format!("{}.cluster_{}.mapping.parquet", root_path, cluster_id);
 
-                    let res_graph = dc.get_bytes(&hnsw_key).await?;
+                    let res_graph = if use_mmap {
+                        GraphData::Mmap(dc.get_mmap(&hnsw_key).await?)
+                    } else {
+                        GraphData::Bytes(dc.get_bytes(&hnsw_key).await?)
+                    };
                     let res_mapping = dc.get_bytes(&mapping_key).await?;
 
                     Ok(ClusterBytes {
@@ -1507,25 +1528,23 @@ impl HnswIvfIndex {
                 let cb = cb_res?;
                 let cluster_id = cb.cluster_id;
 
-                let graph_bytes = cb.graph.to_vec();
-
                 let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
                     match q_impl {
                         QuantizerImpl::TurboQuant(q) => {
                             if q.bits() == 4 {
                                 HnswGraph::TurboQuant4Arrow(
-                                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                        &graph_bytes,
-                                        crate::core::index::distance::DistL2u4,
-                                    )
+                                    match cb.graph {
+                                        GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u4),
+                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u4),
+                                    }
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
                             } else {
                                 HnswGraph::TurboQuant8Arrow(
-                                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                        &graph_bytes,
-                                        crate::core::index::distance::DistL2u8,
-                                    )
+                                    match cb.graph {
+                                        GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, crate::core::index::distance::DistL2u8),
+                                        GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, crate::core::index::distance::DistL2u8),
+                                    }
                                     .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                                 )
                             }
@@ -1535,10 +1554,10 @@ impl HnswIvfIndex {
                                 pq: std::sync::Arc::new(pq.clone()),
                             };
                             HnswGraph::PqArrow(
-                                crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                    &graph_bytes,
-                                    dist,
-                                )
+                                match cb.graph {
+                                    GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, dist),
+                                    GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, dist),
+                                }
                                 .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                             )
                         }
@@ -1546,45 +1565,45 @@ impl HnswIvfIndex {
                 } else {
                     match metric {
                         VectorMetric::L2 => HnswGraph::L2Arrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistL2,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL2),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistL2),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Cosine => HnswGraph::CosineArrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistCosine,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistCosine),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistCosine),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistDot,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistDot),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistDot),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::L1 => HnswGraph::L1Arrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistL1,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistL1),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistL1),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Hamming => HnswGraph::HammingArrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistHamming,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistHamming),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistHamming),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                         VectorMetric::Jaccard => HnswGraph::JaccardArrow(
-                            crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                                &graph_bytes,
-                                DistJaccard,
-                            )
+                            match cb.graph {
+                                GraphData::Mmap(m) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_mmap(m, DistJaccard),
+                                GraphData::Bytes(b) => crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(&b, DistJaccard),
+                            }
                             .map_err(|e| anyhow::anyhow!("HNSW load failed: {}", e))?,
                         ),
                     }

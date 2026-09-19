@@ -10,8 +10,6 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
-use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
 use tracing;
@@ -85,7 +83,8 @@ impl Compactor {
         );
 
         // 1. Discovery: ONLY consider segments active in the latest manifest
-        let (_manifest, all_entries, _) = self.manifest.load_latest_full().await?;
+        let (manifest, all_entries, _) = self.manifest.load_latest_full().await?;
+        let partition_spec = manifest.partition_spec.clone();
         if all_entries.is_empty() {
             tracing::info!("Manifest is empty. Nothing to compact.");
             return Ok(());
@@ -109,37 +108,24 @@ impl Compactor {
             return Ok(());
         }
 
-        // 2. Group by Partition & BinPack
-        let mut partition_groups: HashMap<
-            Vec<(String, Value)>,
-            Vec<crate::core::manifest::ManifestEntry>,
-        > = HashMap::new();
-        for candidate in candidates {
-            let mut key: Vec<(String, Value)> =
-                candidate.partition_values.clone().into_iter().collect();
-            key.sort_by(|a, b| a.0.cmp(&b.0));
-            partition_groups.entry(key).or_default().push(candidate);
-        }
-
+        // 2. BinPack (Cross-Partition enabled by treating all candidates as one group)
         let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();
-        for (_part_key, group) in partition_groups {
-            let mut current_bin = Vec::new();
-            let mut current_size = 0_i64;
+        let mut current_bin = Vec::new();
+        let mut current_size = 0_i64;
 
-            for candidate in group {
-                if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
-                    && !current_bin.is_empty()
-                {
-                    bins.push(current_bin);
-                    current_bin = Vec::new();
-                    current_size = 0;
-                }
-                current_size += candidate.file_size_bytes;
-                current_bin.push(candidate);
-            }
-            if !current_bin.is_empty() {
+        for candidate in candidates {
+            if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
+                && !current_bin.is_empty()
+            {
                 bins.push(current_bin);
+                current_bin = Vec::new();
+                current_size = 0;
             }
+            current_size += candidate.file_size_bytes;
+            current_bin.push(candidate);
+        }
+        if !current_bin.is_empty() {
+            bins.push(current_bin);
         }
 
         tracing::info!(
@@ -159,11 +145,12 @@ impl Compactor {
         // Iterate over bins and map to futures.
 
         // We'll use a stream to limit concurrency.
-        let results: Vec<Result<(crate::core::manifest::ManifestEntry, Vec<String>)>> =
+        let results: Vec<Result<(Vec<crate::core::manifest::ManifestEntry>, Vec<String>)>> =
             futures::stream::iter(bins)
                 .map(|bin| {
                     let compactor = self.clone(); // Needs Clone derive on Compactor
-                    async move { compactor.compact_bin(bin).await }
+                    let pspec = partition_spec.clone();
+                    async move { compactor.compact_bin(bin, &pspec).await }
                 })
                 .buffer_unordered(max_concurrent)
                 .collect()
@@ -175,8 +162,8 @@ impl Compactor {
 
         for res in results {
             match res {
-                Ok((new_entry, old_paths)) => {
-                    all_new_entries.push(new_entry);
+                Ok((new_entries, old_paths)) => {
+                    all_new_entries.extend(new_entries);
                     all_old_paths.extend(old_paths);
                 }
                 Err(e) => {
@@ -208,11 +195,12 @@ impl Compactor {
         Ok(())
     }
 
-    /// Compacts a single bin and returns the (NewEntry, OldPaths) without committing.
+    /// Compacts a single bin and returns the (NewEntries, OldPaths) without committing.
     async fn compact_bin(
         &self,
         bin: Vec<crate::core::manifest::ManifestEntry>,
-    ) -> Result<(crate::core::manifest::ManifestEntry, Vec<String>)> {
+        partition_spec: &crate::core::manifest::PartitionSpec,
+    ) -> Result<(Vec<crate::core::manifest::ManifestEntry>, Vec<String>)> {
         if bin.is_empty() {
             return Err(anyhow::anyhow!("Empty bin"));
         }
@@ -230,15 +218,6 @@ impl Compactor {
                 )
             })?
             .to_string();
-
-        let new_segment_id = format!(
-            "compacted_{}_{}",
-            chrono::Utc::now().format("%Y%m%d%H%M%S"),
-            temp_id
-        );
-
-        let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id);
-        let writer = HybridSegmentWriter::new(writer_config);
 
         // B. Stream and Accumulate All Batches
         let mut all_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
@@ -271,160 +250,181 @@ impl Compactor {
         }
 
         let schema = all_batches[0].schema();
-        let mut merged_batch = arrow::compute::concat_batches(&schema, &all_batches)?;
-        let total_rows = merged_batch.num_rows() as i64;
+        let merged_batch = arrow::compute::concat_batches(&schema, &all_batches)?;
 
-        // APPLY CLUSTERING
-        if let Some(clustering) = &self.options.clustering {
-            if clustering.strategy == "zorder" {
-                tracing::info!(
-                    "Applying Z-Order clustering on columns: {:?}",
-                    clustering.columns
-                );
-                merged_batch =
-                    crate::core::clustering::apply_zorder(&merged_batch, &clustering.columns)?;
-            } else if clustering.strategy == "hilbert" {
-                tracing::info!(
-                    "Applying Hilbert clustering on columns: {:?}",
-                    clustering.columns
-                );
-                merged_batch =
-                    crate::core::clustering::apply_hilbert(&merged_batch, &clustering.columns)?;
+        let chunks = partition_spec.partition_batch(&merged_batch)?;
+        let mut new_entries = Vec::new();
+
+        for (part_vals, mut chunk_batch) in chunks {
+            // APPLY CLUSTERING
+            let mut min_clustering_score = None;
+            let mut max_clustering_score = None;
+            let mut clustering_strategy = None;
+            let mut clustering_columns = None;
+            let mut normalization_mins = None;
+            let mut normalization_maxs = None;
+
+            if let Some(clustering) = &self.options.clustering {
+                clustering_strategy = Some(clustering.strategy.clone());
+                clustering_columns = Some(clustering.columns.clone());
+
+                if clustering.strategy == "zorder" {
+                    tracing::info!(
+                        "Applying Z-Order clustering on columns: {:?}",
+                        clustering.columns
+                    );
+                    let (scores, mins, maxs) = crate::core::clustering::compute_zorder_scores(
+                        &chunk_batch,
+                        &clustering.columns,
+                    )?;
+                    if !scores.is_empty() {
+                        min_clustering_score = Some(scores.value(0));
+                        max_clustering_score = Some(scores.value(scores.len() - 1));
+                        normalization_mins = Some(mins);
+                        normalization_maxs = Some(maxs);
+                    }
+                    chunk_batch =
+                        crate::core::clustering::apply_zorder(&chunk_batch, &clustering.columns)?;
+                } else if clustering.strategy == "hilbert" {
+                    tracing::info!(
+                        "Applying Hilbert clustering on columns: {:?}",
+                        clustering.columns
+                    );
+                    let (scores, mins, maxs) = crate::core::clustering::compute_hilbert_scores(
+                        &chunk_batch,
+                        &clustering.columns,
+                    )?;
+                    if !scores.is_empty() {
+                        min_clustering_score = Some(scores.value(0));
+                        max_clustering_score = Some(scores.value(scores.len() - 1));
+                        normalization_mins = Some(mins);
+                        normalization_maxs = Some(maxs);
+                    }
+                    chunk_batch =
+                        crate::core::clustering::apply_hilbert(&chunk_batch, &clustering.columns)?;
+                }
             }
-        }
 
-        writer.write_batch(&merged_batch)?;
+            let new_segment_id = format!(
+                "compacted_{}_{}_{}",
+                chrono::Utc::now().format("%Y%m%d%H%M%S"),
+                temp_id,
+                uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
+            );
 
-        // C. Upload Artifacts to Object Store
-        let generated_files = writer.get_generated_files();
+            let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id);
+            let writer = HybridSegmentWriter::new(writer_config);
 
-        let mut main_parquet_path = String::new();
-        let mut main_parquet_size = 0;
-        let mut index_files = Vec::new();
-        let mut file_checksum = None;
+            writer.write_batch(&chunk_batch)?;
 
-        for local_path in generated_files {
-            let file_name = std::path::Path::new(&local_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| anyhow::anyhow!("Invalid generated file path: {}", local_path))?;
-            let file_size = fs::metadata(&local_path).await?.len();
+            // C. Upload Artifacts to Object Store
+            let generated_files = writer.get_generated_files();
 
-            let remote_path = if self.base_path.is_empty() {
-                Path::from(file_name)
-            } else {
-                Path::from(format!("{}/{}", self.base_path, file_name))
+            let mut main_parquet_path = String::new();
+            let mut main_parquet_size = 0;
+            let mut index_files = Vec::new();
+            let mut file_checksum = None;
+
+            for local_path in generated_files {
+                let file_name = std::path::Path::new(&local_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Invalid generated file path: {}", local_path)
+                    })?;
+                let file_size = fs::metadata(&local_path).await?.len();
+
+                let remote_path = if self.base_path.is_empty() {
+                    Path::from(file_name)
+                } else {
+                    Path::from(format!("{}/{}", self.base_path, file_name))
+                };
+
+                let content = fs::read(&local_path).await?;
+
+                if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
+                    use sha2::{Digest, Sha256};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&content);
+                    file_checksum = Some(format!("{:x}", hasher.finalize()));
+                }
+
+                self.store.put(&remote_path, content.into()).await?;
+
+                let remote_path_str = remote_path.to_string();
+
+                if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
+                    main_parquet_path = remote_path_str;
+                    main_parquet_size = file_size;
+                    metrics::counter!("hyperstreamdb_compaction_bytes_written")
+                        .increment(file_size);
+                } else if file_name.ends_with(".inv.parquet") {
+                    let parts: Vec<&str> = file_name.split('.').collect();
+                    let column_name = if parts.len() >= 4 {
+                        Some(parts[1].to_string())
+                    } else {
+                        None
+                    };
+                    index_files.push(crate::core::manifest::IndexFile {
+                        file_path: remote_path_str,
+                        index_type: "inverted".to_string(),
+                        column_name,
+                        blob_type: None,
+                        offset: None,
+                        length: None,
+                    });
+                } else {
+                    let index_type = if file_name.contains(".hnsw") {
+                        "vector"
+                    } else if file_name.contains(".idx") {
+                        "scalar"
+                    } else {
+                        "unknown"
+                    }
+                    .to_string();
+
+                    let parts: Vec<&str> = file_name.split('.').collect();
+                    let column_name = if parts.len() >= 3 {
+                        Some(parts[parts.len() - 2].to_string())
+                    } else {
+                        None
+                    };
+
+                    index_files.push(crate::core::manifest::IndexFile {
+                        file_path: remote_path_str,
+                        index_type,
+                        column_name,
+                        blob_type: None,
+                        offset: None,
+                        length: None,
+                    });
+                }
+            }
+
+            let column_stats = writer.get_stats();
+
+            let entry = crate::core::manifest::ManifestEntry {
+                file_path: main_parquet_path,
+                file_size_bytes: main_parquet_size as i64,
+                record_count: chunk_batch.num_rows() as i64,
+                partition_values: part_vals.into_iter().collect(),
+                index_files,
+                file_checksum,
+                column_stats,
+                clustering_strategy,
+                clustering_columns,
+                min_clustering_score,
+                max_clustering_score,
+                normalization_mins,
+                normalization_maxs,
+                ..Default::default()
             };
 
-            let content = fs::read(&local_path).await?;
-
-            if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
-                use sha2::{Digest, Sha256};
-                let mut hasher = Sha256::new();
-                hasher.update(&content);
-                file_checksum = Some(format!("{:x}", hasher.finalize()));
-            }
-
-            self.store.put(&remote_path, content.into()).await?;
-
-            let remote_path_str = remote_path.to_string();
-
-            if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
-                main_parquet_path = remote_path_str;
-                main_parquet_size = file_size;
-                metrics::counter!("hyperstreamdb_compaction_bytes_written").increment(file_size);
-            } else if file_name.ends_with(".inv.parquet") {
-                // Inverted index file
-                let parts: Vec<&str> = file_name.split('.').collect();
-                // Format: segment_id.column_name.inv.parquet -> column is parts[1]
-                let column_name = if parts.len() >= 4 {
-                    Some(parts[1].to_string())
-                } else {
-                    None
-                };
-                index_files.push(crate::core::manifest::IndexFile {
-                    file_path: remote_path_str,
-                    index_type: "inverted".to_string(),
-                    column_name,
-                    blob_type: None,
-                    offset: None,
-                    length: None,
-                });
-            } else {
-                let index_type = if file_name.contains(".hnsw") {
-                    "vector"
-                } else if file_name.contains(".idx") {
-                    "scalar"
-                } else {
-                    "unknown"
-                }
-                .to_string();
-
-                let parts: Vec<&str> = file_name.split('.').collect();
-                let column_name = if parts.len() >= 3 {
-                    Some(parts[parts.len() - 2].to_string())
-                } else {
-                    None
-                };
-
-                index_files.push(crate::core::manifest::IndexFile {
-                    file_path: remote_path_str,
-                    index_type,
-                    column_name,
-                    blob_type: None,
-                    offset: None,
-                    length: None,
-                });
-            }
+            new_entries.push(entry);
         }
 
         // e. Cleanup Local
         fs::remove_dir_all(&temp_dir_path).await?;
-
-        // D. Prepare Result (No Commit)
-        let column_stats = writer.get_stats(); // Use the merged stats
-
-        let mut min_clustering_score = None;
-        let mut max_clustering_score = None;
-        let mut clustering_strategy = None;
-        let mut clustering_columns = None;
-        let mut normalization_mins = None;
-        let mut normalization_maxs = None;
-
-        if let Some(clustering) = &self.options.clustering {
-            clustering_strategy = Some(clustering.strategy.clone());
-            clustering_columns = Some(clustering.columns.clone());
-
-            let (scores, mins, maxs) = if clustering.strategy == "zorder" {
-                crate::core::clustering::compute_zorder_scores(&merged_batch, &clustering.columns)?
-            } else {
-                crate::core::clustering::compute_hilbert_scores(&merged_batch, &clustering.columns)?
-            };
-
-            if !scores.is_empty() {
-                min_clustering_score = Some(scores.value(0));
-                max_clustering_score = Some(scores.value(scores.len() - 1));
-                normalization_mins = Some(mins);
-                normalization_maxs = Some(maxs);
-            }
-        }
-
-        let new_entry = crate::core::manifest::ManifestEntry {
-            file_path: main_parquet_path,
-            file_size_bytes: main_parquet_size as i64,
-            record_count: total_rows,
-            file_checksum,
-            index_files,
-            delete_files: vec![], // Compaction garbage collects deletes, so new segment has no deletes
-            column_stats,
-            partition_values: bin[0].partition_values.clone(),
-            clustering_strategy,
-            clustering_columns,
-            min_clustering_score,
-            max_clustering_score,
-            normalization_mins,
-            normalization_maxs,
-        };
 
         let mut old_paths = Vec::new();
         for entry in &bin {
@@ -432,12 +432,12 @@ impl Compactor {
         }
 
         tracing::info!(
-            "Compacted bin {} -> {}",
+            "Compacted bin of {} files into {} new partitioned segments",
             old_paths.len(),
-            new_entry.file_path
+            new_entries.len()
         );
 
-        Ok((new_entry, old_paths))
+        Ok((new_entries, old_paths))
     }
 }
 

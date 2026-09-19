@@ -280,6 +280,20 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                 Ok(IndexAlgorithm::Bloom { fpr })
             }
             "bitmap" | "inverted" => Ok(IndexAlgorithm::Bitmap),
+            "graph" | "csr" => {
+                let src_column = dict
+                    .get_item("src_column")?
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_else(|| "src".to_string());
+                let dst_column = dict
+                    .get_item("dst_column")?
+                    .and_then(|v| v.extract().ok())
+                    .unwrap_or_else(|| "dst".to_string());
+                Ok(IndexAlgorithm::CsrGraph {
+                    src_column,
+                    dst_column,
+                })
+            }
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unknown index type: {}",
                 type_str

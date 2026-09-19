@@ -101,9 +101,3 @@ impl ManifestManager {
         }
     }
 }
-
-// ── Global commit locks ─────────────────────────────────────────────────────
-// COMMIT_LOCKS is defined in types.rs via lazy_static! macro.
-// Re-export for use by commit submodule.
-#[allow(unused_imports, dead_code)]
-pub(crate) use super::types::COMMIT_LOCKS;

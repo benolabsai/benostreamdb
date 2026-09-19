@@ -33,7 +33,9 @@ def test_query_planning():
     ], schema=schema)
 
     table.write_arrow(batch1)
+    table.commit()
     table.write_arrow(batch2)
+    table.commit()
     table.write_arrow(batch3)
     table.commit()
 

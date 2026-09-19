@@ -290,6 +290,7 @@ pub struct VectorSearchRequest {
     pub config: QueryConfig,
     pub ef_search: Option<usize>,
     pub columns: Option<Vec<String>>,
+    pub use_mmap: bool,
 }
 
 impl VectorSearchRequest {
@@ -298,6 +299,7 @@ impl VectorSearchRequest {
         query: crate::core::index::VectorValue,
         k: usize,
         metric: VectorMetric,
+        use_mmap: bool,
     ) -> Self {
         Self {
             column,
@@ -308,6 +310,7 @@ impl VectorSearchRequest {
             config: QueryConfig::default(),
             ef_search: None,
             columns: None,
+            use_mmap,
         }
     }
 
@@ -617,6 +620,7 @@ pub async fn execute_vector_search_with_config(
                         metric,
                         ef_search_val,
                         target_schema,
+                        request.use_mmap,
                     )
                     .await?;
                 // Tag each result batch with its segment ID
@@ -1104,4 +1108,118 @@ mod tests {
             }
         }
     }
+}
+pub async fn execute_vector_search_raw_with_config(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+    base_uri: &str,
+    request: VectorSearchRequest,
+) -> Result<Vec<crate::core::search::ScoredResult>> {
+    use futures::future::join_all;
+
+    let embedding_dim = match &request.query {
+        crate::core::index::VectorValue::Float32(v) => v.len(),
+        crate::core::index::VectorValue::Float16(v) => v.len(),
+        crate::core::index::VectorValue::Binary(v) => v.len() * 8,
+        crate::core::index::VectorValue::Sparse(s) => s.dim,
+        crate::core::index::VectorValue::Keyword(_) => 0,
+    };
+    let avg_rows_per_segment = if !entries.is_empty() {
+        entries
+            .iter()
+            .map(|e| e.record_count as usize)
+            .sum::<usize>()
+            / entries.len()
+    } else {
+        10_000
+    };
+    let max_parallel = request
+        .config
+        .auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_parallel));
+
+    let search_futures: Vec<_> = entries
+        .into_iter()
+        .map(|entry| {
+            let store = store.clone();
+            let base_uri = base_uri.to_string();
+            let column = request.column.clone();
+            let query_clone = request.query.clone();
+            let semaphore = semaphore.clone();
+            let ef_search_val = request.ef_search;
+            let metric = request.metric;
+            let data_store_clone = data_store.clone();
+            async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+                let file_path_str = entry.file_path.clone();
+                let segment_id = file_path_str
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&file_path_str)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&file_path_str)
+                    .to_string();
+                let path = std::path::Path::new(&file_path_str);
+                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+                let full_base_uri = if rel_parent.is_empty() {
+                    base_uri.clone()
+                } else {
+                    format!("{}/{}", base_uri, rel_parent)
+                };
+                let config = crate::SegmentConfig::new(&full_base_uri, &segment_id)
+                    .with_parquet_path(entry.file_path.clone())
+                    .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
+                    .with_delete_files(entry.delete_files.clone())
+                    .with_index_files(entry.index_files.clone());
+                let reader =
+                    crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
+                let results = reader
+                    .vector_search_index_raw(
+                        &column,
+                        &query_clone,
+                        request.k,
+                        metric,
+                        ef_search_val,
+                        request.use_mmap,
+                    )
+                    .await?;
+                let tagged: Vec<crate::core::search::ScoredResult> = results
+                    .into_iter()
+                    .map(|(row_id, score)| crate::core::search::ScoredResult {
+                        segment_id: segment_id.clone(),
+                        row_id: row_id as u32,
+                        score,
+                    })
+                    .collect();
+                Ok(tagged)
+            }
+        })
+        .collect();
+
+    let results: Vec<anyhow::Result<Vec<crate::core::search::ScoredResult>>> =
+        join_all(search_futures).await;
+    let mut all_results = Vec::new();
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(tagged) => all_results.extend(tagged),
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Vector search raw failed on segment {}: {}",
+                    i,
+                    e
+                ))
+            }
+        }
+    }
+    all_results.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    all_results.truncate(request.k);
+    Ok(all_results)
 }

@@ -134,6 +134,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
             hyperstreamdb::core::index::VectorMetric::L2,
             None,
             None,
+            false, // use_mmap
         )
         .await?;
 
@@ -286,7 +287,16 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
     // Query for vector 42 — it should be the nearest neighbour of itself.
     let query = VectorValue::Float32(vectors[42].clone());
     let results = reader
-        .vector_search_index("embedding", &query, 5, None, VectorMetric::L2, None, None)
+        .vector_search_index(
+            "embedding",
+            &query,
+            5,
+            None,
+            VectorMetric::L2,
+            None,
+            None,
+            false,
+        )
         .await?;
 
     // Before the fix this returned an empty vec (flat-scan fallback on error).
