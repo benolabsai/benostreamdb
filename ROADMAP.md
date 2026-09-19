@@ -684,6 +684,23 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - Graph RAG: Leiden vs. Louvain for community detection default? (Leiden is newer but more complex to implement)
 - Graph RAG: Should `PAGERANK` return results as a materialized sidecar or as a transient DataFrame?
 
+### 🚧 Technical Debt & Missing Features (Discovered via Code Comments)
+- **Index Join Enhancements:** Currently supports only single-column joins and uses inefficient String casting for mixed types (MVP limitations). Needs refactoring to use `RowConverter`.
+- **Complex Range Pushdown:** Missing interval tree support for pushing down complex `OR` clauses over ranges to the index scan.
+- **Cross-Partition Compaction:** Temporarily disabled. Requires ensuring partition transforms are fully reversible.
+- **Concurrent Manifest Writes:** Currently relies on a global table lock. Needs MVCC concurrency control for lock-free commits.
+- **Sparse Vectors Support:** Missing Arrow IPC serialization for `SparseVector`s. Also needs representation as Map or specialized Struct for DataFusion compatibility (`src/core/sql/optimizer/vector_search/sort_expr_parser.rs`).
+- **Configuration from SQL:** Parsing configuration from SQL hints is a planned future extension.
+- **Vector Search I/O Optimization:** Future plans to return `ScoredResults` directly from the reader to avoid Parquet I/O.
+- **GPU Acceleration for Sparse & Binary Vectors:** GPU acceleration is not yet implemented for sparse and binary vectors (`src/python_distance.rs`).
+- **Explain Plan Metrics for Pruning:** Track reasons why partition/file pruning didn't match during query planning for better observability (`src/core/planner.rs`).
+- **Early Pruning for L2 Distance Scans:** Accumulate `diff_sq` for an early pruning threshold optimization during exact searches (`src/core/planner.rs`).
+- **Graph Construction Profiling Hooks:** Add profiling hooks for HNSW graph construction and search phases (`src/core/index/hnsw_rs/hnsw.rs`).
+- **AWS Glue Snapshot Paths:** Compute the new metadata path from the snapshot rather than relying on current path assumptions (`src/core/catalog/glue.rs`).
+- **DataFusion Custom Operator Registration:** Transition UDFs to native custom operator registration when supported by DataFusion (`src/core/sql/vector_operators.rs`).
+- **Row-Value In-List Pushdown:** Implement proper Row-Value In-List support for Primary Key filtering (`src/core/table/primary_key.rs`).
+- **Time Datatype Support:** Add support for `Time32` and `Time64` datatypes which are currently unsupported during table writes (`src/core/table/write.rs`).
+
 ---
 
 **Last Updated:** 2026-09-13  

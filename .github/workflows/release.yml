@@ -22,137 +22,11 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  lint:
-    name: Rust Lint & Format
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Maximize build space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v5
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "lint"
-      - name: Check formatting
-        run: cargo fmt --check
-      - name: Run Clippy
-        run: cargo clippy --all-targets
-
-  audit:
-    name: Cargo Audit
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Run cargo audit
-        run: cargo audit --ignore RUSTSEC-2026-0258 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0221 --ignore RUSTSEC-2026-0204
-
-  check:
-    name: Run Tests
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Maximize build space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v5
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-      - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.36
-        with:
-          cuda: "12.1.0"
-      - name: Prep CUDA Stubs
-        run: |
-          # The linker looks for libcuda.so.1, but stubs only provide libcuda.so
-          sudo ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
-          echo "/usr/local/cuda/lib64/stubs" | sudo tee /etc/ld.so.conf.d/cuda-stubs.conf
-          sudo ldconfig
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            code:
-              - 'src/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'vendor/**'
-              - 'python/**'
-              - 'pyproject.toml'
-              - 'tests/**'
-              - 'benches/**'
-              - 'build.rs'
-
-      - name: Cache Rust dependencies
-        if: steps.filter.outputs.code == 'true'
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "check"
-
-      - name: Run Cargo Check
-        if: steps.filter.outputs.code == 'true'
-        run: cargo check --all-targets --features python
-
-      - name: Run Cargo Tests (CPU)
-        if: steps.filter.outputs.code == 'true'
-        env:
-          SKIP_GPU_TESTS: "1"
-          RUST_LOG: "error"
-        run: cargo test --lib --tests
-
-      - name: Run Cargo Tests (Features)
-        if: steps.filter.outputs.code == 'true'
-        # Note: GPU tests might skip on CI runners, but compilation is verified
-        # Use --nocapture to see live progress and identify potential hangs
-        timeout-minutes: 20
-        env:
-          # Point to CUDA stubs so binaries can load even without a GPU
-          SKIP_GPU_TESTS: "1"
-          RUST_LOG: "error"
-          LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
-        run: cargo test --features python --lib --tests -- --skip gpu_execution --nocapture
-
-      - name: Setup Python for Tests
-        if: steps.filter.outputs.code == 'true'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install Vulkan
-        if: steps.filter.outputs.code == 'true'
-        run: |
-          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
-
-      - name: Install maturin and build
-        if: steps.filter.outputs.code == 'true'
-        run: |
-          pip install maturin
-          maturin build --features python
-          pip install "$(ls target/wheels/hyperstreamdb-*.whl)[dev]"
-
-      - name: Run Python Tests (pytest)
-        if: steps.filter.outputs.code == 'true'
-        run: |
-          # Skip GPU-only benchmarks on standard CI runners
-          pytest -v tests/ \
-            --ignore=tests/performance \
-            --ignore=tests/benchmarks \
-            --ignore=tests/integration/test_catalog.py \
-            --ignore=tests/python/test_prefilter.py
+  ci:
+    uses: ./.github/workflows/ci.yml
 
   linux:
-    needs: [check, lint, audit]
+    needs: [ci]
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: true
@@ -205,7 +79,7 @@ jobs:
           path: dist
 
   macos:
-    needs: [check, lint, audit]
+    needs: [ci]
     runs-on: macos-latest
     strategy:
       fail-fast: true
@@ -246,7 +120,7 @@ jobs:
           path: dist
 
   sdist:
-    needs: [check, lint, audit]
+    needs: [ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
