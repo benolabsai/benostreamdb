@@ -2,8 +2,9 @@ use anyhow::Result;
 use arrow::array::{Array, BooleanBuilder, UInt32Builder};
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
+use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 
 use crate::core::manifest::ManifestEntry;
@@ -25,7 +26,12 @@ pub enum MergeCommitAction {
     AddData { new_entry: ManifestEntry },
 }
 
-pub struct MergePlanner {}
+pub struct MergePlanner {
+    /// Single current-thread runtime reused for every async turn driven by
+    /// this planner. Building a runtime per operation was the dominant cost
+    /// for merges touching many segments.
+    runtime: OnceLock<tokio::runtime::Runtime>,
+}
 
 impl Default for MergePlanner {
     fn default() -> Self {
@@ -35,7 +41,9 @@ impl Default for MergePlanner {
 
 impl MergePlanner {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            runtime: OnceLock::new(),
+        }
     }
 
     /// Prune segments using Bloom Filters to quickly discard segments that cannot possibly match the source keys.
@@ -83,6 +91,9 @@ impl MergePlanner {
             }
         }
 
+        // Build the object store client once instead of per segment.
+        let store = crate::core::storage::create_object_store(base_path)?;
+
         for entry in candidate_entries {
             let seg_id = entry
                 .file_path
@@ -91,19 +102,24 @@ impl MergePlanner {
                 .unwrap_or(&entry.file_path)
                 .replace(".parquet", "");
             let read_config = SegmentConfig::new("", &seg_id);
-            let store = crate::core::storage::create_object_store(base_path)?;
-            let reader = crate::core::reader::HybridReader::new(read_config, store, base_path);
+            let reader =
+                crate::core::reader::HybridReader::new(read_config, store.clone(), base_path);
 
-            let mut possible = false;
-            for val in &test_values {
-                let might_match = self
-                    .runtime_block_on(reader.check_bloom_filter(key_col_name, val))
-                    .unwrap_or(true);
-                if might_match {
-                    possible = true;
-                    break;
+            // Check every candidate key within a single runtime turn; the
+            // reader caches Parquet metadata, so repeated checks per segment
+            // no longer re-open the file or re-create a runtime.
+            let possible = self.runtime_block_on(async {
+                for val in &test_values {
+                    if reader
+                        .check_bloom_filter(key_col_name, val)
+                        .await
+                        .unwrap_or(true)
+                    {
+                        return true;
+                    }
                 }
-            }
+                false
+            });
 
             if possible {
                 pruned.push(entry.clone());
@@ -142,6 +158,9 @@ impl MergePlanner {
         }
         let key_schema = Arc::new(arrow::datatypes::Schema::new(key_fields));
 
+        // Build the object store client once instead of per segment.
+        let store = crate::core::storage::create_object_store(base_path)?;
+
         // 1. Identify which rows in source match which segments
         for entry in candidate_entries {
             let seg_id = entry
@@ -153,16 +172,20 @@ impl MergePlanner {
             tracing::info!("Checking Segment {} for merge overlaps", seg_id);
 
             let read_config = SegmentConfig::new("", &seg_id);
-            let store = crate::core::storage::create_object_store(base_path)?;
-            let reader = crate::core::reader::HybridReader::new(read_config, store, base_path);
+            let reader =
+                crate::core::reader::HybridReader::new(read_config, store.clone(), base_path);
 
-            let mut original_batches = Vec::new();
-            use futures::StreamExt;
-            // ONLY load the key columns into memory to prevent OOM
-            let mut stream = self.runtime_block_on(reader.stream_all(Some(key_schema.clone())))?;
-            while let Some(b) = self.runtime_block_on(stream.next()) {
-                original_batches.push(b?);
-            }
+            // ONLY load the key columns into memory to prevent OOM.
+            // Drain the whole stream within a single runtime turn instead of
+            // re-entering block_on for every batch poll.
+            let original_batches = self.runtime_block_on(async {
+                let mut stream = reader.stream_all(Some(key_schema.clone())).await?;
+                let mut batches = Vec::new();
+                while let Some(b) = stream.next().await {
+                    batches.push(b?);
+                }
+                Ok::<Vec<RecordBatch>, anyhow::Error>(batches)
+            })?;
 
             if original_batches.is_empty() {
                 continue;
@@ -186,22 +209,23 @@ impl MergePlanner {
                 .collect();
             let seg_rows = converter.convert_columns(&key_arrays)?;
 
+            // Index segment rows by their encoded key for O(1) lookups.
+            // (Previously a linear scan made matching O(source_rows x segment_rows).)
+            // First occurrence wins, matching the old `break`-on-first behavior.
+            let mut seg_key_index: HashMap<Vec<u8>, usize> =
+                HashMap::with_capacity(original_batch.num_rows());
+            for i in 0..original_batch.num_rows() {
+                seg_key_index
+                    .entry(seg_rows.row(i).as_ref().to_vec())
+                    .or_insert(i);
+            }
+
             for (row_idx, encoded_key) in source_keys_encoded.iter().enumerate() {
                 if !unmatched_rows.contains(&row_idx) {
                     continue;
                 }
 
-                // Linear scan for now, since we need the exact row matched.
-                // Could be optimized by storing seg_rows in a HashMap -> row_index
-                let mut found_seg_idx = None;
-                for i in 0..original_batch.num_rows() {
-                    if seg_rows.row(i).as_ref() == encoded_key.as_slice() {
-                        found_seg_idx = Some(i);
-                        break;
-                    }
-                }
-
-                if let Some(seg_idx) = found_seg_idx {
+                if let Some(&seg_idx) = seg_key_index.get(encoded_key.as_slice()) {
                     updates_by_segment
                         .entry(seg_id.clone())
                         .or_default()
@@ -242,15 +266,17 @@ impl MergePlanner {
             if mode == MergeMode::CopyOnWrite {
                 // CoW: We MUST read the entire segment to rewrite it without the deleted rows.
                 let read_config = SegmentConfig::new("", &seg_id);
-                let store = crate::core::storage::create_object_store(base_path)?;
-                let reader = crate::core::reader::HybridReader::new(read_config, store, base_path);
+                let reader =
+                    crate::core::reader::HybridReader::new(read_config, store.clone(), base_path);
 
-                let mut original_batches = Vec::new();
-                use futures::StreamExt;
-                let mut stream = self.runtime_block_on(reader.stream_all(None))?;
-                while let Some(b) = self.runtime_block_on(stream.next()) {
-                    original_batches.push(b?);
-                }
+                let original_batches = self.runtime_block_on(async {
+                    let mut stream = reader.stream_all(None).await?;
+                    let mut batches = Vec::new();
+                    while let Some(b) = stream.next().await {
+                        batches.push(b?);
+                    }
+                    Ok::<Vec<RecordBatch>, anyhow::Error>(batches)
+                })?;
                 let original_batch =
                     arrow::compute::concat_batches(&source_batch.schema(), &original_batches)?;
 
@@ -363,11 +389,61 @@ impl MergePlanner {
         Ok(commit_actions)
     }
 
-    fn runtime_block_on<T, F: std::future::Future<Output = T>>(&self, future: F) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Tokio runtime for merge operation")
-            .block_on(future)
+    fn runtime_block_on<T: Send, F: std::future::Future<Output = T> + Send>(&self, future: F) -> T {
+        // A nested `block_on` on a freshly built runtime panics with
+        // "Cannot start a runtime from within a runtime" when the current
+        // thread is already driving an async context. Detect that case and
+        // offload the future to a dedicated thread with its own
+        // single-threaded runtime instead.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create Tokio runtime for merge operation")
+                        .block_on(future)
+                })
+                .join()
+                .expect("Merge runtime thread panicked")
+            })
+        } else {
+            // Fast path: reuse one current-thread runtime for the whole
+            // planner lifetime.
+            self.runtime
+                .get_or_init(|| {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create Tokio runtime for merge operation")
+                })
+                .block_on(future)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test for the "Cannot start a runtime from within a runtime"
+    /// panic (see tests/python/test_compound_pk.py CI failure): the sync merge
+    /// entry points must not panic even when invoked from inside a running
+    /// tokio runtime.
+    #[test]
+    fn runtime_block_on_inside_runtime_does_not_panic() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let planner = MergePlanner::new();
+            let value = planner.runtime_block_on(async { 42u8 });
+            assert_eq!(value, 42);
+        });
+    }
+
+    #[test]
+    fn runtime_block_on_outside_runtime_works() {
+        let planner = MergePlanner::new();
+        let value = planner.runtime_block_on(async { "ok" });
+        assert_eq!(value, "ok");
     }
 }
