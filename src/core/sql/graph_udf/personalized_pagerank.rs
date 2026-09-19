@@ -1,16 +1,17 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use arrow::array::{Array, ArrayRef, Float32Builder, UInt64Array, UInt64Builder};
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, Float64Array, ListArray, ListBuilder, StructBuilder,
+    UInt32Array, UInt64Array, UInt64Builder,
+};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_expr::{AggregateUDFImpl, Signature, TypeSignature, Volatility};
+use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
-use petgraph::graphmap::DiGraphMap;
-use petgraph::Direction;
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -46,28 +47,7 @@ impl Default for PersonalizedPageRankUDF {
 impl PersonalizedPageRankUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![
-                        DataType::UInt64,
-                        DataType::UInt64,
-                        DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                        DataType::Float64,
-                        DataType::UInt32,
-                        DataType::Boolean,
-                    ]),
-                    TypeSignature::Exact(vec![
-                        DataType::UInt64,
-                        DataType::UInt64,
-                        DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                        DataType::Float64,
-                        DataType::UInt32,
-                        DataType::Boolean,
-                        DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
-                    ]),
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -76,26 +56,31 @@ impl AggregateUDFImpl for PersonalizedPageRankUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "personalized_pagerank"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         let struct_fields = vec![
-            Arc::new(Field::new("node", DataType::UInt64, false)),
-            Arc::new(Field::new("score", DataType::Float32, false)),
+            Field::new("node", DataType::UInt64, false),
+            Field::new("score", DataType::Float64, false),
         ];
         Ok(DataType::List(Arc::new(Field::new(
             "item",
-            DataType::Struct(struct_fields.into()),
+            DataType::Struct(Fields::from(struct_fields)),
             true,
         ))))
     }
-    fn accumulator(&self, _arg: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(PersonalizedPageRankAccumulator::new()))
     }
+
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
         Ok(vec![
             Arc::new(Field::new(
@@ -114,11 +99,11 @@ impl AggregateUDFImpl for PersonalizedPageRankUDF {
                 true,
             )),
             Arc::new(Field::new("damping", DataType::Float64, true)),
-            Arc::new(Field::new("iterations", DataType::Int64, true)),
-            Arc::new(Field::new("is_directed", DataType::Boolean, true)),
+            Arc::new(Field::new("iterations", DataType::UInt32, true)),
+            Arc::new(Field::new("directed", DataType::Boolean, true)),
             Arc::new(Field::new(
                 "seed_weights",
-                DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
                 true,
             )),
         ])
@@ -130,10 +115,10 @@ pub struct PersonalizedPageRankAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
     seeds: Vec<u64>,
-    damping: f32,
+    damping: f64,
     iterations: u32,
-    is_directed: bool,
-    seed_weights: Vec<f32>,
+    directed: bool,
+    seed_weights: Option<Vec<f64>>,
 }
 
 impl PersonalizedPageRankAccumulator {
@@ -144,18 +129,56 @@ impl PersonalizedPageRankAccumulator {
             seeds: Vec::new(),
             damping: 0.85,
             iterations: 30,
-            is_directed: false,
-            seed_weights: Vec::new(),
+            directed: false,
+            seed_weights: None,
         }
     }
 }
 
 impl Accumulator for PersonalizedPageRankAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut sources_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        sources_builder.values().append_slice(&self.sources);
+        sources_builder.append(true);
+
+        let mut targets_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        targets_builder.values().append_slice(&self.targets);
+        targets_builder.append(true);
+
+        let mut seeds_builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        seeds_builder.values().append_slice(&self.seeds);
+        seeds_builder.append(true);
+
+        let seed_weights_val = if let Some(weights) = &self.seed_weights {
+            let mut weights_builder =
+                arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
+            weights_builder.values().append_slice(weights);
+            weights_builder.append(true);
+            ScalarValue::List(Arc::new(weights_builder.finish()))
+        } else {
+            let mut weights_builder =
+                arrow::array::ListBuilder::new(arrow::array::Float64Builder::new());
+            weights_builder.append(true);
+            ScalarValue::List(Arc::new(weights_builder.finish()))
+        };
+
+        Ok(vec![
+            ScalarValue::List(Arc::new(sources_builder.finish())),
+            ScalarValue::List(Arc::new(targets_builder.finish())),
+            ScalarValue::List(Arc::new(seeds_builder.finish())),
+            ScalarValue::Float64(Some(self.damping)),
+            ScalarValue::UInt32(Some(self.iterations)),
+            ScalarValue::Boolean(Some(self.directed)),
+            seed_weights_val,
+        ])
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.len() < 3 {
             return Err(DataFusionError::Execution(
-                "personalized_pagerank expects at least 3 arguments: source, target, seeds"
-                    .to_string(),
+                "personalized_pagerank expects at least 3 arguments".to_string(),
             ));
         }
 
@@ -172,98 +195,67 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                 DataFusionError::Execution("Expected UInt64Array for targets".to_string())
             })?;
 
-        if self.seeds.is_empty() && !values[2].is_empty() {
-            if let Some(list_arr) = values[2].as_any().downcast_ref::<arrow::array::ListArray>() {
-                if list_arr.is_valid(0) {
-                    let seed_values = list_arr.value(0);
-                    if let Some(s_arr) = seed_values.as_any().downcast_ref::<UInt64Array>() {
-                        self.seeds.extend_from_slice(s_arr.values());
-                    }
-                }
-            } else if let Some(u_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
-                for i in 0..u_arr.len() {
-                    if u_arr.is_valid(i) {
-                        self.seeds.push(u_arr.value(i));
+        // seeds is a ListArray
+        if let Some(seeds_list) = values[2].as_any().downcast_ref::<ListArray>() {
+            if seeds_list.len() > 0 && seeds_list.is_valid(0) {
+                let list_values = seeds_list.value(0);
+                if let Some(uint_values) = list_values.as_any().downcast_ref::<UInt64Array>() {
+                    self.seeds.clear();
+                    for i in 0..uint_values.len() {
+                        if uint_values.is_valid(i) {
+                            self.seeds.push(uint_values.value(i));
+                        }
                     }
                 }
             }
         }
 
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(d_arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::Float64Array>()
-            {
-                if d_arr.is_valid(0) {
-                    self.damping = d_arr.value(0) as f32;
-                }
-            } else if let Some(d_arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::Float32Array>()
-            {
-                if d_arr.is_valid(0) {
-                    self.damping = d_arr.value(0);
+            if let Some(arr) = values[3].as_any().downcast_ref::<Float64Array>() {
+                if arr.is_valid(0) {
+                    self.damping = arr.value(0);
                 }
             }
         }
 
         if values.len() > 4 && !values[4].is_empty() {
-            if let Some(i_arr) = values[4]
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-            {
-                if i_arr.is_valid(0) {
-                    self.iterations = i_arr.value(0) as u32;
-                }
-            } else if let Some(i_arr) = values[4]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt32Array>()
-            {
-                if i_arr.is_valid(0) {
-                    self.iterations = i_arr.value(0);
+            if let Some(arr) = values[4].as_any().downcast_ref::<UInt32Array>() {
+                if arr.is_valid(0) {
+                    self.iterations = arr.value(0);
                 }
             }
         }
 
         if values.len() > 5 && !values[5].is_empty() {
-            if let Some(b_arr) = values[5]
-                .as_any()
-                .downcast_ref::<arrow::array::BooleanArray>()
-            {
-                if b_arr.is_valid(0) {
-                    self.is_directed = b_arr.value(0);
+            if let Some(arr) = values[5].as_any().downcast_ref::<BooleanArray>() {
+                if arr.is_valid(0) {
+                    self.directed = arr.value(0);
                 }
             }
         }
 
-        if self.seed_weights.is_empty() && values.len() > 6 && !values[6].is_empty() {
-            if let Some(list_arr) = values[6].as_any().downcast_ref::<arrow::array::ListArray>() {
-                if list_arr.is_valid(0) {
-                    let weight_values = list_arr.value(0);
-                    if let Some(w_arr) = weight_values
-                        .as_any()
-                        .downcast_ref::<arrow::array::Float64Array>()
+        if values.len() > 6 && !values[6].is_empty() {
+            if let Some(weights_list) = values[6].as_any().downcast_ref::<ListArray>() {
+                if weights_list.len() > 0 && weights_list.is_valid(0) {
+                    let list_values = weights_list.value(0);
+                    if let Some(float_values) = list_values.as_any().downcast_ref::<Float64Array>()
                     {
-                        for i in 0..w_arr.len() {
-                            if w_arr.is_valid(i) {
-                                self.seed_weights.push(w_arr.value(i) as f32);
+                        let mut sw = Vec::new();
+                        for i in 0..float_values.len() {
+                            if float_values.is_valid(i) {
+                                sw.push(float_values.value(i));
                             }
                         }
-                    } else if let Some(w_arr) = weight_values
-                        .as_any()
-                        .downcast_ref::<arrow::array::Float32Array>()
-                    {
-                        for i in 0..w_arr.len() {
-                            if w_arr.is_valid(i) {
-                                self.seed_weights.push(w_arr.value(i));
-                            }
+                        if sw.len() == self.seeds.len() {
+                            self.seed_weights = Some(sw);
                         }
                     }
                 }
             }
         }
 
-        for i in 0..sources_arr.len() {
+        let len = sources_arr.len();
+        for i in 0..len {
             if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
                 self.sources.push(sources_arr.value(i));
                 self.targets.push(targets_arr.value(i));
@@ -274,310 +266,207 @@ impl Accumulator for PersonalizedPageRankAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        }
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for sources".to_string())
-            })?;
+            .unwrap();
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for targets".to_string())
-            })?;
+            .unwrap();
         let seeds_list = states[2]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for seeds".to_string())
-            })?;
+            .unwrap();
+        let damping_arr = states[3]
+            .as_any()
+            .downcast_ref::<arrow::array::Float64Array>()
+            .unwrap();
+        let iterations_arr = states[4]
+            .as_any()
+            .downcast_ref::<arrow::array::UInt32Array>()
+            .unwrap();
+        let directed_arr = states[5]
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()
+            .unwrap();
+        let seed_weights_list = states[6]
+            .as_any()
+            .downcast_ref::<arrow::array::ListArray>()
+            .unwrap();
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
                 let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<UInt64Array>() {
+                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                     self.sources.extend_from_slice(s.values());
                 }
             }
             if targets_list.is_valid(i) {
                 let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<UInt64Array>() {
+                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
                     self.targets.extend_from_slice(t.values());
                 }
             }
         }
 
-        if self.seeds.is_empty() {
-            for i in 0..seeds_list.len() {
-                if seeds_list.is_valid(i) {
-                    let sd_arr = seeds_list.value(i);
-                    if let Some(s) = sd_arr.as_any().downcast_ref::<UInt64Array>() {
-                        self.seeds.extend_from_slice(s.values());
-                    }
+        if !seeds_list.is_empty() && seeds_list.is_valid(0) {
+            let s_arr = seeds_list.value(0);
+            if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                if !s.is_empty() && self.seeds.is_empty() {
+                    self.seeds.extend_from_slice(s.values());
                 }
             }
         }
 
-        if let Some(d_arr) = states
-            .get(3)
-            .and_then(|a| a.as_any().downcast_ref::<arrow::array::Float64Array>())
-        {
-            if !d_arr.is_empty() && d_arr.is_valid(0) {
-                self.damping = d_arr.value(0) as f32;
-            }
-        }
-        if let Some(i_arr) = states
-            .get(4)
-            .and_then(|a| a.as_any().downcast_ref::<arrow::array::Int64Array>())
-        {
-            if !i_arr.is_empty() && i_arr.is_valid(0) {
-                self.iterations = i_arr.value(0) as u32;
-            }
-        }
-        if let Some(b_arr) = states
-            .get(5)
-            .and_then(|a| a.as_any().downcast_ref::<arrow::array::BooleanArray>())
-        {
-            if !b_arr.is_empty() && b_arr.is_valid(0) {
-                self.is_directed = b_arr.value(0);
+        if !seed_weights_list.is_empty() && seed_weights_list.is_valid(0) {
+            let w_arr = seed_weights_list.value(0);
+            if let Some(w) = w_arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                if !w.is_empty() && self.seed_weights.is_none() {
+                    self.seed_weights = Some(w.values().to_vec());
+                }
             }
         }
 
-        if self.seed_weights.is_empty() && states.len() > 6 {
-            if let Some(weights_list) = states[6].as_any().downcast_ref::<arrow::array::ListArray>()
-            {
-                for i in 0..weights_list.len() {
-                    if weights_list.is_valid(i) {
-                        let w_arr = weights_list.value(i);
-                        if let Some(f_arr) =
-                            w_arr.as_any().downcast_ref::<arrow::array::Float32Array>()
-                        {
-                            self.seed_weights.extend_from_slice(f_arr.values());
-                        }
-                    }
-                }
-            }
+        if !damping_arr.is_empty() && damping_arr.is_valid(0) {
+            self.damping = damping_arr.value(0);
+        }
+        if !iterations_arr.is_empty() && iterations_arr.is_valid(0) {
+            self.iterations = iterations_arr.value(0);
+        }
+        if !directed_arr.is_empty() && directed_arr.is_valid(0) {
+            self.directed = directed_arr.value(0);
         }
 
         Ok(())
     }
 
-    fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        let mut seeds_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        seeds_builder.values().append_slice(&self.seeds);
-        seeds_builder.append(true);
-
-        let mut weights_builder = arrow::array::ListBuilder::new(Float32Builder::new());
-        weights_builder.values().append_slice(&self.seed_weights);
-        weights_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::List(Arc::new(seeds_builder.finish())),
-            ScalarValue::Float64(Some(self.damping as f64)),
-            ScalarValue::Int64(Some(self.iterations as i64)),
-            ScalarValue::Boolean(Some(self.is_directed)),
-            ScalarValue::List(Arc::new(weights_builder.finish())),
-        ])
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut graph = DiGraphMap::<u64, ()>::new();
-
-        for (&s, &t) in self.sources.iter().zip(self.targets.iter()) {
-            graph.add_edge(s, t, ());
-            if !self.is_directed {
-                graph.add_edge(t, s, ());
-            }
-        }
-
-        let nodes: Vec<u64> = graph.nodes().collect();
-        let num_nodes = nodes.len();
-
-        let struct_fields = vec![
-            Arc::new(Field::new("node", DataType::UInt64, false)),
-            Arc::new(Field::new("score", DataType::Float32, false)),
-        ];
-
-        if num_nodes == 0 {
-            let empty_struct = arrow::array::StructArray::from(vec![
-                (
-                    struct_fields[0].clone(),
-                    Arc::new(UInt64Builder::new().finish()) as ArrayRef,
-                ),
-                (
-                    struct_fields[1].clone(),
-                    Arc::new(Float32Builder::new().finish()) as ArrayRef,
-                ),
+        if self.sources.is_empty() || self.seeds.is_empty() {
+            let struct_fields = Fields::from(vec![
+                Field::new("node", DataType::UInt64, false),
+                Field::new("score", DataType::Float64, false),
             ]);
-            let offsets = arrow::buffer::OffsetBuffer::from_lengths(vec![0]);
-            let list_fields = Arc::new(Field::new(
-                "item",
-                DataType::Struct(struct_fields.into()),
-                true,
-            ));
-            return Ok(ScalarValue::List(Arc::new(arrow::array::ListArray::new(
-                list_fields,
-                offsets,
-                Arc::new(empty_struct),
-                None,
-            ))));
+            let struct_builder = StructBuilder::new(
+                struct_fields,
+                vec![
+                    Box::new(UInt64Builder::new()),
+                    Box::new(arrow::array::Float64Builder::new()),
+                ],
+            );
+            let mut list_builder = ListBuilder::new(struct_builder);
+            list_builder.append(true);
+            return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
         }
 
-        let seed_set: HashSet<u64> = self.seeds.iter().copied().collect();
-        let active_seeds: Vec<u64> = self
-            .seeds
-            .iter()
-            .filter(|&&s| graph.contains_node(s))
-            .copied()
-            .collect();
-
-        let p0: HashMap<u64, f32> = if active_seeds.is_empty() {
-            let uniform = 1.0 / (num_nodes as f32);
-            nodes.iter().map(|&n| (n, uniform)).collect()
-        } else if self.seed_weights.len() == self.seeds.len() {
-            let seed_weight_map: HashMap<u64, f32> = self
-                .seeds
-                .iter()
-                .zip(self.seed_weights.iter())
-                .map(|(&s, &w)| (s, w.max(0.0)))
-                .collect();
-            let total_active_weight: f32 = active_seeds
-                .iter()
-                .map(|s| seed_weight_map.get(s).copied().unwrap_or(0.0))
-                .sum();
-            if total_active_weight <= 0.0 {
-                let seed_prob = 1.0 / (active_seeds.len() as f32);
-                nodes
-                    .iter()
-                    .map(|&n| {
-                        (
-                            n,
-                            if seed_set.contains(&n) {
-                                seed_prob
-                            } else {
-                                0.0
-                            },
-                        )
-                    })
-                    .collect()
-            } else {
-                nodes
-                    .iter()
-                    .map(|&n| {
-                        let prob = if seed_set.contains(&n) {
-                            seed_weight_map.get(&n).copied().unwrap_or(0.0) / total_active_weight
-                        } else {
-                            0.0
-                        };
-                        (n, prob)
-                    })
-                    .collect()
+        let mut adjacency: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut nodes: Vec<u64> = Vec::new();
+        for i in 0..self.sources.len() {
+            let u = self.sources[i];
+            let v = self.targets[i];
+            adjacency.entry(u).or_default().push(v);
+            if !self.directed {
+                adjacency.entry(v).or_default().push(u);
             }
+            nodes.push(u);
+            nodes.push(v);
+        }
+        nodes.sort_unstable();
+        nodes.dedup();
+
+        let _num_nodes = nodes.len() as f64;
+        let mut scores: HashMap<u64, f64> = HashMap::new();
+
+        // initialize scores
+        let total_weight = if let Some(sw) = &self.seed_weights {
+            sw.iter().sum::<f64>()
         } else {
-            let seed_prob = 1.0 / (active_seeds.len() as f32);
-            nodes
-                .iter()
-                .map(|&n| {
-                    (
-                        n,
-                        if seed_set.contains(&n) {
-                            seed_prob
-                        } else {
-                            0.0
-                        },
-                    )
-                })
-                .collect()
+            self.seeds.len() as f64
         };
 
-        let mut scores: HashMap<u64, f32> = p0.clone();
-        let mut out_degrees: HashMap<u64, usize> = HashMap::new();
-        for &node in &nodes {
-            out_degrees.insert(
-                node,
-                graph.edges_directed(node, Direction::Outgoing).count(),
-            );
+        for (i, &seed) in self.seeds.iter().enumerate() {
+            let weight = if let Some(sw) = &self.seed_weights {
+                sw[i]
+            } else {
+                1.0
+            };
+            scores.insert(seed, weight / total_weight);
         }
 
         for _ in 0..self.iterations {
-            let mut new_scores = HashMap::with_capacity(num_nodes);
-            let mut dangling_mass = 0.0f32;
+            let mut new_scores: HashMap<u64, f64> = HashMap::new();
 
-            for &node in &nodes {
-                let out_deg = *out_degrees.get(&node).unwrap_or(&0);
-                if out_deg == 0 {
-                    dangling_mass += *scores.get(&node).unwrap_or(&0.0);
-                }
+            // Random jump back to seeds
+            for (i, &seed) in self.seeds.iter().enumerate() {
+                let weight = if let Some(sw) = &self.seed_weights {
+                    sw[i]
+                } else {
+                    1.0
+                };
+                *new_scores.entry(seed).or_insert(0.0) +=
+                    (1.0 - self.damping) * (weight / total_weight);
             }
 
-            for &node in &nodes {
-                let mut sum = 0.0;
-                for incoming in graph.neighbors_directed(node, Direction::Incoming) {
-                    let out_deg = *out_degrees.get(&incoming).unwrap_or(&0);
-                    if out_deg > 0 {
-                        sum += scores.get(&incoming).unwrap_or(&0.0) / (out_deg as f32);
+            for &u in &nodes {
+                let current_score = *scores.get(&u).unwrap_or(&0.0);
+                if current_score == 0.0 {
+                    continue;
+                }
+
+                if let Some(neighbors) = adjacency.get(&u) {
+                    let transfer = (self.damping * current_score) / (neighbors.len() as f64);
+                    for &v in neighbors {
+                        *new_scores.entry(v).or_insert(0.0) += transfer;
+                    }
+                } else {
+                    // dangling node
+                    let transfer = (self.damping * current_score) / total_weight;
+                    for (i, &seed) in self.seeds.iter().enumerate() {
+                        let weight = if let Some(sw) = &self.seed_weights {
+                            sw[i]
+                        } else {
+                            1.0
+                        };
+                        *new_scores.entry(seed).or_insert(0.0) += transfer * weight;
                     }
                 }
-
-                let restart_val = *p0.get(&node).unwrap_or(&0.0);
-                let new_score = (1.0 - self.damping) * restart_val
-                    + self.damping * (sum + dangling_mass * restart_val);
-                new_scores.insert(node, new_score);
             }
-
             scores = new_scores;
         }
 
-        let mut sorted_nodes = nodes;
-        sorted_nodes.sort_by(|a, b| {
-            let sa = scores.get(a).unwrap_or(&0.0);
-            let sb = scores.get(b).unwrap_or(&0.0);
-            sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let mut node_id_builder = UInt64Builder::new();
-        let mut score_builder = Float32Builder::new();
-
-        for &node in &sorted_nodes {
-            node_id_builder.append_value(node);
-            score_builder.append_value(*scores.get(&node).unwrap_or(&0.0));
-        }
-
-        let node_id_array = Arc::new(node_id_builder.finish()) as ArrayRef;
-        let score_array = Arc::new(score_builder.finish()) as ArrayRef;
-
-        let struct_array = arrow::array::StructArray::from(vec![
-            (struct_fields[0].clone(), node_id_array),
-            (struct_fields[1].clone(), score_array),
+        let struct_fields = Fields::from(vec![
+            Field::new("node", DataType::UInt64, false),
+            Field::new("score", DataType::Float64, false),
         ]);
 
-        let list_fields = Arc::new(Field::new(
-            "item",
-            DataType::Struct(struct_fields.into()),
-            true,
-        ));
-        let offsets = arrow::buffer::OffsetBuffer::from_lengths(vec![num_nodes]);
-        let list_array =
-            arrow::array::ListArray::new(list_fields, offsets, Arc::new(struct_array), None);
+        let mut node_builder = UInt64Builder::new();
+        let mut score_builder = arrow::array::Float64Builder::new();
 
+        for (&node, &score) in &scores {
+            node_builder.append_value(node);
+            score_builder.append_value(score);
+        }
+
+        let mut struct_builder = StructBuilder::new(
+            struct_fields.clone(),
+            vec![Box::new(node_builder), Box::new(score_builder)],
+        );
+
+        for _ in 0..scores.len() {
+            struct_builder.append(true);
+        }
+
+        let mut list_builder = ListBuilder::new(struct_builder);
+        list_builder.append(true);
+
+        let list_array = list_builder.finish();
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.sources.capacity() * std::mem::size_of::<u64>()
-            + self.targets.capacity() * std::mem::size_of::<u64>()
-            + self.seeds.capacity() * std::mem::size_of::<u64>()
+        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
     }
 }

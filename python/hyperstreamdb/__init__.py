@@ -421,6 +421,7 @@ class Table:
             else:
                 self._inner.set_primary_key(list(primary_key))
         self._embedding_configs = {}
+        self.graph_api = GraphAPI(self._inner)
 
     @classmethod
     def create(cls, uri: str, schema, device: Optional[Any] = None) -> 'Table':
@@ -518,11 +519,10 @@ class Table:
     def connecting_paths(
         self,
         seeds: List[int],
-        directed: bool = False,
-        max_depth: Optional[int] = None,
+        graph_column: str = "target",
     ):
         """Extract pairwise shortest connecting paths between seed nodes."""
-        return self._inner.connecting_paths(seeds, directed)
+        return self.graph_api.connecting_paths(graph_column, seeds)
 
     def louvain_communities(self, resolution: float = 1.0) -> Any:
         """
@@ -554,19 +554,20 @@ class Table:
         """
         return self._inner.pagerank(damping, iterations)
 
-    def shortest_path(self, start_node: int, end_node: int) -> Any:
+    def shortest_path(self, start_node: int, end_node: int, graph_column: str = "target") -> Any:
         """
         Find the shortest path between two nodes using BFS.
         Returns Arrow Table / DataFrame with the path as a list of node IDs.
         """
-        return self._inner.shortest_path(start_node, end_node)
+        return self.graph_api.shortest_path(graph_column, start_node, end_node)
 
     def connected_components(self) -> Any:
         """
         Find weakly connected components in the graph.
         Returns Arrow Table / DataFrame with 'component' column (component ID per node).
         """
-        return self._inner.connected_components()
+        src, dst = self.edge_endpoints() if self.is_edge_table() else ("source", "target")
+        return self._inner.connected_components(src, dst)
 
     def strongly_connected_components(self) -> Any:
         """
@@ -582,12 +583,12 @@ class Table:
         """
         return self._inner.topological_sort()
 
-    def graph_neighbors(self, node: int, hops: int = 1) -> Any:
+    def graph_neighbors(self, node: int, graph_column: str = "target") -> Any:
         """
-        Find all nodes reachable from `node` within `hops` steps.
-        Returns Arrow Table / DataFrame with 'neighbor' column.
+        Find all nodes reachable from `node` within 1 step using the CSR graph index.
+        Returns a list of neighbor node IDs.
         """
-        return self._inner.graph_neighbors(node, hops)
+        return self.graph_api.neighbors(graph_column, node)
 
     def label_propagation_communities(self) -> Any:
         """
@@ -1488,6 +1489,75 @@ class Table:
         comm_table.insert(arrow_table)
         comm_table.commit()
         return comm_table
+
+    def drift_search(
+        self,
+        query: str,
+        community_table: 'Table',
+        follow_up_llm: Optional[Any] = None,
+        n_depth: int = 2,
+        k_followups: int = 3,
+        top_k: int = 5,
+        hops: int = 2,
+        confidence_threshold: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Execute a DRIFT (Dynamic Reasoning and Inference with Flexible Traversal) search.
+        
+        Args:
+            query: The initial query string.
+            community_table: A Table containing community summaries (e.g. from summarize_communities).
+            follow_up_llm: Optional LLM callback (must be callable) for generating follow-up queries.
+            n_depth: Maximum search depth for follow-ups.
+            k_followups: Number of top-scored follow-ups to explore per round.
+            top_k: Number of top communities to select for the primer phase.
+            hops: Max hops for multi-hop induced subgraph extraction.
+            confidence_threshold: Minimum confidence score to continue exploring a follow-up.
+            
+        Returns:
+            Dictionary containing 'all_discovered_nodes' and 'actions'.
+        """
+        import pandas as pd
+        
+        # Read communities to build top_communities and community_map
+        comm_res = community_table.execute_sql("SELECT * FROM t")
+        comm_df = comm_res if isinstance(comm_res, pd.DataFrame) else (comm_res.to_pandas() if hasattr(comm_res, "to_pandas") else pd.DataFrame(comm_res))
+        
+        if comm_df.empty:
+            raise ValueError("community_table is empty.")
+            
+        if "seed_overlap" in comm_df.columns and comm_df["seed_overlap"].sum() > 0:
+            comm_df = comm_df.sort_values(by=["seed_overlap", "member_count"], ascending=[False, False])
+        elif "member_count" in comm_df.columns:
+            comm_df = comm_df.sort_values(by="member_count", ascending=False)
+            
+        top_comm_df = comm_df.head(top_k)
+        top_communities = top_comm_df["community_id"].astype(int).tolist() if "community_id" in top_comm_df.columns else []
+        
+        community_map = {}
+        if "community_id" in comm_df.columns and "members" in comm_df.columns:
+            for _, row in comm_df.iterrows():
+                try:
+                    cid = int(row["community_id"])
+                    for m in row["members"]:
+                        community_map[int(m)] = cid
+                except (ValueError, TypeError):
+                    pass
+                    
+        if follow_up_llm is not None and not callable(follow_up_llm):
+            raise TypeError("follow_up_llm must be a callable that takes kwargs: (query, phase, top_communities|discovered_nodes, round_num)")
+            
+        return self._inner.drift_search(
+            query,
+            community_map,
+            top_communities,
+            follow_up_llm,
+            n_depth,
+            k_followups,
+            top_k,
+            hops,
+            confidence_threshold
+        )
 
     def resolve_entities(
         self,
@@ -2416,6 +2486,7 @@ class Table:
     def drop_column(self, name: str):
         """Drop an existing column from the table."""
         return self._inner.drop_column(name)
+
 
     def rename_column(self, old_name: str, new_name: str):
         """Rename an existing column."""

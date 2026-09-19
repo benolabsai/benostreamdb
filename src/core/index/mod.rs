@@ -2,6 +2,10 @@
 
 pub mod analyzer;
 pub mod bm25;
+pub mod build_graph;
+pub mod build_inverted;
+pub mod build_vector;
+pub mod csr_graph;
 pub mod distance;
 pub mod gpu;
 pub mod hnsw_ivf;
@@ -175,6 +179,3 @@ pub trait VectorIndex {
         filter: Option<&RoaringBitmap>,
     ) -> Result<Vec<(u32, f32)>>;
 }
-
-pub mod build_inverted;
-pub mod build_vector;

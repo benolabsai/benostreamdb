@@ -41,8 +41,10 @@ def test_wal_compaction():
     table.checkpoint()
     
     # Check WAL still exists
-    assert os.path.exists(wal_path), "WAL file should still exist after compaction"
-    size_after = os.path.getsize(wal_path)
+    wal_files_after = glob.glob(os.path.join(base_path, "_wal", "log_*.arrow"))
+    assert len(wal_files_after) > 0, "WAL file should still exist after compaction"
+    wal_path_after = wal_files_after[0]
+    size_after = os.path.getsize(wal_path_after)
     print(f"✓ WAL file size after compaction: {size_after} bytes")
     
     # Size should be smaller or similar (consolidated into 1 batch)

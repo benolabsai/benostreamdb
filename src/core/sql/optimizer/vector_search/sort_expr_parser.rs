@@ -17,6 +17,7 @@
 //! Extracts distance UDFs from sort expressions, detects metrics,
 //! and supports multi-vector queries.
 
+use arrow::array::Array;
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_expr::PhysicalExpr;
@@ -177,5 +178,57 @@ fn parse_binary_expr(bin: &BinaryExpr) -> Option<(VectorMetric, String, VectorVa
     }
 
     // Case 3: Sparse (Represented as Map or specialized Struct in future)
+    if let ScalarValue::Struct(struct_array) = literal.value() {
+        if struct_array.num_columns() >= 2 {
+            let indices_col = struct_array.column_by_name("indices")?;
+            let values_col = struct_array.column_by_name("values")?;
+
+            if let (Some(indices_list), Some(values_list)) = (
+                indices_col
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>(),
+                values_col
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>(),
+            ) {
+                // Read the first (and only) element since this is a ScalarValue
+                if !indices_list.is_empty() && !values_list.is_empty() {
+                    let indices_arr = indices_list.value(0);
+                    let values_arr = values_list.value(0);
+
+                    if let (Some(indices), Some(values)) = (
+                        indices_arr
+                            .as_any()
+                            .downcast_ref::<arrow::array::UInt32Array>(),
+                        values_arr
+                            .as_any()
+                            .downcast_ref::<arrow::array::Float32Array>(),
+                    ) {
+                        let mut dim = 0;
+                        if struct_array.num_columns() >= 3 {
+                            if let Some(dim_col) = struct_array.column_by_name("dim") {
+                                if let Some(dim_arr) =
+                                    dim_col.as_any().downcast_ref::<arrow::array::UInt32Array>()
+                                {
+                                    if !dim_arr.is_empty() {
+                                        dim = dim_arr.value(0) as usize;
+                                    }
+                                }
+                            }
+                        }
+
+                        let sv = crate::core::index::SparseVector {
+                            indices: indices.values().to_vec(),
+                            values: values.values().to_vec(),
+                            dim,
+                        };
+
+                        return Some((m, col.name().to_string(), VectorValue::Sparse(sv)));
+                    }
+                }
+            }
+        }
+    }
+
     None
 }

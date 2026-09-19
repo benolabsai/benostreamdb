@@ -46,45 +46,33 @@ impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
 
                     // Check logic: Join On keys
                     let on = hash_join.on();
-                    if on.len() != 1 {
-                        // MVP: Single column join
+                    if on.is_empty() {
                         return Ok(Transformed::no(plan));
                     }
 
-                    let (left_col_ast, right_col_ast) = &on[0];
-                    // left_col_ast is PhysicalExpr (Column). right_col_ast is PhysicalExpr (Column).
+                    let mut left_on = Vec::new();
+                    let mut right_cols = Vec::new();
 
-                    // We need to verify right_col_ast refers to an indexed column in hs_exec.
-                    if let Some(r_col) = right_col_ast.as_any().downcast_ref::<Column>() {
-                        // We have column name/index.
-                        let right_col_name = r_col.name();
-
-                        // Check if indexed?
-                        // hs_exec.table has index info in manifest.
-                        // Ideally we check `hs_exec.table.indexes`.
-                        // But `table.rs` encapsulates it.
-                        // We can blindly assume if we are here, we trust the user optimization?
-                        // Or we should verify index exists to actually get perf benefit.
-                        // For MVP, we will ALWAYS convert if it's HyperStreamExec,
-                        // relying on HyperStream to just scan if no index (our implementation supports that via prune_entries -> fallback).
-                        // Wait, `read_filter_async` prunes entires.
-                        // If no index, it prunes using min/max stats only.
-                        // If values are scattered, min/max overlap implies scanning everything.
-                        // So correct "Index Join" requires checking if "Point Lookup" is efficient.
-                        // But correctness is preserved!
-                        // So rewriting is safe.
-
-                        // Construct Custom Node
-                        let new_node = Arc::new(HyperStreamIndexJoinExec::new(
-                            hash_join.left().clone(),
-                            hs_exec.table.clone(), // Access internal table (needs to be pub or accessor)
-                            left_col_ast.clone(),
-                            right_col_name.to_string(),
-                            hash_join.schema(),
-                        ));
-
-                        return Ok(Transformed::yes(new_node));
+                    for (left_col_ast, right_col_ast) in on {
+                        if let Some(r_col) = right_col_ast.as_any().downcast_ref::<Column>() {
+                            left_on.push(left_col_ast.clone());
+                            right_cols.push(r_col.name().to_string());
+                        } else {
+                            // If any right column is not a simple column reference, abort
+                            return Ok(Transformed::no(plan));
+                        }
                     }
+
+                    // Construct Custom Node
+                    let new_node = Arc::new(HyperStreamIndexJoinExec::new(
+                        hash_join.left().clone(),
+                        hs_exec.table.clone(), // Access internal table
+                        left_on,
+                        right_cols,
+                        hash_join.schema(),
+                    ));
+
+                    return Ok(Transformed::yes(new_node));
                 }
             }
             Ok(Transformed::no(plan))

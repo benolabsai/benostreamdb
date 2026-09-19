@@ -10,6 +10,7 @@ use arrow::array::{Array, ArrayRef};
 use arrow::compute::{concat_batches, take};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::record_batch::RecordBatch;
+use arrow::row::{RowConverter, SortField};
 use datafusion::common::Result;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
@@ -29,8 +30,8 @@ use serde_json::Value;
 pub struct HyperStreamIndexJoinExec {
     pub left: Arc<dyn ExecutionPlan>,
     pub right_table: Arc<Table>,
-    pub left_on: Arc<dyn PhysicalExpr>,
-    pub right_col: String,
+    pub left_on: Vec<Arc<dyn PhysicalExpr>>,
+    pub right_cols: Vec<String>,
     pub schema: SchemaRef,
     pub properties: PlanProperties,
 }
@@ -39,8 +40,8 @@ impl HyperStreamIndexJoinExec {
     pub fn new(
         left: Arc<dyn ExecutionPlan>,
         right_table: Arc<Table>,
-        left_on: Arc<dyn PhysicalExpr>,
-        right_col: String,
+        left_on: Vec<Arc<dyn PhysicalExpr>>,
+        right_cols: Vec<String>,
         schema: SchemaRef,
     ) -> Self {
         let properties = PlanProperties::new(
@@ -53,7 +54,7 @@ impl HyperStreamIndexJoinExec {
             left,
             right_table,
             left_on,
-            right_col,
+            right_cols,
             schema,
             properties,
         }
@@ -62,10 +63,17 @@ impl HyperStreamIndexJoinExec {
 
 impl DisplayAs for HyperStreamIndexJoinExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let left_str = self
+            .left_on
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let right_str = self.right_cols.join(", ");
         write!(
             f,
-            "HyperStreamIndexJoinExec: on {} = {}",
-            self.left_on, self.right_col
+            "HyperStreamIndexJoinExec: on ({}) = ({})",
+            left_str, right_str
         )
     }
 }
@@ -99,7 +107,7 @@ impl ExecutionPlan for HyperStreamIndexJoinExec {
             children[0].clone(),
             self.right_table.clone(),
             self.left_on.clone(),
-            self.right_col.clone(),
+            self.right_cols.clone(),
             self.schema.clone(),
         )))
     }
@@ -115,7 +123,7 @@ impl ExecutionPlan for HyperStreamIndexJoinExec {
             left_stream,
             right_table: self.right_table.clone(),
             left_on: self.left_on.clone(),
-            right_col: self.right_col.clone(),
+            right_cols: self.right_cols.clone(),
             output_schema: self.schema.clone(),
             current_future: None,
         }))
@@ -125,8 +133,8 @@ impl ExecutionPlan for HyperStreamIndexJoinExec {
 struct IndexJoinStream {
     left_stream: SendableRecordBatchStream,
     right_table: Arc<Table>,
-    left_on: Arc<dyn PhysicalExpr>,
-    right_col: String,
+    left_on: Vec<Arc<dyn PhysicalExpr>>,
+    right_cols: Vec<String>,
     output_schema: SchemaRef,
     current_future: Option<tokio::task::JoinHandle<Result<Option<RecordBatch>>>>,
 }
@@ -136,7 +144,6 @@ impl Stream for IndexJoinStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            // Check pending future
             if let Some(mut fut) = self.current_future.take() {
                 match Pin::new(&mut fut).poll(cx) {
                     Poll::Ready(Ok(res)) => {
@@ -157,11 +164,10 @@ impl Stream for IndexJoinStream {
                 }
             }
 
-            // Poll left stream
             match self.left_stream.poll_next_unpin(cx) {
                 Poll::Ready(Some(Ok(left_batch))) => {
                     let right_table = self.right_table.clone();
-                    let right_col = self.right_col.clone();
+                    let right_cols = self.right_cols.clone();
                     let left_on = self.left_on.clone();
                     let output_schema = self.output_schema.clone();
 
@@ -170,7 +176,7 @@ impl Stream for IndexJoinStream {
                             left_batch,
                             right_table,
                             left_on,
-                            right_col,
+                            right_cols,
                             output_schema,
                         )
                         .await
@@ -194,34 +200,42 @@ impl RecordBatchStream for IndexJoinStream {
 async fn process_join_batch(
     left_batch: RecordBatch,
     table: Arc<Table>,
-    left_on: Arc<dyn PhysicalExpr>,
-    right_col: String,
+    left_on: Vec<Arc<dyn PhysicalExpr>>,
+    right_cols: Vec<String>,
     output_schema: SchemaRef,
 ) -> Result<Option<RecordBatch>> {
-    // 1. Evaluate join key on left batch
-    let keys = left_on.evaluate(&left_batch)?;
-    let keys_array = keys.into_array(left_batch.num_rows())?;
+    // 1. Evaluate join keys on left batch
+    let mut left_keys_arrays = Vec::with_capacity(left_on.len());
+    for expr in &left_on {
+        let keys = expr.evaluate(&left_batch)?;
+        left_keys_arrays.push(keys.into_array(left_batch.num_rows())?);
+    }
 
-    // 2. Extract distinct keys for query
-    let distinct_values = extract_distinct_values(&keys_array)?;
-
-    if distinct_values.is_empty() {
+    if left_keys_arrays.is_empty() || left_batch.num_rows() == 0 {
         return Ok(None);
     }
 
-    // 3. Query Right Table
-    let filter = QueryFilter {
-        column: right_col.clone(),
-        min: None,
-        min_inclusive: false,
-        max: None,
-        max_inclusive: false,
-        values: Some(distinct_values),
-        negated: false,
-    };
+    // 2. Extract distinct keys for query
+    let mut filters = Vec::with_capacity(right_cols.len());
+    for (i, right_col) in right_cols.iter().enumerate() {
+        let distinct_values = extract_distinct_values(&left_keys_arrays[i])?;
+        if distinct_values.is_empty() {
+            return Ok(None);
+        }
+        filters.push(QueryFilter {
+            column: right_col.clone(),
+            min: None,
+            min_inclusive: false,
+            max: None,
+            max_inclusive: false,
+            values: Some(distinct_values),
+            negated: false,
+        });
+    }
 
+    // 3. Query Right Table
     let right_batches = table
-        .read_filter_async(vec![filter], None, None)
+        .read_filter_async(filters, None, None)
         .await
         .map_err(|e| {
             datafusion::error::DataFusionError::Execution(format!("HyperStream read error: {}", e))
@@ -232,23 +246,21 @@ async fn process_join_batch(
     }
 
     // Concatenate all right batches into one
-    // We assume schema is consistent
     let right_schema = right_batches[0].schema();
     let right_batch_concat = concat_batches(&right_schema, &right_batches)?;
 
-    // 4. Perform In-Memory Join using Indices
+    // 4. Perform In-Memory Join using RowConverter
     perform_join(
         &left_batch,
-        &keys_array,
+        &left_keys_arrays,
         &right_batch_concat,
-        &right_col,
+        &right_cols,
         &output_schema,
     )
 }
 
 fn extract_distinct_values(array: &ArrayRef) -> Result<Vec<Value>> {
     let mut values = Vec::new();
-    // Simplified: handle common types
     match array.data_type() {
         DataType::Int64 => {
             let arr = array
@@ -295,7 +307,6 @@ fn extract_distinct_values(array: &ArrayRef) -> Result<Vec<Value>> {
     Ok(values)
 }
 
-// Helper to sort/dedup
 trait ValueExt {
     fn as_string_repr(&self) -> String;
 }
@@ -311,43 +322,57 @@ impl ValueExt for Value {
 
 fn perform_join(
     left: &RecordBatch,
-    left_keys: &ArrayRef,
+    left_keys: &[ArrayRef],
     right: &RecordBatch,
-    right_col: &str,
+    right_cols: &[String],
     output_schema: &SchemaRef,
 ) -> Result<Option<RecordBatch>> {
-    // 1. Build Index on Right Batch
-    let right_keys_arr = right.column_by_name(right_col).ok_or_else(|| {
-        datafusion::error::DataFusionError::Execution("Right join col missing".into())
+    // 1. Build Index on Right Batch using RowConverter
+    let mut right_keys = Vec::with_capacity(right_cols.len());
+    for col_name in right_cols {
+        let col = right.column_by_name(col_name).ok_or_else(|| {
+            datafusion::error::DataFusionError::Execution(format!(
+                "Right join col {} missing",
+                col_name
+            ))
+        })?;
+        right_keys.push(col.clone());
+    }
+
+    let sort_fields = left_keys
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect::<Vec<_>>();
+    let converter = RowConverter::new(sort_fields).map_err(|e| {
+        datafusion::error::DataFusionError::Execution(format!("RowConverter error: {}", e))
     })?;
 
-    // MultiMap: Key -> [indices]
-    // Uses String representation for key to handle mix types easily in MVP
-    let mut right_map: HashMap<String, Vec<usize>> = HashMap::new();
+    let right_rows = converter.convert_columns(&right_keys).map_err(|e| {
+        datafusion::error::DataFusionError::Execution(format!("RowConverter error: {}", e))
+    })?;
 
-    // Extract keys from right batch
-    // Using string conversion is inefficient but safe generic approach for MVP
-    let right_key_strings = array_to_strings(right_keys_arr);
-    for (idx, key_opt) in right_key_strings.iter().enumerate() {
-        if let Some(key) = key_opt {
-            right_map.entry(key.clone()).or_default().push(idx);
-        }
+    let mut right_map: HashMap<Vec<u8>, Vec<usize>> = HashMap::new();
+
+    for (idx, row) in right_rows.iter().enumerate() {
+        right_map
+            .entry(row.as_ref().to_vec())
+            .or_default()
+            .push(idx);
     }
 
     // 2. Probe with Left Batch
-    let left_key_strings = array_to_strings(left_keys);
+    let left_rows = converter.convert_columns(left_keys).map_err(|e| {
+        datafusion::error::DataFusionError::Execution(format!("RowConverter error: {}", e))
+    })?;
 
-    // Builders for indices
     let mut left_indices_builder = arrow::array::UInt64Builder::new();
     let mut right_indices_builder = arrow::array::UInt64Builder::new();
 
-    for (l_idx, key_opt) in left_key_strings.iter().enumerate() {
-        if let Some(key) = key_opt {
-            if let Some(r_indices) = right_map.get(key) {
-                for &r_idx in r_indices {
-                    left_indices_builder.append_value(l_idx as u64);
-                    right_indices_builder.append_value(r_idx as u64);
-                }
+    for (l_idx, row) in left_rows.iter().enumerate() {
+        if let Some(r_indices) = right_map.get(row.as_ref()) {
+            for &r_idx in r_indices {
+                left_indices_builder.append_value(l_idx as u64);
+                right_indices_builder.append_value(r_idx as u64);
             }
         }
     }
@@ -360,86 +385,20 @@ fn perform_join(
     }
 
     // 3. Interleave / Take
-    // We cannot use interleave directly because we are combining two batches.
-    // Use `take` on each column.
+    let mut output_columns = Vec::with_capacity(left.num_columns() + right.num_columns());
 
-    // Reconstruct Left columns
-    let left_indices_arr = left_indices;
-    let right_indices_arr = right_indices;
-
-    let mut output_columns = Vec::new();
-
-    // Take from Left
     for col in left.columns() {
-        let taken = take(col, &left_indices_arr, None)?;
-        output_columns.push(taken);
+        output_columns.push(take(col, &left_indices, None)?);
     }
 
-    // Take from Right
     for col in right.columns() {
-        let taken = take(col, &right_indices_arr, None)?;
-        output_columns.push(taken);
+        output_columns.push(take(col, &right_indices, None)?);
     }
 
-    // Verify column count matches schema
     if output_columns.len() != output_schema.fields().len() {
-        // Mismatch usually due to key duplication or schema issue in creating IndexJoinExec
-        // In simplest case: schema = Left fields + Right fields.
-        // We just appended them in that order.
+        // Schema mismatch logic handled upstream
     }
 
     let batch = RecordBatch::try_new(output_schema.clone(), output_columns)?;
     Ok(Some(batch))
-}
-
-fn array_to_strings(arr: &ArrayRef) -> Vec<Option<String>> {
-    let mut res = Vec::with_capacity(arr.len());
-    match arr.data_type() {
-        DataType::Int64 => {
-            let a = arr
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-                .unwrap();
-            for i in 0..a.len() {
-                if a.is_null(i) {
-                    res.push(None);
-                } else {
-                    res.push(Some(a.value(i).to_string()));
-                }
-            }
-        }
-        DataType::Int32 => {
-            let a = arr
-                .as_any()
-                .downcast_ref::<arrow::array::Int32Array>()
-                .unwrap();
-            for i in 0..a.len() {
-                if a.is_null(i) {
-                    res.push(None);
-                } else {
-                    res.push(Some(a.value(i).to_string()));
-                }
-            }
-        }
-        DataType::Utf8 => {
-            let a = arr
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .unwrap();
-            for i in 0..a.len() {
-                if a.is_null(i) {
-                    res.push(None);
-                } else {
-                    res.push(Some(a.value(i).to_string()));
-                }
-            }
-        }
-        _ => {
-            // Fallback for debug: None
-            for _ in 0..arr.len() {
-                res.push(None);
-            }
-        }
-    }
-    res
 }

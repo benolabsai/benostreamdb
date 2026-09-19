@@ -1,19 +1,18 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use arrow::array::{Array, ArrayRef, Float32Builder, UInt64Array, UInt64Builder};
-use arrow::datatypes::{DataType, Field};
+use arrow::array::{
+    Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
+    UInt64Builder,
+};
+use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
-
-use petgraph::graphmap::DiGraphMap;
-use petgraph::Direction;
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
     ($name:ident) => {
@@ -33,7 +32,7 @@ macro_rules! impl_dyn_traits {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PageRankUDF {
     signature: Signature,
 }
@@ -47,28 +46,17 @@ impl Default for PageRankUDF {
 
 impl PageRankUDF {
     pub fn new() -> Self {
-        // Arguments: source_id (u64), target_id (u64), damping (f32), iterations (u32)
         Self {
             signature: Signature::exact(
                 vec![
-                    DataType::UInt64,
-                    DataType::UInt64,
-                    DataType::Float64,
-                    DataType::Int64,
+                    DataType::UInt64,  // source
+                    DataType::UInt64,  // target
+                    DataType::Float64, // damping
+                    DataType::UInt32,  // iterations
                 ],
                 Volatility::Immutable,
             ),
         }
-    }
-
-    fn return_type_struct() -> DataType {
-        DataType::Struct(
-            vec![
-                Field::new("node", DataType::UInt64, false),
-                Field::new("score", DataType::Float32, false),
-            ]
-            .into(),
-        )
     }
 }
 
@@ -76,25 +64,32 @@ impl AggregateUDFImpl for PageRankUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn name(&self) -> &str {
         "pagerank"
     }
+
     fn signature(&self) -> &Signature {
         &self.signature
     }
+
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        let struct_fields = vec![
+            Field::new("node", DataType::UInt64, false),
+            Field::new("score", DataType::Float64, false),
+        ];
         Ok(DataType::List(Arc::new(Field::new(
             "item",
-            Self::return_type_struct(),
+            DataType::Struct(Fields::from(struct_fields)),
             true,
         ))))
     }
-    fn accumulator(&self, _arg: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
+
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(PageRankAccumulator::new()))
     }
+
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        // State is kept in memory during a single partition run, but for distribution
-        // we'd serialize the edges. Here we just store source/target arrays.
         Ok(vec![
             Arc::new(Field::new(
                 "sources",
@@ -107,7 +102,7 @@ impl AggregateUDFImpl for PageRankUDF {
                 true,
             )),
             Arc::new(Field::new("damping", DataType::Float64, true)),
-            Arc::new(Field::new("iterations", DataType::Int64, true)),
+            Arc::new(Field::new("iterations", DataType::UInt32, true)),
         ])
     }
 }
@@ -116,7 +111,7 @@ impl AggregateUDFImpl for PageRankUDF {
 pub struct PageRankAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
-    damping: f32,
+    damping: f64,
     iterations: u32,
 }
 
@@ -132,10 +127,72 @@ impl PageRankAccumulator {
 }
 
 impl Accumulator for PageRankAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let mut sources_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        sources_builder.values().append_slice(&self.sources);
+        sources_builder.append(true);
+
+        let mut targets_builder =
+            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
+        targets_builder.values().append_slice(&self.targets);
+        targets_builder.append(true);
+
+        Ok(vec![
+            ScalarValue::List(Arc::new(sources_builder.finish())),
+            ScalarValue::List(Arc::new(targets_builder.finish())),
+            ScalarValue::Float64(Some(self.damping)),
+            ScalarValue::UInt32(Some(self.iterations)),
+        ])
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let sources_list = states[0]
+            .as_any()
+            .downcast_ref::<arrow::array::ListArray>()
+            .unwrap();
+        let targets_list = states[1]
+            .as_any()
+            .downcast_ref::<arrow::array::ListArray>()
+            .unwrap();
+        let damping_arr = states[2]
+            .as_any()
+            .downcast_ref::<arrow::array::Float64Array>()
+            .unwrap();
+        let iterations_arr = states[3]
+            .as_any()
+            .downcast_ref::<arrow::array::UInt32Array>()
+            .unwrap();
+
+        for i in 0..sources_list.len() {
+            if sources_list.is_valid(i) {
+                let s_arr = sources_list.value(i);
+                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                    self.sources.extend_from_slice(s.values());
+                }
+            }
+            if targets_list.is_valid(i) {
+                let t_arr = targets_list.value(i);
+                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
+                    self.targets.extend_from_slice(t.values());
+                }
+            }
+        }
+
+        if !damping_arr.is_empty() && damping_arr.is_valid(0) {
+            self.damping = damping_arr.value(0);
+        }
+        if !iterations_arr.is_empty() && iterations_arr.is_valid(0) {
+            self.iterations = iterations_arr.value(0);
+        }
+
+        Ok(())
+    }
+
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.len() != 4 {
+        if values.len() < 2 {
             return Err(DataFusionError::Execution(
-                "pagerank expects 4 arguments".to_string(),
+                "pagerank expects at least 2 arguments (source, target)".to_string(),
             ));
         }
 
@@ -152,31 +209,25 @@ impl Accumulator for PageRankAccumulator {
                 DataFusionError::Execution("Expected UInt64Array for targets".to_string())
             })?;
 
-        // Scalar values for damping and iterations (they are repeated in the array if parsed from columns,
-        // or just take the first valid value if passed as literals)
-        if !values[2].is_empty() {
-            if let Some(d_arr) = values[2]
-                .as_any()
-                .downcast_ref::<arrow::array::Float64Array>()
-            {
-                if d_arr.is_valid(0) {
-                    self.damping = d_arr.value(0) as f32;
+        let len = sources_arr.len();
+
+        if values.len() > 2 && !values[2].is_empty() {
+            if let Some(arr) = values[2].as_any().downcast_ref::<Float64Array>() {
+                if arr.is_valid(0) {
+                    self.damping = arr.value(0);
                 }
             }
         }
 
-        if !values[3].is_empty() {
-            if let Some(i_arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-            {
-                if i_arr.is_valid(0) {
-                    self.iterations = i_arr.value(0) as u32;
+        if values.len() > 3 && !values[3].is_empty() {
+            if let Some(arr) = values[3].as_any().downcast_ref::<UInt32Array>() {
+                if arr.is_valid(0) {
+                    self.iterations = arr.value(0);
                 }
             }
         }
 
-        for i in 0..sources_arr.len() {
+        for i in 0..len {
             if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
                 self.sources.push(sources_arr.value(i));
                 self.targets.push(targets_arr.value(i));
@@ -186,169 +237,87 @@ impl Accumulator for PageRankAccumulator {
         Ok(())
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for sources".to_string())
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for targets".to_string())
-            })?;
-
-        if let Some(damping_arr) = states
-            .get(2)
-            .and_then(|a| a.as_any().downcast_ref::<arrow::array::Float64Array>())
-        {
-            if !damping_arr.is_empty() && damping_arr.is_valid(0) {
-                self.damping = damping_arr.value(0) as f32;
-            }
-        }
-
-        if let Some(iter_arr) = states
-            .get(3)
-            .and_then(|a| a.as_any().downcast_ref::<arrow::array::Int64Array>())
-        {
-            if !iter_arr.is_empty() && iter_arr.is_valid(0) {
-                self.iterations = iter_arr.value(0) as u32;
-            }
-        }
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn state(&mut self) -> Result<Vec<datafusion::scalar::ScalarValue>> {
-        let mut sources_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-        let sources_list =
-            datafusion::scalar::ScalarValue::List(Arc::new(sources_builder.finish()));
-
-        let mut targets_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-        let targets_list =
-            datafusion::scalar::ScalarValue::List(Arc::new(targets_builder.finish()));
-
-        Ok(vec![
-            sources_list,
-            targets_list,
-            datafusion::scalar::ScalarValue::Float64(Some(self.damping as f64)),
-            datafusion::scalar::ScalarValue::Int64(Some(self.iterations as i64)),
-        ])
-    }
-
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut graph = DiGraphMap::<u64, ()>::new();
-
-        for (s, t) in self.sources.iter().zip(self.targets.iter()) {
-            graph.add_edge(*s, *t, ());
+        if self.sources.is_empty() {
+            return Ok(ScalarValue::List(Arc::new(
+                arrow::array::ListArray::from_iter_primitive::<arrow::datatypes::UInt64Type, _, _>(
+                    vec![None::<Vec<Option<u64>>>],
+                ),
+            ))); // returning empty basically
         }
 
-        let nodes: Vec<u64> = graph.nodes().collect();
-        let num_nodes = nodes.len();
-
-        if num_nodes == 0 {
-            // Return empty list
-            let fields = vec![
-                Field::new("node", DataType::UInt64, false),
-                Field::new("score", DataType::Float32, false),
-            ];
-            let struct_type = DataType::Struct(fields.into());
-            return Ok(ScalarValue::List(ScalarValue::new_list(
-                &[],
-                &struct_type,
-                true,
-            )));
+        let mut adjacency: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut nodes: Vec<u64> = Vec::new();
+        for i in 0..self.sources.len() {
+            let u = self.sources[i];
+            let v = self.targets[i];
+            adjacency.entry(u).or_default().push(v);
+            nodes.push(u);
+            nodes.push(v);
         }
+        nodes.sort_unstable();
+        nodes.dedup();
 
-        let initial_score = 1.0 / (num_nodes as f32);
-        let mut scores: HashMap<u64, f32> = nodes.iter().map(|&n| (n, initial_score)).collect();
-        let mut out_degrees: HashMap<u64, usize> = HashMap::new();
-
-        for &node in &nodes {
-            out_degrees.insert(
-                node,
-                graph.edges_directed(node, Direction::Outgoing).count(),
-            );
-        }
+        let num_nodes = nodes.len() as f64;
+        let mut scores: HashMap<u64, f64> = nodes.iter().map(|&n| (n, 1.0 / num_nodes)).collect();
 
         for _ in 0..self.iterations {
-            let mut new_scores = HashMap::with_capacity(num_nodes);
+            let mut new_scores: HashMap<u64, f64> = nodes
+                .iter()
+                .map(|&n| (n, (1.0 - self.damping) / num_nodes))
+                .collect();
 
-            for &node in &nodes {
-                let mut sum = 0.0;
-                for incoming in graph.neighbors_directed(node, Direction::Incoming) {
-                    let out_deg = out_degrees.get(&incoming).unwrap_or(&0);
-                    if *out_deg > 0 {
-                        sum += scores.get(&incoming).unwrap_or(&0.0) / (*out_deg as f32);
+            for &u in &nodes {
+                let current_score = scores[&u];
+                if let Some(neighbors) = adjacency.get(&u) {
+                    let transfer = (self.damping * current_score) / (neighbors.len() as f64);
+                    for &v in neighbors {
+                        *new_scores.entry(v).or_insert(0.0) += transfer;
+                    }
+                } else {
+                    // dangling node
+                    let transfer = (self.damping * current_score) / num_nodes;
+                    for &v in &nodes {
+                        *new_scores.entry(v).or_insert(0.0) += transfer;
                     }
                 }
-
-                let new_score = (1.0 - self.damping) / (num_nodes as f32) + self.damping * sum;
-                new_scores.insert(node, new_score);
             }
-
             scores = new_scores;
         }
 
-        // Build the result as a StructArray inside a ListArray
-        let mut node_id_builder = UInt64Builder::new();
-        let mut score_builder = Float32Builder::new();
-
-        for &node in &nodes {
-            node_id_builder.append_value(node);
-            score_builder.append_value(*scores.get(&node).unwrap_or(&0.0));
-        }
-
-        let node_id_array = Arc::new(node_id_builder.finish()) as ArrayRef;
-        let score_array = Arc::new(score_builder.finish()) as ArrayRef;
-
-        let struct_fields = vec![
-            Arc::new(Field::new("node", DataType::UInt64, false)),
-            Arc::new(Field::new("score", DataType::Float32, false)),
-        ];
-
-        let struct_array = arrow::array::StructArray::from(vec![
-            (struct_fields[0].clone(), node_id_array),
-            (struct_fields[1].clone(), score_array),
+        // Return a List of Structs {node: UInt64, score: Float64}
+        let struct_fields = Fields::from(vec![
+            Field::new("node", DataType::UInt64, false),
+            Field::new("score", DataType::Float64, false),
         ]);
 
-        let list_fields = Arc::new(Field::new(
-            "item",
-            DataType::Struct(struct_fields.into()),
-            true,
-        ));
+        let mut node_builder = UInt64Builder::new();
+        let mut score_builder = arrow::array::Float64Builder::new();
 
-        // Wrap the struct array in a list array of length 1
-        let offsets = arrow::buffer::OffsetBuffer::from_lengths(vec![num_nodes]);
-        let list_array =
-            arrow::array::ListArray::new(list_fields, offsets, Arc::new(struct_array), None);
+        for (node, score) in scores {
+            node_builder.append_value(node);
+            score_builder.append_value(score);
+        }
 
+        let mut struct_builder = StructBuilder::new(
+            struct_fields.clone(),
+            vec![Box::new(node_builder), Box::new(score_builder)],
+        );
+
+        for _ in 0..nodes.len() {
+            struct_builder.append(true);
+        }
+
+        let mut list_builder = ListBuilder::new(struct_builder);
+        // We appended nodes.len() elements to the internal struct builder.
+        // We now append one list element that spans all of those.
+        list_builder.append(true);
+
+        let list_array = list_builder.finish();
         Ok(ScalarValue::List(Arc::new(list_array)))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
-            + self.sources.capacity() * std::mem::size_of::<u64>()
-            + self.targets.capacity() * std::mem::size_of::<u64>()
+        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
     }
 }

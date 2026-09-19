@@ -803,6 +803,7 @@ impl HybridReader {
         metric: VectorMetric,
         ef_search: Option<usize>,
         target_schema: Option<arrow::datatypes::SchemaRef>,
+        use_mmap: bool,
     ) -> Result<Vec<(arrow::record_batch::RecordBatch, Vec<f32>)>> {
         // Resolve scalar filter to combined bitmap if present
         tracing::debug!("vector_search_index called with filter: {:?}", filter);
@@ -919,7 +920,7 @@ impl HybridReader {
                     ..Default::default()
                 };
                 match self
-                    .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search)
+                    .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap)
                     .await
                 {
                     Ok(m) => m,
@@ -936,17 +937,19 @@ impl HybridReader {
                 let metric_c = metric;
                 let ef_c = ef_search;
                 let k_c = k;
+                let use_mmap_c = use_mmap;
                 let futures: Vec<_> = chunk_indices
                     .iter()
                     .map(|idx_info| {
                         let idx = idx_info.clone();
                         let q = query_c.clone();
                         async move {
-                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c)
+                            self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c)
                                 .await
                         }
                     })
                     .collect();
+                println!("Chunk indices len: {}", chunk_indices.len());
                 let results = futures::future::join_all(futures).await;
                 let mut merged: Vec<(usize, f32)> = Vec::new();
                 let mut any_ok = false;
@@ -983,6 +986,98 @@ impl HybridReader {
     /// Returns `(row_id, raw_bm25_score)` pairs sorted by score descending
     /// (best first). Callers needing a distance-like metric convert with
     /// `1/(1+score)` at the boundary so row order stays aligned with scores.
+    /// Vector search optimized for RRF / scored-only lookup.
+    /// Returns `(row_id, score)` without fetching Parquet rows.
+    pub async fn vector_search_index_raw(
+        &self,
+        column: &str,
+        query: &crate::core::index::VectorValue,
+        k: usize,
+        metric: VectorMetric,
+        ef_search: Option<usize>,
+        use_mmap: bool,
+    ) -> Result<Vec<(usize, f32)>> {
+        let vector_indices: Vec<_> = self
+            .config
+            .index_files
+            .iter()
+            .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+            .cloned()
+            .collect();
+        let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
+            match f.blob_type.as_deref() {
+                Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
+                Some("hnsw_pq") => 1,
+                Some("hnsw_ivf") => 2,
+                _ => 3,
+            }
+        };
+        let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);
+        let chunk_indices: Vec<_> = vector_indices
+            .iter()
+            .filter(|f| algo_rank(f) == best_rank)
+            .cloned()
+            .collect();
+        if chunk_indices.is_empty() {
+            let idx_path = self.resolve_object_path(column).to_string();
+            let idx_info = crate::core::manifest::IndexFile {
+                file_path: idx_path,
+                index_type: "vector".to_string(),
+                column_name: Some(column.to_string()),
+                ..Default::default()
+            };
+            match self
+                .search_hnsw_ivf(&idx_info, query, k, &None, metric, ef_search, use_mmap)
+                .await
+            {
+                Ok(m) => Ok(m),
+                Err(_) => {
+                    self.vector_search_flat(column, query, k, &None, metric)
+                        .await
+                }
+            }
+        } else {
+            let query_c = query.clone();
+            let metric_c = metric;
+            let ef_c = ef_search;
+            let k_c = k;
+            let use_mmap_c = use_mmap;
+            let futures: Vec<_> = chunk_indices
+                .iter()
+                .map(|idx_info| {
+                    let idx = idx_info.clone();
+                    let q = query_c.clone();
+                    async move {
+                        self.search_hnsw_ivf(&idx, &q, k_c, &None, metric_c, ef_c, use_mmap_c)
+                            .await
+                    }
+                })
+                .collect();
+            let results = futures::future::join_all(futures).await;
+            let mut merged: Vec<(usize, f32)> = Vec::new();
+            let mut any_ok = false;
+            for r in results {
+                match r {
+                    Ok(m) => {
+                        any_ok = true;
+                        merged.extend(m);
+                    }
+                    Err(e) => {
+                        tracing::warn!("HNSW chunk search failed: {}", e);
+                    }
+                }
+            }
+            if !any_ok {
+                self.vector_search_flat(column, query, k, &None, metric)
+                    .await
+            } else {
+                merged.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                merged.truncate(k);
+                Ok(merged)
+            }
+        }
+    }
+
     pub async fn keyword_search_index(
         &self,
         column: &str,
@@ -1757,6 +1852,7 @@ impl HybridReader {
         allowed_bitmap: &Option<RoaringBitmap>,
         _metric: VectorMetric,
         _ef_search: Option<usize>,
+        use_mmap: bool,
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
 
@@ -1770,9 +1866,13 @@ impl HybridReader {
         // NOTE: blob_type records the *algorithm* (e.g. "hnsw_tq8"), not the storage format.
         // The writer always uses the multi-file layout (.centroids.parquet, .cluster_N.hnsw.*),
         // so we always load via load_async_with_cache_key regardless of blob_type.
-        let hnsw_ivf =
-            HnswIvfIndex::load_async_with_cache_key(self.store.clone(), &idx_path_str, &cache_key)
-                .await?;
+        let hnsw_ivf = HnswIvfIndex::load_async_with_cache_key(
+            self.store.clone(),
+            &idx_path_str,
+            &cache_key,
+            use_mmap,
+        )
+        .await?;
 
         // Search with HNSW-IVF
         let query_clone = query.clone();

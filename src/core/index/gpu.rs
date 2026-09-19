@@ -17,11 +17,8 @@ use cudarc::driver::{LaunchAsync, LaunchConfig};
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use cudarc::nvrtc::compile_ptx;
 
-// Thread-local GPU context to ensure CUDA contexts are not shared across threads.
-// CUDA contexts are inherently thread-local; sharing them can cause silent corruption.
-thread_local! {
-    static GPU_THREAD_CONTEXT: std::cell::RefCell<Option<ComputeContext>> = const { std::cell::RefCell::new(None) };
-}
+// The global context to ensure PTX modules and device memory are not duplicated per thread.
+// cudarc is Send+Sync and safely manages CUDA contexts internally.
 
 // Keep a global fallback for legacy code paths that don't support thread-local contexts
 static GLOBAL_GPU_CONTEXT: Lazy<parking_lot::RwLock<Option<ComputeContext>>> =
@@ -647,13 +644,6 @@ impl ComputeContext {
     }
 
     pub fn auto_detect() -> Self {
-        // First, check the thread-local context
-        let ctx = GPU_THREAD_CONTEXT.with(|f| f.borrow().clone());
-        if let Some(ctx) = ctx {
-            return ctx;
-        }
-
-        // Fall back to global context if thread-local is not set
         {
             let read = GLOBAL_GPU_CONTEXT.read();
             if let Some(ctx) = &*read {
@@ -668,10 +658,6 @@ impl ComputeContext {
         }
 
         let ctx = Self::do_auto_detect();
-        // Set both thread-local and global contexts
-        GPU_THREAD_CONTEXT.with(|f| {
-            *f.borrow_mut() = Some(ctx.clone());
-        });
         *write = Some(ctx.clone());
         ctx
     }
@@ -926,31 +912,13 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
-/// Set the thread-local GPU context (preferred over global context).
-///
-/// This sets a GPU context that is isolated to the current thread, preventing
-/// CUDA context corruption when multiple threads use different GPU configurations.
+/// Set the global GPU context.
 pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
-    GPU_THREAD_CONTEXT.with(|f| {
-        *f.borrow_mut() = ctx;
-    });
+    *GLOBAL_GPU_CONTEXT.write() = ctx;
 }
 
-/// Retrieve the current GPU context for this thread.
-///
-/// Checks the thread-local context first, then falls back to the global context.
-/// Returns `None` if no context has been set on either scope.
-///
-/// # Thread Safety
-/// This function is safe to call from any thread. Each thread maintains its own
-/// context via thread-local storage, with the global context as a last resort.
+/// Retrieve the current GPU context.
 pub fn get_thread_gpu_context() -> Option<ComputeContext> {
-    // Check thread-local first
-    let ctx = GPU_THREAD_CONTEXT.with(|f| f.borrow().clone());
-    if ctx.is_some() {
-        return ctx;
-    }
-    // Fall back to global context (deprecated path)
     let lock = GLOBAL_GPU_CONTEXT.read();
     lock.clone()
 }

@@ -31,24 +31,26 @@ macro_rules! impl_dyn_traits {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnectedComponentsUDF {
+pub struct GraphNeighborsUDF {
     signature: Signature,
 }
-impl_dyn_traits!(ConnectedComponentsUDF);
+impl_dyn_traits!(GraphNeighborsUDF);
 
-impl Default for ConnectedComponentsUDF {
+impl Default for GraphNeighborsUDF {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ConnectedComponentsUDF {
+impl GraphNeighborsUDF {
     pub fn new() -> Self {
         Self {
             signature: Signature::exact(
                 vec![
                     DataType::UInt64, // source
                     DataType::UInt64, // target
+                    DataType::UInt64, // node
+                    DataType::UInt32, // hops
                 ],
                 Volatility::Immutable,
             ),
@@ -56,13 +58,13 @@ impl ConnectedComponentsUDF {
     }
 }
 
-impl AggregateUDFImpl for ConnectedComponentsUDF {
+impl AggregateUDFImpl for GraphNeighborsUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn name(&self) -> &str {
-        "connected_components"
+        "graph_neighbors"
     }
 
     fn signature(&self) -> &Signature {
@@ -78,7 +80,7 @@ impl AggregateUDFImpl for ConnectedComponentsUDF {
     }
 
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(ConnectedComponentsAccumulator::new()))
+        Ok(Box::new(GraphNeighborsAccumulator::new()))
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
@@ -98,12 +100,12 @@ impl AggregateUDFImpl for ConnectedComponentsUDF {
 }
 
 #[derive(Debug)]
-pub struct ConnectedComponentsAccumulator {
+pub struct GraphNeighborsAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
 }
 
-impl ConnectedComponentsAccumulator {
+impl GraphNeighborsAccumulator {
     fn new() -> Self {
         Self {
             sources: Vec::new(),
@@ -112,7 +114,7 @@ impl ConnectedComponentsAccumulator {
     }
 }
 
-impl Accumulator for ConnectedComponentsAccumulator {
+impl Accumulator for GraphNeighborsAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let mut sources_builder =
             arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
