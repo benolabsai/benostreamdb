@@ -5,7 +5,6 @@ use hyperstreamdb::core::index::csr_graph::MmapCsrGraph;
 use hyperstreamdb::core::sql::graph_udf::drift_search::DriftGraph;
 use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
 
 #[tokio::test]
 async fn test_csr_graph_out_of_core() -> Result<()> {

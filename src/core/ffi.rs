@@ -783,6 +783,7 @@ fn vector_search_impl(
             store.clone(),
             &idx_path_str,
             &cache_key,
+            true, // use_mmap: default to true for zero-copy
         )
         .await
         .map_err(|e| {
