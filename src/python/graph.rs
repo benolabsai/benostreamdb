@@ -131,7 +131,7 @@ impl PyGraphAPI {
                     src, dst
                 )).await?;
                 init_df.write_parquet(&pr_init_path, DataFrameWriteOptions::new(), None).await?;
-                
+
                 let mut current_pr_table = "pr_0".to_string();
                 ctx.register_parquet(&current_pr_table, &pr_init_path, ParquetReadOptions::default()).await?;
 
@@ -139,10 +139,10 @@ impl PyGraphAPI {
                 for i in 1..=iterations {
                     let next_pr_table = format!("pr_{}", i);
                     let next_pr_path = format!("{}/{}", base_path, next_pr_table);
-                    
+
                     let query = format!("
-                        SELECT 
-                            nodes.node, 
+                        SELECT
+                            nodes.node,
                             (1.0 - {damping}) + {damping} * COALESCE(sum(in_nodes.pr / out_degree.deg), 0.0) as pr
                         FROM {current_pr_table} as nodes
                         LEFT JOIN edges ON nodes.node = edges.{dst}
@@ -153,9 +153,9 @@ impl PyGraphAPI {
 
                     let df = ctx.sql(&query).await?;
                     df.write_parquet(&next_pr_path, DataFrameWriteOptions::new(), None).await?;
-                    
+
                     ctx.register_parquet(&next_pr_table, &next_pr_path, ParquetReadOptions::default()).await?;
-                    
+
                     // Deregister old table to save memory
                     ctx.deregister_table(&current_pr_table)?;
                     current_pr_table = next_pr_table;

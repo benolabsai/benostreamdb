@@ -9,6 +9,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.8.1] - 2026-09-19
+
+### Added
+- **Graph RAG (CSR Graph + Shared Algorithms)**:
+  - Extracted shared graph algorithms into `src/core/algorithms/` (connected components, label propagation, topological sort).
+  - Added CSR graph index (`src/core/index/csr_graph.rs`) and builder (`build_graph.rs`); registered `IndexAlgorithm::CsrGraph` across manifest, index_config, segment, and Python helpers.
+  - Refactored graph UDFs (pagerank, personalized_pagerank, shortest_path, strongly_connected_components, connected_components, label_propagation, jaccard_coefficient) to use shared algorithms + CSR graph.
+  - Added `drift_search` UDF and Python GraphAPI + drift_search bindings.
+- **Vector Index Joins**:
+  - Reworked the index-join optimizer and physical plan; added a vector search sort-expression parser; updated HNSW-IVF, GPU, and HNSW paths.
+- **Raw Vector Search API**:
+  - Added `execute_vector_search_raw_with_config` for raw vector search returning `ScoredResult` with segment and row IDs.
+- **PrimaryKeyFilter Row-Value IN-List Pushdown**:
+  - Added `PrimaryKeyFilter` type representing a set of candidate PK rows (row-value IN list).
+  - `from_expr` supports `Expr::InList`, equality, AND of disjoint columns, and OR (row-value IN lists).
+  - `from_batch` builds from a RecordBatch; `to_expr` converts back to a DataFusion Expr; `to_query_filter` yields a single-column IN-list QueryFilter for inverted-index pushdown.
+  - Reworked `check_primary_key_uniqueness_async` to push the whole batch as a single expression.
+- **Time32/Time64 Datatype Support**:
+  - Safely ignore Time datatypes for in-memory vector indexing.
+
+### Changed
+- Reworked compaction, reader (filter/scan), segment, manifest, query, and cache; renamed `MergeMode::MergeOnWrite` to `CopyOnWrite`.
+- Extended PyTable bindings and the Python package with graph and drift_search APIs.
+- DRY up release workflow, add deps, and document tech debt.
+
+### Fixed
+- Fixed FFI `load_async_with_cache_key` call missing `use_mmap` argument (compile error with `java` feature).
+- Fixed clippy lints: `manual_map`, `needless_borrow`, `new_without_default`, `len_zero`, `needless_borrows_for_generic_args`.
+
+---
+
+## [0.8.0] - 2026-09-16
+
+### Added
+- **Graph RAG & Graph Analytics**:
+  - Added a comprehensive suite of graph UDFs: pagerank, personalized_pagerank, shortest_path, strongly_connected_components, connected_components, label_propagation, jaccard_coefficient, degree_centrality, preferential_attachment, subgraph, louvain_communities, modularity, clustering_coefficient, adamic_adar, connecting_paths, neighbors, resource_allocation, to_graphviz, and topological_sort.
+  - Added a graph search handler to the `hyperstreamdb-search` gateway.
+  - Added the Python Graph API and graph RAG pipeline bindings.
+  - Added dbt graph macros and graph RAG edge-table documentation.
+- **Arrow IPC Vector Index & Micro-Batch Streaming Ingest Buffer**:
+  - Implemented the Arrow IPC vector index and a micro-batch streaming ingest buffer.
+  - Reworked HNSW-IVF index construction and search.
+- **Zero-Copy Arrow IPC vectorSearch FFI Bridge**:
+  - Added a zero-copy Arrow IPC `vectorSearch` FFI bridge for Spark and Trino.
+  - Added `vectorSearch` JNI bindings to the Java connectors.
+- **Python CLI for Background Services**:
+  - Added Python CLI commands for installing and uninstalling background services.
+  - Added a universal installer/uninstaller and a centralized configuration file for background services.
+  - Added native background service configurations for `hyperstream-search`.
+
+### Changed
+- Reworked vector search for correctness and SQL aggregate consistency.
+- Updated the Trino and Spark connectors.
+
+### Fixed
+- Updated rustls to 0.23.45 to fix RUSTSEC-2026-0285.
+- Various connector and CI/CD hotfixes.
+
+### Build / CI
+- DRY up the CI pipeline to dynamically install `[dev]` extras directly from the built wheel.
+- Added networkx, cffi, and scikit-learn to CI test environments.
+- Upgraded `actions/checkout` from v4 to v5 for Node.js 24 support.
+- Added the Renovate workflow; removed Dependabot.
+
+---
+
 ## [0.7.0] - 2026-09-10
 
 ### Added
