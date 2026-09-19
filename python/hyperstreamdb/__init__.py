@@ -482,6 +482,7 @@ class Table:
         seeds: List[int],
         hops: int = 1,
         directed: bool = False,
+        graph_column: Optional[str] = None,
         allowed_relations: Optional[List[str]] = None,
         time_column: Optional[str] = None,
         time_start: Optional[str] = None,
@@ -489,9 +490,14 @@ class Table:
     ):
         """
         Extract multi-hop induced subgraph starting from seed nodes.
+        If `graph_column` is provided, uses the CSR graph index built on that
+        column and returns a list of (source, target) tuples.
         If `allowed_relations` is provided, filters edge traversals to only the specified relations/predicates.
         If `time_column`/`time_start`/`time_end` are provided, filters edges by timestamp window.
         """
+        if graph_column is not None:
+            return self.graph_api.subgraph(graph_column, seeds)
+
         predicates = []
 
         # Relation filtering
@@ -519,10 +525,22 @@ class Table:
     def connecting_paths(
         self,
         seeds: List[int],
-        graph_column: str = "target",
+        directed: bool = False,
+        max_depth: Optional[int] = None,
+        graph_column: Optional[str] = None,
     ):
-        """Extract pairwise shortest connecting paths between seed nodes."""
-        return self.graph_api.connecting_paths(graph_column, seeds)
+        """
+        Extract pairwise shortest connecting paths between seed nodes.
+
+        If `graph_column` is provided, uses the CSR graph index built on that
+        column and returns a list of (source, target) tuples. Otherwise runs
+        the SQL UDF over the table's `source`/`target` columns and returns a
+        pyarrow Table with one row per path edge.
+        `max_depth` is accepted for API compatibility.
+        """
+        if graph_column is not None:
+            return self.graph_api.connecting_paths(graph_column, seeds)
+        return self._inner.connecting_paths(seeds, directed)
 
     def louvain_communities(self, resolution: float = 1.0) -> Any:
         """
@@ -554,12 +572,18 @@ class Table:
         """
         return self._inner.pagerank(damping, iterations)
 
-    def shortest_path(self, start_node: int, end_node: int, graph_column: str = "target") -> Any:
+    def shortest_path(self, start_node: int, end_node: int, graph_column: Optional[str] = None) -> Any:
         """
         Find the shortest path between two nodes using BFS.
-        Returns Arrow Table / DataFrame with the path as a list of node IDs.
+
+        If `graph_column` is provided, uses the CSR graph index built on that
+        column and returns a list of node IDs. Otherwise runs the SQL UDF over
+        the table's `source`/`target` columns and returns a pyarrow Table
+        with a 'node' column.
         """
-        return self.graph_api.shortest_path(graph_column, start_node, end_node)
+        if graph_column is not None:
+            return self.graph_api.shortest_path(graph_column, start_node, end_node)
+        return self._inner.shortest_path(start_node, end_node)
 
     def connected_components(self) -> Any:
         """
@@ -583,12 +607,18 @@ class Table:
         """
         return self._inner.topological_sort()
 
-    def graph_neighbors(self, node: int, graph_column: str = "target") -> Any:
+    def graph_neighbors(self, node: int, hops: int = 1, graph_column: Optional[str] = None) -> Any:
         """
-        Find all nodes reachable from `node` within 1 step using the CSR graph index.
-        Returns a list of neighbor node IDs.
+        Find all nodes reachable from `node` within `hops` steps.
+
+        If `graph_column` is provided, uses the CSR graph index built on that
+        column (1 hop) and returns a list of neighbor node IDs. Otherwise runs
+        the SQL UDF over the table's `source`/`target` columns and returns a
+        pyarrow Table with a 'neighbor' column.
         """
-        return self.graph_api.neighbors(graph_column, node)
+        if graph_column is not None:
+            return self.graph_api.neighbors(graph_column, node)
+        return self._inner.graph_neighbors(node, hops)
 
     def label_propagation_communities(self) -> Any:
         """
@@ -1551,12 +1581,12 @@ class Table:
             query,
             community_map,
             top_communities,
-            follow_up_llm,
-            n_depth,
-            k_followups,
-            top_k,
-            hops,
-            confidence_threshold
+            follow_up_fn=follow_up_llm,
+            n_depth=n_depth,
+            k_followups=k_followups,
+            top_k=top_k,
+            hops=hops,
+            confidence_threshold=confidence_threshold,
         )
 
     def resolve_entities(

@@ -12,6 +12,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -161,8 +162,49 @@ impl Accumulator for ConnectedComponentsAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        // Union-find over the undirected edge set. The result is a list of
+        // interleaved [node, component_label] pairs, ordered by ascending
+        // node id, where the component label is the minimum node id in the
+        // weakly connected component.
+        let mut parent: HashMap<u64, u64> = HashMap::new();
+
+        fn find(parent: &mut HashMap<u64, u64>, x: u64) -> u64 {
+            let mut root = x;
+            while parent[&root] != root {
+                root = parent[&root];
+            }
+            // Path compression
+            let mut cur = x;
+            while parent[&cur] != root {
+                let next = parent[&cur];
+                parent.insert(cur, root);
+                cur = next;
+            }
+            root
+        }
+
+        for i in 0..self.sources.len().min(self.targets.len()) {
+            let (u, v) = (self.sources[i], self.targets[i]);
+            parent.entry(u).or_insert(u);
+            parent.entry(v).or_insert(v);
+            let ru = find(&mut parent, u);
+            let rv = find(&mut parent, v);
+            if ru != rv {
+                let (keep, drop) = (ru.min(rv), ru.max(rv));
+                parent.insert(drop, keep);
+            }
+        }
+
         let mut builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        builder.values().append_value(1);
+        let mut nodes: Vec<u64> = parent.keys().cloned().collect();
+        nodes.sort_unstable();
+        let mut out = Vec::with_capacity(nodes.len() * 2);
+        for n in nodes {
+            let root = find(&mut parent, n);
+            out.push(n);
+            out.push(root);
+        }
+        builder.values().append_slice(&out);
         builder.append(true);
         Ok(ScalarValue::List(Arc::new(builder.finish())))
     }

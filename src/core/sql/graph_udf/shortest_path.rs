@@ -12,6 +12,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -95,6 +96,8 @@ impl AggregateUDFImpl for ShortestPathUDF {
                 DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
                 true,
             )),
+            Arc::new(Field::new("start", DataType::UInt64, true)),
+            Arc::new(Field::new("end", DataType::UInt64, true)),
         ])
     }
 }
@@ -103,6 +106,8 @@ impl AggregateUDFImpl for ShortestPathUDF {
 pub struct ShortestPathAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
+    start: Option<u64>,
+    end: Option<u64>,
 }
 
 impl ShortestPathAccumulator {
@@ -110,6 +115,8 @@ impl ShortestPathAccumulator {
         Self {
             sources: Vec::new(),
             targets: Vec::new(),
+            start: None,
+            end: None,
         }
     }
 }
@@ -129,6 +136,8 @@ impl Accumulator for ShortestPathAccumulator {
         Ok(vec![
             ScalarValue::List(Arc::new(sources_builder.finish())),
             ScalarValue::List(Arc::new(targets_builder.finish())),
+            ScalarValue::UInt64(self.start),
+            ScalarValue::UInt64(self.end),
         ])
     }
 
@@ -159,13 +168,90 @@ impl Accumulator for ShortestPathAccumulator {
                 }
             }
         }
+
+        if states.len() > 2 {
+            if let Some(start_arr) = states[2].as_any().downcast_ref::<UInt64Array>() {
+                if start_arr.is_valid(0) {
+                    self.start = Some(start_arr.value(0));
+                }
+            }
+        }
+        if states.len() > 3 {
+            if let Some(end_arr) = states[3].as_any().downcast_ref::<UInt64Array>() {
+                if end_arr.is_valid(0) {
+                    self.end = Some(end_arr.value(0));
+                }
+            }
+        }
+
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        builder.values().append_value(1);
-        builder.append(true);
+
+        if let (Some(start), Some(end)) = (self.start, self.end) {
+            // BFS over the directed edge set.
+            let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
+            for i in 0..self.sources.len().min(self.targets.len()) {
+                adj.entry(self.sources[i])
+                    .or_default()
+                    .push(self.targets[i]);
+            }
+
+            let path = if start == end {
+                Some(vec![start])
+            } else {
+                let mut prev: HashMap<u64, u64> = HashMap::new();
+                let mut visited: HashSet<u64> = HashSet::new();
+                let mut q = VecDeque::new();
+                visited.insert(start);
+                q.push_back(start);
+                let mut found = false;
+
+                while let Some(curr) = q.pop_front() {
+                    if curr == end {
+                        found = true;
+                        break;
+                    }
+                    if let Some(neighbors) = adj.get(&curr) {
+                        for &n in neighbors {
+                            if visited.insert(n) {
+                                prev.insert(n, curr);
+                                q.push_back(n);
+                            }
+                        }
+                    }
+                }
+
+                if found {
+                    let mut path = vec![end];
+                    let mut curr = end;
+                    while curr != start {
+                        curr = *prev.get(&curr).ok_or_else(|| {
+                            DataFusionError::Execution(
+                                "shortest_path: broken predecessor chain".to_string(),
+                            )
+                        })?;
+                        path.push(curr);
+                    }
+                    path.reverse();
+                    Some(path)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(path) = path {
+                builder.values().append_slice(&path);
+                builder.append(true);
+            } else {
+                builder.append(false); // no path found
+            }
+        } else {
+            builder.append(false); // missing start/end arguments
+        }
+
         Ok(ScalarValue::List(Arc::new(builder.finish())))
     }
 
@@ -178,6 +264,21 @@ impl Accumulator for ShortestPathAccumulator {
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());
+
+        if values.len() > 2 && !values[2].is_empty() {
+            if let Some(start_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
+                if start_arr.is_valid(0) {
+                    self.start = Some(start_arr.value(0));
+                }
+            }
+        }
+        if values.len() > 3 && !values[3].is_empty() {
+            if let Some(end_arr) = values[3].as_any().downcast_ref::<UInt64Array>() {
+                if end_arr.is_valid(0) {
+                    self.end = Some(end_arr.value(0));
+                }
+            }
+        }
 
         Ok(())
     }
