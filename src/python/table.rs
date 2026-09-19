@@ -1325,8 +1325,10 @@ impl PyTable {
                     .join(", ")
             )
         };
+        // Join the extracted edge set back against the source table so the
+        // induced subgraph retains all payload columns (e.g. `weight`).
         let query = format!(
-            "SELECT unnest(subgraph(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'UInt32'), {})) FROM t",
+            "SELECT DISTINCT t.* FROM t JOIN (SELECT unnest(subgraph(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'UInt32'), {})) AS e FROM t) x ON arrow_cast(t.source, 'UInt64') = x.e.source AND arrow_cast(t.target, 'UInt64') = x.e.target",
             seed_sql, hops, directed
         );
         self.execute_sql(py, query)

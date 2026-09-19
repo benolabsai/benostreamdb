@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Merge/upsert nested-runtime panic**: `Table::merge` no longer drives the synchronous
+  `MergePlanner` entry points inside a running tokio runtime (fixes
+  `Cannot start a runtime from within a runtime` in `test_compound_pk.py`);
+  `runtime_block_on` additionally offloads to a dedicated thread when invoked from
+  within a runtime context.
+- **Merge-path performance**: one reused current-thread runtime per `MergePlanner`
+  (was: a new runtime per async call), object-store client hoisted out of per-segment
+  loops, streams/bloom checks drained in a single runtime turn, and key matching
+  changed from O(source × segment) linear scan to a hash index.
+- **Graph UDAFs were stubs**: implemented real BFS in `shortest_path` and
+  `graph_neighbors`, union-find in the `connected_components` UDAF, and neighborhood
+  Jaccard similarity in `jaccard_coefficient` (previously returned hardcoded values).
+- **Missing `connecting_paths` UDF**: implemented and registered
+  `ConnectingPathsUDF` (pairwise BFS paths between seed nodes).
+- **Scalar-arg overwrite in multi-partition merges**: `hops`/`directed` in the
+  `subgraph`/`graph_neighbors`/`connecting_paths` accumulators are now optional so
+  empty partitions no longer clobber captured values during `merge_batch`.
+- **Python graph API drift**: `subgraph`, `connecting_paths`, `shortest_path`,
+  `graph_neighbors` wrappers now match the Rust bindings (CSR-index route when
+  `graph_column` is given, SQL route otherwise; `hops`/`directed`/`max_depth`
+  accepted); `drift_search` now passes keyword arguments to the binding.
+- `subgraph()` now returns full edge rows (payload columns such as `weight`
+  preserved) by joining the extracted edge set back against the table.
+- Added `jinja2` to the `dev` extra so `test_dbt_macro_file_syntax` runs in CI.
+
 ---
 
 ## [0.8.1] - 2026-09-19

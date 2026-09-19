@@ -36,6 +36,7 @@ pub fn all_graph_aggregates() -> Vec<AggregateUDF> {
         AggregateUDF::new_from_impl(label_propagation::LabelPropagationUDF::new()),
         AggregateUDF::new_from_impl(graph_neighbors::GraphNeighborsUDF::new()),
         AggregateUDF::new_from_impl(subgraph::SubgraphUDF::new()),
+        AggregateUDF::new_from_impl(subgraph::ConnectingPathsUDF::new()),
         AggregateUDF::new_from_impl(shortest_path::ShortestPathUDF::new()),
         AggregateUDF::new_from_impl(connected_components::ConnectedComponentsUDF::new()),
         AggregateUDF::new_from_impl(degree_centrality::DegreeCentralityUDF::new()),

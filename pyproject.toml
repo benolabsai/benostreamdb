@@ -47,6 +47,7 @@ dev = [
     "scikit-learn",
     "pandas",
     "hypothesis",
+    "jinja2",
 ]
 # Hardware acceleration extras
 all_gpu = []

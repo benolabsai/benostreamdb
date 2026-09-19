@@ -12,6 +12,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -95,6 +96,8 @@ impl AggregateUDFImpl for GraphNeighborsUDF {
                 DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
                 true,
             )),
+            Arc::new(Field::new("node", DataType::UInt64, true)),
+            Arc::new(Field::new("hops", DataType::UInt32, true)),
         ])
     }
 }
@@ -103,6 +106,8 @@ impl AggregateUDFImpl for GraphNeighborsUDF {
 pub struct GraphNeighborsAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
+    node: Option<u64>,
+    hops: Option<u32>,
 }
 
 impl GraphNeighborsAccumulator {
@@ -110,6 +115,8 @@ impl GraphNeighborsAccumulator {
         Self {
             sources: Vec::new(),
             targets: Vec::new(),
+            node: None,
+            hops: None,
         }
     }
 }
@@ -129,6 +136,8 @@ impl Accumulator for GraphNeighborsAccumulator {
         Ok(vec![
             ScalarValue::List(Arc::new(sources_builder.finish())),
             ScalarValue::List(Arc::new(targets_builder.finish())),
+            ScalarValue::UInt64(self.node),
+            ScalarValue::UInt32(self.hops),
         ])
     }
 
@@ -159,13 +168,68 @@ impl Accumulator for GraphNeighborsAccumulator {
                 }
             }
         }
+
+        if states.len() > 2 {
+            if let Some(node_arr) = states[2].as_any().downcast_ref::<UInt64Array>() {
+                if node_arr.is_valid(0) {
+                    self.node = Some(node_arr.value(0));
+                }
+            }
+        }
+        if states.len() > 3 {
+            if let Some(hops_arr) = states[3].as_any().downcast_ref::<UInt32Array>() {
+                if hops_arr.is_valid(0) && self.hops.is_none() {
+                    self.hops = Some(hops_arr.value(0));
+                }
+            }
+        }
+
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        builder.values().append_value(1);
-        builder.append(true);
+
+        if let Some(node) = self.node {
+            // BFS from `node` over the directed edge set, up to `hops` steps.
+            let hops = self.hops.unwrap_or(1);
+            let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
+            for i in 0..self.sources.len().min(self.targets.len()) {
+                adj.entry(self.sources[i])
+                    .or_default()
+                    .push(self.targets[i]);
+            }
+
+            let mut visited: HashSet<u64> = HashSet::new();
+            let mut q = VecDeque::new();
+            visited.insert(node);
+            q.push_back((node, 0u32));
+            let mut neighbors: Vec<u64> = Vec::new();
+
+            while let Some((curr, dist)) = q.pop_front() {
+                if dist >= hops {
+                    continue;
+                }
+                if let Some(ns) = adj.get(&curr) {
+                    for &n in ns {
+                        if visited.insert(n) {
+                            if n != node {
+                                neighbors.push(n);
+                            }
+                            q.push_back((n, dist + 1));
+                        }
+                    }
+                }
+            }
+
+            neighbors.sort_unstable();
+            neighbors.dedup();
+            builder.values().append_slice(&neighbors);
+            builder.append(true);
+        } else {
+            builder.append(false);
+        }
+
         Ok(ScalarValue::List(Arc::new(builder.finish())))
     }
 
@@ -178,6 +242,21 @@ impl Accumulator for GraphNeighborsAccumulator {
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());
+
+        if values.len() > 2 && !values[2].is_empty() {
+            if let Some(node_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
+                if node_arr.is_valid(0) {
+                    self.node = Some(node_arr.value(0));
+                }
+            }
+        }
+        if values.len() > 3 && !values[3].is_empty() {
+            if let Some(hops_arr) = values[3].as_any().downcast_ref::<UInt32Array>() {
+                if hops_arr.is_valid(0) {
+                    self.hops = Some(hops_arr.value(0));
+                }
+            }
+        }
 
         Ok(())
     }

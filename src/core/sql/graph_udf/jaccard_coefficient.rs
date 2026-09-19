@@ -12,6 +12,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -91,6 +92,8 @@ impl AggregateUDFImpl for JaccardCoefficientUDF {
                 DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
                 true,
             )),
+            Arc::new(Field::new("node1", DataType::UInt64, true)),
+            Arc::new(Field::new("node2", DataType::UInt64, true)),
         ])
     }
 }
@@ -99,6 +102,8 @@ impl AggregateUDFImpl for JaccardCoefficientUDF {
 pub struct JaccardCoefficientAccumulator {
     sources: Vec<u64>,
     targets: Vec<u64>,
+    node1: Option<u64>,
+    node2: Option<u64>,
 }
 
 impl JaccardCoefficientAccumulator {
@@ -106,6 +111,8 @@ impl JaccardCoefficientAccumulator {
         Self {
             sources: Vec::new(),
             targets: Vec::new(),
+            node1: None,
+            node2: None,
         }
     }
 }
@@ -125,6 +132,8 @@ impl Accumulator for JaccardCoefficientAccumulator {
         Ok(vec![
             ScalarValue::List(Arc::new(sources_builder.finish())),
             ScalarValue::List(Arc::new(targets_builder.finish())),
+            ScalarValue::UInt64(self.node1),
+            ScalarValue::UInt64(self.node2),
         ])
     }
 
@@ -155,11 +164,48 @@ impl Accumulator for JaccardCoefficientAccumulator {
                 }
             }
         }
+
+        if states.len() > 2 {
+            if let Some(a_arr) = states[2].as_any().downcast_ref::<UInt64Array>() {
+                if a_arr.is_valid(0) {
+                    self.node1 = Some(a_arr.value(0));
+                }
+            }
+        }
+        if states.len() > 3 {
+            if let Some(b_arr) = states[3].as_any().downcast_ref::<UInt64Array>() {
+                if b_arr.is_valid(0) {
+                    self.node2 = Some(b_arr.value(0));
+                }
+            }
+        }
+
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(Some(1.0)))
+        // Jaccard similarity of the (undirected) neighborhoods of node1 and node2.
+        let score = match (self.node1, self.node2) {
+            (Some(a), Some(b)) => {
+                let mut nbr: HashMap<u64, HashSet<u64>> = HashMap::new();
+                for i in 0..self.sources.len().min(self.targets.len()) {
+                    let (u, v) = (self.sources[i], self.targets[i]);
+                    nbr.entry(u).or_default().insert(v);
+                    nbr.entry(v).or_default().insert(u);
+                }
+                let na = nbr.get(&a).cloned().unwrap_or_default();
+                let nb = nbr.get(&b).cloned().unwrap_or_default();
+                let inter = na.intersection(&nb).count();
+                let union = na.union(&nb).count();
+                if union == 0 {
+                    0.0
+                } else {
+                    inter as f64 / union as f64
+                }
+            }
+            _ => 0.0,
+        };
+        Ok(ScalarValue::Float64(Some(score)))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -171,6 +217,21 @@ impl Accumulator for JaccardCoefficientAccumulator {
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());
+
+        if values.len() > 2 && !values[2].is_empty() {
+            if let Some(a_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
+                if a_arr.is_valid(0) {
+                    self.node1 = Some(a_arr.value(0));
+                }
+            }
+        }
+        if values.len() > 3 && !values[3].is_empty() {
+            if let Some(b_arr) = values[3].as_any().downcast_ref::<UInt64Array>() {
+                if b_arr.is_valid(0) {
+                    self.node2 = Some(b_arr.value(0));
+                }
+            }
+        }
 
         Ok(())
     }

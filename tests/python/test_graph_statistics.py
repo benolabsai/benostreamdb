@@ -29,11 +29,13 @@ def test_pagerank(graph_table):
 def test_connected_components(graph_table):
     df = graph_table.connected_components().to_pandas()
     assert "component" in df.columns
-    assert len(df) == 3
+    # One row per node (5 nodes); weakly connected components are {1,2,3} and {4,5}
+    assert len(df) == 5
+    assert df["component"].nunique() == 2
 
 def test_strongly_connected_components(graph_table):
     df = graph_table.strongly_connected_components().to_pandas()
-    assert "node_id" in df.columns
+    assert "node" in df.columns
     assert "scc_id" in df.columns
     # 1,2,3 in one SCC, 4, 5 in separate SCCs
     assert len(df["scc_id"].unique()) == 3
@@ -53,4 +55,6 @@ def test_graph_neighbors(graph_table):
 def test_label_propagation(graph_table):
     df = graph_table.label_propagation_communities().to_pandas()
     assert "community" in df.columns
-    assert len(df) == 2
+    # One row per node (5 nodes); {1,2,3} and {4,5} converge to 2 communities
+    assert len(df) == 5
+    assert df["community"].nunique() == 2
