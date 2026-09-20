@@ -6,7 +6,7 @@ Runs against the WHOLE English-Wikipedia graph prepared by:
 
 Two persistent HyperStreamDB tables are used:
   * data/wiki_graph_db/edges — (source, target) int64 + CSR graph index
-  * data/wiki_graph_db/nodes — (id, title, summary, embedding) + HNSW-TQ8
+  * data/wiki_graph_db/nodes — (id, title, summary, embedding) + HNSW-TQ4
                                vector index + BM25 inverted title index
 
 Capabilities on display (each degrades gracefully if its dependency is absent):
@@ -36,7 +36,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DB = os.environ.get("HDB_DEMO_DB", os.path.join(REPO, "data", "wiki_graph_db"))
 EDGES_URI = f"file://{os.path.join(DB, 'edges')}"
 NODES_URI = f"file://{os.path.join(DB, 'nodes')}"
-EMBED_MODEL = os.environ.get("HDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
+EMBED_MODEL = os.environ.get("HDB_DEMO_EMBED_MODEL", "BAAI/bge-large-en-v1.5")
 
 st.set_page_config(page_title="HyperStreamDB — Wikipedia Graph RAG", layout="wide")
 st.title("HyperStreamDB — Wikipedia Graph RAG")
@@ -239,7 +239,7 @@ with TAB_SEMANTIC:
                     res = nodes_t.hybrid_search(text_column="title", query_text=q,
                                                 vector_column="embedding",
                                                 query_vector=vec, k=k)
-                    mode = "hybrid (BM25 + HNSW-TQ8, RRF)"
+                    mode = "hybrid (BM25 + HNSW-TQ4, RRF)"
                 else:
                     safe_q = q.replace("'", "''")
                     res = nodes_t.execute_sql(
