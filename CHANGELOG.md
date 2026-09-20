@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Demo prep is now laptop-feasible on RAM**: `prepare_demo.py` embed streams
   per row-group (was materializing the whole slice, ~9 GB/worker), resolve joins
   per edge-chunk against one broadcast title map (was ~47 GB), and load deletes
-  each embedding shard after ingesting it (bounds peak disk). Embed runs on GPU
-  (bge-large-en-v1.5, 1024-d, ~1,234 sent/s on an RTX 3090).
+  each embedding shard after ingesting it (bounds peak disk). Embed runs on GPU;
+  default model pivoted to `all-MiniLM-L6-v2` (384-d seed-index centroids,
+  ~6,000 sent/s on an RTX 3090 → ~2.5 h for 51.8M pages; bge-large-1024 measured
+  279 sent/s = 50 h, impractical for a whole-site seed index).
 
 ### Fixed
 - **Embedding column type**: the demo pipeline wrote `LargeList` embeddings, which
@@ -24,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switched to `FixedSizeList`, so the HNSW index actually builds.
 
 ### Added
+- **Two-level Graph RAG in the Wikipedia demo** (`examples/web_ui/app.py`): the
+  local-search tab now reranks with a bitmap-filtered vector search — the PPR
+  neighborhood becomes an `id IN (...)` RoaringBitmap predicate on the HNSW
+  index (topology prunes, semantics orders), mirroring the seed-index → CSR
+  expansion → filtered-rerank architecture validated at whole-site scale.
+- **Roadmap**: LangChain + LlamaIndex connector detail (Active Roadmap §9,
+  Phase 12): vector stores, Graph-RAG retrievers wrapping
+  `graph_rag_search`/`drift_search`, and an edge-table property-graph store.
 - **Wikipedia demo dataset pipeline** (`scripts/build_demo_dataset.py`): consumes
   the full dump parquets, resolves mixed curid/title edge endpoints to int64
   curids (parallel, memory-bounded), prunes to the largest connected component and

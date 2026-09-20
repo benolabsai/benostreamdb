@@ -596,6 +596,23 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 - [x] Incremental sidecar index append vs. compaction coordination under concurrent streaming writes.
 - [x] Architecture documentation detailing the interaction between persistent HNSW overlays and Iceberg transaction manifests.
 
+### 9. AI Agent Framework Connectors (Phase 12) [Free]
+
+First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG search to the two dominant LLM application frameworks. These ship as thin, dependency-light adapters over the existing Python API (`vector_search`, `hybrid_search`, `graph_rag_search`, `drift_search`) — no engine changes required.
+
+#### 9a. [Free] LangChain (`langchain-hyperstreamdb`)
+- [ ] **[Free] `HyperStreamVectorStore`**: Standard `VectorStore` interface (add / similarity search / MMR) mapping onto HNSW + TurboQuant sidecars, with metadata filters pushed down as RoaringBitmap predicates (`id IN (...)`).
+- [ ] **[Free] `HyperStreamGraphRetriever`**: `BaseRetriever` wrapping `table.graph_rag_search(...)` — local/global modes, PPR grounding, and prompt-ready `format_context()` injection.
+- [ ] **[Free] Edge-table loader**: Ingest documents/triplets into Iceberg doc + edge tables following the [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md) schema convention.
+
+#### 9b. [Free] LlamaIndex (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`)
+- [ ] **[Free] `HyperStreamVectorStore`**: `BaseVectorStore` implementation with add/query mapped to the sidecar HNSW indexes and scalar-filter pushdown.
+- [ ] **[Free] Property-graph store**: `GraphStore` over edge tables (`subgraph`, `connecting_paths`, `graph_neighbors` UDAFs) enabling `PropertyGraphIndex` / HippoRAG-style retrievers on lakehouse data.
+- [ ] **[Free] Two-level Graph-RAG retriever**: Composite retriever mirroring the full-site Wikipedia demo pattern — 384-d seed index → CSR expansion → bitmap-filtered rerank.
+
+#### 9c. [Free] Examples & Docs
+- [ ] **[Free] Runnable examples**: `examples/langchain_rag.py` and `examples/llamaindex_graph_rag.py` with integration docs.
+
 ---
 
 ## Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB) ⏳ PLANNED
@@ -620,8 +637,9 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 
 ### Tasks
 - [x] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
-- [ ] Official LangChain vector store integration (`HyperStreamVectorStore`).
-- [ ] Official LlamaIndex vector store integration (`HyperStreamIndexStore`).
+- [ ] Official LangChain integration package (`langchain-hyperstreamdb`): `HyperStreamVectorStore` + `HyperStreamGraphRetriever` wrapping `graph_rag_search` / `drift_search`.
+- [ ] Official LlamaIndex integration packages (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`): vector store, edge-table property-graph store, and the two-level Graph-RAG retriever (seed index → CSR expansion → bitmap-filtered rerank, as demonstrated by the full-site Wikipedia demo).
+- [ ] Runnable examples and docs for both frameworks (see Active Roadmap §9c).
 
 ---
 
@@ -703,5 +721,5 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 
 ---
 
-**Last Updated:** 2026-09-13  
+**Last Updated:** 2026-09-20
 **Status:** Phases 1–10 COMPLETE ✅ | Active: Phase 12 (PyPI Wheels & Connectors) | Planned: Phase 11 (SEC EDGAR Scale Lab), Advanced Search & Query Features, Graph Analytics

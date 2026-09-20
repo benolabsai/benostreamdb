@@ -154,7 +154,7 @@ def stage_resolve():
 
 
 # ── 4. embed (GPU if available, streaming, resumable) ────────────────────────
-def stage_embed(model: str, dims: int, batch: int):
+def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     os.makedirs(EMB, exist_ok=True)
     src = os.path.join(DATA, "wiki_nodes.parquet")
     out = os.path.join(EMB, "part-000.parquet")
@@ -190,7 +190,7 @@ def stage_embed(model: str, dims: int, batch: int):
     for batch_df in pl.scan_parquet(src).collect_batches(chunk_size=200_000):
         titles = batch_df["title"].to_list()
         summaries = batch_df["summary"].to_list()
-        combined = [f"{t}. {(s or '')[:512]}" for t, s in zip(titles, summaries)]
+        combined = [f"{t}. {(s or '')[:lead_chars]}" for t, s in zip(titles, summaries)]
         vecs = enc(combined)
         dim = vecs.shape[1]
         tbl = pa.Table.from_arrays(
@@ -308,10 +308,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "all"], default="all")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")
-    ap.add_argument("--embed-model", default="BAAI/bge-large-en-v1.5")
-    ap.add_argument("--embed-dims", type=int, default=0, help="0=native (1024 for bge-large); 512/256 = MRL truncate to save disk")
+    ap.add_argument("--embed-model", default="all-MiniLM-L6-v2",
+                    help="384-d centroid embedder (fast+small). bge-small-en-v1.5 (384d) or "
+                         "BAAI/bge-large-en-v1.5 (1024d, ~4x slower/bigger) are options")
+    ap.add_argument("--embed-dims", type=int, default=0, help="0=native; 512/256 = MRL truncate (bge-large/small support this)")
     ap.add_argument("--embed-batch", type=int, default=512)
-    ap.add_argument("--quant", choices=["tq4", "tq8", "none"], default="tq4")
+    ap.add_argument("--lead-chars", type=int, default=256, help="embed only the article lead (chars) for the centroid")
+    ap.add_argument("--quant", choices=["tq4", "tq8", "none"], default="tq8")
     ap.add_argument("--keep-shards", action="store_true", help="don't delete embeddings after load")
     ap.add_argument("--rebuild", action="store_true", help="force-rebuild hdb tables in stage load")
     args = ap.parse_args()
@@ -326,7 +329,7 @@ def main():
         elif s == "resolve":
             stage_resolve()
         elif s == "embed":
-            stage_embed(args.embed_model, args.embed_dims, args.embed_batch)
+            stage_embed(args.embed_model, args.embed_dims, args.embed_batch, args.lead_chars)
         elif s == "load":
             stage_load(args.rebuild, args.quant, not args.keep_shards)
     log("requested stages complete.")

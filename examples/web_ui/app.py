@@ -6,8 +6,8 @@ Runs against the WHOLE English-Wikipedia graph prepared by:
 
 Two persistent HyperStreamDB tables are used:
   * data/wiki_graph_db/edges — (source, target) int64 + CSR graph index
-  * data/wiki_graph_db/nodes — (id, title, summary, embedding) + HNSW-TQ4
-                               vector index + BM25 inverted title index
+  * data/wiki_graph_db/nodes — (id, title, summary, embedding) + HNSW-TQ
+                               vector index (384-d article centroids) + BM25
 
 Capabilities on display (each degrades gracefully if its dependency is absent):
   Browse        keyset pagination through 51M pages (engine-side SQL)
@@ -36,7 +36,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DB = os.environ.get("HDB_DEMO_DB", os.path.join(REPO, "data", "wiki_graph_db"))
 EDGES_URI = f"file://{os.path.join(DB, 'edges')}"
 NODES_URI = f"file://{os.path.join(DB, 'nodes')}"
-EMBED_MODEL = os.environ.get("HDB_DEMO_EMBED_MODEL", "BAAI/bge-large-en-v1.5")
+EMBED_MODEL = os.environ.get("HDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
 
 st.set_page_config(page_title="HyperStreamDB — Wikipedia Graph RAG", layout="wide")
 st.title("HyperStreamDB — Wikipedia Graph RAG")
@@ -239,7 +239,7 @@ with TAB_SEMANTIC:
                     res = nodes_t.hybrid_search(text_column="title", query_text=q,
                                                 vector_column="embedding",
                                                 query_vector=vec, k=k)
-                    mode = "hybrid (BM25 + HNSW-TQ4, RRF)"
+                    mode = "hybrid (BM25 + HNSW-TQ, RRF)"
                 else:
                     safe_q = q.replace("'", "''")
                     res = nodes_t.execute_sql(
@@ -264,14 +264,17 @@ with TAB_GRAPHRAG:
     with c1:
         top_k = st.number_input("Seeds", 1, 20, 5)
         hops = st.slider("Hops", 1, 3, 2, key="gr_hops")
+        rerank_n = st.number_input("Rerank top-N", 1, 20, 8, key="gr_rerank")
     with c2:
-        st.caption("Local search retrieves seed pages by embedding similarity, expands an "
-                   "induced subgraph around them, then ranks the neighborhood with "
-                   "Personalized PageRank (HippoRAG-style) before assembling context.")
+        st.caption("Two-level retrieval: seed pages found via the 384-d centroid index, an "
+                   "induced subgraph is expanded over the CSR edges and ranked with "
+                   "Personalized PageRank (HippoRAG-style). The PPR pool is then re-scored by "
+                   "a vector search **filtered to that pool** (`id IN (...)` → RoaringBitmap "
+                   "predicate pushdown): topology prunes, semantics orders.")
     if st.button("Run Graph RAG", key="gr_go", type="primary") and q:
         vec = embed_text(q)
         with st.expander("Pipeline", expanded=True):
-            with st.spinner("graph_rag_search: vector seeds -> CSR subgraph -> PPR..."):
+            with st.spinner("graph_rag_search: vector seeds -> CSR subgraph -> PPR -> bitmap-filtered rerank..."):
                 try:
                     result = nodes_t.graph_rag_search(
                         query=vec if vec is not None else q,
@@ -293,6 +296,38 @@ with TAB_GRAPHRAG:
                             pairs = list(zip(e_df["source"].astype("int64"), e_df["target"].astype("int64")))[:120]
                             st.graphviz_chart(graphviz_from_edges(pairs, titles))
                     context = result.format_context() if hasattr(result, "format_context") else ""
+
+                    # Two-level rerank: the PPR neighborhood becomes a bitmap filter on the
+                    # vector index — semantic re-scoring constrained to the subgraph that the
+                    # CSR expansion proved topologically relevant.
+                    if vec is not None and not ctx_df.empty and "id" in ctx_df.columns:
+                        pool = [int(x) for x in ctx_df["id"].tolist()]
+                        try:
+                            rr = nodes_t.vector_search(
+                                "embedding", vec, k=min(int(rerank_n), len(pool)),
+                                filter=f"id IN ({', '.join(map(str, pool))})",
+                                columns=["id", "title"],
+                            )
+                            if rr is not None and not rr.empty:
+                                st.markdown(f"**Bitmap-filtered rerank** — same query vector, "
+                                            f"search space constrained to the {len(pool)}-node "
+                                            f"PPR neighborhood:")
+                                show = rr[[c for c in ["_distance", "distance", "id", "title"] if c in rr.columns]]
+                                st.dataframe(show, hide_index=True,
+                                             height=min(40 + 35 * len(show), 350))
+                                rr_ids = ", ".join(str(int(i)) for i in rr["id"].tolist())
+                                rr_full = as_df(nodes_t.execute_sql(
+                                    f"SELECT id, title, summary FROM t WHERE id IN ({rr_ids})"))
+                                if not rr_full.empty:
+                                    order = {int(i): r for r, i in enumerate(rr["id"].tolist())}
+                                    rr_full = rr_full.assign(
+                                        _o=rr_full["id"].astype(int).map(order)).sort_values("_o")
+                                    block = "\n#### Reranked neighborhood (topology ∩ semantics)\n" + "\n".join(
+                                        f"- **{row['title']}** — {str(row['summary'])[:400]}"
+                                        for _, row in rr_full.iterrows())
+                                    context = (context + "\n" + block) if context else block
+                        except Exception as re_err:
+                            st.warning(f"Rerank skipped ({type(re_err).__name__}: {re_err})")
                 except Exception as e:
                     st.error(f"{type(e).__name__}: {e}")
                     context = ""
