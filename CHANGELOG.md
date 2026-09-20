@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Wikipedia demo dataset pipeline** (`scripts/build_demo_dataset.py`): consumes
+  the full dump parquets, resolves mixed curid/title edge endpoints to int64
+  curids (parallel, memory-bounded), prunes to the largest connected component and
+  a dense hub-centered subgraph **inside HyperStreamDB** (`connected_components`,
+  `degree_centrality`, `subgraph`), and emits `data/demo_nodes.parquet` /
+  `data/demo_edges.parquet` with integer node ids the CSR index requires.
+  Optional `sentence-transformers` embeddings (default `BAAI/bge-large-en-v1.5`,
+  1024-d) for the UI's semantic entity resolution.
+
 ### Fixed
 - **Merge/upsert nested-runtime panic**: `Table::merge` no longer drives the synchronous
   `MergePlanner` entry points inside a running tokio runtime (fixes
@@ -32,6 +42,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `subgraph()` now returns full edge rows (payload columns such as `weight`
   preserved) by joining the extracted edge set back against the table.
 - Added `jinja2` to the `dev` extra so `test_dbt_macro_file_syntax` runs in CI.
+
+### Performance
+- **Frontier-based out-of-core graph traversal**: new `core::algorithms::frontier`
+  executes BFS (level-synchronous, one hash join per hop over a deduplicated
+  symmetric adjacency, parquet-materialized visited/frontier state with early
+  exit) inside DataFusion. The `subgraph()` and `graph_neighbors()` bindings now
+  route through it instead of the UDAF accumulator that buffered the entire edge
+  set plus a `HashMap` adjacency in RAM (tens of GB at 100M+ edge scale). The
+  UDAFs remain available for raw SQL use.
+- **Connected components at scale**: rewrote `compute_connected_components` from
+  textbook per-hop label propagation (O(diameter) rounds, two full edge joins per
+  round) to **pointer jumping + edge contraction** with a single symmetric edge
+  join per round and a cheap checksum convergence probe. Validated on the
+  English-Wikipedia link graph (160.5M raw / 91.7M clean edges):
+  `connected_components()` completes in **~137s** (was effectively intractable
+  at this scale).
+- **Label propagation**: pre-materializes a symmetric edge set so each round does
+  one join instead of two; per-run unique temp directory; state-sized convergence.
+
+### Fixed
+- **Intermittent vector-index panic**: `ArrowHnsw::get_vector` casts an Arrow
+  binary value slice to `&[f32]`; when the IPC buffer landed on a misaligned byte
+  offset, `bytemuck::cast_slice` panicked with
+  `TargetAlignmentGreaterAndInputNotAligned` (debug-only, order-dependent). The
+  binary buffer is now repacked into an aligned buffer once at load when needed,
+  keeping the search hot path zero-copy.
+
+### Notes
+- Evaluated `mimalloc` as a `#[global_allocator]` for the Python extension; it
+  fails to import under glibc (`cannot allocate memory in static TLS block`) and
+  was reverted. A future option is `ld_preload`/`GLIBC_TUNABLES` or a non-TLS
+  allocator.
 
 ---
 
