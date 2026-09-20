@@ -97,7 +97,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 .ok_or("Failed to downcast data_id column to UInt64Array")?
                 .clone(),
         );
-        let vector_array = Arc::new(
+        let mut vector_array = Arc::new(
             batch
                 .column(1)
                 .as_any()
@@ -110,6 +110,29 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 })?
                 .clone(),
         );
+
+        // `get_vector` casts a binary-array value slice to `&[T]` via
+        // `bytemuck::cast_slice`, which requires `align_of::<T>()` alignment.
+        // Arrow IPC buffers are only guaranteed aligned relative to the
+        // message body, so a value slice can land on a misaligned offset
+        // (intermittently, depending on data sizes / allocation history),
+        // causing a `TargetAlignmentGreaterAndInputNotAligned` panic.
+        // Repack once into an arrow-allocated (aligned) buffer if needed;
+        // the hot search path stays zero-copy.
+        let align = std::mem::align_of::<T>();
+        if align > 1
+            && vector_array.len() > 0
+            && vector_array.value(0).as_ptr() as usize % align != 0
+        {
+            let total_bytes = (*vector_array.value_offsets().last().unwrap_or(&0)) as usize;
+            let mut builder =
+                arrow::array::BinaryBuilder::with_capacity(vector_array.len(), total_bytes);
+            for i in 0..vector_array.len() {
+                builder.append_value(vector_array.value(i));
+            }
+            vector_array = Arc::new(builder.finish());
+        }
+
         let max_layer_array = Arc::new(
             batch
                 .column(2)

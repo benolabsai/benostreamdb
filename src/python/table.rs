@@ -1301,8 +1301,49 @@ impl PyTable {
 
     #[pyo3(signature = (node, hops=1))]
     fn graph_neighbors(&self, py: Python<'_>, node: u64, hops: u32) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(graph_neighbors(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt32'))) AS neighbor FROM t", node, hops);
-        self.execute_sql(py, query)
+        // Frontier-based BFS: bounded, parquet-spilling intermediate state
+        // instead of buffering the entire edge set in a UDAF accumulator.
+        let rt = self.table.runtime();
+        let visited = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+                let res = crate::core::algorithms::frontier::bfs_visited(
+                    &ctx,
+                    "t",
+                    &[node],
+                    hops,
+                    true,
+                    "source",
+                    "target",
+                    &tmp,
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = std::fs::remove_dir_all(&tmp);
+                res
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+        let neighbors: Vec<u64> = visited.into_iter().filter(|&n| n != node).collect();
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("neighbor", arrow::datatypes::DataType::UInt64, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![std::sync::Arc::new(arrow::array::UInt64Array::from(
+                neighbors,
+            ))],
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        crate::python::helpers::arrow_batches_to_pyarrow(py, vec![batch], schema)
     }
 
     #[pyo3(signature = (seeds, hops=1, directed=false))]
@@ -1313,25 +1354,56 @@ impl PyTable {
         hops: u32,
         directed: bool,
     ) -> PyResult<Py<PyAny>> {
-        let seed_sql = if seeds.is_empty() {
-            "make_array()".to_string()
-        } else {
-            format!(
-                "make_array({})",
-                seeds
-                    .iter()
-                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        // Join the extracted edge set back against the source table so the
-        // induced subgraph retains all payload columns (e.g. `weight`).
-        let query = format!(
-            "SELECT DISTINCT t.* FROM t JOIN (SELECT unnest(subgraph(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'UInt32'), {})) AS e FROM t) x ON arrow_cast(t.source, 'UInt64') = x.e.source AND arrow_cast(t.target, 'UInt64') = x.e.target",
-            seed_sql, hops, directed
-        );
-        self.execute_sql(py, query)
+        // Frontier-based BFS (bounded, spilling intermediates), then join the
+        // induced node set back against the table so payload columns (e.g.
+        // `weight`) survive in the result.
+        let rt = self.table.runtime();
+        let result = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+                let visited_res = crate::core::algorithms::frontier::bfs_visited(
+                    &ctx, "t", &seeds, hops, directed, "source", "target", &tmp,
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = std::fs::remove_dir_all(&tmp);
+                let visited = visited_res?;
+
+                let visited_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+                    arrow::datatypes::Field::new("id", arrow::datatypes::DataType::UInt64, false),
+                ]));
+                let visited_batch = arrow::record_batch::RecordBatch::try_new(
+                    visited_schema,
+                    vec![std::sync::Arc::new(arrow::array::UInt64Array::from(
+                        visited,
+                    ))],
+                )
+                .map_err(|e| e.to_string())?;
+                ctx.register_batch("hdb_visited", visited_batch)
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(
+                        "SELECT DISTINCT t.* FROM t \
+                         JOIN hdb_visited vs ON arrow_cast(t.source, 'UInt64') = vs.id \
+                         JOIN hdb_visited vt ON arrow_cast(t.target, 'UInt64') = vt.id",
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result.0, result.1)
     }
 
     #[pyo3(signature = (seeds, directed=false))]

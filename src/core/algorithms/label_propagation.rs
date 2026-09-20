@@ -4,46 +4,75 @@ use datafusion::prelude::*;
 use std::fs;
 use std::path::Path;
 
+/// Weak label propagation community detection.
+///
+/// The edge set is pre-materialized symmetrically so each propagation round
+/// performs a SINGLE join over edges instead of two full edge scans.
+/// (Unlike connected components, majority voting cannot exploit edge
+/// contraction, so this is the main scalable win available here.)
+///
+/// Returns the name of a registered parquet table with columns `(id, label)`.
 pub async fn compute_label_propagation(
     ctx: &SessionContext,
     edges_table: &str,
     temp_dir: &Path,
     max_iterations: usize,
 ) -> Result<String> {
-    fs::create_dir_all(temp_dir)?;
+    let run_dir = temp_dir.join(format!("lp_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&run_dir)?;
 
-    // 1. Initialize State
-    let init_sql = format!(
-        "
-        SELECT id, id AS label FROM (
-            SELECT source AS id FROM {edges_table}
-            UNION
-            SELECT target AS id FROM {edges_table}
-        )
-    "
-    );
+    // Materialize a SQL result into parquet and register it under `name`.
+    async fn materialize(
+        ctx: &SessionContext,
+        run_dir: &Path,
+        name: &str,
+        sql: &str,
+    ) -> Result<String> {
+        let df = ctx.sql(sql).await?;
+        let path = run_dir.join(format!("{name}.parquet"));
+        df.write_parquet(path.to_str().unwrap(), Default::default(), None)
+            .await?;
+        ctx.register_parquet(name, path.to_str().unwrap(), ParquetReadOptions::default())
+            .await?;
+        Ok(name.to_string())
+    }
 
-    let init_df = ctx.sql(&init_sql).await?;
-    let init_path = temp_dir.join("lp_0.parquet");
-    init_df
-        .write_parquet(init_path.to_str().unwrap(), Default::default(), None)
-        .await?;
-
-    ctx.register_parquet(
-        "lp_0",
-        init_path.to_str().unwrap(),
-        ParquetReadOptions::default(),
+    // 1. Symmetric working edge set (deduplicated, no self-loops).
+    let edges_sym = materialize(
+        ctx,
+        &run_dir,
+        "edges_sym",
+        &format!(
+            "
+            SELECT DISTINCT a AS source, b AS target FROM (
+                SELECT source AS a, target AS b FROM {edges_table}
+                UNION ALL
+                SELECT target AS a, source AS b FROM {edges_table}
+            )
+            WHERE a <> b
+            "
+        ),
     )
     .await?;
 
-    let mut current_table = "lp_0".to_string();
+    // 2. Initial state: label(v) = v.
+    let init_sql = format!(
+        "
+        SELECT id, id AS label FROM (
+            SELECT source AS id FROM {edges_sym}
+            UNION
+            SELECT target AS id FROM {edges_sym}
+        )
+        "
+    );
+    let mut prev_table = materialize(ctx, &run_dir, "lp_0", &init_sql).await?;
 
-    // 2. Iterative Label Propagation
+    // 3. Iterative label propagation with a state-sized convergence check.
     for i in 0..max_iterations {
-        let next_table = format!("lp_{}", i + 1);
-        let next_path = temp_dir.join(format!("{}.parquet", next_table));
+        let next_name = format!("lp_{}", i + 1);
 
-        // Find the most frequent label among neighbors for each node
+        // Most frequent neighbor label wins; ties break on smallest label.
+        // The symmetric edge set means one join covers both directions.
         let update_sql = format!(
             "
             SELECT id, label FROM (
@@ -54,58 +83,44 @@ pub async fn compute_label_propagation(
                 FROM (
                     SELECT node_id, label, COUNT(*) as cnt
                     FROM (
-                        -- Current state (so disconnected nodes retain their label)
-                        SELECT id AS node_id, label FROM {current_table}
+                        -- Current state (so isolated nodes retain their label)
+                        SELECT id AS node_id, label FROM {prev_table}
                         UNION ALL
                         SELECT e.target AS node_id, c.label
-                        FROM {edges_table} e JOIN {current_table} c ON e.source = c.id
-                        UNION ALL
-                        SELECT e.source AS node_id, c.label
-                        FROM {edges_table} e JOIN {current_table} c ON e.target = c.id
+                        FROM {edges_sym} e JOIN {prev_table} c ON e.source = c.id
                     )
                     GROUP BY node_id, label
                 )
             )
             WHERE rn = 1
-        "
+            "
         );
 
-        let df = ctx.sql(&update_sql).await?;
-        df.write_parquet(next_path.to_str().unwrap(), Default::default(), None)
-            .await?;
+        let next_table = materialize(ctx, &run_dir, &next_name, &update_sql).await?;
 
-        ctx.register_parquet(
-            &next_table,
-            next_path.to_str().unwrap(),
-            ParquetReadOptions::default(),
-        )
-        .await?;
-
-        // 3. Convergence Check
+        // Convergence check (state x state join, not edge-sized).
         let check_sql = format!(
             "
             SELECT COUNT(*) AS changes
             FROM {next_table} n
-            JOIN {current_table} c ON n.id = c.id
-            WHERE n.label != c.label
-        "
+            JOIN {prev_table} p ON n.id = p.id
+            WHERE n.label != p.label
+            "
         );
-
-        let check_df = ctx.sql(&check_sql).await?;
-        let batches = check_df.collect().await?;
-        let changes_array = batches[0]
+        let batches = ctx.sql(&check_sql).await?.collect().await?;
+        let changes = batches[0]
             .column(0)
             .as_any()
             .downcast_ref::<Int64Array>()
-            .unwrap();
-        let changes = changes_array.value(0);
+            .map(|a| a.value(0))
+            .unwrap_or(0);
 
+        tracing::debug!("label_propagation round {i}: changes={changes}");
         if changes == 0 {
-            return Ok(next_table); // Converged
+            return Ok(next_table);
         }
-
-        current_table = next_table;
+        prev_table = next_table;
     }
 
-    Ok(current_table)
+    Ok(prev_table)
 }
