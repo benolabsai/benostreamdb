@@ -35,10 +35,11 @@ are skipped. Stages:
 3. **resolve** — polars joins mixed curid/title link endpoints to integer
    `curid`s and drops redirect pages → `data/wiki_nodes.parquet`,
    `data/wiki_edges.parquet`.
-4. **embed** — sentence-transformers (`all-MiniLM-L6-v2` by default;
-   `--embed-model BAAI/bge-large-en-v1.5` for higher quality at ~10× cost)
-   sharded across `--workers` processes → `data/embeddings/part-*.parquet`
-   (resumable per shard).
+4. **embed** — sentence-transformers (`all-MiniLM-L6-v2` by default — the
+   two-level design only needs a cheap 384-d **seed index**, and reranking is
+   bitmap-filtered to the retrieved neighborhood; `--embed-model
+   BAAI/bge-large-en-v1.5` costs ~20× more: measured 279 vs 6,065 sent/s)
+   on GPU if present → `data/embeddings/part-*.parquet` (resumable per shard).
 5. **load** — builds the two persistent HyperStreamDB tables under
    `data/wiki_graph_db/`:
    - `edges` — `(source, target) int64` + CSR graph index
@@ -91,17 +92,17 @@ Reference hardware: **32-core x86-64 Linux, 121 GB RAM, NVMe** (`/tmp` is a
 pages / 498M raw links → **51.8M live pages / 383M clean int64 edges** after
 redirect filtering and endpoint resolution.
 
-> ⏳ Wall-times for **embed** and **load** below are estimates; the whole-site
-> bge-large GPU run is in progress and these will be replaced with measured
-> numbers when it completes.
+> ⏳ Wall-time for **load** below is an estimate; the whole-site load
+> (HNSW-TQ8 build over 51.8M vectors) is in progress and will be replaced with
+> a measured number when it completes. Embed is now measured.
 
 | Stage | Wall time | Peak memory | Notes |
 |---|---|---|---|
 | download (19 chunks, ~48 GB) | ~2 h | <1 GB | 3 parallel streams; Wikimedia returns HTTP 429 beyond ~3 — the downloader is 429-aware and resumes via `.part` |
 | parse (streaming Rust) | ~2.6 h | **< 2 GB** | 66.1M pages + 498M edges; the old accumulate-then-write design OOM-killed at ~110 GB — streaming per-chunk flushes fixed it |
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
-| embed (bge-large-en-v1.5, 1024-d, **RTX 3090**) | **~11 h** (est.) | **< 4 GB RAM**, 22 GB VRAM | streaming per-row-group, fp16, single GPU process (~1,234 sent/s measured); CPU fallback is ~40–60 h |
-| load (hdb tables + HNSW-TQ4 + CSR + BM25) | ~2–4 h (est.) | ~4–8 GB | streams embeddings into the table and **deletes each shard after ingest** to bound peak disk |
+| embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **~2.3 h** | **< 4 GB RAM**, ~6 GB VRAM | streaming per-row-group, fp16, batch 512; **6,065 sent/s measured** (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
+| load (hdb tables + HNSW-TQ8 + CSR + BM25) | ~2–4 h (est.) | ~4–8 GB | streams embeddings into the table and **deletes each shard after ingest** to bound peak disk |
 
 ### Engine benchmarks (91.7M-edge graph, debug build)
 
@@ -127,7 +128,7 @@ Two distinct workloads with very different bars: **preparing** the dataset
 | Resource | Absolute floor | Comfortable | Why |
 |---|---|---|---|
 | RAM | **16 GB** | 24–32 GB | Vector + CSR indexes are **mmap-backed** (`use_mmap` default + `MADV_RANDOM`), so only pages a query touches are resident (upper HNSW layers + visited nodes ≈ a few GB). 16 GB runs graph + keyword + dense search, just with more page faults. |
-| Disk | **~250 GB** | 400 GB | nodes table with 1024-d f32 embeddings ≈ 212 GB + TQ4 index ~27 GB + edges/CSR ~15 GB + BM25 ~5 GB. |
+| Disk | **~150 GB** | 250 GB | nodes table with 384-d f32 embeddings ≈ 80 GB + TQ8 index ~25 GB + edges/CSR (383M) ~10 GB + BM25 ~5 GB. |
 | CPU | 4 cores | 8+ | hybrid/PPR/DRIFT are engine-side; DRIFT over a big region is the heaviest. |
 | GPU | none | optional | GPU only speeds *prep* (embedding); serving reads the prebuilt index. |
 
@@ -140,9 +141,9 @@ constraint). What a laptop can't do is *prepare* it fast — see below.
 | Resource | Floor | Notes |
 |---|---|---|
 | RAM | **8 GB** | every stage is now streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~4–8 GB). The old 47–55 GB spikes are gone. |
-| Disk | **~300 GB free** | peak = 212 GB embeddings + growing table before shard-delete; dumps (48 GB) are re-fetchable and can be deleted after parse. |
-| GPU | strongly advised | bge-large on a 3090 ≈ 11 h; on CPU it's 40–60 h. |
-| Time | **~15–18 h** end-to-end | dominated by embed; parse ~2.6 h; download ~2 h. |
+| Disk | **~200 GB free** | peak = ~80 GB embedding shards + growing table before shard-delete; dumps (48 GB) are re-fetchable and can be deleted after parse. |
+| GPU | strongly advised | MiniLM-384 on a 3090 ≈ **2.5 h** (measured); on CPU expect ~10–20 h. bge-large-1024 would take 50 h on the same GPU. |
+| Time | **~9–11 h** end-to-end | parse ~2.6 h; embed ~2.3 h; load ~2–4 h; download ~2 h. |
 
 **If you have neither a GPU nor ~300 GB disk**, use the pruned profile instead
 (`scripts/build_demo_dataset.py`, ~50k-node hub-centered subgraph → ~155 MB
@@ -157,5 +158,5 @@ pruned path share the same app and engine APIs — only scale differs.
 - **DRIFT tab fails on huge regions** → lower *Region seeds*; the region is a
   1-hop induced subgraph around the query's top pages.
 - **Out of disk** → the pipeline needs ~200 GB free (dumps 48 GB, intermediates
-  ~36 GB, embeddings ~80 GB, tables ~110 GB). `data_full/` is safe to delete
-  once `data/wiki_*.parquet` exist.
+  ~36 GB, embedding shards ~80 GB, tables ~105 GB). `data_full/` is safe to
+  delete once `data/wiki_*.parquet` exist.
