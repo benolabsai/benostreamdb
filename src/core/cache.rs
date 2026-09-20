@@ -156,6 +156,16 @@ impl DiskCache {
 
         let file = std::fs::File::open(&cache_path)?;
         let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+        // Every consumer of get_mmap is a random-access serving structure
+        // (HNSW graph links/vectors, CSR offsets/edges/dict). Default kernel
+        // readahead speculatively pulls ~128 KB windows around each page
+        // fault that are evicted before reuse during pointer-chasing,
+        // polluting the page cache and thrashing out-of-core serving.
+        // MADV_RANDOM disables readahead so only the pages actually touched
+        // are faulted in — this is what makes mmap-backed (out-of-core)
+        // vector/graph search cache-efficient on memory-constrained hosts.
+        // Advice is a hint; ignore failure on platforms that reject it.
+        let _ = mmap.advise(memmap2::Advice::Random);
         Ok(Arc::new(mmap))
     }
 }

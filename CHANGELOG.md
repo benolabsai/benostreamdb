@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Out-of-core vector serving**: `DiskCache::get_mmap` now applies
+  `MADV_RANDOM` to serving mmaps (HNSW graph/vectors, CSR offsets/edges/dict).
+  Combined with the existing `use_mmap` default and TQ4 quantization, whole-site
+  dense search runs on memory-constrained hosts with a bounded resident set.
+- **Demo prep is now laptop-feasible on RAM**: `prepare_demo.py` embed streams
+  per row-group (was materializing the whole slice, ~9 GB/worker), resolve joins
+  per edge-chunk against one broadcast title map (was ~47 GB), and load deletes
+  each embedding shard after ingesting it (bounds peak disk). Embed runs on GPU
+  (bge-large-en-v1.5, 1024-d, ~1,234 sent/s on an RTX 3090).
+
+### Fixed
+- **Embedding column type**: the demo pipeline wrote `LargeList` embeddings, which
+  the vector index silently ignores (it matches `List`/`FixedSizeList` only) —
+  switched to `FixedSizeList`, so the HNSW index actually builds.
+
 ### Added
 - **Wikipedia demo dataset pipeline** (`scripts/build_demo_dataset.py`): consumes
   the full dump parquets, resolves mixed curid/title edge endpoints to int64
