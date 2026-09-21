@@ -5,7 +5,7 @@
 This document outlines the step-by-step plan to take HyperStreamDB from PoC to production-ready.
 
 **Timeline:** ~8 weeks  
-**Current Phase:** Phases 1–11 COMPLETE ✅ | Active Roadmap: Polaris OAuth2, Trino Sidecar Pushdown & Multi-Vector Search, Phase 12 (Client Ecosystem)
+**Current Phase:** Phases 1–11 COMPLETE ✅ | Active Roadmap: Phase 12 (Client Ecosystem: LangChain/LlamaIndex connectors, Native tokio Ingest Orchestrator)
 
 ---
 
@@ -641,18 +641,39 @@ First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG 
 - [ ] Official LlamaIndex integration packages (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`): vector store, edge-table property-graph store, and the two-level Graph-RAG retriever (seed index → CSR expansion → bitmap-filtered rerank, as demonstrated by the full-site Wikipedia demo).
 - [ ] Runnable examples and docs for both frameworks (see Active Roadmap §9c).
 
-### Serverless & Multi-TB Ingest Scale-Out
-- [ ] **Chunked-ingest orchestrator**: fan a table load across N serverless workers
-  by row-range chunks — each worker commits independently via the OCC manifest CAS
-  (`FileBasedLock`); peak worker RAM is the `--load-chunk-rows` knob (500k rows ≈
-  3–4 GB, Fargate/Lambda-sized). Reference implementation: `scripts/prepare_demo.py`
-  fresh-process chunking.
-- [ ] **Long-lived-process memory discipline**: allocator strategy for daemons that
-  rebuild indexes in-process (builder churn strands freed memory in glibc's main
-  heap at ~2.6–4.5 GB per million vectors): evaluate jemalloc (mimalloc failed
-  static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the
-  HNSW/TQ builders; plus scheduled `rewrite_data_files` compaction so segment and
-  manifest counts stay bounded at TB scale.
+### Native Ingest Orchestrator (tokio) — cluster-free bulk ingest [Free]
+Spark stays for pre-write transforms and existing lake pipelines, but ingestion must
+not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes,
+and commits a bulk load entirely inside the engine. The whole-site Wikipedia demo
+(`scripts/prepare_demo.py` fresh-process chunking: 2M-row chunks, 118 s @ ~10 GB,
+per-chunk OCC commits) is the working prototype for this design.
+
+- [ ] **Work planner**: enumerate inputs (parquet files / row groups / streams) into
+  row-range work units sized from a memory budget (measured ~4.5 GB per million
+  384-d vectors incl. allocator churn; auto-detected from `MemAvailable`, env-overridable).
+- [ ] **Bounded tokio worker pool**: each worker streams its range into a *private*
+  segment builder (segments are already independent), flushes with per-segment index
+  builds, under a `Semaphore`-bounded queue; per-worker RSS ceiling = chunk size knob.
+- [ ] **Commit strategy**: coordinator drains completed segments into multi-segment
+  snapshots via the existing OCC manifest CAS (`FileBasedLock`, `PutMode::Create`) —
+  N segments per snapshot to keep manifest versions bounded; retries on conflict.
+- [ ] **Resume & idempotency**: durable job state (completed work-unit list as a table
+  property or sidecar) so an interrupted multi-TB load restarts at the unit boundary.
+- [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory
+  budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the
+  HNSW/TQ builders so freed memory is actually reusable.
+- [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based
+  work stealing over an object-store lease file / Flight gateway later.
+- [ ] **Python/CLI surface**: `table.ingest(paths, chunk_rows=None, parallelism=None)`
+  with progress; `hdb ingest --plan/--run`; serverless tasks become thin runners
+  (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
+- [ ] **Scheduled compaction**: drive `rewrite_data_files` from the orchestrator so
+  segment and manifest counts stay bounded at TB scale (chunked loads create many
+  small segments by design).
+- [ ] **Allocator evaluation** (shared with the memory-discipline item, for
+  long-lived daemons that rebuild indexes in-process): jemalloc vs glibc
+  (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or
+  slab-allocating the HNSW/TQ builders.
 
 ---
 
