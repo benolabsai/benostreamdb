@@ -239,12 +239,111 @@ def _table_loaded(d: str) -> bool:
         f not in ("metadata", "_wal", "_manifest") for f in os.listdir(d))
 
 
-def stage_load(rebuild: bool, quant: str, delete_shards: bool):
+def _delete_shards():
+    if not os.path.isdir(EMB):
+        return
+    removed = 0
+    for p in os.listdir(EMB):
+        if p.endswith(".parquet"):
+            os.remove(os.path.join(EMB, p))
+            removed += 1
+    if removed:
+        log(f"load nodes: deleted {removed} embedding shard(s) (reclaim disk)")
+
+
+def _load_nodes_child(quant, delete_shards, row_start, row_end):
+    """Write wiki_nodes rows [row_start, row_end) into the nodes table.
+
+    Runs in a FRESH process per chunk: the in-process HNSW/TQ8 builders do
+    millions of small allocations, and glibc strands freed memory inside the
+    main heap — RSS ratcheted ~2.6 GB per million rows regardless of arena
+    caps, OOM-killing single-process runs around 30-40M rows. A new process
+    resets the allocator high-water mark.
+    """
     import hyperstreamdb as hdb
 
-    if not os.environ.get("MALLOC_ARENA_MAX"):
-        log("load: tip — run with MALLOC_ARENA_MAX=2 (glibc arenas otherwise "
-            "retain tens of GB of freed index-build memory with 32+ workers)")
+    nodes_dir = os.path.join(DB, "nodes")
+    nodes_path = os.path.join(DATA, "wiki_nodes.parquet")
+    total_rows = pq.ParquetFile(nodes_path).metadata.num_rows
+    if row_end <= 0:
+        row_end = total_rows
+
+    parts = sorted(f for f in os.listdir(EMB) if f.endswith(".parquet")) if os.path.isdir(EMB) else []
+    has_vec = bool(parts)
+    # Derive schema from the ACTUAL source files so string/large_string and
+    # the FixedSizeList inner field name always line up (avoids ArrowInvalid).
+    schema = pq.ParquetFile(nodes_path).schema_arrow
+    emb_field = None
+    if has_vec:
+        emb_field = pq.ParquetFile(os.path.join(EMB, parts[0])).schema_arrow.field("embedding")
+        schema = schema.append(emb_field)
+
+    if _table_loaded(nodes_dir):
+        t = hdb.Table(f"file://{nodes_dir}")           # later chunks: open existing
+    else:
+        shutil.rmtree(nodes_dir, ignore_errors=True)   # clear crashed-run shell
+        t = hdb.Table.create(f"file://{nodes_dir}", schema)
+        if has_vec:
+            t.add_index("embedding", f"hnsw_{quant}" if quant != "none" else "hnsw")
+        t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
+
+    def ranged_batches(path, s, e, batch=250_000, columns=None):
+        """Batches from `path` clipped to the row range [s, e)."""
+        pos = 0
+        for b in pq.ParquetFile(path).iter_batches(batch_size=batch, columns=columns):
+            if pos + b.num_rows > s and pos < e:
+                lo = max(0, s - pos)
+                hi = min(b.num_rows, e - pos)
+                yield b.slice(lo, hi - lo)
+            pos += b.num_rows
+            if pos >= e:
+                break
+
+    t0 = time.time(); n = 0
+    if has_vec:
+        # Embedding shards are contiguous row-order slices of wiki_nodes, so
+        # the same [s, e) grid on both sides keeps batches position-aligned.
+        def emb_arrays():
+            pos = 0
+            for p in parts:
+                for b in pq.ParquetFile(os.path.join(EMB, p)).iter_batches(
+                        batch_size=250_000, columns=["embedding"]):
+                    arr = b["embedding"]
+                    if pos + len(arr) > row_start and pos < row_end:
+                        lo = max(0, row_start - pos)
+                        hi = min(len(arr), row_end - pos)
+                        yield arr.slice(lo, hi - lo)
+                    pos += len(arr)
+                    if pos >= row_end:
+                        return
+
+        emb_it = emb_arrays()
+        for batch in ranged_batches(nodes_path, row_start, row_end):
+            col = next(emb_it, None)
+            if col is None:
+                raise RuntimeError("embeddings shorter than nodes")
+            assert len(col) == batch.num_rows, "node/embed alignment lost"
+            out = batch.append_column(emb_field, col)
+            t.write(pa.Table.from_batches([out]))
+            n += batch.num_rows
+            if n % 2_000_000 < 250_000:
+                log(f"load nodes: {row_start + n:,}/{total_rows:,} ({time.time()-t0:.0f}s)")
+    else:
+        log("load nodes: no embeddings — text only (semantic search off)")
+        for batch in ranged_batches(nodes_path, row_start, row_end):
+            t.write(pa.Table.from_batches([batch]))
+            n += batch.num_rows
+    t.commit(); t.wait_for_background_tasks()
+    log(f"load nodes: wrote {n:,} rows [{row_start:,}, {row_end:,}) in {time.time()-t0:.0f}s")
+    if has_vec and delete_shards and row_start == 0 and row_end == total_rows:
+        _delete_shards()
+
+
+def stage_load(rebuild: bool, quant: str, delete_shards: bool,
+               chunk_rows: int, row_start: int, row_end: int):
+    # hyperstreamdb self-tunes glibc arenas (mallopt M_ARENA_MAX=2) at import;
+    # the chunked design below additionally resets allocator high-water marks.
+    import hyperstreamdb as hdb
 
     edges_dir = os.path.join(DB, "edges")
     nodes_dir = os.path.join(DB, "nodes")
@@ -253,7 +352,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
         shutil.rmtree(nodes_dir, ignore_errors=True)
     os.makedirs(DB, exist_ok=True)
 
-    # ── edges table + CSR graph index ──
+    # ── edges table + CSR graph index (single pass, cheap memory) ──
     if not _table_loaded(edges_dir):
         schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
         t = hdb.Table.create(f"file://{edges_dir}", schema)
@@ -270,73 +369,31 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
     else:
         log("load edges: table exists — skipping (use --rebuild)")
 
-    # ── nodes table + HNSW(quant) vector index + BM25 title index ──
-    if not _table_loaded(nodes_dir):
-        shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell
-        parts = sorted(f for f in os.listdir(EMB) if f.endswith(".parquet")) if os.path.isdir(EMB) else []
-        has_vec = bool(parts)
-        nodes_path = os.path.join(DATA, "wiki_nodes.parquet")
-        # Derive schema from the ACTUAL source files so string/large_string and
-        # the FixedSizeList inner field name always line up (avoids ArrowInvalid).
-        schema = pq.ParquetFile(nodes_path).schema_arrow
-        emb_field = None
-        if has_vec:
-            emb_field = pq.ParquetFile(os.path.join(EMB, parts[0])).schema_arrow.field("embedding")
-            schema = schema.append(emb_field)
-        t = hdb.Table.create(f"file://{nodes_dir}", schema)
-        if has_vec:
-            t.add_index("embedding", f"hnsw_{quant}" if quant != "none" else "hnsw")
-        t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
-        t0 = time.time(); n = 0
+    # ── child / single-process mode ──
+    if chunk_rows <= 0 or row_start > 0:
+        _load_nodes_child(quant, delete_shards, row_start, row_end)
+        return
 
-        if has_vec:
-            # Embedding shards are contiguous row-order slices of wiki_nodes, so
-            # zip by position — STREAMING batches (a whole-shard read_table OOM-
-            # killed the 37 GB single-shard run). Shards are deleted only AFTER
-            # the table commits, so a crash never destroys unrecoverable work.
-            def emb_batches():
-                for p in parts:
-                    path = os.path.join(EMB, p)
-                    for b in pq.ParquetFile(path).iter_batches(batch_size=250_000):
-                        yield b["embedding"]
-
-            emb_iter = emb_batches()
-            emb_cur = None  # current embeddings batch (ChunkedArray column)
-            emb_off = 0
-            for batch in pq.ParquetFile(nodes_path).iter_batches(batch_size=250_000):
-                pieces = []; need = batch.num_rows
-                while need > 0:
-                    if emb_cur is None or emb_off >= len(emb_cur):
-                        try:
-                            emb_cur = next(emb_iter)
-                        except StopIteration:
-                            raise RuntimeError("embeddings shorter than nodes")
-                        emb_off = 0
-                        continue
-                    take = min(need, len(emb_cur) - emb_off)
-                    pieces.append(emb_cur.slice(emb_off, take))  # Array (batch col)
-                    emb_off += take; need -= take
-                col = pieces[0] if len(pieces) == 1 else pa.concat_arrays(pieces)
-                out = batch.append_column(emb_field, col)
-                t.write(pa.Table.from_batches([out]))
-                n += batch.num_rows
-                if n % 2_000_000 < 250_000:
-                    log(f"load nodes: {n:,} ({time.time()-t0:.0f}s)")
-        else:
-            log("load nodes: no embeddings — text only (semantic search off)")
-            for batch in pq.ParquetFile(nodes_path).iter_batches(250_000):
-                t.write(pa.Table.from_batches([batch]))
-                n += batch.num_rows
-        t.commit(); t.wait_for_background_tasks()
-        log(f"load nodes: {n:,} pages in {time.time()-t0:.0f}s")
-        if has_vec and delete_shards:
-            for p in parts:
-                fp = os.path.join(EMB, p)
-                if os.path.exists(fp):
-                    os.remove(fp)
-            log("load nodes: deleted embedding shards (reclaim disk)")
-    else:
+    # ── nodes: parent orchestrates fresh-process chunks ──
+    if _table_loaded(nodes_dir):
         log("load nodes: table exists — skipping (use --rebuild)")
+        return
+    shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell
+    total = pq.ParquetFile(os.path.join(DATA, "wiki_nodes.parquet")).metadata.num_rows
+    s = 0
+    while s < total:
+        e = min(s + chunk_rows, total)
+        log(f"load nodes: chunk [{s:,}, {e:,}) in a fresh process")
+        rc = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--stage", "load",
+             "--load-chunk-rows", "0", "--row-start", str(s), "--row-end", str(e),
+             "--quant", quant, "--keep-shards"])
+        if rc.returncode != 0:
+            raise SystemExit(f"load chunk [{s:,}, {e:,}) failed (rc={rc.returncode})")
+        s = e
+    if delete_shards:
+        _delete_shards()
+    log(f"load nodes: all chunks complete ({total:,} rows)")
 
 
 def main():
@@ -352,6 +409,12 @@ def main():
     ap.add_argument("--quant", choices=["tq4", "tq8", "none"], default="tq8")
     ap.add_argument("--keep-shards", action="store_true", help="don't delete embeddings after load")
     ap.add_argument("--rebuild", action="store_true", help="force-rebuild hdb tables in stage load")
+    ap.add_argument("--load-chunk-rows", type=int, default=10_000_000,
+                    help="rows per fresh-process load chunk (resets allocator high-water marks; "
+                         "index builds strand ~2.6 GB freed-but-unreturnable memory per million "
+                         "rows otherwise). 0 = single process")
+    ap.add_argument("--row-start", type=int, default=0, help=argparse.SUPPRESS)
+    ap.add_argument("--row-end", type=int, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args()
 
     stages = ["download", "parse", "resolve", "embed", "load"] if args.stage == "all" else [args.stage]
@@ -366,7 +429,8 @@ def main():
         elif s == "embed":
             stage_embed(args.embed_model, args.embed_dims, args.embed_batch, args.lead_chars)
         elif s == "load":
-            stage_load(args.rebuild, args.quant, not args.keep_shards)
+            stage_load(args.rebuild, args.quant, not args.keep_shards,
+                       args.load_chunk_rows, args.row_start, args.row_end)
     log("requested stages complete.")
 
 
