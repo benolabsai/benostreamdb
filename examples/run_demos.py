@@ -52,7 +52,7 @@ def run_notebook(path, delay_per_cell=15):
         print(f"Failed to run {path}: {e}")
 
 def main():
-    demo_dir = "/home/ralbright/projects/hyperstreamdb/demo"
+    demo_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notebooks")
     notebooks = [
         "03_comprehensive_guide.ipynb",
         "01_installation_and_basics.ipynb",
