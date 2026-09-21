@@ -17,16 +17,18 @@ without it, and without the embedder.
 
 ## 1. Prepare the data (one-time, ~4–6 h)
 
-> **Run the load stage as `MALLOC_ARENA_MAX=2 python scripts/prepare_demo.py --stage load …`**
-> The load builds HNSW/IVF indexes in-process across 32 workers; without the
-> glibc arena cap, freed build memory accumulates in ~430 thread arenas
-> (measured: 82 GB RSS vs 18 GB capped — and 2× faster writes with the cap).
+> No env-var prefixes needed: the engine self-tunes glibc malloc arenas at
+> import (`mallopt(M_ARENA_MAX, 2)`), and the load stage writes the nodes table
+> in **fresh-process chunks of 10M rows** (`--load-chunk-rows`) — in-process
+> HNSW/TQ8 builders strand freed memory in glibc's main heap (~2.6 GB per
+> million rows measured), so a new process per chunk resets the high-water mark
+> and keeps peak RSS ~25 GB regardless of dataset size.
 
 From the repository root:
 
 ```bash
 pip install -e ".[dev]"          # hyperstreamdb + polars/sentence-transformers etc.
-MALLOC_ARENA_MAX=2 python scripts/prepare_demo.py
+python scripts/prepare_demo.py
 ```
 
 The script is **idempotent and resumable** — rerun it any time; completed stages
@@ -50,7 +52,7 @@ are skipped. Stages:
    all-or-nothing: if an interrupted run left shards behind, delete
    `data/embeddings/` and rerun. `--embed-dims 256/128` MRL-truncates.
 5. **load** — builds the two persistent HyperStreamDB tables under
-   `data/wiki_graph_db/` (run with `MALLOC_ARENA_MAX=2`, see above):
+   `data/wiki_graph_db/` (nodes in fresh-process 10M-row chunks, see above):
    - `edges` — `(source, target) int64` + CSR graph index
    - `nodes` — `(id, title, summary, embedding)` + `hnsw_tq8` vector index
      (`--quant tq4|tq8|none`) + BM25 inverted index on `title`
@@ -64,6 +66,7 @@ Useful invocations:
 python scripts/prepare_demo.py --stage download --workers 6   # --workers = download only
 python scripts/prepare_demo.py --stage embed --embed-batch 1024
 python scripts/prepare_demo.py --stage load --rebuild         # rebuild both tables
+python scripts/prepare_demo.py --stage load --load-chunk-rows 0   # single process (small datasets)
 python scripts/prepare_demo.py --stage load --keep-shards     # don't delete embeddings after commit
 df -h .                                                       # watch disk (needs ~200 GB)
 ```
@@ -98,7 +101,7 @@ Toggle the LLM off in the sidebar to run purely engine-side.
 | `HDB_DEMO_DB` | `data/wiki_graph_db` | location of the prepared tables |
 | `HDB_DEMO_EMBED_MODEL` | `all-MiniLM-L6-v2` | must match the model used in the embed stage |
 | `HDB_DEMO_LLM` | `1` | `0` disables LLM features by default |
-| `MALLOC_ARENA_MAX` | unset | set to **2** for the load stage (glibc arena cap; see §1) |
+| `MALLOC_ARENA_MAX` | engine sets 2 at import | override only if you know better |
 | `HDB_EMBED_SHARD_ROWS` | `5000000` | embed-stage shard rotation size |
 
 ## Timings & system stats (measured on this machine)
@@ -119,7 +122,7 @@ redirect filtering and endpoint resolution.
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
 | embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **< 4 GB RAM**, ~7 GB VRAM | fp16, batch 512, 256-char leads; **6,750 sent/s avg** → 11 shards / 36 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
 | load — edges (383M + CSR) | **529 s** | ~6 GB | 15 GB table incl. CSR sidecars |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~1–2 h (in progress) | **18 GB RSS** with `MALLOC_ARENA_MAX=2` (82 GB without — glibc arenas) | ~14.4k rows/s with the arena cap vs ~7k without (arena lock contention) |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~2 h (in progress) | ~25 GB per 10M-row chunk (fresh process each; single-process runs ratchet ~2.6 GB/M rows in glibc's main heap) | chunked parent spawns children sequentially; shards deleted after all chunks commit |
 
 ### Engine benchmarks (91.7M-edge graph, debug build)
 
@@ -157,7 +160,7 @@ constraint). What a laptop can't do is *prepare* it fast — see below.
 
 | Resource | Floor | Notes |
 |---|---|---|
-| RAM | **8 GB** | every stage is streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~18 GB *with* `MALLOC_ARENA_MAX=2`). The old 47–55 GB spikes are gone. |
+| RAM | **8 GB** | every stage is streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~25 GB per fresh-process chunk). The old 47–82 GB single-process spikes are gone. |
 | Disk | **~200 GB free** | peak = ~36 GB embedding shards + growing tables; shards are deleted after the nodes table commits; dumps (48 GB) are re-fetchable and can be deleted after parse. |
 | GPU | strongly advised | MiniLM-384 on a 3090 ≈ **2.1 h** (measured, 6,750 sent/s); on CPU expect ~10–20 h. bge-large-1024 would take 50 h on the same GPU. |
 | Time | **~8–10 h** end-to-end | download ~2 h; parse ~2.6 h; embed ~2.1 h; load ~1.5–2.5 h. |
@@ -170,9 +173,9 @@ pruned path share the same app and engine APIs — only scale differs.
 ## Troubleshooting
 
 - **“Demo tables not found”** → run `python scripts/prepare_demo.py` first.
-- **Load stage RAM climbs into tens of GB / writes slow down** → relaunch with
-  `MALLOC_ARENA_MAX=2` (glibc keeps freed index-build memory per thread arena;
-  measured 82 GB → 18 GB RSS and 2× write rate).
+- **Load stage RAM climbs into tens of GB** → expected only if you forced
+  `--load-chunk-rows 0`; the default fresh-process chunking exists precisely
+  because glibc strands freed index-build memory in the main heap.
 - **Load died mid-run** → `rm -rf data/wiki_graph_db/nodes && MALLOC_ARENA_MAX=2
   python scripts/prepare_demo.py --stage load` — embedding shards survive until
   post-commit deletion, so only the (re-runnable) load is redone.

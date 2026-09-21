@@ -43,9 +43,34 @@ pub use crate::core::table::{Table, VectorSearchParams};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
+/// glibc gives each thread its own malloc arena (up to 8 × cores) and keeps
+/// freed memory in the arena that released it. With dozens of worker threads
+/// doing heavy small-allocation churn (e.g. in-process index builds), RSS
+/// ratchets toward the sum of every arena's high-water mark — measured 82 GB
+/// vs 18 GB live during the whole-site Wikipedia node load — while threads
+/// also contend on their own fragmented heaps. Capping to 2 arenas forces
+/// shared reuse of freed memory. No-ops when the user explicitly sets
+/// `MALLOC_ARENA_MAX`; musl/macOS use different allocators entirely.
+#[cfg(all(feature = "python", target_os = "linux", target_env = "gnu"))]
+fn tame_glibc_arenas() {
+    const M_ARENA_MAX: i32 = -101; // glibc mallopt param (not exported by libc crate)
+    extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+    }
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        unsafe {
+            mallopt(M_ARENA_MAX, 2);
+        }
+    }
+}
+
+#[cfg(all(feature = "python", not(all(target_os = "linux", target_env = "gnu"))))]
+fn tame_glibc_arenas() {}
+
 #[cfg(feature = "python")]
 #[pymodule]
 fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    tame_glibc_arenas();
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(
