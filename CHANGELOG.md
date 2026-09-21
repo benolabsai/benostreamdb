@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Embedding column type**: the demo pipeline wrote `LargeList` embeddings, which
   the vector index silently ignores (it matches `List`/`FixedSizeList` only) —
   switched to `FixedSizeList`, so the HNSW index actually builds.
+- **Demo load OOM + data-loss hazards** (`prepare_demo.py`): stage `load` read
+  each embedding shard with a whole-shard `pq.read_table` — a 37 GB single-shard
+  run was OOM-killed by the kernel; it now streams shards in 250k-row batches
+  (verified position-aligned across multi-shard/coprime-batch boundaries).
+  Shard deletion moved to strictly AFTER table commit (an earlier delete-on-
+  advance variant destroyed the only embedding copy). Stage `embed` now rotates
+  5M-row shards (`HDB_EMBED_SHARD_ROWS` override) so load can reclaim disk
+  incrementally. Covered by `tests/python/test_prepare_demo.py`.
 
 ### Added
 - **Two-level Graph RAG in the Wikipedia demo** (`examples/web_ui/app.py`): the
