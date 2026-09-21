@@ -29,7 +29,7 @@ def verify_explain():
     
     # 3. Test EXPLAIN on Scalar Filter
     print("\n--- EXPLAIN: Scalar Filter ---")
-    plan = table.filter("category = 'A'").explain()
+    plan = table._inner.explain("category = 'A'", None)
     print(plan)
     
     # Check for expected keywords
@@ -41,7 +41,8 @@ def verify_explain():
     # 4. Test EXPLAIN on Vector Search
     print("\n--- EXPLAIN: Vector Search ---")
     query_vec = [1.0] * 128
-    plan_vector = table.vector_search(query_vec, k=5).explain()
+    vector_filter = {"column": "embedding", "query": query_vec, "k": 5}
+    plan_vector = table._inner.explain(None, vector_filter)
     print(plan_vector)
     
     if "Vector Search" in plan_vector or "KNN" in plan_vector or "HNSW" in plan_vector or "IVF" in plan_vector:
@@ -52,7 +53,8 @@ def verify_explain():
 
     # 5. Test EXPLAIN on Hybrid Search
     print("\n--- EXPLAIN: Hybrid Search ---")
-    plan_hybrid = table.filter("category = 'B'").vector_search(query_vec, k=10).explain()
+    vector_filter_hybrid = {"column": "embedding", "query": query_vec, "k": 10}
+    plan_hybrid = table._inner.explain("category = 'B'", vector_filter_hybrid)
     print(plan_hybrid)
 
 if __name__ == "__main__":

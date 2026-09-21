@@ -7,7 +7,7 @@ A Streamlit UI that puts HyperStreamDB's hybrid engine through its paces on the
 |---|---|
 | Browse | engine-side SQL over 51M rows (keyset pagination, no client-side table) |
 | Semantic search | HNSW + TurboQuant-8 dense vectors fused with BM25 keyword search via RRF (`hybrid_search`) |
-| Graph RAG (local) | seed discovery → multi-hop induced subgraph → Personalized PageRank (HippoRAG-style) via `graph_rag_search` |
+| Graph RAG (local) | two-level: seed discovery → multi-hop induced subgraph → Personalized PageRank (HippoRAG-style) via `graph_rag_search`, then a **bitmap-filtered rerank** (`id IN (...)` → RoaringBitmap predicate on the HNSW index: topology prunes, semantics orders) |
 | DRIFT (regional) | Louvain community rollup (`summarize_communities`) + iterative-deepening `drift_search` |
 | Graph traversals | microsecond CSR-index hops: `shortest_path`, `connecting_paths`, `graph_neighbors`, `subgraph` |
 
@@ -26,7 +26,7 @@ From the repository root:
 
 ```bash
 pip install -e ".[dev]"          # hyperstreamdb + polars/sentence-transformers etc.
-python scripts/prepare_demo.py
+MALLOC_ARENA_MAX=2 python scripts/prepare_demo.py
 ```
 
 The script is **idempotent and resumable** — rerun it any time; completed stages
@@ -40,23 +40,32 @@ are skipped. Stages:
 3. **resolve** — polars joins mixed curid/title link endpoints to integer
    `curid`s and drops redirect pages → `data/wiki_nodes.parquet`,
    `data/wiki_edges.parquet`.
-4. **embed** — sentence-transformers (`all-MiniLM-L6-v2` by default — the
-   two-level design only needs a cheap 384-d **seed index**, and reranking is
-   bitmap-filtered to the retrieved neighborhood; `--embed-model
-   BAAI/bge-large-en-v1.5` costs ~20× more: measured 279 vs 6,065 sent/s)
-   on GPU if present → `data/embeddings/part-*.parquet` (resumable per shard).
+4. **embed** — sentence-transformers over each article's lead
+   (`--lead-chars 256` by default; `all-MiniLM-L6-v2` — the two-level design
+   only needs a cheap 384-d **seed index**, and reranking is bitmap-filtered
+   to the retrieved neighborhood; `--embed-model BAAI/bge-large-en-v1.5` costs
+   ~20× more: measured 279 vs ~6,700 sent/s) on GPU if present. Writes
+   `data/embeddings/part-NNN.parquet` shards of 5M rows
+   (`HDB_EMBED_SHARD_ROWS`; 51.8M pages → 11 shards ≈ 36 GB). The skip check is
+   all-or-nothing: if an interrupted run left shards behind, delete
+   `data/embeddings/` and rerun. `--embed-dims 256/128` MRL-truncates.
 5. **load** — builds the two persistent HyperStreamDB tables under
-   `data/wiki_graph_db/`:
+   `data/wiki_graph_db/` (run with `MALLOC_ARENA_MAX=2`, see above):
    - `edges` — `(source, target) int64` + CSR graph index
-   - `nodes` — `(id, title, summary, embedding)` + `hnsw_tq8` vector index +
-     BM25 inverted index on `title`
+   - `nodes` — `(id, title, summary, embedding)` + `hnsw_tq8` vector index
+     (`--quant tq4|tq8|none`) + BM25 inverted index on `title`
+   Embedding shards are streamed in 250k-row batches and deleted only **after**
+   the table commits. If load dies mid-run: `rm -rf data/wiki_graph_db/nodes`
+   and rerun `--stage load` (edges table and shards are untouched).
 
 Useful invocations:
 
 ```bash
-python scripts/prepare_demo.py --stage embed --workers 8   # one stage
-python scripts/prepare_demo.py --stage load --rebuild      # rebuild the tables
-df -h .                                                    # watch disk (needs ~200 GB)
+python scripts/prepare_demo.py --stage download --workers 6   # --workers = download only
+python scripts/prepare_demo.py --stage embed --embed-batch 1024
+python scripts/prepare_demo.py --stage load --rebuild         # rebuild both tables
+python scripts/prepare_demo.py --stage load --keep-shards     # don't delete embeddings after commit
+df -h .                                                       # watch disk (needs ~200 GB)
 ```
 
 ## 2. Launch the demo
@@ -89,6 +98,8 @@ Toggle the LLM off in the sidebar to run purely engine-side.
 | `HDB_DEMO_DB` | `data/wiki_graph_db` | location of the prepared tables |
 | `HDB_DEMO_EMBED_MODEL` | `all-MiniLM-L6-v2` | must match the model used in the embed stage |
 | `HDB_DEMO_LLM` | `1` | `0` disables LLM features by default |
+| `MALLOC_ARENA_MAX` | unset | set to **2** for the load stage (glibc arena cap; see §1) |
+| `HDB_EMBED_SHARD_ROWS` | `5000000` | embed-stage shard rotation size |
 
 ## Timings & system stats (measured on this machine)
 
@@ -97,17 +108,18 @@ Reference hardware: **32-core x86-64 Linux, 121 GB RAM, NVMe** (`/tmp` is a
 pages / 498M raw links → **51.8M live pages / 383M clean int64 edges** after
 redirect filtering and endpoint resolution.
 
-> ⏳ Wall-time for **load** below is an estimate; the whole-site load
-> (HNSW-TQ8 build over 51.8M vectors) is in progress and will be replaced with
-> a measured number when it completes. Embed is now measured.
+> ⏳ The **load (nodes)** row below is mid-measurement (HNSW-TQ8 build over
+> 51.8M vectors); it will be finalized when the run completes. Everything else
+> in this table is measured.
 
 | Stage | Wall time | Peak memory | Notes |
 |---|---|---|---|
 | download (19 chunks, ~48 GB) | ~2 h | <1 GB | 3 parallel streams; Wikimedia returns HTTP 429 beyond ~3 — the downloader is 429-aware and resumes via `.part` |
 | parse (streaming Rust) | ~2.6 h | **< 2 GB** | 66.1M pages + 498M edges; the old accumulate-then-write design OOM-killed at ~110 GB — streaming per-chunk flushes fixed it |
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
-| embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **~2.3 h** | **< 4 GB RAM**, ~6 GB VRAM | streaming per-row-group, fp16, batch 512; **6,065 sent/s measured** (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
-| load (hdb tables + HNSW-TQ8 + CSR + BM25) | ~2–4 h (est.) | ~4–8 GB | streams embeddings into the table and **deletes each shard after ingest** to bound peak disk |
+| embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **< 4 GB RAM**, ~7 GB VRAM | fp16, batch 512, 256-char leads; **6,750 sent/s avg** → 11 shards / 36 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
+| load — edges (383M + CSR) | **529 s** | ~6 GB | 15 GB table incl. CSR sidecars |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~1–2 h (in progress) | **18 GB RSS** with `MALLOC_ARENA_MAX=2` (82 GB without — glibc arenas) | ~14.4k rows/s with the arena cap vs ~7k without (arena lock contention) |
 
 ### Engine benchmarks (91.7M-edge graph, debug build)
 
@@ -145,10 +157,10 @@ constraint). What a laptop can't do is *prepare* it fast — see below.
 
 | Resource | Floor | Notes |
 |---|---|---|
-| RAM | **8 GB** | every stage is now streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~4–8 GB). The old 47–55 GB spikes are gone. |
-| Disk | **~200 GB free** | peak = ~80 GB embedding shards + growing table before shard-delete; dumps (48 GB) are re-fetchable and can be deleted after parse. |
-| GPU | strongly advised | MiniLM-384 on a 3090 ≈ **2.5 h** (measured); on CPU expect ~10–20 h. bge-large-1024 would take 50 h on the same GPU. |
-| Time | **~9–11 h** end-to-end | parse ~2.6 h; embed ~2.3 h; load ~2–4 h; download ~2 h. |
+| RAM | **8 GB** | every stage is streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~18 GB *with* `MALLOC_ARENA_MAX=2`). The old 47–55 GB spikes are gone. |
+| Disk | **~200 GB free** | peak = ~36 GB embedding shards + growing tables; shards are deleted after the nodes table commits; dumps (48 GB) are re-fetchable and can be deleted after parse. |
+| GPU | strongly advised | MiniLM-384 on a 3090 ≈ **2.1 h** (measured, 6,750 sent/s); on CPU expect ~10–20 h. bge-large-1024 would take 50 h on the same GPU. |
+| Time | **~8–10 h** end-to-end | download ~2 h; parse ~2.6 h; embed ~2.1 h; load ~1.5–2.5 h. |
 
 **If you have neither a GPU nor ~300 GB disk**, use the pruned profile instead
 (`scripts/build_demo_dataset.py`, ~50k-node hub-centered subgraph → ~155 MB
@@ -158,10 +170,22 @@ pruned path share the same app and engine APIs — only scale differs.
 ## Troubleshooting
 
 - **“Demo tables not found”** → run `python scripts/prepare_demo.py` first.
+- **Load stage RAM climbs into tens of GB / writes slow down** → relaunch with
+  `MALLOC_ARENA_MAX=2` (glibc keeps freed index-build memory per thread arena;
+  measured 82 GB → 18 GB RSS and 2× write rate).
+- **Load died mid-run** → `rm -rf data/wiki_graph_db/nodes && MALLOC_ARENA_MAX=2
+  python scripts/prepare_demo.py --stage load` — embedding shards survive until
+  post-commit deletion, so only the (re-runnable) load is redone.
+- **Embed interrupted** → `rm -rf data/embeddings/` and rerun `--stage embed`
+  (the skip check is all-or-nothing).
+- **`nvrtc` panic in engine logs** → harmless: cudarc probes for GPU kernel
+  compilation, doesn't recognize pip's `libnvrtc.so.13` filename, falls back to
+  CPU. To enable the GPU build path: symlink `libnvrtc.so → libnvrtc.so.13` in
+  `site-packages/nvidia/cu13/lib/` and add that directory to `LD_LIBRARY_PATH`.
 - **Semantic tab warns “Embedder unavailable”** → `pip install sentence-transformers`,
   and ensure `HDB_DEMO_EMBED_MODEL` matches the embed stage model.
 - **DRIFT tab fails on huge regions** → lower *Region seeds*; the region is a
   1-hop induced subgraph around the query's top pages.
 - **Out of disk** → the pipeline needs ~200 GB free (dumps 48 GB, intermediates
-  ~36 GB, embedding shards ~80 GB, tables ~105 GB). `data_full/` is safe to
+  ~36 GB, embedding shards ~36 GB, tables ~105 GB). `data_full/` is safe to
   delete once `data/wiki_*.parquet` exist.

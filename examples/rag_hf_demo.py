@@ -41,12 +41,13 @@ def get_answer(question, contexts):
     )
 
 # 4. Ingest Data (SQuAD Knowledge Base)
-dataset = load_dataset("squad", split="train")
-unique_contexts = pd.DataFrame(dataset)["context"].unique()[:300]
+dataset_full = load_dataset("squad", split="train")
+full_df = pd.DataFrame(dataset_full)
+unique_contexts_df = full_df.drop_duplicates(subset=["context"]).head(300).copy()
 df = pd.DataFrame({
-    "id": range(len(unique_contexts)),
-    "context": unique_contexts,
-    "title": [dataset[i]["title"] for i in range(len(unique_contexts))]
+    "id": range(len(unique_contexts_df)),
+    "context": unique_contexts_df["context"].tolist(),
+    "title": unique_contexts_df["title"].tolist()
 })
 
 print(f"\nIngesting {len(df)} knowledge base articles...")
