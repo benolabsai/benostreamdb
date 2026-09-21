@@ -232,6 +232,13 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
 
 
 # ── 5. load into persistent HyperStreamDB tables ────────────────────────────
+def _table_loaded(d: str) -> bool:
+    """Existence is not enough: a crashed run can leave an empty table shell
+    (metadata/_wal/_manifest only) that would otherwise be 'skipped'."""
+    return os.path.isdir(d) and any(
+        f not in ("metadata", "_wal", "_manifest") for f in os.listdir(d))
+
+
 def stage_load(rebuild: bool, quant: str, delete_shards: bool):
     import hyperstreamdb as hdb
 
@@ -243,7 +250,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
     os.makedirs(DB, exist_ok=True)
 
     # ── edges table + CSR graph index ──
-    if not os.path.exists(edges_dir):
+    if not _table_loaded(edges_dir):
         schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
         t = hdb.Table.create(f"file://{edges_dir}", schema)
         t.add_index("source", {"type": "graph", "src_column": "source", "dst_column": "target"})
@@ -260,7 +267,8 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
         log("load edges: table exists — skipping (use --rebuild)")
 
     # ── nodes table + HNSW(quant) vector index + BM25 title index ──
-    if not os.path.exists(nodes_dir):
+    if not _table_loaded(nodes_dir):
+        shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell
         parts = sorted(f for f in os.listdir(EMB) if f.endswith(".parquet")) if os.path.isdir(EMB) else []
         has_vec = bool(parts)
         nodes_path = os.path.join(DATA, "wiki_nodes.parquet")

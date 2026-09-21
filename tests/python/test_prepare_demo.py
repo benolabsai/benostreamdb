@@ -121,6 +121,19 @@ def test_multi_shard_zip_alignment(wiki_like):
     assert np.array_equal(flat.reshape(N, DIM), vals)
 
 
+def test_table_loaded_guard(tmp_path):
+    """A crashed-run table shell (metadata/_wal/_manifest only) must NOT be
+    treated as loaded — it silently skipped the whole node load once."""
+    shell = tmp_path / "nodes"
+    (shell / "metadata").mkdir(parents=True)
+    (shell / "_wal").mkdir()
+    (shell / "_manifest").mkdir()
+    assert pdemo._table_loaded(str(shell)) is False
+    (shell / "data").mkdir()
+    assert pdemo._table_loaded(str(shell)) is True
+    assert pdemo._table_loaded(str(tmp_path / "missing")) is False
+
+
 def test_shards_survive_mid_loop_crash(wiki_like):
     """Deletion must happen only AFTER commit — never during the write loop."""
     _, src, emb_dir = wiki_like
