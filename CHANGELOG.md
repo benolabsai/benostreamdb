@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **Chunked-ingest memory is now a knob, not a wall**: demo load defaults to
+  fresh-process 2M-row chunks (measured 9.5 GB peak per chunk, 2M rows/118 s);
+  `--load-chunk-rows 500000` fits serverless tasks (~3-4 GB). ROADMAP gained
+  the scale-out items this implies (serverless chunk orchestrator on the OCC
+  manifest CAS; long-lived-process allocator discipline).
 - **Out-of-core vector serving**: `DiskCache::get_mmap` now applies
   `MADV_RANDOM` to serving mmaps (HNSW graph/vectors, CSR offsets/edges/dict).
   Combined with the existing `use_mmap` default and TQ4 quantization, whole-site

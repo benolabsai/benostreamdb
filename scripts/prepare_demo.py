@@ -46,6 +46,42 @@ EMB = os.path.join(DATA, "embeddings")
 log = lambda m: print(f"[prepare] {m}", flush=True)
 
 
+def _avail_ram_gb() -> float:
+    try:
+        with open("/proc/meminfo") as f:
+            return next(int(l.split()[1]) for l in f if l.startswith("MemAvailable")) / 1048576
+    except OSError:
+        return 8.0  # conservative default
+
+
+def _auto_chunk_rows(gb: float | None = None) -> int:
+    """Size the fresh-process load chunk from available RAM.
+
+    Measured: the chunked node load needs ~4.5 GB per million rows (live
+    flush/index-build buffers + allocator-stranded churn). Use half of
+    MemAvailable, rounded to 250k-row batches, clamped to [250k, 10M].
+    """
+    if gb is None:
+        gb = _avail_ram_gb()
+    rows = int(gb * 0.5 / 4.5 * 1_000_000)
+    chunk = max(250_000, min(10_000_000, rows // 250_000 * 250_000))
+    log(f"load: chunk size {chunk:,} rows (auto: {gb:.0f} GB RAM available, "
+        f"~{chunk * 4.5 / 1e6:.0f} GB peak)")
+    return chunk
+
+
+def _disk_guard(input_bytes: int, factor: float = 1.3):
+    """Warn (not abort) if free disk on the data volume can't hold the output."""
+    need = input_bytes * factor
+    free = shutil.disk_usage(DATA).free
+    if free < need:
+        log(f"WARNING: disk guard — need ~{need / 1e9:.0f} GB free "
+            f"(inputs × {factor}), have {free / 1e9:.0f} GB. Delete dumps / "
+            f"data_full/ if present.")
+    else:
+        log(f"load: disk ok ({free / 1e9:.0f} GB free ≥ {need / 1e9:.0f} GB needed)")
+
+
 def _run(cmd, **kw):
     log("$ " + " ".join(str(c) for c in cmd))
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
@@ -409,10 +445,11 @@ def main():
     ap.add_argument("--quant", choices=["tq4", "tq8", "none"], default="tq8")
     ap.add_argument("--keep-shards", action="store_true", help="don't delete embeddings after load")
     ap.add_argument("--rebuild", action="store_true", help="force-rebuild hdb tables in stage load")
-    ap.add_argument("--load-chunk-rows", type=int, default=10_000_000,
+    ap.add_argument("--load-chunk-rows", type=int, default=None,
                     help="rows per fresh-process load chunk (resets allocator high-water marks; "
-                         "index builds strand ~2.6 GB freed-but-unreturnable memory per million "
-                         "rows otherwise). 0 = single process")
+                         "index builds strand ~2.6-4.5 GB freed-but-unreturnable memory per "
+                         "million rows otherwise). Default: auto from available RAM (~half of "
+                         "MemAvailable at 4.5 GB/M rows, clamped 250k..10M). -1 = single process")
     ap.add_argument("--row-start", type=int, default=0, help=argparse.SUPPRESS)
     ap.add_argument("--row-end", type=int, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -429,8 +466,19 @@ def main():
         elif s == "embed":
             stage_embed(args.embed_model, args.embed_dims, args.embed_batch, args.lead_chars)
         elif s == "load":
+            # precedence: --load-chunk-rows flag > HDB_LOAD_CHUNK_ROWS env > RAM auto-size
+            chunk = args.load_chunk_rows
+            if chunk is None:
+                env = os.environ.get("HDB_LOAD_CHUNK_ROWS", "").strip()
+                chunk = int(env) if env else _auto_chunk_rows()
+            if not args.row_start:  # parent only (children pass explicit ranges)
+                inputs = os.path.getsize(os.path.join(DATA, "wiki_nodes.parquet"))
+                if os.path.isdir(EMB):
+                    inputs += sum(os.path.getsize(os.path.join(EMB, f))
+                                  for f in os.listdir(EMB) if f.endswith(".parquet"))
+                _disk_guard(inputs)
             stage_load(args.rebuild, args.quant, not args.keep_shards,
-                       args.load_chunk_rows, args.row_start, args.row_end)
+                       chunk, args.row_start, args.row_end)
     log("requested stages complete.")
 
 

@@ -641,6 +641,19 @@ First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG 
 - [ ] Official LlamaIndex integration packages (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`): vector store, edge-table property-graph store, and the two-level Graph-RAG retriever (seed index → CSR expansion → bitmap-filtered rerank, as demonstrated by the full-site Wikipedia demo).
 - [ ] Runnable examples and docs for both frameworks (see Active Roadmap §9c).
 
+### Serverless & Multi-TB Ingest Scale-Out
+- [ ] **Chunked-ingest orchestrator**: fan a table load across N serverless workers
+  by row-range chunks — each worker commits independently via the OCC manifest CAS
+  (`FileBasedLock`); peak worker RAM is the `--load-chunk-rows` knob (500k rows ≈
+  3–4 GB, Fargate/Lambda-sized). Reference implementation: `scripts/prepare_demo.py`
+  fresh-process chunking.
+- [ ] **Long-lived-process memory discipline**: allocator strategy for daemons that
+  rebuild indexes in-process (builder churn strands freed memory in glibc's main
+  heap at ~2.6–4.5 GB per million vectors): evaluate jemalloc (mimalloc failed
+  static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the
+  HNSW/TQ builders; plus scheduled `rewrite_data_files` compaction so segment and
+  manifest counts stay bounded at TB scale.
+
 ---
 
 ## Success Metrics
