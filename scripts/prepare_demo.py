@@ -157,10 +157,14 @@ def stage_resolve():
 def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     os.makedirs(EMB, exist_ok=True)
     src = os.path.join(DATA, "wiki_nodes.parquet")
-    out = os.path.join(EMB, "part-000.parquet")
-    if os.path.exists(out):
-        log("embed: shard present — skipping (delete data/embeddings/ to redo)")
+    done_shards = sorted(f for f in os.listdir(EMB)
+                         if f.startswith("part-") and f.endswith(".parquet"))
+    if done_shards:
+        log(f"embed: {len(done_shards)} shard(s) present — skipping (delete data/embeddings/ to redo)")
         return
+    for stale in os.listdir(EMB):  # leftovers from a crashed run
+        if stale.endswith(".tmp"):
+            os.remove(os.path.join(EMB, stale))
 
     import torch
     from sentence_transformers import SentenceTransformer
@@ -180,8 +184,13 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
         v = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-9)
         return v.astype("float32")
 
-    tmp = out + ".tmp"
+    # Rotate shards every SHARD_ROWS so the load stage can delete each shard
+    # after ingesting it (bounds peak disk); tmp+rename keeps files atomic.
+    SHARD_ROWS = int(os.environ.get("HDB_EMBED_SHARD_ROWS", 5_000_000))
+    shard = 0
     writer = None
+    cur_tmp = cur_final = None
+    rows_in_shard = 0
     dim = None
     done = 0
     t0 = time.time()
@@ -197,9 +206,19 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
             [pa.array(batch_df["id"].to_list(), type=pa.int64()),
              pa.FixedSizeListArray.from_arrays(pa.array(vecs.reshape(-1), type=pa.float32()), dim)],
             names=["id", "embedding"])
+        if writer is not None and rows_in_shard >= SHARD_ROWS:
+            writer.close()
+            os.replace(cur_tmp, cur_final)
+            log(f"embed: {os.path.basename(cur_final)} ({rows_in_shard:,} x {dim}d)")
+            shard += 1
+            writer = None
         if writer is None:
-            writer = pq.ParquetWriter(tmp, tbl.schema)
+            cur_final = os.path.join(EMB, f"part-{shard:03d}.parquet")
+            cur_tmp = cur_final + ".tmp"
+            writer = pq.ParquetWriter(cur_tmp, tbl.schema)
+            rows_in_shard = 0
         writer.write_table(tbl)
+        rows_in_shard += tbl.num_rows
         done += len(combined)
         if done % 1_000_000 < 200_000:
             rate = done / (time.time() - t0)
@@ -207,8 +226,9 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
             log(f"  embed {done:,}/{n_rows:,} ({rate:.0f} sent/s, ETA {eta:.1f} h)")
     if writer is not None:
         writer.close()
-    os.replace(tmp, out)
-    log(f"embed: wrote {out} ({done:,} x {dim}d)")
+        os.replace(cur_tmp, cur_final)
+        log(f"embed: {os.path.basename(cur_final)} ({rows_in_shard:,} x {dim}d)")
+    log(f"embed: {done:,} vectors across {shard + 1} shard(s)")
 
 
 # ── 5. load into persistent HyperStreamDB tables ────────────────────────────
@@ -259,29 +279,30 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
 
         if has_vec:
             # Embedding shards are contiguous row-order slices of wiki_nodes, so
-            # zip by position; delete each shard after ingesting to bound disk.
-            emb_iter = iter(parts)
-            emb_batch = None
+            # zip by position — STREAMING batches (a whole-shard read_table OOM-
+            # killed the 37 GB single-shard run). Shards are deleted only AFTER
+            # the table commits, so a crash never destroys unrecoverable work.
+            def emb_batches():
+                for p in parts:
+                    path = os.path.join(EMB, p)
+                    for b in pq.ParquetFile(path).iter_batches(batch_size=250_000):
+                        yield b["embedding"]
+
+            emb_iter = emb_batches()
+            emb_cur = None  # current embeddings batch (ChunkedArray column)
             emb_off = 0
-            def next_emb():
-                nonlocal emb_batch, emb_off
-                p = next(emb_iter, None)
-                if p is None:
-                    return False
-                emb_batch = pq.read_table(os.path.join(EMB, p))
-                emb_off = 0
-                return True
-            if not next_emb():
-                raise RuntimeError("no embedding batches")
             for batch in pq.ParquetFile(nodes_path).iter_batches(batch_size=250_000):
                 pieces = []; need = batch.num_rows
                 while need > 0:
-                    if emb_batch is None or emb_off >= emb_batch.num_rows:
-                        if not next_emb():
+                    if emb_cur is None or emb_off >= len(emb_cur):
+                        try:
+                            emb_cur = next(emb_iter)
+                        except StopIteration:
                             raise RuntimeError("embeddings shorter than nodes")
+                        emb_off = 0
                         continue
-                    take = min(need, emb_batch.num_rows - emb_off)
-                    pieces.append(emb_batch["embedding"].slice(emb_off, take).combine_chunks())
+                    take = min(need, len(emb_cur) - emb_off)
+                    pieces.append(emb_cur.slice(emb_off, take))  # Array (batch col)
                     emb_off += take; need -= take
                 col = pieces[0] if len(pieces) == 1 else pa.concat_arrays(pieces)
                 out = batch.append_column(emb_field, col)
@@ -289,10 +310,6 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
                 n += batch.num_rows
                 if n % 2_000_000 < 250_000:
                     log(f"load nodes: {n:,} ({time.time()-t0:.0f}s)")
-            if delete_shards:
-                for p in parts:
-                    os.remove(os.path.join(EMB, p))
-                log("load nodes: deleted embedding shards (reclaim disk)")
         else:
             log("load nodes: no embeddings — text only (semantic search off)")
             for batch in pq.ParquetFile(nodes_path).iter_batches(250_000):
@@ -300,6 +317,12 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool):
                 n += batch.num_rows
         t.commit(); t.wait_for_background_tasks()
         log(f"load nodes: {n:,} pages in {time.time()-t0:.0f}s")
+        if has_vec and delete_shards:
+            for p in parts:
+                fp = os.path.join(EMB, p)
+                if os.path.exists(fp):
+                    os.remove(fp)
+            log("load nodes: deleted embedding shards (reclaim disk)")
     else:
         log("load nodes: table exists — skipping (use --rebuild)")
 
