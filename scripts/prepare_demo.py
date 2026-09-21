@@ -242,6 +242,10 @@ def _table_loaded(d: str) -> bool:
 def stage_load(rebuild: bool, quant: str, delete_shards: bool):
     import hyperstreamdb as hdb
 
+    if not os.environ.get("MALLOC_ARENA_MAX"):
+        log("load: tip — run with MALLOC_ARENA_MAX=2 (glibc arenas otherwise "
+            "retain tens of GB of freed index-build memory with 32+ workers)")
+
     edges_dir = os.path.join(DB, "edges")
     nodes_dir = os.path.join(DB, "nodes")
     if rebuild:

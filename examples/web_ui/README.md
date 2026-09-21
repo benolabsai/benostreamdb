@@ -17,6 +17,11 @@ without it, and without the embedder.
 
 ## 1. Prepare the data (one-time, ~4–6 h)
 
+> **Run the load stage as `MALLOC_ARENA_MAX=2 python scripts/prepare_demo.py --stage load …`**
+> The load builds HNSW/IVF indexes in-process across 32 workers; without the
+> glibc arena cap, freed build memory accumulates in ~430 thread arenas
+> (measured: 82 GB RSS vs 18 GB capped — and 2× faster writes with the cap).
+
 From the repository root:
 
 ```bash

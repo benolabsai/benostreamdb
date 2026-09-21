@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   279 sent/s = 50 h, impractical for a whole-site seed index).
 
 ### Fixed
+- **glibc arena bloat during index-heavy loads**: the whole-site node load (32
+  in-process HNSW-IVF/TQ8 builders) ratcheted RSS to 82 GB while doing 7k rows/s
+  — every builder frees its memory, but glibc retains freed small allocations in
+  per-thread arenas (430 observed). `MALLOC_ARENA_MAX=2` collapses this to 18 GB
+  RSS at 2× the write rate (arena lock contention eliminated); `stage_load` now
+  warns when the cap is unset and the demo README documents it.
 - **Embedding column type**: the demo pipeline wrote `LargeList` embeddings, which
   the vector index silently ignores (it matches `List`/`FixedSizeList` only) —
   switched to `FixedSizeList`, so the HNSW index actually builds.
