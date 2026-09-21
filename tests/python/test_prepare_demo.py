@@ -134,6 +134,16 @@ def test_table_loaded_guard(tmp_path):
     assert pdemo._table_loaded(str(tmp_path / "missing")) is False
 
 
+@pytest.mark.parametrize("gb,expected", [
+    (1.0, 250_000),      # floor clamp
+    (4.0, 250_000),      # 0.44M -> rounds down to floor
+    (18.0, 2_000_000),   # 2.0M exactly
+    (120.0, 10_000_000),  # ceiling clamp
+])
+def test_auto_chunk_rows(gb, expected):
+    assert pdemo._auto_chunk_rows(gb) == expected
+
+
 def test_shards_survive_mid_loop_crash(wiki_like):
     """Deletion must happen only AFTER commit — never during the write loop."""
     _, src, emb_dir = wiki_like

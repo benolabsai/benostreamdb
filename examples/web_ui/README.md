@@ -19,10 +19,11 @@ without it, and without the embedder.
 
 > No env-var prefixes needed: the engine self-tunes glibc malloc arenas at
 > import (`mallopt(M_ARENA_MAX, 2)`), and the load stage writes the nodes table
-> in **fresh-process chunks of 10M rows** (`--load-chunk-rows`) — in-process
-> HNSW/TQ8 builders strand freed memory in glibc's main heap (~2.6 GB per
-> million rows measured), so a new process per chunk resets the high-water mark
-> and keeps peak RSS ~25 GB regardless of dataset size.
+> in **fresh-process chunks** (`--load-chunk-rows`, default 2M rows ≈ 8-12 GB
+> peak) — in-process HNSW/TQ8 builders strand freed memory in glibc's main
+> heap (~2.6-4.5 GB per million rows measured), so a new process per chunk
+> resets the high-water mark. Peak RSS is a knob, not a wall: 500k-row chunks
+> run in ~3-4 GB (serverless-task sized).
 
 From the repository root:
 
@@ -103,6 +104,7 @@ Toggle the LLM off in the sidebar to run purely engine-side.
 | `HDB_DEMO_LLM` | `1` | `0` disables LLM features by default |
 | `MALLOC_ARENA_MAX` | engine sets 2 at import | override only if you know better |
 | `HDB_EMBED_SHARD_ROWS` | `5000000` | embed-stage shard rotation size |
+| `HDB_LOAD_CHUNK_ROWS` | auto (from RAM) | load chunk size; `--load-chunk-rows` flag wins over this |
 
 ## Timings & system stats (measured on this machine)
 
@@ -122,7 +124,7 @@ redirect filtering and endpoint resolution.
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
 | embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **< 4 GB RAM**, ~7 GB VRAM | fp16, batch 512, 256-char leads; **6,750 sent/s avg** → 11 shards / 36 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
 | load — edges (383M + CSR) | **529 s** | ~6 GB | 15 GB table incl. CSR sidecars |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~2 h (in progress) | ~25 GB per 10M-row chunk (fresh process each; single-process runs ratchet ~2.6 GB/M rows in glibc's main heap) | chunked parent spawns children sequentially; shards deleted after all chunks commit |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~2 h (in progress) | ~8-12 GB per 2M-row chunk (fresh process each; single-process runs ratchet ~2.6-4.5 GB/M rows in glibc's main heap) | chunked parent spawns children sequentially; shards deleted after all chunks commit |
 
 ### Engine benchmarks (91.7M-edge graph, debug build)
 
@@ -160,7 +162,7 @@ constraint). What a laptop can't do is *prepare* it fast — see below.
 
 | Resource | Floor | Notes |
 |---|---|---|
-| RAM | **8 GB** | every stage is streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~25 GB per fresh-process chunk). The old 47–82 GB single-process spikes are gone. |
+| RAM | **8 GB** | every stage is streaming/chunked (parse <2 GB, resolve ~5–8 GB, embed <4 GB, load ~8–12 GB per chunk — drop `--load-chunk-rows` to 500k for a ~4 GB ceiling). The old 47–82 GB single-process spikes are gone. |
 | Disk | **~200 GB free** | peak = ~36 GB embedding shards + growing tables; shards are deleted after the nodes table commits; dumps (48 GB) are re-fetchable and can be deleted after parse. |
 | GPU | strongly advised | MiniLM-384 on a 3090 ≈ **2.1 h** (measured, 6,750 sent/s); on CPU expect ~10–20 h. bge-large-1024 would take 50 h on the same GPU. |
 | Time | **~8–10 h** end-to-end | download ~2 h; parse ~2.6 h; embed ~2.1 h; load ~1.5–2.5 h. |
