@@ -194,13 +194,20 @@ impl Table {
             })
             .collect::<Result<Vec<String>>>()?;
 
+        // NOTE: use the async read path. `read_with_columns` is a sync wrapper
+        // that calls `runtime().block_on(...)`; invoking it from this async fn
+        // (itself driven by `TOKIO_RUNTIME.block_on`) re-enters the runtime and
+        // panics with "Cannot start a runtime from within a runtime".
+        let col_refs: Vec<&str> = col_names.iter().map(|s| s.as_str()).collect();
+
         // 1. Acceleration: Single-column PK check using indexes
         if col_names.len() == 1 {
             let col_name = &col_names[0];
 
             // For now, we perform an optimized read of just the PK column.
             let batches = self
-                .read_with_columns(None, None, col_names.clone())
+                .read_async(None, None, Some(&col_refs))
+                .await
                 .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
 
             let mut seen = std::collections::HashSet::new();
@@ -223,7 +230,8 @@ impl Table {
 
         // Fallback: Multi-column PK scan
         let batches = self
-            .read_with_columns(None, None, col_names.clone())
+            .read_async(None, None, Some(&col_refs))
+            .await
             .map_err(|e| anyhow::anyhow!("Validation read failed: {}", e))?;
 
         let mut seen = std::collections::HashSet::new();

@@ -23,6 +23,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default `true`) controls whether bins may span partitions.
 
 ### Fixed
+- **`add_primary_key` / `drop_primary_key` panicked from Python** with
+  "Cannot start a runtime from within a runtime": the async
+  `_validate_pk_uniqueness` called the sync `read_with_columns`, which
+  re-enters the Tokio runtime. It now uses the async read path.
+- **Index joins returned no rows for non-int/string keys**:
+  `extract_distinct_values` only handled `Int32`/`Int64`/`Utf8`, so a join on
+  a date, timestamp, float, boolean, or `large_string` key produced an empty
+  filter. It now derives keys via `ManifestValue::from_array` (all scalar
+  types).
+- **`SparseVector(indices, values, dim)` rejected plain Python lists** despite
+  documenting them; it now accepts lists and NumPy arrays
+  (`PyArrayLike1` + `AllowTypeChange`).
 - **Partition values were the raw source value, not the transform result**:
   `partition_batch` ignored `PartitionField::transform`, so `bucket`/`truncate`/
   time partitions stored the untransformed value. Now routed through

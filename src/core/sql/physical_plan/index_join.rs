@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 
 use arrow::array::{Array, ArrayRef};
 use arrow::compute::{concat_batches, take};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::row::{RowConverter, SortField};
 use datafusion::common::Result;
@@ -259,43 +259,24 @@ async fn process_join_batch(
     )
 }
 
+/// Extract the distinct, non-null values of a join-key array as JSON values.
+///
+/// Delegates to `ManifestValue::from_array`, which understands every scalar
+/// type the engine stores (ints, floats, booleans, `Utf8`/`LargeUtf8`/
+/// `Utf8View`, dates and timestamps). Previously this only handled
+/// `Int32`/`Int64`/`Utf8`, so an index join on any other key type silently
+/// produced an empty filter and returned no rows.
 fn extract_distinct_values(array: &ArrayRef) -> Result<Vec<Value>> {
     let mut values = Vec::new();
-    match array.data_type() {
-        DataType::Int64 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<arrow::array::Int64Array>()
-                .unwrap();
-            for i in 0..arr.len() {
-                if !arr.is_null(i) {
-                    values.push(Value::Number(arr.value(i).into()));
-                }
-            }
+    for i in 0..array.len() {
+        if array.is_null(i) {
+            continue;
         }
-        DataType::Int32 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<arrow::array::Int32Array>()
-                .unwrap();
-            for i in 0..arr.len() {
-                if !arr.is_null(i) {
-                    values.push(Value::Number(arr.value(i).into()));
-                }
-            }
+        let mv = crate::core::manifest::ManifestValue::from_array(array, i);
+        if matches!(mv, crate::core::manifest::ManifestValue::Null) {
+            continue;
         }
-        DataType::Utf8 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<arrow::array::StringArray>()
-                .unwrap();
-            for i in 0..arr.len() {
-                if !arr.is_null(i) {
-                    values.push(Value::String(arr.value(i).to_string()));
-                }
-            }
-        }
-        _ => {}
+        values.push(mv.to_json_value());
     }
     // Dedup
     values.sort_by(|a: &Value, b: &Value| {

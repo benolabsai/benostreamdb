@@ -435,15 +435,17 @@ hdb repair s3://bucket/table
 **Completed**
 - [x] Cloud-agnostic distributed locking (`FileBasedLock`, CAS `PutMode::Create`) — Phase 7.
 - [x] OCC manifest commits with retry/backoff — Phase 7.
+- [x] **Index Join Enhancements**: multi-column joins via `RowConverter` (hash-probe on encoded rows). `extract_distinct_values` now derives keys through `ManifestValue::from_array`, so joins work on every scalar key type (ints, floats, booleans, `Utf8`/`LargeUtf8`/`Utf8View`, dates, timestamps) — previously only `Int32`/`Int64`/`Utf8`, which silently returned no rows for other key types. ✅
+- [x] **Time Datatype Support**: `Time32`/`Time64` write, read, range-filter, and inverted-index paths verified end-to-end (round-trips as `time32[s]`/`time64[us]`). ✅
+- [x] **Primary-key operations from Python**: `add_primary_key`/`drop_primary_key` no longer panic with "Cannot start a runtime from within a runtime" — the async `_validate_pk_uniqueness` was calling the sync `read_with_columns` (which re-enters the Tokio runtime); it now uses the async read path. ✅
+- [x] **Sparse vector construction**: `SparseVector(indices, values, dim)` accepts plain Python lists as well as NumPy arrays (`PyArrayLike1` + `AllowTypeChange`), matching its documented API. ✅
 - [x] **Concurrent Manifest Writes (MVCC)**: lock-free commits. The global `commit.lock` is gone from `update_schema` (pure OCC); `CommitMetadata::skip_missing_remove_paths` lets a writer rebase onto a newer snapshot when a candidate was concurrently removed (compaction uses it); `Table::snapshot_version()` exposes the monotonic snapshot id. ✅
 - [x] **Cross-Partition Compaction**: re-enabled. `PartitionSpec::partition_batch` now applies the declared Iceberg transform (`identity`/`void`/`bucket`/`truncate`/`year`/`month`/`day`/`hour`) via the canonical `IcebergTransform`, so merged bins re-partition deterministically; compaction preserves the Hive partition directory; `CompactionOptions::allow_cross_partition` controls the behaviour. ✅
 
 **Next Steps**
-- [ ] **Index Join Enhancements**: Multi-column joins via `RowConverter` (replace single-column + String-casting MVP).
-- [ ] **Complex Range Pushdown**: Interval-tree support for pushing complex `OR`-over-ranges to the index scan.
-- [ ] **Row-Value In-List Pushdown**: Proper Row-Value In-List support for Primary Key filtering (`src/core/table/primary_key.rs`).
-- [ ] **Time Datatype Support**: `Time32`/`Time64` writes (`src/core/table/write.rs`).
-- [ ] **Sparse Vectors Support**: Arrow IPC serialization + Map/Struct representation for DataFusion (`src/core/sql/optimizer/vector_search/sort_expr_parser.rs`).
+- [ ] **Complex Range Pushdown**: Interval-tree support for pushing complex `OR`-over-ranges to the index scan. *(Correctness verified — `(a BETWEEN ..) OR (b BETWEEN ..)` returns the right rows; the remaining work is pushing the union of ranges into the sidecar scan instead of post-filtering.)*
+- [ ] **Row-Value In-List Pushdown**: `WHERE (a, b) IN ((..),(..))` is correct but currently evaluated as a scan + filter; push the tuple set to the composite index (`src/core/table/primary_key.rs`).
+- [ ] **Sparse Vectors Support**: Arrow IPC serialization (`ArrowType for SparseVector` is still `unimplemented!()` in `src/core/index/hnsw_rs/arrow_ipc.rs`) + Map/Struct representation for DataFusion (`src/core/sql/optimizer/vector_search/sort_expr_parser.rs`).
 - [ ] **Vector Search I/O Optimization**: Return `ScoredResults` directly from the reader to avoid Parquet I/O.
 - [ ] **DataFusion Custom Operator Registration**: Transition UDFs to native custom operator registration (`src/core/sql/vector_operators.rs`).
 - [ ] **Explain Plan Metrics for Pruning**: Track why partition/file pruning didn't match (`src/core/planner.rs`).
