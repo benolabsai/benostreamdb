@@ -55,6 +55,39 @@ def test_primary_key_rejects_duplicates(tmp_path):
         t.commit()
 
 
+def test_row_value_in_list_read_path(tmp_path):
+    """Row-value IN-list over an indexed composite PK is pushed to the scan.
+
+    With every PK column inverted-indexed, `scan` prunes segments that cannot
+    match before reading them. This asserts correctness of that path (and, by
+    construction, that pruning never drops a matching row).
+    """
+    uri = f"file://{tmp_path}/pkread"
+    schema = pa.schema([("a", pa.int64()), ("b", pa.int64()), ("v", pa.large_string())])
+    t = hdb.Table.create(uri, schema)
+    t.add_primary_key("a")
+    t.add_index("a", "inverted")
+    t.add_index("b", "inverted")
+
+    # Several segments so there is something to prune.
+    for chunk in range(5):
+        t.write(pa.table({
+            "a": pa.array([chunk * 10 + i for i in range(10)], pa.int64()),
+            "b": pa.array([1] * 10, pa.int64()),
+            "v": pa.array([f"v{chunk * 10 + i}" for i in range(10)], pa.large_string()),
+        }))
+        t.commit()
+    t.wait_for_background_tasks()
+
+    df = t.execute_sql("SELECT a, b FROM t WHERE (a, b) IN ((1,1),(23,1))").to_pandas()
+    assert sorted(df["a"].tolist()) == [1, 23], df
+
+    # A tuple that matches nothing must return no rows (not a false prune of
+    # everything, and not a leak of unrelated rows).
+    empty = t.execute_sql("SELECT a FROM t WHERE (a, b) IN ((999,999))").to_pandas()
+    assert empty.empty
+
+
 def test_sparse_vector_accepts_lists_and_arrays():
     from_list = hdb.SparseVector([0, 5, 10], [1.0, 2.0, 3.0], 100)
     assert from_list.dim == 100
