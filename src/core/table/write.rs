@@ -1217,9 +1217,17 @@ impl Table {
 
         // Save metadata file (vX.metadata.json)
         let new_meta_version = (new_manifest.version) as i32; // Sync with manifest version for simplicity
-        table_meta
+        // `save_to_store` returns the relative path it wrote. Capture it so we
+        // can hand catalogs the authoritative location instead of making them
+        // reconstruct it (AWS Glue cannot be told by its server, unlike REST).
+        let written_metadata_path = table_meta
             .save_to_store(meta_store, new_meta_version)
             .await?;
+        let metadata_location = format!(
+            "{}/{}",
+            self.uri.trim_end_matches('/'),
+            written_metadata_path.trim_start_matches('/')
+        );
 
         // 5. Commit to Catalog if configured (Iceberg Atomic Swap)
         if let Some(catalog) = &self.catalog_state.catalog {
@@ -1232,6 +1240,12 @@ impl Table {
                     .last()
                     .ok_or_else(|| anyhow::anyhow!("No snapshot available in table metadata"))?;
                 let updates = vec![
+                    // Authoritative metadata location for catalogs that cannot
+                    // return it themselves (Glue). Other catalogs ignore it.
+                    serde_json::json!({
+                        "action": "set-metadata-location",
+                        "metadata-location": metadata_location
+                    }),
                     serde_json::json!({
                         "action": "add-snapshot",
                         "snapshot": snapshot

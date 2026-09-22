@@ -180,33 +180,65 @@ impl Catalog for GlueCatalogClient {
             .table()
             .ok_or_else(|| anyhow!("Table not found in Glue response"))?;
 
-        // Extract the new metadata location from updates (look for set-snapshot-ref or similar)
+        // Extract the new metadata location from updates.
+        //
+        // Prefer the explicit `set-metadata-location` the writer now sends: it
+        // knows the path it just wrote. The old fallback reconstructs the path
+        // from the snapshot's `sequence-number`, which only coincides with the
+        // metadata version by accident — if those two counters ever diverge,
+        // this would record a path to a file that does not exist, and it fails
+        // silently when the manifest list has no `/_manifest/` segment.
         let mut new_metadata_location: Option<String> = None;
         for update in &updates {
             if let Some(action) = update.get("action").and_then(|v| v.as_str()) {
-                if action == "set-current-snapshot" || action == "add-snapshot" {
-                    // The snapshot update implies we need to update metadata location
-                    // In a full implementation, we would compute the new path from snapshot
-                    if let Some(snapshot) = update.get("snapshot") {
-                        if let Some(manifest_list) =
-                            snapshot.get("manifest-list").and_then(|v| v.as_str())
-                        {
-                            // Derive metadata location from manifest list path
-                            // e.g., s3://bucket/table/_manifest/snap-1.avro -> s3://bucket/table/metadata/vN.metadata.json
-                            if let Some(table_root) = manifest_list.rsplit_once("/_manifest/") {
-                                new_metadata_location = Some(format!(
-                                    "{}/metadata/v{}.metadata.json",
-                                    table_root.0,
-                                    snapshot
-                                        .get("sequence-number")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(1)
-                                ));
+                if action == "set-metadata-location" {
+                    new_metadata_location = update
+                        .get("metadata-location")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    break;
+                }
+            }
+        }
+
+        if new_metadata_location.is_none() {
+            for update in &updates {
+                if let Some(action) = update.get("action").and_then(|v| v.as_str()) {
+                    if action == "set-current-snapshot" || action == "add-snapshot" {
+                        if let Some(snapshot) = update.get("snapshot") {
+                            if let Some(manifest_list) =
+                                snapshot.get("manifest-list").and_then(|v| v.as_str())
+                            {
+                                // e.g. s3://bucket/table/_manifest/snap-1.avro
+                                //   -> s3://bucket/table/metadata/vN.metadata.json
+                                if let Some(table_root) = manifest_list.rsplit_once("/_manifest/") {
+                                    let derived = format!(
+                                        "{}/metadata/v{}.metadata.json",
+                                        table_root.0,
+                                        snapshot
+                                            .get("sequence-number")
+                                            .and_then(|v| v.as_i64())
+                                            .unwrap_or(1)
+                                    );
+                                    tracing::warn!(
+                                        "Glue commit had no explicit metadata-location; \
+                                         deriving {} from the snapshot sequence number",
+                                        derived
+                                    );
+                                    new_metadata_location = Some(derived);
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if new_metadata_location.is_none() {
+            tracing::warn!(
+                "Glue commit could not determine a metadata location; \
+                 metadata_location parameter left unchanged"
+            );
         }
 
         // Update parameters with new metadata location
