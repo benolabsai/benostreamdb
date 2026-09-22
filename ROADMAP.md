@@ -5,7 +5,7 @@
 This document outlines the step-by-step plan to take HyperStreamDB from PoC to production-ready.
 
 **Timeline:** ~8 weeks  
-**Current Phase:** Phases 1–11 COMPLETE ✅ | Active Roadmap: Phase 12 (Client Ecosystem: LangChain/LlamaIndex connectors, Native tokio Ingest Orchestrator)
+**Current Phase:** Phases 1–10 COMPLETE ✅ | Active: Core Product (Native Ingest Orchestrator) + Client Ecosystem
 
 ---
 
@@ -423,140 +423,224 @@ hdb repair s3://bucket/table
 
 ---
 
-## 🎯 Active Roadmap & Remaining Milestones
+## 🎯 Active Roadmap — Core Product First, Dependency-Ordered
 
-The following items represent the active, vetted roadmap for HyperStreamDB. Speculative dead ends (such as proprietary cloud locks, bespoke C++ database extensions, or third-party format readers) have been pruned in favor of standards-based interoperability.
+> **Reorganized 2026-09-22.** Sections are ordered so that **core-product work comes first**, then by dependency (each section unblocks the next). Within each section, **completed items are listed first, followed by the next steps**. Completed phases (1–10) are retained below as history.
 
-### 1. Catalog & Interoperability
-- [x] **[Free] Apache Polaris Integration**: Add OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper). ✅ (v0.7.0)
+### Part A — Core Product
 
-### 2. Connector & Pushdown Enhancements
-- [x] **[Free] Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing and incremental batching. Allows ingesting terabytes of data directly via the core Rust library without OOM errors, while maintaining Spark distributed ingestion support. ✅ (v0.7.0)
-- [x] **[Free] HNSW Hot Cache Optimization**: Update the `IndexFileCache` to store fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes. This eliminates per-query deserialization overhead and brings kNN latency down to ~3-5ms (on par with OpenSearch). ✅ (v0.7.0)
-- [x] **[Free] Trino Connector Sidecar Pushdown**: Enhance `trino-hyperstream` SPI implementation to evaluate filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
-- [x] **[Free] Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis. ✅ (v0.8.0)
+#### A1. Core Engine Correctness & Concurrency
+*Foundational: unblocks the ingest orchestrator and TB-scale operation.*
 
-### 3. Performance & Competitive Benchmarking
-- [x] **[Free] 100k Competitive Benchmarks vs. OpenSearch**: Execute long-running benchmark runs on local SSD storage using docker-constrained environments (4 CPUs / 4GB RAM) and document findings. ✅ (v0.7.0)
+**Completed**
+- [x] Cloud-agnostic distributed locking (`FileBasedLock`, CAS `PutMode::Create`) — Phase 7.
+- [x] OCC manifest commits with retry/backoff — Phase 7.
+
+**Next Steps**
+- [ ] **Concurrent Manifest Writes (MVCC)**: Replace the global table lock with lock-free MVCC concurrency control for commits. *(Blocks multi-writer ingest orchestrator.)*
+- [ ] **Cross-Partition Compaction**: Re-enable (currently disabled); requires ensuring partition transforms are fully reversible. *(Blocks scheduled compaction at TB scale.)*
+- [ ] **Index Join Enhancements**: Multi-column joins via `RowConverter` (replace single-column + String-casting MVP).
+- [ ] **Complex Range Pushdown**: Interval-tree support for pushing complex `OR`-over-ranges to the index scan.
+- [ ] **Row-Value In-List Pushdown**: Proper Row-Value In-List support for Primary Key filtering (`src/core/table/primary_key.rs`).
+- [ ] **Time Datatype Support**: `Time32`/`Time64` writes (`src/core/table/write.rs`).
+- [ ] **Sparse Vectors Support**: Arrow IPC serialization + Map/Struct representation for DataFusion (`src/core/sql/optimizer/vector_search/sort_expr_parser.rs`).
+- [ ] **Vector Search I/O Optimization**: Return `ScoredResults` directly from the reader to avoid Parquet I/O.
+- [ ] **DataFusion Custom Operator Registration**: Transition UDFs to native custom operator registration (`src/core/sql/vector_operators.rs`).
+- [ ] **Explain Plan Metrics for Pruning**: Track why partition/file pruning didn't match (`src/core/planner.rs`).
+- [ ] **Early Pruning for L2 Distance Scans**: Accumulate `diff_sq` early-pruning threshold (`src/core/planner.rs`).
+- [ ] **Graph Construction Profiling Hooks**: Profiling for HNSW build/search phases (`src/core/index/hnsw_rs/hnsw.rs`).
+- [ ] **AWS Glue Snapshot Paths**: Compute new metadata path from the snapshot (`src/core/catalog/glue.rs`).
+- [ ] **Configuration from SQL**: Parse configuration from SQL hints.
+
+#### A2. Connector & Pushdown Enhancements
+
+**Completed**
+- [x] **Out-of-Core Index Ingestion**: HNSW and inverted index building use out-of-core (on-disk) processing and incremental batching. ✅ (v0.7.0)
+- [x] **HNSW Hot Cache Optimization**: `IndexFileCache` stores fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes; kNN latency ~3-5ms. ✅ (v0.7.0)
+- [x] **Trino Connector Sidecar Pushdown**: `trino-hyperstream` SPI evaluates filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits. ✅
+- [x] **Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis. ✅ (v0.8.0)
+
+**Next Steps**
+- [ ] (none outstanding)
+
+#### A3. Advanced Search & Query Features
+
+**Completed**
+- [x] **Zero-Copy Arrow IPC Vector Index**: HNSW graph traverses columnar Apache Arrow IPC structures instead of Rust heap pointers. ✅ (v0.8.0)
+- [x] **Async Ingest Memory Buffer & WAL**: `_bulk` ingestion buffers documents in memory and flushes asynchronously via a Write-Ahead Log (WAL). ✅ (v0.8.0)
+- [x] **TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression. ✅ (v0.7.0)
+- [x] **Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`). ✅ (v0.7.0)
+- [x] **Multi-Vector Search**: Query planner and scoring coordination across multiple embedding columns using Reciprocal Rank Fusion (RRF). ✅ (v0.7.0)
+
+**Next Steps**
+- [ ] (none outstanding)
+
+#### A4. Native Ingest Orchestrator (tokio) — cluster-free bulk ingest
+*Depends on A1 (MVCC commits, cross-partition compaction).* Spark stays for pre-write transforms and existing lake pipelines, but ingestion must not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes, and commits a bulk load entirely inside the engine.
+
+**Completed**
+- [x] **Working prototype**: whole-site Wikipedia demo fresh-process chunking (`scripts/prepare_demo.py`: 2M-row chunks, 118 s @ ~10 GB, per-chunk OCC commits).
+
+**Next Steps**
+- [ ] **Work planner**: enumerate inputs (parquet files / row groups / streams) into row-range work units sized from a memory budget (measured ~4.5 GB per million 384-d vectors incl. allocator churn; auto-detected from `MemAvailable`, env-overridable).
+- [ ] **Bounded tokio worker pool**: each worker streams its range into a *private* segment builder (segments are already independent), flushes with per-segment index builds, under a `Semaphore`-bounded queue; per-worker RSS ceiling = chunk size knob.
+- [ ] **Commit strategy**: coordinator drains completed segments into multi-segment snapshots via the existing OCC manifest CAS (`FileBasedLock`, `PutMode::Create`) — N segments per snapshot to keep manifest versions bounded; retries on conflict.
+- [ ] **Resume & idempotency**: durable job state (completed work-unit list as a table property or sidecar) so an interrupted multi-TB load restarts at the unit boundary.
+- [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the HNSW/TQ builders so freed memory is actually reusable.
+- [ ] **Python/CLI surface**: `table.ingest(paths, chunk_rows=None, parallelism=None)` with progress; `hdb ingest --plan/--run`; serverless tasks become thin runners (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
+- [ ] **Scheduled compaction**: drive `rewrite_data_files` from the orchestrator so segment and manifest counts stay bounded at TB scale (chunked loads create many small segments by design).
+- [ ] **Allocator evaluation** (shared with the memory-discipline item, for long-lived daemons that rebuild indexes in-process): jemalloc vs glibc (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the HNSW/TQ builders.
+- [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based work stealing over an object-store lease file / Flight gateway later.
+
+#### A5. GPU & Hardware Acceleration
+
+**Completed**
+- [x] **GPU-accelerated k-means centroid training**: `simple_kmeans` dispatches its assignment step to `gpu::compute_kmeans_assignment` when a GPU backend is usable, keeping the rayon CPU scan as the fallback. ✅
+- [x] **Universal GPU PyPI Wheel**: Single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
+- [x] **GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
+
+**Next Steps**
+- [ ] **Find nvrtc/cudart from installed wheels**: cudarc 0.13.9 probes only `libnvrtc.so` / `.so.{12,11,10,1}`, so pip's `nvidia-*-cu13` layout (`nvidia/cu13/lib/libnvrtc.so.13`) is never found — the JIT path panics and silently falls back to CPU (the demo ships `scripts/create_cuda_shims.sh` and auto-re-execs with `LD_LIBRARY_PATH` as a workaround). Proper fix: resolve the library path ourselves (glob `site-packages/nvidia/*/lib`, honour `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so `pip install` alone is enough — no env-var prefix.
+- [ ] **GPU distance computation inside graph construction**: `hnsw_rs` builds neighbour graphs CPU-only and the CUDA backend has no HNSW kernel. Implementing GPU HNSW construction is research-grade; the realistically GPU-accelerable piece is the *distance computation during insertion (neighbor search)*, which cannot be wired in trivially because `hnsw_rs` owns that loop — it requires either a custom CUDA HNSW build or an IVF-flat GPU path for large clusters. Tracked as design work, deliberately not a dispatcher change.
+- [ ] **GPU Acceleration for Sparse & Binary Vectors**: GPU acceleration is not yet implemented for sparse and binary vectors (`src/python_distance.rs`).
+
+#### A6. Catalog & Interoperability
+
+**Completed**
+- [x] **Apache Polaris Integration**: OAuth2 client credentials grant flow (`/v1/oauth/tokens`) in `RestCatalogClient` (`src/core/catalog/rest.rs`) to support open Iceberg REST catalogs (Polaris, Lakekeeper). ✅ (v0.7.0)
+
+**Next Steps**
+- [ ] (none outstanding)
+
+#### A7. Graph RAG & Lakehouse Graph Analytics [Free]
+
+Native graph analytics on Iceberg edge tables with sidecar index acceleration. Replaces the need for Neo4j + Pinecone combos or Spark GraphX for knowledge graph and Graph RAG workloads. All core graph features ship in the free Community edition.
+
+**Completed**
+- [x] **Edge Table Schema Convention (5a)**: standard edge table layout (source, target, relation, weight, embedding), sidecar indexes (Roaring Bitmap on `source`/`target`, HNSW on `embedding`), and best-practices guide ([`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md)). ✅ (v0.8.0)
+- [x] **Graph SQL Functions (5b)**: `PAGERANK`, `PERSONALIZED_PAGERANK`, `COMMUNITY_DETECT`, `GRAPH_NEIGHBORS`, `SUBGRAPH`, `CONNECTING_PATHS`, `NODE_SIMILARITY`, `CONNECTED_COMPONENTS`, `DEGREE_CENTRALITY`, `SHORTEST_PATH`. ✅ (v0.8.0)
+- [x] **Graph RAG Pipeline Integration (5c)**: `GRAPH_RAG_SEARCH` (local/global, HippoRAG seed weighting, relation pruning, dual vector-graph), community summarization workflow (hierarchical Louvain pyramids), entity equivalence resolution (DSU). ✅ (v0.8.0)
+- [x] **Python API (5d)**: `pagerank`, `personalized_pagerank`, `louvain_communities`, `graph_neighbors`, `subgraph`, `connecting_paths`, `resolve_entities`, `graph_rag_search`, `to_networkx`. ✅ (v0.8.0)
+- [x] **dbt Macros (5e)**: `pagerank`, `personalized_pagerank`, `community_detect`, `graph_neighbors`, `subgraph`, `connecting_paths`, `shortest_path`, `connected_components`, `degree_centrality`, `node_similarity`, `topological_sort`. ✅ (v0.8.0)
+- [x] **Search Gateway Graph Endpoints (5f)**: OpenSearch `_graph_search` DSL (Port 9200); Qdrant wire compatibility retained (Port 6333). ✅ (v0.8.0)
+
+**Next Steps**
+- [ ] (none outstanding)
+
+#### A8. Correctness & Benchmarking Suite [Free]
+
+Ensure that all HyperStreamDB features maintain mathematical correctness and benchmark speed against established industry standards. This prevents regressions and builds trust in the database.
+
+**Completed**
+- [x] **Graph Algorithms Suite (6a)**: accuracy validation vs NetworkX/petgraph; speed profiling (10x-50x vs NetworkX). ✅ (v0.8.0)
+- [x] **Vector Search Suite (6b)**: recall vs latency benchmarks vs faiss/scikit-learn; L2/Cosine/Inner Product correctness. ✅ (v0.8.0)
+- [x] **SQL Aggregates Suite (6c)**: aggregate consistency vs pandas/dask (nulls, extreme values). ✅ (v0.8.0)
+
+**Next Steps**
+- [ ] (none outstanding)
+
+#### A9. Performance & Competitive Benchmarking
+
+**Completed**
+- [x] **100k Competitive Benchmarks vs. OpenSearch**: long-running benchmark runs on local SSD using docker-constrained environments (4 CPUs / 4GB RAM). ✅ (v0.7.0)
   - *Key Takeaways from 100K-doc benchmark*:
     - **Vector search is world-class and strictly faster**: HyperStreamDB query latencies are incredibly stable (P50: 1.94ms, P99: 4.26ms). It completely eliminates tail-latency spikes that plague OpenSearch (P99: 62.58ms), running up to 14.7x faster at the 99th percentile under tight memory constraints.
     - **Memory safety proven**: The engine safely loaded 100k HNSW vectors within the 4GB hard container limit without OOM crashing.
     - **Storage footprint**: 7.1x lower disk requirement (~26MB vs ~185MB) due to zero data lake duplication.
     - **Ingestion throughput**: OpenSearch handles bulk indexing faster (7,510 docs/s vs 4,419 docs/s) by deferring HNSW graph operations to background merges.
-- [x] **[Free] 1M Competitive Benchmarks vs. OpenSearch**: Execute 1,000,000 document scaling benchmark under identical 4 CPU / 4GB RAM limits. ✅ (v0.7.0)
+- [x] **1M Competitive Benchmarks vs. OpenSearch**: 1,000,000 document scaling benchmark under identical 4 CPU / 4GB RAM limits. ✅ (v0.7.0)
   - *Key Takeaways from 1M-doc benchmark*:
     - **Zero tail latency degradation**: HyperStreamDB latency remains completely flat from 100k to 1M (P50: 1.91ms, P99: 3.74ms).
     - **Catastrophic tail collapse eliminated**: OpenSearch suffers severe memory thrashing under 4GB RAM, causing P99 latency to spike to **478.77ms** (128x slower).
     - **Zero data duplication**: Requires only ~280MB storage vs OpenSearch's ~1,852MB (6.6x disk savings).
     - Documented comprehensively in [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
 
-### 4. Advanced Search & Query Features
-- [x] **[Free] Zero-Copy Arrow IPC Vector Index**: Completely rewrite the internal HNSW graph implementation to traverse columnar Apache Arrow IPC structures instead of Rust heap pointers. This will allow true zero-copy memory mapping and native ecosystem interoperability with Spark/Trino for vector search. ✅ (v0.8.0)
-- [x] **[Free] Async Ingest Memory Buffer & WAL**: Re-architect `_bulk` ingestion to buffer documents in memory and flush asynchronously via a Write-Ahead Log (WAL), removing the synchronous disk fsync bottleneck. ✅ (v0.8.0)
-- [x] **[Free] TurboQuant™ Core Quantization**: Built-in scalar quantization (TQ4 / TQ8 with Fast Walsh-Hadamard Transform) for 4x memory compression in core open-source engine. ✅ (v0.7.0)
-- [x] **[Free] Composite Scalar Indexes**: Multi-column composite roaring bitmaps for frequent multi-column filter queries (e.g., `(tenant_id, status)`). ✅ (v0.7.0)
-- [x] **[Free] Multi-Vector Search**: Query planner and scoring coordination to search and rank across multiple embedding columns simultaneously using Reciprocal Rank Fusion (RRF). ✅ (v0.7.0)
+**Next Steps**
+- [ ] (none outstanding)
 
-### 5. Graph RAG & Lakehouse Graph Analytics [Free]
+#### A10. Packaging, Hardware & CI
 
-Native graph analytics on Iceberg edge tables with sidecar index acceleration. Replaces the need for Neo4j + Pinecone combos or Spark GraphX for knowledge graph and Graph RAG workloads. All core graph features ship in the free Community edition.
+**Completed**
+- [x] **Universal GPU PyPI Wheel**: Single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
+- [x] **GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
+- [x] **CI/CD Pipeline Maintenance**: Upgraded checkout actions to v5 for Node 24 compatibility, enforced Rust SecAudit resolutions, and DRY'd Python test workflows to use dynamically loaded wheel `[dev]` extras. ✅ (v0.8.0)
 
-#### 5a. [Free] Edge Table Schema Convention
-- [x] **[Free] Standard Edge Table Layout**: Define standard Iceberg edge table schema (source, target, relation, weight, embedding). ✅ (v0.8.0)
-- [x] **[Free] Sidecar Indexes**: Auto-generate sidecar indexes on `source` and `target` columns (Roaring Bitmap) and `embedding` (HNSW) for O(1) edge lookups and semantic vector search. ✅ (v0.8.0)
-- [x] **[Free] Best Practices Guide**: Document edge table conventions, NetworkX interop, and Graph RAG workflow in [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md). ✅ (v0.8.0)
+**Next Steps**
+- [ ] (none outstanding)
 
-#### 5b. [Free] Graph SQL Functions (DataFusion UDFs)
-- [x] **[Free] `PAGERANK(edge_table, damping, max_iterations, tolerance)`**: Iterative PageRank over edge table. ✅ (v0.8.0)
-- [x] **[Free] `PERSONALIZED_PAGERANK(source, target, seeds, damping, max_iter, is_directed, [seed_weights])`**: Seed-biased teleportation PageRank with optional HippoRAG-style continuous vector similarity weights ($p_0(v) \propto w(v)$). ✅ (v0.8.0)
-- [x] **[Free] `COMMUNITY_DETECT(edge_table, algorithm, resolution)`**: Louvain / Label Propagation community detection with modularity resolution parameter $\gamma$. ✅ (v0.8.0)
-- [x] **[Free] `GRAPH_NEIGHBORS(entity_id, edge_table, hops, direction)`**: 1–N hop neighborhood retrieval. ✅ (v0.8.0)
-- [x] **[Free] `SUBGRAPH(source, target, seed_nodes, hops, is_directed)`**: Induced multi-hop subgraph extraction with SQL predicate pushdown filtering on relations. ✅ (v0.8.0)
-- [x] **[Free] `CONNECTING_PATHS(source, target, seed_nodes, is_directed)`**: Multi-seed pairwise shortest connecting paths. ✅ (v0.8.0)
-- [x] **[Free] `NODE_SIMILARITY(node_a, node_b, edge_table, method)`**: Jaccard, Adamic-Adar, Resource Allocation, and Preferential Attachment link prediction. ✅ (v0.8.0)
-- [x] **[Free] `CONNECTED_COMPONENTS(edge_table)`**: Weakly and Strongly Connected Components. ✅ (v0.8.0)
-- [x] **[Free] `DEGREE_CENTRALITY(edge_table, direction)`**: In-degree, out-degree, and total degree aggregation. ✅ (v0.8.0)
-- [x] **[Free] `SHORTEST_PATH(source, target, start, end)`**: Breadth-first shortest pathfinding. ✅ (v0.8.0)
+### Part B — Ecosystem, Vertical & Commercial
 
-#### 5c. [Free] Graph RAG Pipeline Integration
-- [x] **[Free] `GRAPH_RAG_SEARCH(query_embedding, edge_table, doc_table, mode, ...)`**: Combined graph + vector search (local and global modes). Supports HippoRAG continuous seed weighting, predicate/relation pruning (`allowed_relations`), and Dual Vector-Graph RAG (`search_edges=True`). ✅ (v0.8.0)
-- [x] **[Free] Community Summarization Workflow**: SQL-driven pipeline to detect Louvain communities, rank central hub entities, and materialize Iceberg community summaries. Supports hierarchical multi-level Louvain pyramids (`hierarchical=True`, `resolutions=[...]`, `level`, `parent_community_id`) for Microsoft GraphRAG parity. ✅ (v0.8.0)
-- [x] **[Free] Entity Equivalence Resolution**: Transitive alias and synonym resolution (`table.resolve_entities(relation='same_as')`) via Disjoint Set Union (DSU). ✅ (v0.8.0)
+#### B1. Client Ecosystem & Distribution
+*Depends on a stable core API (Part A). Thin, dependency-light adapters over the existing Python API (`vector_search`, `hybrid_search`, `graph_rag_search`, `drift_search`) — no engine changes required.*
 
-#### 5d. [Free] Python API
-- [x] **[Free] `table.pagerank(damping=0.85, iterations=30)`**: DataFrame with PageRank scores. ✅ (v0.8.0)
-- [x] **[Free] `table.personalized_pagerank(seeds, alpha=0.85, seed_weights=None)`**: Continuous seed-weighted HippoRAG PPR scores. ✅ (v0.8.0)
-- [x] **[Free] `table.louvain_communities(resolution=1.0)`**: Community assignments with multi-resolution tuning. ✅ (v0.8.0)
-- [x] **[Free] `table.graph_neighbors(entity_id, hops=2)`**: Neighbor entities + edges. ✅ (v0.8.0)
-- [x] **[Free] `table.subgraph(nodes, hops=2, is_directed=False, allowed_relations=None)`**: Extracted induced subgraph with relation pushdown. ✅ (v0.8.0)
-- [x] **[Free] `table.connecting_paths(nodes, directed=False)`**: Connecting paths across seeds. ✅ (v0.8.0)
-- [x] **[Free] `table.resolve_entities(relation='same_as')`**: Transitive equivalence closure mapping. ✅ (v0.8.0)
-- [x] **[Free] `table.graph_rag_search(query, mode='local', hops=2, top_k=10, search_edges=False, ...)`**: Combined graph + vector results with `GraphRagResult` and prompt-ready `.format_context()`. ✅ (v0.8.0)
-- [x] **[Free] `table.to_networkx()`**: Export to NetworkX `DiGraph`, `Graph`, or `MultiGraph` for ecosystem visualization. ✅ (v0.8.0)
+**Completed**
+- [x] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
 
-#### 5e. [Free] dbt Macros (`dbt-hyperstreamdb`)
-- [x] **[Free] `{{ pagerank(ref('edges'), damping=0.85) }}`**: Materialize PageRank scores as an Iceberg table. ✅ (v0.8.0)
-- [x] **[Free] `{{ personalized_pagerank(ref('edges'), seeds=[...], [seed_weights]) }}`**: HippoRAG-style continuous seed-weighted PPR materialization. ✅ (v0.8.0)
-- [x] **[Free] `{{ community_detect(ref('edges'), algorithm='louvain', resolution=1.0) }}`**: Materialize Louvain / Label Propagation community assignments. ✅ (v0.8.0)
-- [x] **[Free] `{{ graph_neighbors(ref('edges'), entity_id, hops=2) }}`**: Neighborhood subgraph extraction. ✅ (v0.8.0)
-- [x] **[Free] `{{ subgraph(ref('edges'), seeds=[...], hops=1) }}`**: Induced multi-hop subgraph extraction. ✅ (v0.8.0)
-- [x] **[Free] `{{ connecting_paths(ref('edges'), seeds=[...]) }}`**: Multi-seed connecting path chains. ✅ (v0.8.0)
-- [x] **[Free] `{{ shortest_path(ref('edges'), start, end) }}`**: Shortest path node sequences. ✅ (v0.8.0)
-- [x] **[Free] `{{ connected_components(ref('edges'), directed=false) }}`**: Weakly & strongly connected component clustering. ✅ (v0.8.0)
-- [x] **[Free] `{{ degree_centrality(ref('edges')) }}`**: In/out/total degree centrality distribution. ✅ (v0.8.0)
-- [x] **[Free] `{{ node_similarity(ref('edges'), node_a, node_b, method='jaccard') }}`**: Link prediction scores (Jaccard, Adamic-Adar, Resource Allocation, Preferential Attachment). ✅ (v0.8.0)
-- [x] **[Free] `{{ topological_sort(ref('edges')) }}`**: Directed acyclic graph execution ordering. ✅ (v0.8.0)
+**Next Steps**
+- [ ] **LangChain (`langchain-hyperstreamdb`)**:
+  - `HyperStreamVectorStore`: Standard `VectorStore` interface (add / similarity search / MMR) mapping onto HNSW + TurboQuant sidecars, with metadata filters pushed down as RoaringBitmap predicates (`id IN (...)`).
+  - `HyperStreamGraphRetriever`: `BaseRetriever` wrapping `table.graph_rag_search(...)` — local/global modes, PPR grounding, and prompt-ready `format_context()` injection.
+  - Edge-table loader: Ingest documents/triplets into Iceberg doc + edge tables following the [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md) schema convention.
+- [ ] **LlamaIndex (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`)**:
+  - `HyperStreamVectorStore`: `BaseVectorStore` implementation with add/query mapped to the sidecar HNSW indexes and scalar-filter pushdown.
+  - Property-graph store: `GraphStore` over edge tables (`subgraph`, `connecting_paths`, `graph_neighbors` UDAFs) enabling `PropertyGraphIndex` / HippoRAG-style retrievers on lakehouse data.
+  - Two-level Graph-RAG retriever: Composite retriever mirroring the full-site Wikipedia demo pattern — 384-d seed index → CSR expansion → bitmap-filtered rerank.
+- [ ] **Haystack (`hyperstream-haystack`)**:
+  - `HyperStreamDocumentStore`: implement deepset's `DocumentStore` contract (`write_documents`, `filter_documents`, `delete_documents`, embedding retrieval) over HyperStreamDB tables, with metadata filters pushed down as RoaringBitmap predicates and embeddings served by the TQ HNSW indexes.
+  - `HyperStreamEmbeddingRetriever`: dense/sparse (BM25) and hybrid (RRF) retrieval components usable in a Haystack pipeline.
+  - Graph-RAG retriever component: wraps `graph_rag_search` (seed index → CSR expansion → bitmap-filtered rerank) for Haystack pipelines.
+- [ ] **LangGraph & agent tooling** (orchestration layer — expose HyperStreamDB retrievers as graph nodes/tools):
+  - Retrieval tools: `HyperStreamRetrieverTool`, `HyperStreamGraphRagTool`, `HyperStreamDriftTool` (typed tool wrappers with provenance: seed pages, PPR scores, hop paths).
+  - Reference agent graph: `examples/langgraph_agentic_rag.py` — planner → hybrid retrieve → graph expand/rerank → synthesize, demonstrating agentic Graph RAG over the whole-site Wikipedia tables.
+- [ ] **Pydantic AI (`hyperstream-pydantic-ai`)** — *up-and-comer track*: type-safe agent framework from the Pydantic team (the validation layer already under OpenAI SDK / LangChain). Thin adapter exposing HyperStreamDB retrievers as typed tools (`HyperStreamRetriever`, `HyperStreamGraphRagTool`) with Pydantic result models; low integration cost, high mindshare leverage with the Pydantic ecosystem.
+- [ ] **Examples & Docs**: `examples/langchain_rag.py`, `examples/llamaindex_graph_rag.py`, `examples/haystack_pipeline.py`, `examples/pydantic_ai_rag.py` and the LangGraph agent above, with integration docs.
 
-#### 5f. [Free] Search Gateway Graph Endpoints
-- [x] **[Free] OpenSearch API (Port 9200)**: Implemented `_graph_search` DSL endpoint for OpenSearch gateway to enable multi-hop context retrieval. ✅ (v0.8.0)
-- [x] **[Free] Qdrant API (Port 6333)**: Retained strict Qdrant wire compatibility. Graph features are delegated to OpenSearch or treated as plugins. ✅ (v0.8.0)
-### 6. Correctness and Benchmarking Suite [Free]
+> **Framework prioritization (avoid sprawl):** cover the **most popular** first — LangChain + LlamaIndex are the must-haves, Haystack for enterprise RAG, LangGraph for orchestration — then add **one up-and-comer** (Pydantic AI) to leapfrog incumbents via the Pydantic ecosystem. All are thin adapters over the existing Python API, so each is cheap; cap the list here and add further frameworks only on demonstrated user demand.
 
-Ensure that all HyperStreamDB features maintain mathematical correctness and benchmark speed against established industry standards. This prevents regressions and builds trust in the database.
+#### B2. Codebase Intelligence & Model Context Protocol (MCP) Server
+*Depends on core + client ecosystem.*
 
-#### 6a. [Free] Graph Algorithms Suite
-- [x] **[Free] Accuracy Validation**: Ensure PageRank, Louvain, Connected Components, and pathfinding results perfectly match NetworkX (Python) and petgraph (Rust). ✅ (v0.8.0)
-- [x] **[Free] Speed Profiling**: Continuous performance tracking (e.g., ensuring 10x-50x speedups vs NetworkX). ✅ (v0.8.0)
+**Completed**
+- [ ] (none outstanding)
 
-#### 6b. [Free] Vector Search Suite
-- [x] **[Free] Recall vs Latency Benchmarks**: Establish standard HNSW and IVF-PQ tests against faiss and scikit-learn. ✅ (v0.8.0)
-- [x] **[Free] Distance Metric Correctness**: Validate L2, Cosine, and Inner Product calculations. ✅ (v0.8.0)
+**Next Steps**
+- [ ] **MCP Server Implementation (`hyperstream-mcp`)**:
+  - Protocol Support: Standard Model Context Protocol (JSON-RPC over stdio and SSE). (v0.9.0)
+  - Tool: `code_search`: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks. (v0.9.0)
+  - Tool: `find_symbol`: Sub-millisecond exact definition and reference lookups powered by String Inverted Index. (v0.9.0)
+  - Tool: `get_context`: Extract relevant code blocks, AST parent contexts, and neighboring functions. (v0.9.0)
+  - Tool: `code_graph`: Query imports, calls, and dependency relationships via sidecar graph tables. (v0.9.0)
+  - Language Parsers: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++). (v0.9.0)
+- [ ] **Git-Diff Incremental CI Indexer**:
+  - CLI Subcommand `hyperstream index`: `--repo <path>`, `--diff-since <ref>`, `--target <uri>`. (v0.9.0)
+  - Incremental Parquet & Overlay Appends: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps. (v0.9.0)
+  - Official GitHub Action (`hyperstreamdb/index-action@v1`): Ready-to-use GitHub Action for PR and merge workflows. (v0.9.0)
+  - GitLab CI & Jenkins Examples: Provide standard CI pipeline configurations. (v0.9.0)
+- [ ] **Feature Tiering: Local vs. Remote Lakehouse**:
+  - [Free] Local Storage Backends: Direct support for local filesystem (`file://`) and developer MinIO instances. (v0.9.0)
+  - [Free] Local MCP Server & Tooling: Full stdio/SSE MCP protocol support for local developer desktop tools (Cursor, Claude, Roo Code). (v0.9.0)
+  - [Free] Git-Diff Incremental Indexing Engine: Fast incremental AST chunking and overlay generation on individual developer machines. (v0.9.0)
+  - [Paid] Remote Cloud Object Storage Integration: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`). (v0.9.0)
+  - [Paid] Centralized Team Knowledge Cache: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution. (v0.9.0)
 
-#### 6c. [Free] SQL Aggregates Suite
-- [x] **[Free] Aggregate Consistency**: Verify DataFusion-powered UDFs against pandas / dask for edge cases (nulls, extreme values). ✅ (v0.8.0)
+#### B3. Vertical Lighthouse: High-Cardinality Scale Benchmark
+*Depends on core high-cardinality filtering (A1) + ingest orchestrator (A4). Retained as the scale lighthouse + research platform (see [`business_plan/README.md`](business_plan/README.md)).*
 
-### 7. Packaging, Hardware & CI
-- [x] **[Free] Universal GPU PyPI Wheel**: Distribute a single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
-- [x] **[Free] GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
-- [x] **[Free] CI/CD Pipeline Maintenance**: Upgraded checkout actions to v5 for Node 24 compatibility, enforced Rust SecAudit resolutions, and DRY'd Python test workflows to use dynamically loaded wheel `[dev]` extras. ✅ (v0.8.0)
+**Completed**
+- [x] **Raw scale-testing objective** — satisfied by the full-site Wikipedia Graph RAG demo ([`examples/web_ui/README.md`](examples/web_ui/README.md)): 51.8M live pages / 383M clean int64 edges, HNSW-TQ8 + BM25 (RRF `hybrid_search`), CSR graph index, PageRank/PPR, Louvain, and two-level Graph RAG (seed index → CSR expansion → bitmap-filtered rerank), with chunked fresh-process ingest, OCC commits, and compaction ([`scripts/prepare_demo.py`](scripts/prepare_demo.py)).
 
-### 8. Codebase Intelligence & Model Context Protocol (MCP) Server
+**Next Steps**
+- [ ] High-cardinality scalar pre-filtering benchmark (millions of distinct keys / temporal predicates) against RoaringBitmap sidecars.
+- [ ] End-to-end verification of hybrid scalar-vector queries under high data skew and temporal partitioning.
+- [ ] Zero-copy PyTorch tensor feeding via Arrow Flight SQL gateway for deep learning feature pipelines.
 
-#### 7a. [Free] MCP Server Implementation (`hyperstream-mcp`)
-- [ ] **[Free] Protocol Support**: Standard Model Context Protocol (JSON-RPC over stdio and SSE). (v0.9.0)
-- [ ] **[Free] Tool: `code_search`**: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks. (v0.9.0)
-- [ ] **[Free] Tool: `find_symbol`**: Sub-millisecond exact definition and reference lookups powered by String Inverted Index. (v0.9.0)
-- [ ] **[Free] Tool: `get_context`**: Extract relevant code blocks, AST parent contexts, and neighboring functions. (v0.9.0)
-- [ ] **[Free] Tool: `code_graph`**: Query imports, calls, and dependency relationships via sidecar graph tables. (v0.9.0)
-- [ ] **[Free] Language Parsers**: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++). (v0.9.0)
+#### B4. Enterprise Security & Compliance [Paid]
+*Depends on core maturity (Part A).*
 
-#### 7b. [Free] Git-Diff Incremental CI Indexer
-- [ ] **[Free] CLI Subcommand `hyperstream index`**: (v0.9.0)
-  - `--repo <path>`: Target repository directory.
-  - `--diff-since <ref>`: Git diff mode (e.g. `HEAD~1`, `origin/main`) to only re-index changed files.
-  - `--target <uri>`: Target storage URI (`file:///...`, `s3://...`).
-- [ ] **[Free] Incremental Parquet & Overlay Appends**: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps. (v0.9.0)
-- [ ] **[Free] Official GitHub Action (`hyperstreamdb/index-action@v1`)**: Ready-to-use GitHub Action for PR and merge workflows. (v0.9.0)
-- [ ] **[Free] GitLab CI & Jenkins Examples**: Provide standard CI pipeline configurations. (v0.9.0)
+**Completed**
+- [ ] (none outstanding)
 
-#### 7c. Feature Tiering: Local vs. Remote Lakehouse
-- [ ] **[Free] Local Storage Backends**: Direct support for local filesystem (`file://`) and developer MinIO instances. (v0.9.0)
-- [ ] **[Free] Local MCP Server & Tooling**: Full stdio/SSE MCP protocol support for local developer desktop tools (Cursor, Claude, Roo Code). (v0.9.0)
-- [ ] **[Free] Git-Diff Incremental Indexing Engine**: Fast incremental AST chunking and overlay generation on individual developer machines. (v0.9.0)
-- [ ] **[Paid] Remote Cloud Object Storage Integration**: Direct synchronization to cloud object storage (`s3://`, `gs://`, `az://`, `r2://`). (v0.9.0)
-- [ ] **[Paid] Centralized Team Knowledge Cache**: Shared team repository index across engineering organizations with access control and pre-computed embedding distribution. (v0.9.0)
-
-### 9. Enterprise Security & Compliance [Paid]
+**Next Steps**
 - [ ] **[Paid] Row-Level Security (RLS) & Multi-Tenancy**: Sidecar-level tenant bitmap isolation (`.idx` intersection before reading Parquet).
 - [ ] **[Paid] Dynamic Column Masking**: Role-based PII redaction on query and vector results.
 - [ ] **[Paid] Customer-Managed Encryption Keys (CMEK)**: Envelope encryption for sidecar index files via AWS KMS, GCP KMS, or HashiCorp Vault.
@@ -564,10 +648,49 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 - [ ] **[Paid] SIEM Telemetry Export**: Native connector export to Splunk, Datadog, and AWS CloudWatch.
 - [ ] **[Paid] Cross-Catalog Governance Propagation**: Unified RLS policies and audit synchronization across Polaris, Unity, and Glue catalogs.
 
-### 10. HyperStream Accelerator & Lifecycle Automation [Paid]
+#### B5. HyperStream Accelerator & Lifecycle Automation [Paid]
+*Depends on core maturity (Part A).*
+
+**Completed**
+- [ ] (none outstanding)
+
+**Next Steps**
 - [ ] **[Paid] Fused SIMD & Tensor Core Kernels**: Hand-crafted AVX-512, ARM SVE, and Hopper/Blackwell FP8/FP4 fused kernels.
 - [ ] **[Paid] GPUDirect Storage (GDS) Bypass**: Direct NVMe/S3 local cache streaming to GPU VRAM, bypassing host CPU/PCIe bottleneck.
 - [ ] **[Paid] Sidecar Lifecycle Manager**: Autonomous 3-format coordinated compaction (Iceberg manifests + Parquet bin-packing + HNSW/Bitmap sidecars) with cost-aware S3 scheduling and recall drift rebalancing.
+
+---
+
+## 📣 Marketing & Go-To-Market
+
+> **Trigger:** The full-site Wikipedia Graph RAG demo works end-to-end and the core engine (Phases 1–10) is complete. This is the moment to start public marketing — the product has a credible, reproducible flagship artifact and a stable core to point at.
+
+### Positioning
+- **Horizontal data infrastructure**, not a vertical app: Apache Iceberg V2/V3 + RoaringBitmap + HNSW/TQ8 overlays, exposed over OpenSearch / Qdrant / Arrow Flight SQL.
+- **The proof point:** *"51.8M Wikipedia pages / 383M edges — hybrid vector + keyword + Graph RAG, served on a laptop under bounded RAM, with zero data duplication."*
+- **Competitive wedge:** flat tail latency vs OpenSearch (P99 3.74ms vs 478.77ms at 1M docs), 6.6x–7.1x lower disk, no JVM / no OOM.
+
+### Channels & Cadence
+- **LinkedIn** (founder-led, 2–3 posts/week):
+  - Short benchmark teardowns (P50/P99 charts, disk footprint) linking to the demo repo.
+  - "Build in public" progress notes (ingest orchestrator, Graph RAG, 4 GB matrix).
+  - Demo screen-captures (Browse / Semantic / Graph RAG / DRIFT tabs).
+- **Medium** (long-form, 1–2/month):
+  - "Running the entire English Wikipedia link graph on a laptop" — architecture + measured timings.
+  - "Why tail latency is the real vector-search benchmark" — HyperStreamDB vs OpenSearch at 1M docs.
+  - "Graph RAG on the lakehouse: seed index → CSR expansion → bitmap-filtered rerank."
+  - "Iceberg-native vector search without a separate vector database."
+- **Secondary**: Hacker News (Show HN), r/dataengineering, DuckDB / Iceberg communities, X/Twitter threads.
+
+### Content Assets to Produce
+- [ ] Benchmark chart pack (P50/P99 latency, disk footprint, ingest throughput) from [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
+- [ ] 2–3 min demo video of the full-site Wikipedia Graph RAG UI ([`examples/web_ui/app.py`](examples/web_ui/app.py)).
+- [ ] Reproducible "one-command" quickstart gist (`pip install hyperstreamdb` + 3 lines).
+- [ ] Comparison one-pager vs OpenSearch / LanceDB / pgvector.
+
+### Guardrails
+- Keep `hyperstreamdb` a pristine, domain-agnostic Apache 2.0 engine; vertical/domain-specific work stays in separate downstream repos.
+- Market the horizontal engine on measured, reproducible benchmarks only.
 
 ---
 
@@ -595,130 +718,6 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 - [x] Integration test suite for Iceberg V2 position delete masking in vector graph scans (`tests/verify_mor_vector_deletes.rs`).
 - [x] Incremental sidecar index append vs. compaction coordination under concurrent streaming writes.
 - [x] Architecture documentation detailing the interaction between persistent HNSW overlays and Iceberg transaction manifests.
-
-### 9. AI Agent Framework Connectors (Phase 12) [Free]
-
-First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG search to the two dominant LLM application frameworks. These ship as thin, dependency-light adapters over the existing Python API (`vector_search`, `hybrid_search`, `graph_rag_search`, `drift_search`) — no engine changes required.
-
-#### 9a. [Free] LangChain (`langchain-hyperstreamdb`)
-- [ ] **[Free] `HyperStreamVectorStore`**: Standard `VectorStore` interface (add / similarity search / MMR) mapping onto HNSW + TurboQuant sidecars, with metadata filters pushed down as RoaringBitmap predicates (`id IN (...)`).
-- [ ] **[Free] `HyperStreamGraphRetriever`**: `BaseRetriever` wrapping `table.graph_rag_search(...)` — local/global modes, PPR grounding, and prompt-ready `format_context()` injection.
-- [ ] **[Free] Edge-table loader**: Ingest documents/triplets into Iceberg doc + edge tables following the [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md) schema convention.
-
-#### 9b. [Free] LlamaIndex (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`)
-- [ ] **[Free] `HyperStreamVectorStore`**: `BaseVectorStore` implementation with add/query mapped to the sidecar HNSW indexes and scalar-filter pushdown.
-- [ ] **[Free] Property-graph store**: `GraphStore` over edge tables (`subgraph`, `connecting_paths`, `graph_neighbors` UDAFs) enabling `PropertyGraphIndex` / HippoRAG-style retrievers on lakehouse data.
-- [ ] **[Free] Two-level Graph-RAG retriever**: Composite retriever mirroring the full-site Wikipedia demo pattern — 384-d seed index → CSR expansion → bitmap-filtered rerank.
-
-#### 9c. [Free] Haystack (`hyperstream-haystack`)
-- [ ] **[Free] `HyperStreamDocumentStore`**: implement deepset's `DocumentStore`
-  contract (`write_documents`, `filter_documents`, `delete_documents`, embedding
-  retrieval) over HyperStreamDB tables, with metadata filters pushed down as
-  RoaringBitmap predicates and embeddings served by the TQ HNSW indexes.
-- [ ] **[Free] `HyperStreamEmbeddingRetriever`**: dense/sparse (BM25) and hybrid
-  (RRF) retrieval components usable in a Haystack pipeline.
-- [ ] **[Free] Graph-RAG retriever component**: wraps `graph_rag_search`
-  (seed index → CSR expansion → bitmap-filtered rerank) for Haystack pipelines.
-
-#### 9d. [Free] LangGraph & agent tooling
-LangGraph is an orchestration layer rather than a store framework: the
-integration is the reverse direction — expose HyperStreamDB retrievers as graph
-nodes/tools so agent workflows can use them.
-
-- [ ] **[Free] Retrieval tools**: `HyperStreamRetrieverTool`,
-  `HyperStreamGraphRagTool`, `HyperStreamDriftTool` (typed tool wrappers with
-  provenance: seed pages, PPR scores, hop paths).
-- [ ] **[Free] Reference agent graph**: `examples/langgraph_agentic_rag.py` —
-  planner → hybrid retrieve → graph expand/rerank → synthesize, demonstrating
-  agentic Graph RAG over the whole-site Wikipedia tables.
-
-#### 9e. [Free] Examples & Docs
-- [ ] **[Free] Runnable examples**: `examples/langchain_rag.py`,
-  `examples/llamaindex_graph_rag.py`, `examples/haystack_pipeline.py` and the
-  LangGraph agent above, with integration docs.
-
----
-
-## Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB) ⏳ PLANNED
-
-### Objectives
-- Stress-test HyperStreamDB under real-world, massive enterprise data: 10+ years of SEC EDGAR filings (Form 4 XML insider transactions, 10-K/10-Q text and XBRL).
-- Validate high-cardinality metadata pre-filtering (CIK, SIC industry code, filing dates) combined with RoaringBitmaps and TQ8 HNSW vector search on a single 4 GB node.
-- Serve as the production-scale proving ground for HyperStreamDB core, powering downstream financial RAG applications including `edgarstreamdb` and the `OpenEDGAR` frontend (`github.com/rla3rd/openedgar`).
-
-### Tasks
-- [ ] Reference benchmark implementation in `examples/sec_edgar_scale_test.md`.
-- [ ] Zero-copy PyTorch tensor feeding via Arrow Flight SQL gateway for deep learning feature pipelines.
-- [ ] End-to-end verification of hybrid scalar-vector queries under high data skew and temporal partitioning.
-
----
-
-## Phase 12: Client Ecosystem & Packaged Distribution ⏳ ACTIVE
-
-### Objectives
-- Enable frictionless developer adoption via standard package managers and AI agent frameworks.
-- Provide first-class client libraries and upstream ecosystem connectors.
-
-### Tasks
-- [x] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
-- [ ] Official LangChain integration package (`langchain-hyperstreamdb`): `HyperStreamVectorStore` + `HyperStreamGraphRetriever` wrapping `graph_rag_search` / `drift_search`.
-- [ ] Official LlamaIndex integration packages (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`): vector store, edge-table property-graph store, and the two-level Graph-RAG retriever (seed index → CSR expansion → bitmap-filtered rerank, as demonstrated by the full-site Wikipedia demo).
-- [ ] Runnable examples and docs for both frameworks (see Active Roadmap §9c).
-
-### CUDA Library Discovery [Free]
-- [ ] **Find nvrtc/cudart from installed wheels**: cudarc 0.13.9 probes only
-  `libnvrtc.so` / `.so.{12,11,10,1}`, so pip's `nvidia-*-cu13` layout
-  (`nvidia/cu13/lib/libnvrtc.so.13`) is never found — the JIT path panics and
-  silently falls back to CPU (the demo ships `scripts/create_cuda_shims.sh` and
-  auto-re-execs with `LD_LIBRARY_PATH` as a workaround). Proper fix: resolve the
-  library path ourselves (glob `site-packages/nvidia/*/lib`, honour
-  `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so
-  `pip install` alone is enough — no env-var prefix.
-- [x] **GPU-accelerated k-means centroid training**: `simple_kmeans` now dispatches
-  its assignment step (iters × sample × k × dim) to
-  `gpu::compute_kmeans_assignment` when a GPU backend is usable, keeping the
-  rayon CPU scan as the fallback. ✅
-- [ ] **GPU distance computation inside graph construction**: `hnsw_rs` builds
-  neighbour graphs CPU-only and the CUDA backend has no HNSW kernel. Implementing
-  GPU HNSW construction is research-grade; the realistically GPU-accelerable
-  piece is the *distance computation during insertion (neighbor search)*, which
-  cannot be wired in trivially because `hnsw_rs` owns that loop — it requires
-  either a custom CUDA HNSW build or an IVF-flat GPU path for large clusters.
-  Tracked as design work, deliberately not a dispatcher change.
-
-### Native Ingest Orchestrator (tokio) — cluster-free bulk ingest [Free]
-Spark stays for pre-write transforms and existing lake pipelines, but ingestion must
-not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes,
-and commits a bulk load entirely inside the engine. The whole-site Wikipedia demo
-(`scripts/prepare_demo.py` fresh-process chunking: 2M-row chunks, 118 s @ ~10 GB,
-per-chunk OCC commits) is the working prototype for this design.
-
-- [ ] **Work planner**: enumerate inputs (parquet files / row groups / streams) into
-  row-range work units sized from a memory budget (measured ~4.5 GB per million
-  384-d vectors incl. allocator churn; auto-detected from `MemAvailable`, env-overridable).
-- [ ] **Bounded tokio worker pool**: each worker streams its range into a *private*
-  segment builder (segments are already independent), flushes with per-segment index
-  builds, under a `Semaphore`-bounded queue; per-worker RSS ceiling = chunk size knob.
-- [ ] **Commit strategy**: coordinator drains completed segments into multi-segment
-  snapshots via the existing OCC manifest CAS (`FileBasedLock`, `PutMode::Create`) —
-  N segments per snapshot to keep manifest versions bounded; retries on conflict.
-- [ ] **Resume & idempotency**: durable job state (completed work-unit list as a table
-  property or sidecar) so an interrupted multi-TB load restarts at the unit boundary.
-- [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory
-  budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the
-  HNSW/TQ builders so freed memory is actually reusable.
-- [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based
-  work stealing over an object-store lease file / Flight gateway later.
-- [ ] **Python/CLI surface**: `table.ingest(paths, chunk_rows=None, parallelism=None)`
-  with progress; `hdb ingest --plan/--run`; serverless tasks become thin runners
-  (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
-- [ ] **Scheduled compaction**: drive `rewrite_data_files` from the orchestrator so
-  segment and manifest counts stay bounded at TB scale (chunked loads create many
-  small segments by design).
-- [ ] **Allocator evaluation** (shared with the memory-discipline item, for
-  long-lived daemons that rebuild indexes in-process): jemalloc vs glibc
-  (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or
-  slab-allocating the HNSW/TQ builders.
 
 ---
 
@@ -757,10 +756,12 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Phase 6.5: Ecosystem Gateways** — Dual-protocol search server (`hyperstreamdb-search` on ports 9200 & 6333), Arrow Flight SQL gateway (`hyperstreamdb-flight` on port 50051), and official dbt adapter (`dbt-hyperstreamdb`).
 - **Phase 7: Cloud-Agnostic Concurrency & Durability** — `FileBasedLock` (`src/core/lock.rs`) using object storage CAS (`PutMode::Create`), OCC snapshot swaps with retries (`src/core/manifest/manager/commit.rs`), chaos testing (`tests/test_chaos.rs`).
 - **Phase 8: Documentation Suite** — Complete Sphinx / ReadTheDocs setup in `docs/` with developer guides for SQL, Python, Iceberg V2/V3, GPU, and Concurrency.
+- **Phase 9: 4 GB RAM Matrix** — Docker-constrained vector benchmarking vs OpenSearch/LanceDB.
+- **Phase 10: Streaming Commit & Delete Lifecycle** — HNSW overlay stability across snapshots, partition splits, and position/equality deletes.
 
-**Active & Upcoming Phases (Phases 11-12)**:
-- **Phase 11: Real-World Scale-Testing Lab (SEC EDGAR & EdgarStreamDB)** — 10+ years of SEC filings as the high-cardinality multi-vector & Graph RAG testing ground.
-- **Phase 12: Client Ecosystem & Packaged Distribution** — Official PyPI wheels and LangChain/LlamaIndex vector store connectors.
+**Active Roadmap (core-first, dependency-ordered)** — see the [Active Roadmap](#-active-roadmap--core-product-first-dependency-ordered) section above:
+- **Part A — Core Product**: A1 Core Engine Correctness & Concurrency → A2 Connector & Pushdown → A3 Advanced Search → A4 Native Ingest Orchestrator → A5 GPU & Hardware → A6 Catalog → A7 Graph RAG → A8 Correctness Suite → A9 Competitive Benchmarking → A10 Packaging & CI.
+- **Part B — Ecosystem, Vertical & Commercial**: B1 Client Ecosystem → B2 Codebase Intelligence & MCP → B3 High-Cardinality Scale Lighthouse → B4 Enterprise Security [Paid] → B5 Accelerator & Lifecycle [Paid].
 
 ---
 
@@ -781,24 +782,9 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - Graph RAG: Leiden vs. Louvain for community detection default? (Leiden is newer but more complex to implement)
 - Graph RAG: Should `PAGERANK` return results as a materialized sidecar or as a transient DataFrame?
 
-### 🚧 Technical Debt & Missing Features (Discovered via Code Comments)
-- **Index Join Enhancements:** Currently supports only single-column joins and uses inefficient String casting for mixed types (MVP limitations). Needs refactoring to use `RowConverter`.
-- **Complex Range Pushdown:** Missing interval tree support for pushing down complex `OR` clauses over ranges to the index scan.
-- **Cross-Partition Compaction:** Temporarily disabled. Requires ensuring partition transforms are fully reversible.
-- **Concurrent Manifest Writes:** Currently relies on a global table lock. Needs MVCC concurrency control for lock-free commits.
-- **Sparse Vectors Support:** Missing Arrow IPC serialization for `SparseVector`s. Also needs representation as Map or specialized Struct for DataFusion compatibility (`src/core/sql/optimizer/vector_search/sort_expr_parser.rs`).
-- **Configuration from SQL:** Parsing configuration from SQL hints is a planned future extension.
-- **Vector Search I/O Optimization:** Future plans to return `ScoredResults` directly from the reader to avoid Parquet I/O.
-- **GPU Acceleration for Sparse & Binary Vectors:** GPU acceleration is not yet implemented for sparse and binary vectors (`src/python_distance.rs`).
-- **Explain Plan Metrics for Pruning:** Track reasons why partition/file pruning didn't match during query planning for better observability (`src/core/planner.rs`).
-- **Early Pruning for L2 Distance Scans:** Accumulate `diff_sq` for an early pruning threshold optimization during exact searches (`src/core/planner.rs`).
-- **Graph Construction Profiling Hooks:** Add profiling hooks for HNSW graph construction and search phases (`src/core/index/hnsw_rs/hnsw.rs`).
-- **AWS Glue Snapshot Paths:** Compute the new metadata path from the snapshot rather than relying on current path assumptions (`src/core/catalog/glue.rs`).
-- **DataFusion Custom Operator Registration:** Transition UDFs to native custom operator registration when supported by DataFusion (`src/core/sql/vector_operators.rs`).
-- **Row-Value In-List Pushdown:** Implement proper Row-Value In-List support for Primary Key filtering (`src/core/table/primary_key.rs`).
-- **Time Datatype Support:** Add support for `Time32` and `Time64` datatypes which are currently unsupported during table writes (`src/core/table/write.rs`).
+> **Note:** The former "Technical Debt & Missing Features" list has been folded into **A1. Core Engine Correctness & Concurrency** (next steps) so all outstanding core work lives in one dependency-ordered place.
 
 ---
 
-**Last Updated:** 2026-09-20
-**Status:** Phases 1–10 COMPLETE ✅ | Active: Phase 12 (PyPI Wheels & Connectors) | Planned: Phase 11 (SEC EDGAR Scale Lab), Advanced Search & Query Features, Graph Analytics
+**Last Updated:** 2026-09-22
+**Status:** Phases 1–10 COMPLETE ✅ | Active: Part A Core Product (Native Ingest Orchestrator) + Part B Client Ecosystem | Planned: High-Cardinality Scale Lighthouse (scale objective satisfied by the full-site Wikipedia demo), Codebase Intelligence & MCP, Enterprise & Accelerator tiers

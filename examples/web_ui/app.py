@@ -25,6 +25,13 @@ used for query parsing and answer synthesis; configure via
 
 import json
 import os
+
+# Serving default: the engine's 1 GB index-cache cannot hold whole-site segment
+# indexes (69 segments x ~300 MB TQ8 graphs), so every query would evict and
+# re-deserialize them. Size it to 40 GB unless the operator set it explicitly.
+# On smaller hosts lower it via HYPERSTREAM_CACHE_GB, or use the pruned dataset.
+os.environ.setdefault("HYPERSTREAM_CACHE_GB", "40")
+
 import shutil
 
 import pandas as pd
@@ -44,14 +51,23 @@ st.title("HyperStreamDB — Wikipedia Graph RAG")
 
 # ── LLM (optional) ──────────────────────────────────────────────────────────
 def llm_config():
+    """LLM endpoint resolution: standard OpenAI env vars > secrets.toml > defaults.
+
+    Any OpenAI-compatible provider works — a local vLLM, or a hosted one like
+    OpenRouter (OPENAI_BASE_URL=https://openrouter.ai/api/v1,
+    OPENAI_API_KEY=sk-or-v1-…, OPENAI_MODEL=qwen/qwen3.8-27b:free).
+    """
     try:
         secrets = st.secrets.get("llm", {})
     except Exception:
         secrets = {}
     return {
-        "base_url": secrets.get("base_url", "http://127.0.0.1:18020/v1"),
-        "api_key": secrets.get("api_key", "empty"),
-        "model": secrets.get("model", "qwen3.8-27b"),
+        "base_url": os.environ.get("OPENAI_BASE_URL",
+                                   secrets.get("base_url", "http://127.0.0.1:18020/v1")),
+        "api_key": os.environ.get("OPENAI_API_KEY",
+                                  secrets.get("api_key", "empty")),
+        "model": os.environ.get("OPENAI_MODEL",
+                                secrets.get("model", "qwen3.8-27b")),
     }
 
 
