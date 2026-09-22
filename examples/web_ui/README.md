@@ -63,6 +63,13 @@ are skipped. Stages:
    Embedding shards are streamed in 250k-row batches and deleted only **after**
    the table commits. If load dies mid-run: `rm -rf data/wiki_graph_db/nodes`
    and rerun `--stage load` (edges table and shards are untouched).
+   The index config is persisted in the table (manifest schema) at the first
+   commit and restored on open, so every chunk process indexes its own segments.
+6. **compact** — final step: `rewrite_data_files` merges the many small
+   segments chunked loading produces (each query fans out over all of them) into
+   ~2×`--compact-min-bytes` (default 2 GB → 4 GB) segments, **rebuilding their
+   vector/inverted indexes** as it rewrites. Runs automatically at the end of
+   `--stage all`.
 
 Useful invocations:
 
@@ -86,17 +93,25 @@ traversals and vector search respond in milliseconds on the full graph.
 
 ### Optional: LLM endpoint
 
-Start any OpenAI-compatible server (e.g. vLLM) and point the app at it via
-`examples/web_ui/../../.streamlit/secrets.toml` (repo root `.streamlit/`):
+Any OpenAI-compatible provider works — a local vLLM or a hosted one. Set it
+with the **standard OpenAI environment variables** (precedence: env >
+`.streamlit/secrets.toml` > defaults):
 
-```toml
-[llm]
-base_url = "http://127.0.0.1:18020/v1"
-api_key  = "empty"
-model    = "qwen3.8-27b"
+```bash
+# local vLLM
+export OPENAI_BASE_URL=http://127.0.0.1:18020/v1
+export OPENAI_API_KEY=empty
+export OPENAI_MODEL=qwen3.8-27b
+
+# or a hosted provider, e.g. OpenRouter (free Qwen 27B):
+export OPENAI_BASE_URL=https://openrouter.ai/api/v1
+export OPENAI_API_KEY=sk-or-v1-...
+export OPENAI_MODEL=qwen/qwen3.8-27b:free
 ```
 
-Toggle the LLM off in the sidebar to run purely engine-side.
+Alternatively, put the same keys under `[llm]` in the repo-root
+`.streamlit/secrets.toml`. Toggle the LLM off in the sidebar (or
+`HDB_DEMO_LLM=0`) to run purely engine-side.
 
 ### Environment variables
 
@@ -105,6 +120,9 @@ Toggle the LLM off in the sidebar to run purely engine-side.
 | `HDB_DEMO_DB` | `data/wiki_graph_db` | location of the prepared tables |
 | `HDB_DEMO_EMBED_MODEL` | `all-MiniLM-L6-v2` | must match the model used in the embed stage |
 | `HDB_DEMO_LLM` | `1` | `0` disables LLM features by default |
+| `OPENAI_BASE_URL` | `http://127.0.0.1:18020/v1` | any OpenAI-compatible endpoint (e.g. `https://openrouter.ai/api/v1`) |
+| `OPENAI_API_KEY` | `empty` | provider key (OpenRouter: `sk-or-v1-…`) |
+| `OPENAI_MODEL` | `qwen3.8-27b` | e.g. `qwen/qwen3.8-27b:free` on OpenRouter |
 | `MALLOC_ARENA_MAX` | engine sets 2 at import | override only if you know better |
 | `HDB_EMBED_SHARD_ROWS` | `5000000` | embed-stage shard rotation size |
 | `HDB_LOAD_CHUNK_ROWS` | auto (from RAM) | load chunk size; `--load-chunk-rows` flag wins over this |
@@ -178,6 +196,20 @@ pruned path share the same app and engine APIs — only scale differs.
 ## Troubleshooting
 
 - **“Demo tables not found”** → run `python scripts/prepare_demo.py` first.
+- **Engine fixes seem to have no effect after `maturin develop`** → verify the
+  *installed* extension timestamp; maturin has been observed reporting
+  “Installed” while leaving a stale `.so`, so edits appear inert (this cost us
+  an evening). Force it explicitly:
+  `cargo build --features python && cp target/debug/libhyperstreamdb.so
+  .venv*/lib/python*/site-packages/hyperstreamdb/hyperstreamdb.abi3.so`
+- **Queries are slow / reading hundreds of GB** → check that segments actually
+  carry indexes: a nodes dir with far more `seg_*.parquet` files than
+  `*.tq8.centroids.parquet` files means segments were written without the index
+  config (fixed: the config persists in the manifest and is restored on open).
+  `--stage compact` rewrites and re-indexes them.
+- **Queries slow despite indexes** → the engine's index cache defaults to 1 GB;
+  the app sets `HYPERSTREAM_CACHE_GB=40` (69 segment indexes ≈ 20 GB). Set it
+  for any other client too.
 - **Load stage RAM climbs into tens of GB** → expected only if you forced
   `--load-chunk-rows 0`; the default fresh-process chunking exists precisely
   because glibc strands freed index-build memory in the main heap.
