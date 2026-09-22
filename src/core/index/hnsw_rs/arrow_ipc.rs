@@ -10,35 +10,107 @@ use std::sync::Arc;
 use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::hnsw_rs::hnsw::Hnsw;
 
+/// Serialization for the value type stored in an [`ArrowHnsw`](super::arrow_hnsw::ArrowHnsw).
+///
+/// The conversion is *owned* rather than a zero-copy reinterpretation: a
+/// variable-length type such as [`SparseVector`](crate::core::index::SparseVector)
+/// stores its elements in separate heap allocations, so there is no contiguous
+/// `&[Self]` view over raw bytes to hand back. Fixed-width types simply
+/// `bytemuck`-cast; sparse vectors use a self-describing encoding.
 pub trait ArrowType: Clone + Send + Sync + 'static {
-    fn as_bytes(slice: &[Self]) -> &[u8];
-    fn from_bytes(bytes: &[u8]) -> &[Self];
+    /// Encode a slice of values into a byte blob.
+    fn to_bytes(slice: &[Self]) -> Vec<u8>;
+    /// Decode a blob produced by [`ArrowType::to_bytes`].
+    fn from_bytes(bytes: &[u8]) -> Vec<Self>;
 }
 
 impl ArrowType for f32 {
-    fn as_bytes(slice: &[f32]) -> &[u8] {
-        bytemuck::cast_slice(slice)
+    fn to_bytes(slice: &[f32]) -> Vec<u8> {
+        bytemuck::cast_slice(slice).to_vec()
     }
-    fn from_bytes(bytes: &[u8]) -> &[f32] {
-        bytemuck::cast_slice(bytes)
+    fn from_bytes(bytes: &[u8]) -> Vec<f32> {
+        bytemuck::cast_slice(bytes).to_vec()
     }
 }
 
 impl ArrowType for u8 {
-    fn as_bytes(slice: &[u8]) -> &[u8] {
-        slice
+    fn to_bytes(slice: &[u8]) -> Vec<u8> {
+        slice.to_vec()
     }
-    fn from_bytes(bytes: &[u8]) -> &[u8] {
-        bytes
+    fn from_bytes(bytes: &[u8]) -> Vec<u8> {
+        bytes.to_vec()
     }
 }
 
 impl ArrowType for crate::core::index::SparseVector {
-    fn as_bytes(_slice: &[Self]) -> &[u8] {
-        unimplemented!("SparseVector Arrow IPC serialization is not yet supported")
+    /// Layout: `[u64 count]` then, per vector, `[u64 dim][u64 nnz]` followed by
+    /// `nnz` × (`[u32 index][f32 value]`), all little-endian.
+    fn to_bytes(slice: &[Self]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(slice.len() as u64).to_le_bytes());
+        for v in slice {
+            out.extend_from_slice(&(v.dim as u64).to_le_bytes());
+            out.extend_from_slice(&(v.indices.len() as u64).to_le_bytes());
+            for (idx, val) in v.indices.iter().zip(v.values.iter()) {
+                out.extend_from_slice(&idx.to_le_bytes());
+                out.extend_from_slice(&val.to_le_bytes());
+            }
+        }
+        out
     }
-    fn from_bytes(_bytes: &[u8]) -> &[Self] {
-        unimplemented!("SparseVector Arrow IPC deserialization is not yet supported")
+
+    fn from_bytes(bytes: &[u8]) -> Vec<Self> {
+        struct Reader<'a> {
+            b: &'a [u8],
+            p: usize,
+        }
+        impl Reader<'_> {
+            fn u64(&mut self) -> Option<u64> {
+                let s = self.b.get(self.p..self.p + 8)?;
+                self.p += 8;
+                Some(u64::from_le_bytes(s.try_into().ok()?))
+            }
+            fn u32(&mut self) -> Option<u32> {
+                let s = self.b.get(self.p..self.p + 4)?;
+                self.p += 4;
+                Some(u32::from_le_bytes(s.try_into().ok()?))
+            }
+            fn f32(&mut self) -> Option<f32> {
+                let s = self.b.get(self.p..self.p + 4)?;
+                self.p += 4;
+                Some(f32::from_le_bytes(s.try_into().ok()?))
+            }
+        }
+
+        let mut r = Reader { b: bytes, p: 0 };
+        let n = match r.u64() {
+            Some(n) => n as usize,
+            None => return Vec::new(),
+        };
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            let (dim, nnz) = match (r.u64(), r.u64()) {
+                (Some(d), Some(k)) => (d as usize, k as usize),
+                _ => break,
+            };
+            let mut indices = Vec::with_capacity(nnz);
+            let mut values = Vec::with_capacity(nnz);
+            for _ in 0..nnz {
+                match (r.u32(), r.f32()) {
+                    (Some(i), Some(v)) => {
+                        indices.push(i);
+                        values.push(v);
+                    }
+                    _ => break,
+                }
+            }
+            out.push(crate::core::index::SparseVector {
+                indices,
+                values,
+                dim,
+            });
+        }
+        out
     }
 }
 
@@ -115,7 +187,7 @@ pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(hnsw: &Hnsw<T, D>) -> Result
 
         // Vector
         let v = point.get_v();
-        vector_builder.append_value(T::as_bytes(v));
+        vector_builder.append_value(T::to_bytes(v));
 
         // Max layer
         let max_layer_for_point = point.get_point_id().0;
@@ -178,4 +250,52 @@ pub fn dump_arrow_ipc<T: ArrowType, D: Distance<T>>(hnsw: &Hnsw<T, D>) -> Result
     }
 
     Ok(buffer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::index::SparseVector;
+
+    fn sv(indices: Vec<u32>, values: Vec<f32>, dim: usize) -> SparseVector {
+        SparseVector {
+            indices,
+            values,
+            dim,
+        }
+    }
+
+    #[test]
+    fn f32_round_trip() {
+        let v = vec![1.0f32, 2.5, -3.0];
+        let bytes = <f32 as ArrowType>::to_bytes(&v);
+        assert_eq!(<f32 as ArrowType>::from_bytes(&bytes), v);
+    }
+
+    #[test]
+    fn sparse_vector_round_trip() {
+        let original = vec![
+            sv(vec![0, 5, 10], vec![1.0, 2.0, 3.0], 100),
+            sv(vec![], vec![], 50),
+            sv(vec![1], vec![-0.5], 7),
+        ];
+        let bytes = <SparseVector as ArrowType>::to_bytes(&original);
+        let decoded = <SparseVector as ArrowType>::from_bytes(&bytes);
+
+        assert_eq!(decoded.len(), original.len());
+        for (a, b) in original.iter().zip(decoded.iter()) {
+            assert_eq!(a.dim, b.dim);
+            assert_eq!(a.indices, b.indices);
+            assert_eq!(a.values, b.values);
+        }
+    }
+
+    #[test]
+    fn sparse_vector_truncated_blob_does_not_panic() {
+        let original = vec![sv(vec![0, 1], vec![1.0, 2.0], 10)];
+        let bytes = <SparseVector as ArrowType>::to_bytes(&original);
+        // Decoding a truncated blob must stop cleanly rather than panic.
+        let decoded = <SparseVector as ArrowType>::from_bytes(&bytes[..bytes.len() - 3]);
+        assert!(decoded.iter().all(|v| v.indices.len() < 2));
+    }
 }
