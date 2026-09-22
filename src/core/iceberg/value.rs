@@ -159,3 +159,26 @@ pub fn json_to_avro_value(v: &serde_json::Value) -> AvroValue {
         _ => AvroValue::Null,
     }
 }
+
+/// Encode a [`ManifestValue`](crate::core::manifest::ManifestValue) into
+/// Iceberg's single-value binary form — the exact inverse of
+/// [`decode_iceberg_value`].
+///
+/// Used to populate the manifest's `lower_bounds` / `upper_bounds`, which the
+/// reader turns back into `column_stats`. Returns `None` for values with no
+/// binary representation (e.g. `Null`).
+pub fn encode_iceberg_value(
+    value: &crate::core::manifest::ManifestValue,
+) -> Option<Vec<u8>> {
+    use crate::core::manifest::ManifestValue;
+    match value {
+        ManifestValue::Boolean(b) => Some(vec![u8::from(*b)]),
+        // Little-endian, matching `decode_iceberg_value` and the Iceberg spec.
+        ManifestValue::Int32(i) => Some(i.to_le_bytes().to_vec()),
+        ManifestValue::Int64(i) => Some(i.to_le_bytes().to_vec()),
+        ManifestValue::Float32(f) => Some(f.to_le_bytes().to_vec()),
+        ManifestValue::Float64(f) => Some(f.to_le_bytes().to_vec()),
+        ManifestValue::String(s) => Some(s.as_bytes().to_vec()),
+        ManifestValue::Null => None,
+    }
+}

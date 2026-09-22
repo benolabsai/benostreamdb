@@ -340,7 +340,13 @@ impl HybridSegmentWriter {
         let mut props_builder = parquet::file::properties::WriterProperties::builder()
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
             .set_dictionary_enabled(false)
-            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::None)
+            // Chunk-level statistics (per column chunk min/max, null counts).
+            // These were disabled, which meant `merge_parquet_stats` had nothing
+            // to read and every manifest entry ended up with empty `ColumnStats`
+            // — making the planner's whole stats-pruning branch inert (only
+            // partition pruning did any work). Chunk granularity is what
+            // row-group pruning needs, at far less overhead than per-page stats.
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
             .set_data_page_size_limit(8192); // 8KB pages for highly granular random access
 
         // Enable Bloom Filters for Primary Keys if defined

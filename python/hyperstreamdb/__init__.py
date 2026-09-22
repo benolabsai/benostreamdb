@@ -409,7 +409,10 @@ class Table:
     """
     def __init__(self, uri: str, inner_table: Optional[_RustTable] = None, device: Optional[Any] = None, index_all: bool = False, primary_key: Optional[str] = None, explain: bool = False):
         uri = _resolve_uri(uri)
-        self.explain = explain
+        # Stored privately: a public `self.explain` attribute would shadow the
+        # `explain()` method below (Python resolves instance attributes before
+        # class methods), making the engine plan unreachable as `t.explain(...)`.
+        self._explain = explain
         if inner_table:
             self._inner = inner_table
         else:
@@ -2257,7 +2260,7 @@ class Table:
                 if func:
                     # Vectorize the query string
                     vector_filter["query"] = func([vector_filter["query"]])[0].tolist()
-                    if self.explain:
+                    if self._explain:
                         print(f"[Explain] Vectorized query using device: {target_col}")
                     
         return vector_filter
@@ -2291,7 +2294,7 @@ class Table:
             })
         """
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
-        if self.explain:
+        if self._explain:
             # Call native Rust explain logic
             print(self._inner.explain(filter, vf))
             
@@ -2321,6 +2324,26 @@ class Table:
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
         # to_arrow in Rust doesn't currently take **kwargs
         return self._inner.to_arrow(filter, vf, columns, device=device)
+
+    def explain(self, filter: Optional[str] = None, vector_filter: Optional[Dict[str, Any]] = None) -> str:
+        """Return the engine's query plan, including *why* segments were pruned.
+
+        Args:
+            filter: optional scalar WHERE clause
+            vector_filter: optional vector-search params dict (same shape as
+                :meth:`to_pandas`)
+
+        Returns:
+            The plan as a string, with a per-reason pruning breakdown.
+
+        Example::
+
+            print(table.explain("id BETWEEN 100 AND 105"))
+            #   -> Pruning Activity: 2 segments pruned via Partition/Stats mapping
+            #        - 2 segment(s): column max < filter min
+        """
+        vf = self._prepare_vector_filter(vector_filter) if vector_filter else None
+        return self._inner.explain(filter, vf)
 
     def sql(self, query: str) -> Any:
         """

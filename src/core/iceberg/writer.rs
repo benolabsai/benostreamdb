@@ -548,22 +548,19 @@ impl IcebergWriter {
                 "value_counts",
                 apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
             );
-            data_file.put(
-                "null_value_counts",
-                apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-            );
+            // Per-column bounds and null counts. The reader reconstructs
+            // `column_stats` from these three, so writing Null here (as this
+            // code used to) silently discarded every min/max and left the
+            // planner's stats-pruning branch with nothing to work on.
+            let (null_counts, lower_bounds, upper_bounds) =
+                bounds_avro_values(&entry.column_stats, schema);
+            data_file.put("null_value_counts", null_counts);
             data_file.put(
                 "nan_value_counts",
                 apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
             );
-            data_file.put(
-                "lower_bounds",
-                apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-            );
-            data_file.put(
-                "upper_bounds",
-                apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-            );
+            data_file.put("lower_bounds", lower_bounds);
+            data_file.put("upper_bounds", upper_bounds);
 
             let mut partition_record_values = Vec::new();
             for field in &partition_spec.fields {
@@ -848,6 +845,68 @@ impl IcebergWriter {
             partition_fields_json
         )
     }
+}
+
+/// Build the manifest's `null_value_counts`, `lower_bounds` and `upper_bounds`
+/// Avro values from a segment's `column_stats`, keyed by Iceberg field id.
+///
+/// This is the write side of the pair that
+/// [`crate::core::iceberg::manifest`] reads: it reconstructs `column_stats`
+/// from exactly these three maps, and only when all three are present.
+fn bounds_avro_values(
+    stats: &std::collections::HashMap<String, crate::core::manifest::ColumnStats>,
+    schema: &crate::core::manifest::Schema,
+) -> (
+    apache_avro::types::Value,
+    apache_avro::types::Value,
+    apache_avro::types::Value,
+) {
+    use apache_avro::types::Value as AvroValue;
+    use crate::core::iceberg::value::encode_iceberg_value;
+
+    let mut nulls: Vec<AvroValue> = Vec::new();
+    let mut lowers: Vec<AvroValue> = Vec::new();
+    let mut uppers: Vec<AvroValue> = Vec::new();
+
+    for (col_name, col_stats) in stats {
+        let Some(field) = schema.fields.iter().find(|f| &f.name == col_name) else {
+            continue; // not addressable by field id; skip rather than guess
+        };
+
+        nulls.push(AvroValue::Record(vec![
+            ("key".to_string(), AvroValue::Int(field.id)),
+            ("value".to_string(), AvroValue::Long(col_stats.null_count)),
+        ]));
+        if let Some(bytes) = col_stats
+            .min
+            .as_ref()
+            .and_then(encode_iceberg_value)
+        {
+            lowers.push(AvroValue::Record(vec![
+                ("key".to_string(), AvroValue::Int(field.id)),
+                ("value".to_string(), AvroValue::Bytes(bytes)),
+            ]));
+        }
+        if let Some(bytes) = col_stats
+            .max
+            .as_ref()
+            .and_then(encode_iceberg_value)
+        {
+            uppers.push(AvroValue::Record(vec![
+                ("key".to_string(), AvroValue::Int(field.id)),
+                ("value".to_string(), AvroValue::Bytes(bytes)),
+            ]));
+        }
+    }
+
+    let wrap = |v: Vec<AvroValue>| {
+        if v.is_empty() {
+            AvroValue::Union(0, Box::new(AvroValue::Null))
+        } else {
+            AvroValue::Union(1, Box::new(AvroValue::Array(v)))
+        }
+    };
+    (wrap(nulls), wrap(lowers), wrap(uppers))
 }
 
 /// Avro type for a partition field, derived from its transform.
