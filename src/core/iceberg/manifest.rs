@@ -321,8 +321,21 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
     })
 }
 
+/// Unwrap the nullable-union wrapper Avro puts around every `["null", T]` field.
+///
+/// These fields are declared nullable in the manifest schema, so apache-avro
+/// hands them back as `Union(1, Box(Array(..)))` rather than a bare `Array`.
+/// Without this the parsers silently returned `None` for every stats map, which
+/// left `column_stats` empty and made the planner's stats pruning inert.
+fn unwrap_nullable_union(val: AvroValue) -> AvroValue {
+    match val {
+        AvroValue::Union(_, inner) => *inner,
+        other => other,
+    }
+}
+
 fn parse_map_int_long(val: AvroValue) -> Option<std::collections::HashMap<i32, i64>> {
-    if let AvroValue::Array(items) = val {
+    if let AvroValue::Array(items) = unwrap_nullable_union(val) {
         let mut map = std::collections::HashMap::new();
         for item in items {
             if let AvroValue::Record(fields) = item {
@@ -352,7 +365,7 @@ fn parse_map_int_long(val: AvroValue) -> Option<std::collections::HashMap<i32, i
 }
 
 fn parse_map_int_bytes(val: AvroValue) -> Option<std::collections::HashMap<i32, Vec<u8>>> {
-    if let AvroValue::Array(items) = val {
+    if let AvroValue::Array(items) = unwrap_nullable_union(val) {
         let mut map = std::collections::HashMap::new();
         for item in items {
             if let AvroValue::Record(fields) = item {

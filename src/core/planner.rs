@@ -492,7 +492,47 @@ fn extract_filters_from_expr(expr: &Expr, filters: &mut Vec<QueryFilter>) {
                 filters.push(f);
             }
         }
+        // `BETWEEN` is not lowered to `>= AND <=` by DataFusion, so without this
+        // arm a range predicate produced no QueryFilter at all and skipped both
+        // partition and statistics pruning.
+        Expr::Between(between) if !between.negated => {
+            if let (Some(col), Some(min), Some(max)) = (
+                expr_column_name(&between.expr),
+                expr_literal_json(&between.low),
+                expr_literal_json(&between.high),
+            ) {
+                filters.push(QueryFilter {
+                    column: col,
+                    min: Some(min),
+                    min_inclusive: true,
+                    max: Some(max),
+                    max_inclusive: true,
+                    values: None,
+                    negated: false,
+                });
+            }
+        }
         _ => {} // Other expressions can't be easily converted to our QueryFilter leaf
+    }
+}
+
+/// Strip casts and return the underlying column name.
+fn expr_column_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Column(c) => Some(c.name.clone()),
+        Expr::Cast(cast) => expr_column_name(&cast.expr),
+        Expr::TryCast(cast) => expr_column_name(&cast.expr),
+        _ => None,
+    }
+}
+
+/// Strip casts and return the literal as a JSON value.
+fn expr_literal_json(expr: &Expr) -> Option<Value> {
+    match expr {
+        Expr::Literal(scalar, _) => scalar_to_json_value(scalar),
+        Expr::Cast(cast) => expr_literal_json(&cast.expr),
+        Expr::TryCast(cast) => expr_literal_json(&cast.expr),
+        _ => None,
     }
 }
 
