@@ -130,3 +130,31 @@ test_bm25*
 mem_report.txt
 benchmark_raw.json
 docs/roo_task_*.md
+
+# Local secrets — never commit
+.streamlit/secrets.toml
+.env
+.env.local
+
+# Local data, scratch & generated artifacts — never commit
+data/
+.venv-cuda-shims/
+.agents/
+benchmark_results/
+test_ingestion_db/
+scratch*.rs
+/test
+test.rs
+test_avro.py
+test_investigate.py
+test_mmap.py
+test_vectors.py
+debug_read*.py
+patch_*.py
+patch_*.sh
+fix_*.py
+extract_comments.py
+analyze_comments.py
+all_comments.txt
+interesting_comments.txt
+user_msg.txt
