@@ -947,6 +947,110 @@ fn partition_field_avro_type(
     }
 }
 
+#[cfg(test)]
+mod bounds_roundtrip_tests {
+    use super::*;
+    use crate::core::manifest::{
+        ColumnStats, ManifestEntry, ManifestValue, PartitionSpec, Schema, SchemaField,
+    };
+
+    fn one_field_schema() -> Schema {
+        Schema {
+            schema_id: 0,
+            fields: vec![SchemaField {
+                id: 1,
+                name: "id".to_string(),
+                type_str: "long".to_string(),
+                required: false,
+                indexes: Vec::new(),
+                fields: Vec::new(),
+                initial_default: None,
+                write_default: None,
+            }],
+            identifier_field_ids: Vec::new(),
+        }
+    }
+
+    /// Does a column with a known min/max actually end up with bounds in the
+    /// written manifest? `bounds_avro_values` building them (observed via a
+    /// temporary eprintln) is not the same as them surviving serialization.
+    #[test]
+    fn chunks_write_lower_and_upper_bounds() {
+        let schema = one_field_schema();
+
+        let mut stats = std::collections::HashMap::new();
+        stats.insert(
+            "id".to_string(),
+            ColumnStats {
+                min: Some(ManifestValue::Int64(40)),
+                max: Some(ManifestValue::Int64(42)),
+                null_count: 0,
+                distinct_count: None,
+                vector_stats: None,
+            },
+        );
+
+        let entry = ManifestEntry {
+            file_path: "seg_x.parquet".to_string(),
+            file_size_bytes: 10,
+            record_count: 3,
+            column_stats: stats,
+            ..Default::default()
+        };
+
+        let chunks = IcebergWriter::new()
+            .write_manifest_chunks(
+                &[entry],
+                &PartitionSpec::default(),
+                &schema,
+                1,
+                1,
+                1_000_000,
+            )
+            .expect("write_manifest_chunks");
+
+        assert!(!chunks.is_empty(), "expected at least one manifest chunk");
+
+        let mut saw_lower = false;
+        let mut saw_upper = false;
+        for (bytes, _, _) in &chunks {
+            let reader = apache_avro::Reader::new(&bytes[..]).expect("avro reader");
+            for rec in reader {
+                let apache_avro::types::Value::Record(top) = rec.expect("avro record") else {
+                    continue;
+                };
+                // Top level is {status, snapshot_id, ..., data_file}.
+                let Some(apache_avro::types::Value::Record(fields)) = top
+                    .iter()
+                    .find(|(k, _)| k == "data_file")
+                    .map(|(_, v)| v)
+                else {
+                    continue;
+                };
+                for (key, value) in fields.iter() {
+                    let non_empty_array = matches!(
+                        value,
+                        apache_avro::types::Value::Union(_, inner)
+                            if matches!(inner.as_ref(), apache_avro::types::Value::Array(a) if !a.is_empty())
+                    );
+                    if key == "lower_bounds" && non_empty_array {
+                        saw_lower = true;
+                    }
+                    if key == "upper_bounds" && non_empty_array {
+                        saw_upper = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_lower && saw_upper,
+            "manifest did not carry non-empty bounds for a column with min/max \
+             (lower={saw_lower}, upper={saw_upper})"
+        );
+    }
+}
+
 /// GPU Accelerated Puffin Index Writer for Iceberg
 pub struct GpuPuffinWriter {
     // Orchestrates GPU-based index builds (HNSW, Bloom)

@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Statistics pruning was inert — four independent faults, all fixed.** Per-column
+  min/max never reached the planner, so only partition pruning did any work:
+  1. Parquet statistics were **disabled** (`EnabledStatistics::None`) → now `Chunk`.
+  2. The Avro manifest writer hardcoded `lower_bounds` / `upper_bounds` /
+     `null_value_counts` to `Null`, and the reader rebuilds `column_stats` from
+     exactly those three → added `encode_iceberg_value` (mirror of the existing
+     `decode_iceberg_value`) and `bounds_avro_values`.
+  3. The reader never unwrapped Avro's nullable-union wrapper: `parse_map_int_long`
+     / `parse_map_int_bytes` matched a bare `Array`, but a `["null", T]` field
+     decodes as `Union(1, Box(Array(..)))`, so every stats map silently parsed as
+     `None` → `unwrap_nullable_union`.
+  4. `BETWEEN` produced no `QueryFilter` at all (DataFusion does not lower it to
+     `>= AND <=`) → added an `Expr::Between` arm.
+  Result: `id >= 100` prunes 5/5 segments ("column max < filter min"),
+  `id = 15` prunes 4/5, `id >= 40` keeps exactly the matching segment; query
+  results unchanged.
 - **AWS Glue `metadata_location` is now authoritative**: Glue is the only
   catalog whose commit API cannot return a metadata location (REST/Nessie
   return it; Hive/JDBC set it directly), so the client must supply one. The
