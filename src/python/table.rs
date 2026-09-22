@@ -757,6 +757,71 @@ impl PyTable {
         self.to_pandas(py, filter, Some(vf_dict), None, device, None)
     }
 
+    /// Vector search returning only `(segment_id, row_id, score)`.
+    ///
+    /// This reads nothing but the HNSW/BM25 index — no Parquet I/O at all. Use
+    /// it for seed discovery, RRF fusion, or candidate reranking where payload
+    /// columns are not needed; fetch the rows afterwards only for the winners.
+    ///
+    /// Args:
+    ///     column: vector column to search
+    ///     query: query vector
+    ///     k: number of neighbours
+    ///     metric: optional distance metric name ("l2", "cosine", "inner_product",
+    ///             "l1", "hamming", "jaccard"); defaults to L2
+    ///
+    /// Returns:
+    ///     PyArrow Table with columns `segment_id`, `row_id`, `score`
+    #[pyo3(signature = (column, query, k, metric=None))]
+    fn vector_search_scored(
+        &self,
+        py: Python<'_>,
+        column: String,
+        query: Vec<f32>,
+        k: usize,
+        metric: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        use crate::core::index::{VectorValue, VectorMetric};
+        use crate::core::planner::VectorSearchParams;
+
+        let metric = match metric {
+            Some(m) => crate::python::helpers::parse_metric(&m)?,
+            None => VectorMetric::L2,
+        };
+
+        let params =
+            VectorSearchParams::new(&column, VectorValue::Float32(query), k).with_metric(metric);
+
+        let results = py
+            .allow_threads(|| TOKIO_RUNTIME.block_on(self.table.execute_vector_search_as_scored(params)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let segments: Vec<&str> = results.iter().map(|r| r.segment_id.as_str()).collect();
+        let row_ids: Vec<u32> = results.iter().map(|r| r.row_id).collect();
+        let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("segment_id", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("row_id", arrow::datatypes::DataType::UInt32, false),
+            arrow::datatypes::Field::new("score", arrow::datatypes::DataType::Float32, false),
+        ]));
+
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(arrow::array::StringArray::from(segments))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::UInt32Array::from(row_ids))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::Float32Array::from(scores))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+            ],
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        arrow_batches_to_pyarrow(py, vec![batch], schema)
+    }
+
     /// Parallel vector search - runs multiple queries in parallel in Rust (bypasses Python GIL)
     ///
     /// This method submits all queries to a dedicated Rust thread pool, allowing

@@ -452,8 +452,11 @@ hdb repair s3://bucket/table
 
 **Next Steps**
 - [ ] **Vector Search I/O Optimization**: Return `ScoredResults` directly from the reader to avoid Parquet I/O.
-- [ ] **DataFusion Custom Operator Registration**: Transition UDFs to native custom operator registration (`src/core/sql/vector_operators.rs`).
-- [ ] **Explain Plan Metrics for Pruning**: Track why partition/file pruning didn't match (`src/core/planner.rs`).
+- [ ] **DataFusion Custom Operator Registration** — **BLOCKED UPSTREAM**: DataFusion 52.5.0 has no custom-operator extension point. `grep -rn "register_operator"` across the entire vendored crate returns nothing; the only registration surface is `SessionContext::register_udf`, and the `Operator` enum is closed. The pgvector rewriter (`src/core/sql/pgvector_rewriter.rs`) + UDFs *is* the workaround, and it is already in place. This item cannot be implemented on this DataFusion version.
+- [x] **Explain Plan Metrics for Pruning**: `QueryPlanner::classify_condition(entry, filter, emit_metrics)` returns a `PruneReason`, and `explain()` prints a ranked breakdown ("2 segment(s): partition value > max") instead of a bare count. `emit_metrics=false` on the diagnostic path so EXPLAIN doesn't inflate the operational counters. ✅
+- [ ] **Empty `column_stats` makes stats pruning inert** *(found while verifying the above)*: freshly written segments report `min: {}` / `max: {}`, so `classify_condition`'s fine-grained stats branch (`StatsAllNull`/`StatsBelowMin`/`StatsAboveMax`/`StatsNotInList`) can never fire — only partition pruning does real work. Needs the writer to populate `column_stats` (`merge_parquet_stats`) end-to-end.
+- [ ] **`Table.explain` is shadowed on the Python wrapper**: `Table.__init__(..., explain: bool = False)` sets `self.explain`, so the `explain()` engine method is unreachable as `t.explain(...)` (it resolves to the bool). Rename the constructor flag or expose the method under a distinct name.
+- [ ] **EXPLAIN / EXPLAIN ANALYZE as SQL**: verified working through `execute_sql` (`EXPLAIN SELECT ...` returns the logical + physical plan; `EXPLAIN ANALYZE` returns "Plan with Metrics" including `output_rows`/`elapsed_compute`). Worth surfacing the pruning breakdown into the DataFusion plan too, so one EXPLAIN shows everything.
 - [ ] **Early Pruning for L2 Distance Scans**: Accumulate `diff_sq` early-pruning threshold (`src/core/planner.rs`).
 - [ ] **Graph Construction Profiling Hooks**: Profiling for HNSW build/search phases (`src/core/index/hnsw_rs/hnsw.rs`).
 - [ ] **AWS Glue Snapshot Paths**: Compute new metadata path from the snapshot (`src/core/catalog/glue.rs`).
