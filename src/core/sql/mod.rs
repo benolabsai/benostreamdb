@@ -18,6 +18,11 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use roaring::RoaringBitmap;
+use serde_json::Value;
+
+use crate::core::planner::QueryFilter;
+
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
@@ -27,6 +32,179 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use crate::core::sql::physical_plan::HyperStreamExec;
 use crate::core::table::Table;
+
+/// A range bound on a single column, used for OR-over-ranges pruning.
+#[derive(Debug, Clone)]
+struct RangeBound {
+    min: Option<Value>,
+    min_inclusive: bool,
+    max: Option<Value>,
+    max_inclusive: bool,
+}
+
+fn scalar_to_json(scalar: &datafusion::scalar::ScalarValue) -> Option<Value> {
+    use datafusion::scalar::ScalarValue as SV;
+    match scalar {
+        SV::Int8(Some(i)) => Some(Value::from(*i as i64)),
+        SV::Int16(Some(i)) => Some(Value::from(*i as i64)),
+        SV::Int32(Some(i)) => Some(Value::from(*i as i64)),
+        SV::Int64(Some(i)) => Some(Value::from(*i)),
+        SV::UInt8(Some(i)) => Some(Value::from(*i as i64)),
+        SV::UInt16(Some(i)) => Some(Value::from(*i as i64)),
+        SV::UInt32(Some(i)) => Some(Value::from(*i as i64)),
+        SV::UInt64(Some(i)) => Some(Value::from(*i)),
+        SV::Float32(Some(f)) => Some(Value::from(*f as f64)),
+        SV::Float64(Some(f)) => Some(Value::from(*f)),
+        SV::Utf8(Some(s)) | SV::LargeUtf8(Some(s)) => Some(Value::from(s.clone())),
+        SV::Boolean(Some(b)) => Some(Value::from(*b)),
+        SV::Date32(Some(d)) => Some(Value::from(*d as i64)),
+        SV::TimestampMicrosecond(Some(t), _)
+        | SV::TimestampMillisecond(Some(t), _)
+        | SV::TimestampSecond(Some(t), _)
+        | SV::TimestampNanosecond(Some(t), _) => Some(Value::from(*t)),
+        _ => None,
+    }
+}
+
+fn column_of(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Column(c) => Some(c.name.clone()),
+        Expr::Cast(c) => column_of(&c.expr),
+        Expr::TryCast(c) => column_of(&c.expr),
+        _ => None,
+    }
+}
+
+fn literal_of(e: &Expr) -> Option<Value> {
+    match e {
+        Expr::Literal(s, _) => scalar_to_json(s),
+        Expr::Cast(c) => literal_of(&c.expr),
+        Expr::TryCast(c) => literal_of(&c.expr),
+        _ => None,
+    }
+}
+
+/// Interpret an expression as a range on a single column.
+///
+/// Handles `BETWEEN` and the comparison operators, plus an `AND` of two bounds
+/// on the same column (how `BETWEEN` is often lowered).
+fn expr_to_range(e: &Expr) -> Option<(String, RangeBound)> {
+    use datafusion::logical_expr::Operator as Op;
+    match e {
+        Expr::Between(b) if !b.negated => {
+            let col = column_of(&b.expr)?;
+            let min = literal_of(&b.low)?;
+            let max = literal_of(&b.high)?;
+            Some((
+                col,
+                RangeBound {
+                    min: Some(min),
+                    min_inclusive: true,
+                    max: Some(max),
+                    max_inclusive: true,
+                },
+            ))
+        }
+        Expr::BinaryExpr(b) if b.op == Op::And => {
+            let (lc, lr) = expr_to_range(&b.left)?;
+            let (rc, rr) = expr_to_range(&b.right)?;
+            if lc != rc {
+                return None;
+            }
+            let (min, min_inclusive) = match (lr.min, rr.min) {
+                (Some(m), _) => (Some(m), lr.min_inclusive),
+                (None, m) => (m, rr.min_inclusive),
+            };
+            let (max, max_inclusive) = match (lr.max, rr.max) {
+                (Some(m), _) => (Some(m), lr.max_inclusive),
+                (None, m) => (m, rr.max_inclusive),
+            };
+            Some((
+                lc,
+                RangeBound {
+                    min,
+                    min_inclusive,
+                    max,
+                    max_inclusive,
+                },
+            ))
+        }
+        Expr::BinaryExpr(b) => {
+            let col = column_of(&b.left)?;
+            let val = literal_of(&b.right)?;
+            match b.op {
+                Op::Gt => Some((
+                    col,
+                    RangeBound {
+                        min: Some(val),
+                        min_inclusive: false,
+                        max: None,
+                        max_inclusive: false,
+                    },
+                )),
+                Op::GtEq => Some((
+                    col,
+                    RangeBound {
+                        min: Some(val),
+                        min_inclusive: true,
+                        max: None,
+                        max_inclusive: false,
+                    },
+                )),
+                Op::Lt => Some((
+                    col,
+                    RangeBound {
+                        min: None,
+                        min_inclusive: false,
+                        max: Some(val),
+                        max_inclusive: false,
+                    },
+                )),
+                Op::LtEq => Some((
+                    col,
+                    RangeBound {
+                        min: None,
+                        min_inclusive: false,
+                        max: Some(val),
+                        max_inclusive: true,
+                    },
+                )),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extract a same-column disjunction of ranges, e.g.
+/// `(id BETWEEN 1 AND 5) OR (id BETWEEN 50 AND 55)`.
+///
+/// Returns `None` unless the whole expression is a disjunction of two or more
+/// ranges that all target the same column — anything else is left to
+/// DataFusion's own filtering.
+fn extract_or_ranges(expr: &Expr) -> Option<(String, Vec<RangeBound>)> {
+    use datafusion::logical_expr::Operator as Op;
+
+    fn collect(e: &Expr, out: &mut Vec<RangeBound>) -> Option<String> {
+        if let Expr::BinaryExpr(b) = e {
+            if b.op == Op::Or {
+                let l = collect(&b.left, out)?;
+                let r = collect(&b.right, out)?;
+                return if l == r { Some(l) } else { None };
+            }
+        }
+        let (col, r) = expr_to_range(e)?;
+        out.push(r);
+        Some(col)
+    }
+
+    let mut out = Vec::new();
+    let col = collect(expr, &mut out)?;
+    if out.len() < 2 {
+        return None;
+    }
+    Some((col, out))
+}
 
 #[derive(Debug)]
 pub struct HyperStreamTableProvider {
@@ -149,6 +327,67 @@ impl TableProvider for HyperStreamTableProvider {
                 before
             );
             segments = kept;
+        }
+
+        // Complex range pushdown (A1.6): a disjunction of ranges on one column,
+        // e.g. `(id BETWEEN 1 AND 5) OR (id BETWEEN 50 AND 55)`. DataFusion
+        // already post-filters this correctly; here we additionally use the
+        // column's index to skip segments whose values cannot match *any*
+        // disjunct, so they are never read.
+        if let Some((col, ranges)) = filters.iter().find_map(extract_or_ranges) {
+            if indexed_cols.contains(&col) {
+                let before = segments.len();
+                let mut kept = Vec::with_capacity(before);
+                for segment in segments {
+                    let mut matched = true;
+                    if let Ok(reader) = self.table.segment_reader(&segment) {
+                        let mut union: Option<RoaringBitmap> = None;
+                        let mut prunable = true;
+                        for r in &ranges {
+                            let qf = QueryFilter {
+                                column: col.clone(),
+                                min: r.min.clone(),
+                                min_inclusive: r.min_inclusive,
+                                max: r.max.clone(),
+                                max_inclusive: r.max_inclusive,
+                                values: None,
+                                negated: false,
+                            };
+                            match reader.get_scalar_filter_bitmap(&qf).await {
+                                Ok(Some(bm)) => {
+                                    union = Some(match union {
+                                        Some(u) => u | bm,
+                                        None => bm,
+                                    });
+                                }
+                                // No index for this column (or a read error):
+                                // we cannot prune safely, so keep the segment.
+                                _ => {
+                                    prunable = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if prunable {
+                            if let Some(u) = union {
+                                let deleted =
+                                    reader.load_merged_deletes().await.unwrap_or_default();
+                                matched = !(u - deleted).is_empty();
+                            }
+                        }
+                    }
+                    if matched {
+                        kept.push(segment);
+                    }
+                }
+                tracing::info!(
+                    "SQL Scan: OR-range pushdown on '{}' pruned {}/{} segment(s)",
+                    col,
+                    before - kept.len(),
+                    before
+                );
+                segments = kept;
+            }
         }
 
         // Determine parallelism
