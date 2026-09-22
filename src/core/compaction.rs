@@ -348,11 +348,42 @@ impl Compactor {
             }
             let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id)
                 .with_index_all(self.index_all)
-                .with_columns_to_index(cols_to_index);
-            let writer = HybridSegmentWriter::new(writer_config)
+                .with_columns_to_index(cols_to_index.clone())
+                // index finishing re-reads the segment parquet by this name
+                .with_parquet_path(format!("{}.parquet", new_segment_id));
+            let mut writer = HybridSegmentWriter::new(writer_config)
                 .with_index_configs(self.index_configs.clone());
+            writer.set_store(self.store.clone());
 
             writer.write_batch(&chunk_batch)?;
+
+            // Upload the data parquet FIRST: index finishing re-reads the
+            // segment from the store (the table's flush path likewise uploads
+            // data before building indexes).
+            {
+                let main_name = format!("{}.parquet", new_segment_id);
+                let local = writer
+                    .get_generated_files()
+                    .into_iter()
+                    .find(|f| f.ends_with(&main_name));
+                if let Some(local) = local {
+                    let remote = if self.base_path.is_empty() {
+                        Path::from(main_name.clone())
+                    } else {
+                        Path::from(format!("{}/{}", self.base_path, main_name))
+                    };
+                    let content = fs::read(&local).await?;
+                    self.store.put(&remote, content.into()).await?;
+                }
+            }
+
+            // write_batch writes DATA only: mirror the table's flush path by
+            // explicitly building and finishing indexes, otherwise compacted
+            // segments silently lose their vector/inverted indexes.
+            if self.index_all || !cols_to_index.is_empty() {
+                writer.build_indexes(&chunk_batch, 0)?;
+                writer.finish_indexing().await?;
+            }
 
             // C. Upload Artifacts to Object Store
             let generated_files = writer.get_generated_files();
@@ -369,7 +400,19 @@ impl Compactor {
                     .ok_or_else(|| {
                         anyhow::anyhow!("Invalid generated file path: {}", local_path)
                     })?;
-                let file_size = fs::metadata(&local_path).await?.len();
+                // finish_indexing uploads some artifacts itself (e.g. the BM25
+                // inverted sidecars) and removes their local staging copies, so
+                // a listed path may already be gone — skip rather than fail.
+                let file_size = match fs::metadata(&local_path).await {
+                    Ok(m) => m.len(),
+                    Err(_) => {
+                        tracing::debug!(
+                            "compaction: staging file already consumed/uploaded, skipping {}",
+                            local_path
+                        );
+                        continue;
+                    }
+                };
 
                 let remote_path = if self.base_path.is_empty() {
                     Path::from(file_name)

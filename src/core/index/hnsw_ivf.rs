@@ -387,13 +387,16 @@ impl HnswIvfIndex {
                 dim = current_dim;
             }
 
-            let mut vec_buf = vec![0u8; current_dim * 4];
-            file.read_exact(&mut vec_buf)?;
+            // Read into an f32-ALIGNED buffer: Vec<u8> has alignment 1 in Rust's
+            // layout, so casting it to &[f32] panics intermittently
+            // ("cast_slice>TargetAlignmentGreaterAndInputNotAligned").
+            let mut vec_f32 = vec![0f32; current_dim];
+            file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
 
             n_vectors += 1;
 
             if vectors_sampled.len() < max_samples {
-                let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
+                let vec: &[f32] = &vec_f32;
                 vectors_sampled.push(vec.to_vec());
             }
         }
@@ -466,9 +469,10 @@ impl HnswIvfIndex {
             if file.read_exact(&mut dim_buf).is_err() {
                 break;
             }
-            let mut vec_buf = vec![0u8; dim * 4];
-            file.read_exact(&mut vec_buf)?;
-            let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
+            let mut vec_f32 = vec![0f32; dim];
+            file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+            let vec: &[f32] = &vec_f32;
+            let vec_buf = bytemuck::cast_slice::<f32, u8>(&vec_f32); // byte view for re-write
 
             let best_cluster = find_closest_centroid(vec, &centroids, metric);
             if let Some((_, ref mut f)) = cluster_files.get_mut(&best_cluster) {
@@ -497,11 +501,10 @@ impl HnswIvfIndex {
                 if f.read_exact(&mut id_buf).is_err() {
                     break;
                 }
-                let mut vec_buf = vec![0u8; dim * 4];
-                f.read_exact(&mut vec_buf)?;
-                let vec: &[f32] = bytemuck::cast_slice(&vec_buf);
+                let mut vec_f32 = vec![0f32; dim];
+                f.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
                 c_row_ids.push(u32::from_le_bytes(id_buf) as usize);
-                c_vectors.push(vec.to_vec());
+                c_vectors.push(vec_f32);
             }
 
             if !c_vectors.is_empty() {
