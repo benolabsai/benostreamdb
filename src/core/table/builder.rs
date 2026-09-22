@@ -345,6 +345,39 @@ impl TableBuilder {
         let (initial_buffer, initial_mem_index, schema_val) =
             recover_wal_state(recovered_stream, schema_val);
 
+        // Restore the persisted index configuration from the manifest schema so
+        // an opened table inherits the indexes its segments were built with
+        // (previously the config was in-memory only and lost on reopen).
+        let (restored_index_columns, restored_index_configs) = {
+            let mut cols: Vec<String> = Vec::new();
+            let mut cfgs: HashMap<String, crate::core::table::state::ColumnIndexConfig> =
+                HashMap::new();
+            if let Some(schema) = manifest.schemas.last() {
+                for f in &schema.fields {
+                    if !f.indexes.is_empty() {
+                        cols.push(f.name.clone());
+                        cfgs.insert(
+                            f.name.clone(),
+                            crate::core::table::state::ColumnIndexConfig {
+                                device: None,
+                                tokenizer: None,
+                                enabled: true,
+                                algorithms: f.indexes.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+            if !cols.is_empty() {
+                tracing::info!(
+                    "Restored index configuration for {} column(s) from manifest: {:?}",
+                    cols.len(),
+                    cols
+                );
+            }
+            (cols, cfgs)
+        };
+
         let table = Table {
             uri: uri.clone(),
             store,
@@ -354,8 +387,8 @@ impl TableBuilder {
 
             indexing: crate::core::table::TableIndexState {
                 index_all: self.index_all,
-                index_columns: Arc::new(parking_lot::RwLock::new(Vec::new())),
-                index_configs: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+                index_columns: Arc::new(parking_lot::RwLock::new(restored_index_columns)),
+                index_configs: Arc::new(parking_lot::RwLock::new(restored_index_configs)),
                 default_device: Arc::new(parking_lot::RwLock::new(self.default_device)),
                 memory_index: Arc::new(parking_lot::RwLock::new(initial_mem_index)),
             },

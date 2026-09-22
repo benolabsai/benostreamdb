@@ -2450,6 +2450,20 @@ class Table:
         """
         return self._inner.set_index_columns(config)
 
+    def rewrite_data_files(self, min_file_size_bytes: Optional[int] = None) -> None:
+        """Compact small segments into larger ones (Iceberg-style rewrite).
+
+        Args:
+            min_file_size_bytes: segments smaller than this are compaction
+                candidates; the target output size is 2x this value. Defaults
+                to the engine's 384 MB / 512 MB pair.
+        """
+        return self._inner.rewrite_data_files(min_file_size_bytes)
+
+    def compact(self, min_file_size_bytes: Optional[int] = None) -> None:
+        """Alias for `rewrite_data_files`."""
+        return self.rewrite_data_files(min_file_size_bytes)
+
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
         """
         Add an indexing strategy to a column.

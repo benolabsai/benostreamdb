@@ -88,7 +88,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             .map_err(|e| e.to_string())?
             .ok_or("Failed to read record batch")?;
 
-        println!("Schema of loaded batch: {:#?}", batch.schema());
+        tracing::debug!("Schema of loaded batch: {:#?}", batch.schema());
         let data_id_array = Arc::new(
             batch
                 .column(0)

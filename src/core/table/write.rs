@@ -1098,10 +1098,24 @@ impl Table {
             } else {
                 manifest.current_schema_id + 1
             };
-            new_schemas.push(crate::core::manifest::Schema::from_arrow(
-                &current_schema,
-                new_id,
-            ));
+            let mut manifest_schema =
+                crate::core::manifest::Schema::from_arrow(&current_schema, new_id);
+            // Persist the table's index configuration into the schema so it is
+            // inherited by every future open — including other writer processes.
+            // Without this, `add_index` on a fresh table (before the first
+            // commit) lived only in memory and segments written by a later
+            // process were silently unindexed.
+            {
+                let cfgs = self.indexing.index_configs.read();
+                for field in &mut manifest_schema.fields {
+                    if let Some(cfg) = cfgs.get(&field.name) {
+                        if !cfg.algorithms.is_empty() {
+                            field.indexes = cfg.algorithms.clone();
+                        }
+                    }
+                }
+            }
+            new_schemas.push(manifest_schema);
             (Some(new_schemas), Some(new_id))
         } else {
             (None, None)

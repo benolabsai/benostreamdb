@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use futures::StreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
 use tracing;
@@ -48,9 +49,29 @@ pub struct Compactor {
     options: CompactionOptions,
     base_path: String,
     root_uri: String,
+    /// Index configuration carried from the table so compacted segments are
+    /// re-indexed. Without this, compaction silently produced unindexed
+    /// segments and every query fell back to a full scan.
+    index_all: bool,
+    index_columns: Vec<String>,
+    index_configs: HashMap<String, crate::core::table::state::ColumnIndexConfig>,
 }
 
 impl Compactor {
+    /// Attach the table's index configuration so rewritten segments rebuild
+    /// their vector/inverted indexes (compaction must not drop indexes).
+    pub fn with_index_configs(
+        mut self,
+        index_all: bool,
+        index_columns: Vec<String>,
+        index_configs: HashMap<String, crate::core::table::state::ColumnIndexConfig>,
+    ) -> Self {
+        self.index_all = index_all;
+        self.index_columns = index_columns;
+        self.index_configs = index_configs;
+        self
+    }
+
     pub fn new(uri: &str, options: CompactionOptions) -> Result<Self> {
         let store = create_object_store(uri)?;
 
@@ -72,6 +93,9 @@ impl Compactor {
             root_uri: uri.to_string(),
             options,
             base_path,
+            index_all: false,
+            index_columns: Vec::new(),
+            index_configs: HashMap::new(),
         })
     }
 
@@ -312,8 +336,21 @@ impl Compactor {
                 uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
             );
 
-            let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id);
-            let writer = HybridSegmentWriter::new(writer_config);
+            // Rebuild indexes for the merged segment: carry the table's index
+            // configuration into the writer (compaction must preserve indexes).
+            let mut cols_to_index = self.index_columns.clone();
+            if self.index_all {
+                for f in chunk_batch.schema().fields() {
+                    if !cols_to_index.contains(f.name()) {
+                        cols_to_index.push(f.name().clone());
+                    }
+                }
+            }
+            let writer_config = SegmentConfig::new(&temp_dir_str, &new_segment_id)
+                .with_index_all(self.index_all)
+                .with_columns_to_index(cols_to_index);
+            let writer = HybridSegmentWriter::new(writer_config)
+                .with_index_configs(self.index_configs.clone());
 
             writer.write_batch(&chunk_batch)?;
 
