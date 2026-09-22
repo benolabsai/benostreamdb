@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ArrowHnsw::get_vector` returns an owned `Vec<T>`.
 
 ### Fixed
+- **Score-only vector search failed / read the whole row**: projecting only the
+  synthesised `distance` column built an *empty* Parquet projection and failed
+  with "must either specify a row count or at least one column". An empty
+  projection is now the signal to skip Parquet entirely — the reader emits the
+  score straight from the index search using an explicit row count, and
+  `fetch_results_by_id` short-circuits the same way. Removed a stray `println!`
+  from the HNSW chunk-search hot path.
 - **Vector-search column projection was ignored**: `HybridReader::read_rows_by_id`
   took a `columns` parameter but never used it (`_columns`), so a vector search
   projecting two columns still read *every* column of the row from Parquet. It
