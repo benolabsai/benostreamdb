@@ -3,7 +3,7 @@
 use crate::core::index::gpu::{compute_distance, ComputeBackend};
 use crate::core::index::{distance, VectorMetric};
 use crate::python_gpu_context::PyDevice;
-use numpy::{PyArray1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{AllowTypeChange, PyArray1, PyArrayLike1, PyReadonlyArray1, PyReadonlyArray2};
 /// Python bindings for vector distance functions
 ///
 /// This module provides Python bindings for all 6 distance metrics with GPU acceleration support.
@@ -817,12 +817,20 @@ impl PySparseVector {
     ///     If indices/values length mismatch, indices not sorted, or indices out of bounds
     #[new]
     pub fn new(
-        indices: PyReadonlyArray1<u32>,
-        values: PyReadonlyArray1<f32>,
+        // `PyArrayLike1` accepts plain Python lists/tuples as well as NumPy
+        // arrays; `AllowTypeChange` coerces e.g. a list of Python ints to u32.
+        indices: PyArrayLike1<'_, u32, AllowTypeChange>,
+        values: PyArrayLike1<'_, f32, AllowTypeChange>,
         dim: usize,
     ) -> PyResult<Self> {
-        let indices_slice = indices.as_slice()?;
-        let values_slice = values.as_slice()?;
+        let indices = indices.as_array();
+        let values = values.as_array();
+        let indices_slice = indices.as_slice().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("indices array must be contiguous")
+        })?;
+        let values_slice = values.as_slice().ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("values array must be contiguous")
+        })?;
 
         // Validate lengths match
         if indices_slice.len() != values_slice.len() {
