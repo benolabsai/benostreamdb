@@ -340,7 +340,12 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
     # not inherit it, and segments written without it are silently unindexed
     # (queries then flat-scan them — measured 197 GB read for one search).
     if has_vec:
-        t.add_index("embedding", f"hnsw_{quant}" if quant != "none" else "hnsw")
+        # Force CPU index builds: the CUDA probe JIT-compiles via nvrtc (absent
+        # here), and that panic lands inside a background build task where it can
+        # leave an engine lock held — observed as a 4.5 h futex wait that wedged
+        # a whole load. CPU builds are fast enough at this scale.
+        t.add_index("embedding", {"type": f"hnsw_{quant}" if quant != "none" else "hnsw",
+                                  "device": "cpu"})
     t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
 
     def ranged_batches(path, s, e, batch=250_000, columns=None):

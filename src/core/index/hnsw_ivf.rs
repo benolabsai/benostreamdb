@@ -332,6 +332,20 @@ pub struct HnswIvfIndex {
     _compute_context: crate::core::index::gpu::ComputeContext,
 }
 
+/// CPU fallback for batched k-means assignment (flat `vectors` buffer, same
+/// contract as `gpu::compute_kmeans_assignment`), used when the GPU helper is
+/// unavailable/fails or the metric is not L2.
+fn cpu_assignments(
+    vectors: &[f32],
+    centroids: &[Vec<f32>],
+    dim: usize,
+    metric: VectorMetric,
+) -> Vec<u32> {
+    (0..vectors.len() / dim)
+        .map(|i| find_closest_centroid(&vectors[i * dim..(i + 1) * dim], centroids, metric) as u32)
+        .collect()
+}
+
 fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetric) -> usize {
     let mut best_dist = f32::MAX;
     let mut best_cluster = 0;
@@ -461,27 +475,61 @@ impl HnswIvfIndex {
         let mut file = std::fs::File::open(tmp_path)?;
         use std::io::Write;
 
-        let mut progress = 0;
-        loop {
-            if file.read_exact(&mut id_buf).is_err() {
-                break;
-            }
-            if file.read_exact(&mut dim_buf).is_err() {
-                break;
-            }
-            let mut vec_f32 = vec![0f32; dim];
-            file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-            let vec: &[f32] = &vec_f32;
-            let vec_buf = bytemuck::cast_slice::<f32, u8>(&vec_f32); // byte view for re-write
+        // Batched bucketing. The previous per-vector loop did a CPU centroid
+        // scan AND two write syscalls per vector, which dominated index build
+        // time for large segments. Now a batch is assigned through the
+        // GPU-dispatched k-means helper (which falls back to CPU when no GPU is
+        // available) and written in bulk. Non-L2 metrics keep the CPU path, as
+        // the GPU helper implements L2 assignment only.
+        let centroids_flat: Vec<f32> = centroids.iter().flatten().copied().collect();
+        let use_gpu_assign = matches!(metric, VectorMetric::L2);
+        const ASSIGN_BATCH: usize = 8192;
+        let mut ids: Vec<u32> = Vec::with_capacity(ASSIGN_BATCH);
+        let mut vecs: Vec<f32> = Vec::with_capacity(ASSIGN_BATCH * dim);
+        let mut progress = 0usize;
 
-            let best_cluster = find_closest_centroid(vec, &centroids, metric);
-            if let Some((_, ref mut f)) = cluster_files.get_mut(&best_cluster) {
-                f.write_all(&id_buf)?;
-                f.write_all(&vec_buf)?;
+        loop {
+            ids.clear();
+            vecs.clear();
+            let mut eof = false;
+            while ids.len() < ASSIGN_BATCH {
+                if file.read_exact(&mut id_buf).is_err() {
+                    eof = true;
+                    break;
+                }
+                if file.read_exact(&mut dim_buf).is_err() {
+                    eof = true;
+                    break;
+                }
+                let mut vec_f32 = vec![0f32; dim];
+                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                ids.push(u32::from_le_bytes(id_buf));
+                vecs.extend_from_slice(&vec_f32);
             }
-            progress += 1;
-            if progress % 100_000 == 0 {
+            if ids.is_empty() {
+                break;
+            }
+
+            let assignments: Vec<u32> = match use_gpu_assign {
+                true => crate::core::index::gpu::compute_kmeans_assignment(
+                    &vecs, &centroids_flat, dim,
+                )
+                .unwrap_or_else(|_| cpu_assignments(&vecs, &centroids, dim, metric)),
+                false => cpu_assignments(&vecs, &centroids, dim, metric),
+            };
+
+            for (k, &c) in assignments.iter().enumerate() {
+                if let Some((_, ref mut f)) = cluster_files.get_mut(&(c as usize)) {
+                    f.write_all(&ids[k].to_le_bytes())?;
+                    f.write_all(bytemuck::cast_slice(&vecs[k * dim..(k + 1) * dim]))?;
+                }
+            }
+            progress += ids.len();
+            if progress / 100_000 != (progress - ids.len()) / 100_000 {
                 tracing::info!("Bucketed {}/{} vectors...", progress, n_vectors);
+            }
+            if eof {
+                break;
             }
         }
 
