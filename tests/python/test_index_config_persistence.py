@@ -75,6 +75,50 @@ def test_index_config_persists_and_is_inherited(tmp_path):
     assert after - before, "reopened table wrote a segment with no vector index files"
 
 
+def test_compaction_rebuilds_indexes(tmp_path):
+    """Compaction must not silently drop vector/inverted indexes.
+
+    Regression: compact_bin built its segment with a bare SegmentConfig, so
+    rewritten segments had no indexes and queries flat-scanned them.
+    """
+    uri = f"file://{tmp_path}/comp"
+    t, vecs = _table(uri, n=800, seed=11)
+    t.add_index("embedding", "hnsw")
+    t.add_index("title", "inverted")
+    for i in range(2):  # a few small segments to merge
+        t.write(pa.table({
+            "id": pa.array([10_000 + i], pa.int64()),
+            "title": pa.array([f"extra {i}"], pa.large_string()),
+            "embedding": pa.FixedSizeListArray.from_arrays(
+                pa.array(vecs[i].reshape(-1), pa.float32()), DIM),
+        }))
+        t.commit()
+    t.wait_for_background_tasks()
+
+    base = os.path.join(str(tmp_path), "comp")
+
+    def data_segments():
+        # the compactor names its output "compacted_<ts>_<uuid>_<short>";
+        # index sidecars share the prefix, so filter them out explicitly
+        files = glob.glob(os.path.join(base, "seg_*.parquet")) + \
+                glob.glob(os.path.join(base, "compacted_*.parquet"))
+        return {f.split(".parquet")[0] for f in files
+                if not any(x in f for x in ("title", "centroids", "tq8", ".inv.",
+                                            ".doclen.", ".embedding.", ".hnsw"))}
+
+    before_segs = data_segments()
+
+    # min_file_size_bytes is the CANDIDATE threshold: segments smaller than this
+    # are rewritten. Use a large value so the tiny test segment qualifies.
+    t.rewrite_data_files(min_file_size_bytes=1_000_000_000)
+
+    compacted = data_segments() - before_segs
+    assert compacted, "no compacted segments were written"
+    for seg in compacted:
+        assert glob.glob(f"{seg}.embedding.*centroids*.parquet"), f"{seg} missing vector index"
+        assert glob.glob(f"{seg}.title.inv.parquet"), f"{seg} missing inverted index"
+
+
 def test_no_index_table_degrades_gracefully(tmp_path):
     """No index config -> plain Iceberg behaviour: correct results, no errors."""
     uri = f"file://{tmp_path}/plain"
