@@ -68,6 +68,27 @@ def test_embed_rotation_and_skip(wiki_like):
     assert sorted(f for f in os.listdir(emb_dir) if f.endswith(".parquet")) == shards
 
 
+def test_embed_resumes_from_partial_shards(wiki_like):
+    """An interrupted embed must continue, not restart (hours of GPU work)."""
+    _, src, emb_dir = wiki_like
+    pdemo.stage_embed("fake", 0, 256, lead_chars=10)
+    shards = sorted(f for f in os.listdir(emb_dir) if f.endswith(".parquet"))
+    assert len(shards) == 3
+    # simulate an interruption: drop the last shard + leave a stale tmp file
+    os.remove(os.path.join(emb_dir, shards[-1]))
+    open(os.path.join(emb_dir, "part-003.parquet.tmp"), "wb").close()
+
+    pdemo.stage_embed("fake", 0, 256, lead_chars=10)
+
+    remaining = sorted(f for f in os.listdir(emb_dir) if f.endswith(".parquet"))
+    rows = sum(pq.ParquetFile(os.path.join(emb_dir, s)).metadata.num_rows for s in remaining)
+    assert rows == N, f"resume produced {rows} rows, expected {N}"
+    assert not [f for f in os.listdir(emb_dir) if f.endswith(".tmp")]
+    # second resume is a no-op
+    pdemo.stage_embed("fake", 0, 256, lead_chars=10)
+    assert sorted(f for f in os.listdir(emb_dir) if f.endswith(".parquet")) == remaining
+
+
 def _write_known_shards(emb_dir, src_rows):
     """3 shards with deterministic values, sizes not aligned to any batch size."""
     vals = np.arange(src_rows * DIM, dtype=np.float32).reshape(src_rows, DIM)
