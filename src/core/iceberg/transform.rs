@@ -16,25 +16,32 @@ pub enum IcebergTransform {
 
 impl IcebergTransform {
     pub fn parse(s: &str) -> Self {
-        match s {
+        let lower = s.trim().to_ascii_lowercase();
+        match lower.as_str() {
             "identity" => Self::Identity,
             "year" => Self::Year,
             "month" => Self::Month,
             "day" => Self::Day,
             "hour" => Self::Hour,
             "void" => Self::Void,
-            _ if s.starts_with("bucket[") => {
-                let n = s
+            // Accept both the Iceberg spec syntax `bucket(N)` and the legacy
+            // bracket form `bucket[N]`.
+            _ if lower.starts_with("bucket[") || lower.starts_with("bucket(") => {
+                let n = lower
                     .trim_start_matches("bucket[")
+                    .trim_start_matches("bucket(")
                     .trim_end_matches(']')
+                    .trim_end_matches(')')
                     .parse()
                     .unwrap_or(0);
                 Self::Bucket(n)
             }
-            _ if s.starts_with("truncate[") => {
-                let n = s
+            _ if lower.starts_with("truncate[") || lower.starts_with("truncate(") => {
+                let n = lower
                     .trim_start_matches("truncate[")
+                    .trim_start_matches("truncate(")
                     .trim_end_matches(']')
+                    .trim_end_matches(')')
                     .parse()
                     .unwrap_or(0);
                 Self::Truncate(n)
@@ -84,6 +91,27 @@ impl IcebergTransform {
                     arrow::datatypes::DataType::Utf8 => {
                         let a = if let Some(arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
+                            arr
+                        } else {
+                            return serde_json::Value::Null;
+                        };
+                        serde_json::json!(a.value(row_i))
+                    }
+                    // `large_string` is PyArrow's default string type.
+                    arrow::datatypes::DataType::LargeUtf8 => {
+                        let a = if let Some(arr) =
+                            array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                        {
+                            arr
+                        } else {
+                            return serde_json::Value::Null;
+                        };
+                        serde_json::json!(a.value(row_i))
+                    }
+                    arrow::datatypes::DataType::Utf8View => {
+                        let a = if let Some(arr) =
+                            array.as_any().downcast_ref::<arrow::array::StringViewArray>()
                         {
                             arr
                         } else {
@@ -154,6 +182,28 @@ impl IcebergTransform {
                             let s = a.value(row_i);
                             murmur3_32_x86(s.as_bytes(), hash_val)
                         }
+                        arrow::datatypes::DataType::LargeUtf8 => {
+                            let a = if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                            {
+                                arr
+                            } else {
+                                return serde_json::Value::Null;
+                            };
+                            let s = a.value(row_i);
+                            murmur3_32_x86(s.as_bytes(), hash_val)
+                        }
+                        arrow::datatypes::DataType::Utf8View => {
+                            let a = if let Some(arr) =
+                                array.as_any().downcast_ref::<arrow::array::StringViewArray>()
+                            {
+                                arr
+                            } else {
+                                return serde_json::Value::Null;
+                            };
+                            let s = a.value(row_i);
+                            murmur3_32_x86(s.as_bytes(), hash_val)
+                        }
                         arrow::datatypes::DataType::Date32 => {
                             let a = if let Some(arr) =
                                 array.as_any().downcast_ref::<arrow::array::Date32Array>()
@@ -179,6 +229,30 @@ impl IcebergTransform {
                     arrow::datatypes::DataType::Utf8 => {
                         let a = if let Some(arr) =
                             array.as_any().downcast_ref::<arrow::array::StringArray>()
+                        {
+                            arr
+                        } else {
+                            return serde_json::Value::Null;
+                        };
+                        let s = a.value(row_i);
+                        let limit = (*w as usize).min(s.len());
+                        serde_json::json!(&s[..limit])
+                    }
+                    arrow::datatypes::DataType::LargeUtf8 => {
+                        let a = if let Some(arr) =
+                            array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                        {
+                            arr
+                        } else {
+                            return serde_json::Value::Null;
+                        };
+                        let s = a.value(row_i);
+                        let limit = (*w as usize).min(s.len());
+                        serde_json::json!(&s[..limit])
+                    }
+                    arrow::datatypes::DataType::Utf8View => {
+                        let a = if let Some(arr) =
+                            array.as_any().downcast_ref::<arrow::array::StringViewArray>()
                         {
                             arr
                         } else {

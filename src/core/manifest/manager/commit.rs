@@ -39,14 +39,32 @@ impl ManifestManager {
                 .collect();
             let new_ver = current_ver + 1;
 
-            // Hardened De-duplication and Precondition Validation
+            // Hardened De-duplication and Precondition Validation.
+            //
+            // MVCC rebase: a concurrent writer may have already removed one of
+            // our candidate paths. With `skip_missing_remove_paths` we treat
+            // that as "already done" and rebase onto the newer snapshot instead
+            // of aborting the whole commit.
             for path in remove_paths {
-                if metadata.require_remove_paths_exist && !active_map.contains_key(path) {
-                    anyhow::bail!(
-                        "Compaction precondition failed: candidate file '{}' was concurrently removed or replaced in snapshot v{}",
-                        path,
-                        current_ver
-                    );
+                if !active_map.contains_key(path) {
+                    if metadata.require_remove_paths_exist && !metadata.skip_missing_remove_paths {
+                        anyhow::bail!(
+                            "Compaction precondition failed: candidate file '{}' was concurrently removed or replaced in snapshot v{}",
+                            path,
+                            current_ver
+                        );
+                    }
+                    if metadata.skip_missing_remove_paths {
+                        metrics::counter!(
+                            "hyperstreamdb_manifest_commit_skipped_removals_total"
+                        )
+                        .increment(1);
+                        tracing::debug!(
+                            "MVCC rebase: '{}' already removed in snapshot v{}, skipping",
+                            path,
+                            current_ver
+                        );
+                    }
                 }
                 active_map.remove(path);
             }
@@ -240,6 +258,7 @@ impl ManifestManager {
                 }
                 Err(e) if is_already_exists(&e) => {
                     metrics::counter!("hyperstreamdb_manifest_commit_retries_total").increment(1);
+                    metrics::counter!("hyperstreamdb_manifest_commit_rebases_total").increment(1);
                     if attempt % 10 == 0 || attempt > 90 {
                         tracing::debug!(
                             "Conflict committing Manifest v{} (attempt {}), retrying...",

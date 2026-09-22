@@ -435,10 +435,10 @@ hdb repair s3://bucket/table
 **Completed**
 - [x] Cloud-agnostic distributed locking (`FileBasedLock`, CAS `PutMode::Create`) — Phase 7.
 - [x] OCC manifest commits with retry/backoff — Phase 7.
+- [x] **Concurrent Manifest Writes (MVCC)**: lock-free commits. The global `commit.lock` is gone from `update_schema` (pure OCC); `CommitMetadata::skip_missing_remove_paths` lets a writer rebase onto a newer snapshot when a candidate was concurrently removed (compaction uses it); `Table::snapshot_version()` exposes the monotonic snapshot id. ✅
+- [x] **Cross-Partition Compaction**: re-enabled. `PartitionSpec::partition_batch` now applies the declared Iceberg transform (`identity`/`void`/`bucket`/`truncate`/`year`/`month`/`day`/`hour`) via the canonical `IcebergTransform`, so merged bins re-partition deterministically; compaction preserves the Hive partition directory; `CompactionOptions::allow_cross_partition` controls the behaviour. ✅
 
 **Next Steps**
-- [ ] **Concurrent Manifest Writes (MVCC)**: Replace the global table lock with lock-free MVCC concurrency control for commits. *(Blocks multi-writer ingest orchestrator.)*
-- [ ] **Cross-Partition Compaction**: Re-enable (currently disabled); requires ensuring partition transforms are fully reversible. *(Blocks scheduled compaction at TB scale.)*
 - [ ] **Index Join Enhancements**: Multi-column joins via `RowConverter` (replace single-column + String-casting MVP).
 - [ ] **Complex Range Pushdown**: Interval-tree support for pushing complex `OR`-over-ranges to the index scan.
 - [ ] **Row-Value In-List Pushdown**: Proper Row-Value In-List support for Primary Key filtering (`src/core/table/primary_key.rs`).
@@ -476,7 +476,7 @@ hdb repair s3://bucket/table
 - [ ] (none outstanding)
 
 #### A4. Native Ingest Orchestrator (tokio) — cluster-free bulk ingest
-*Depends on A1 (MVCC commits, cross-partition compaction).* Spark stays for pre-write transforms and existing lake pipelines, but ingestion must not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes, and commits a bulk load entirely inside the engine.
+*A1 dependencies (MVCC commits, cross-partition compaction) are now complete — this is unblocked.* Spark stays for pre-write transforms and existing lake pipelines, but ingestion must not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes, and commits a bulk load entirely inside the engine.
 
 **Completed**
 - [x] **Working prototype**: whole-site Wikipedia demo fresh-process chunking (`scripts/prepare_demo.py`: 2M-row chunks, 118 s @ ~10 GB, per-chunk OCC commits).
@@ -787,4 +787,4 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 ---
 
 **Last Updated:** 2026-09-22
-**Status:** Phases 1–10 COMPLETE ✅ | Active: Part A Core Product (Native Ingest Orchestrator) + Part B Client Ecosystem | Planned: High-Cardinality Scale Lighthouse (scale objective satisfied by the full-site Wikipedia demo), Codebase Intelligence & MCP, Enterprise & Accelerator tiers
+**Status:** Phases 1–10 COMPLETE ✅ | A1 Core Engine Correctness & Concurrency COMPLETE ✅ (MVCC commits, cross-partition compaction) | Active: Part A Core Product (Native Ingest Orchestrator — now unblocked) + Part B Client Ecosystem | Planned: High-Cardinality Scale Lighthouse (scale objective satisfied by the full-site Wikipedia demo), Codebase Intelligence & MCP, Enterprise & Accelerator tiers

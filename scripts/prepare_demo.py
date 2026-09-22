@@ -473,12 +473,30 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
         return
 
     # ── nodes: parent orchestrates fresh-process chunks ──
-    if _table_loaded(nodes_dir):
-        log("load nodes: table exists — skipping (use --rebuild)")
-        return
-    shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell
     total = pq.ParquetFile(os.path.join(DATA, "wiki_nodes.parquet")).metadata.num_rows
-    s = 0
+
+    # Resume from the last committed chunk. Each chunk commits atomically, so a
+    # crashed/killed run leaves a whole number of chunks behind; restarting
+    # continues from there instead of redoing (or skipping) the whole load.
+    loaded = 0
+    if _table_loaded(nodes_dir):
+        try:
+            loaded = len(hdb.Table(f"file://{nodes_dir}"))
+        except Exception as e:  # noqa: BLE001
+            log(f"load nodes: could not count existing rows ({e}); starting fresh")
+            loaded = 0
+
+    if loaded >= total:
+        log(f"load nodes: table complete ({loaded:,} rows) — skipping (use --rebuild)")
+        return
+
+    if loaded > 0:
+        s = (loaded // chunk_rows) * chunk_rows
+        log(f"load nodes: resuming at {s:,} ({loaded:,} rows already committed)")
+    else:
+        shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell
+        s = 0
+
     while s < total:
         e = min(s + chunk_rows, total)
         log(f"load nodes: chunk [{s:,}, {e:,}) in a fresh process")

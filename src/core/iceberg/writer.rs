@@ -798,44 +798,7 @@ impl IcebergWriter {
     ) -> String {
         let mut partition_fields = Vec::new();
         for field in &spec.fields {
-            let type_str = match field.transform.as_str() {
-                "year" | "month" | "day" => r#"["null", "int"]"#,
-                s if s.starts_with("bucket[") => r#"["null", "int"]"#,
-                s if s.starts_with("truncate[") => r#"["null", "string"]"#,
-                "identity" => {
-                    let source_id = field.source_ids.first().copied().or(field.source_id);
-                    // Robustness: Prioritize Name-based resolution, fallback to ID (Name-First strategy)
-                    let resolved_field = schema
-                        .fields
-                        .iter()
-                        .find(|sf| sf.name == field.name)
-                        .cloned()
-                        .or_else(|| {
-                            if let Some(id) = source_id {
-                                schema.fields.iter().find(|f| f.id == id).cloned()
-                            } else {
-                                None
-                            }
-                        });
-
-                    if let Some(f) = resolved_field {
-                        match f.type_str.as_str() {
-                            "Int32" | "int" => r#"["null", "int"]"#,
-                            "Int64" | "long" => r#"["null", "long"]"#,
-                            "Float32" | "float" => r#"["null", "float"]"#,
-                            "Float64" | "double" => r#"["null", "double"]"#,
-                            "Boolean" | "bool" | "boolean" => r#"["null", "boolean"]"#,
-                            "string" | "utf8" | "utf-8" | "String" | "Utf8" => {
-                                r#"["null", "string"]"#
-                            }
-                            _ => r#"["null", "string"]"#,
-                        }
-                    } else {
-                        r#"["null", "string"]"#
-                    }
-                }
-                _ => r#"["null", "string"]"#,
-            };
+            let type_str = partition_field_avro_type(field, schema);
             partition_fields.push(format!(
                 r#"{{"name": "{}", "type": {}, "default": null}}"#,
                 field.name, type_str
@@ -884,6 +847,44 @@ impl IcebergWriter {
 "#,
             partition_fields_json
         )
+    }
+}
+
+/// Avro type for a partition field, derived from its transform.
+///
+/// Iceberg's rule: `bucket` and the time transforms (`year`/`month`/`day`/
+/// `hour`) always produce an `int`; `identity`, `void` and `truncate` preserve
+/// the source column's type. Getting this wrong makes the manifest writer
+/// reject the partition value (e.g. an `int` bucket value against a `string`
+/// field), which is exactly what blocked cross-partition compaction.
+fn partition_field_avro_type(
+    field: &crate::core::manifest::PartitionField,
+    schema: &crate::core::manifest::Schema,
+) -> &'static str {
+    let t = field.transform.trim().to_ascii_lowercase();
+
+    if t == "year" || t == "month" || t == "day" || t == "hour" {
+        return r#"["null", "int"]"#;
+    }
+    if t.starts_with("bucket(") || t.starts_with("bucket[") {
+        return r#"["null", "int"]"#;
+    }
+
+    // identity / void / truncate(...) preserve the source type.
+    let source_id = field.source_ids.first().copied().or(field.source_id);
+    let resolved = schema
+        .fields
+        .iter()
+        .find(|sf| sf.name == field.name)
+        .or_else(|| source_id.and_then(|id| schema.fields.iter().find(|f| f.id == id)));
+
+    match resolved.map(|f| f.type_str.as_str()) {
+        Some("Int32") | Some("int") => r#"["null", "int"]"#,
+        Some("Int64") | Some("long") => r#"["null", "long"]"#,
+        Some("Float32") | Some("float") => r#"["null", "float"]"#,
+        Some("Float64") | Some("double") => r#"["null", "double"]"#,
+        Some("Boolean") | Some("bool") | Some("boolean") => r#"["null", "boolean"]"#,
+        _ => r#"["null", "string"]"#,
     }
 }
 

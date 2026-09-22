@@ -245,6 +245,65 @@ impl ManifestValue {
                     .unwrap();
                 ManifestValue::String(arr.value(i).to_string())
             }
+            // `large_string` is the default for PyArrow string columns; without
+            // this arm partition values silently became Null.
+            DataType::LargeUtf8 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeStringArray>()
+                    .unwrap();
+                ManifestValue::String(arr.value(i).to_string())
+            }
+            DataType::Utf8View => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringViewArray>()
+                    .unwrap();
+                ManifestValue::String(arr.value(i).to_string())
+            }
+            // Date/time types feed the year/month/day/hour transforms.
+            DataType::Date32 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Date32Array>()
+                    .unwrap();
+                ManifestValue::Int32(arr.value(i))
+            }
+            DataType::Date64 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::Date64Array>()
+                    .unwrap();
+                ManifestValue::Int64(arr.value(i))
+            }
+            DataType::Timestamp(_, _) => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::TimestampMicrosecondArray>()
+                    .map(|a| a.value(i))
+                    .or_else(|| {
+                        array
+                            .as_any()
+                            .downcast_ref::<arrow::array::TimestampMillisecondArray>()
+                            .map(|a| a.value(i) * 1_000)
+                    })
+                    .or_else(|| {
+                        array
+                            .as_any()
+                            .downcast_ref::<arrow::array::TimestampSecondArray>()
+                            .map(|a| a.value(i) * 1_000_000)
+                    })
+                    .or_else(|| {
+                        array
+                            .as_any()
+                            .downcast_ref::<arrow::array::TimestampNanosecondArray>()
+                            .map(|a| a.value(i) / 1_000)
+                    });
+                match arr {
+                    Some(v) => ManifestValue::Int64(v),
+                    None => ManifestValue::Null,
+                }
+            }
             DataType::Int32 => {
                 let arr = array
                     .as_any()

@@ -1914,6 +1914,16 @@ impl PyTable {
         }
     }
 
+    /// MVCC snapshot version: the latest committed manifest version.
+    ///
+    /// Monotonically increasing; a reader can pin it and later read exactly
+    /// that snapshot. Useful for multi-writer coordination and cache keys.
+    fn snapshot_version(&self) -> PyResult<u64> {
+        let rt = self.table.runtime();
+        rt.block_on(async { self.table.snapshot_version().await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     // ============================================================================
     // Connector APIs (Spark/Trino)
     // ============================================================================

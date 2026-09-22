@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **MVCC manifest commits (lock-free)**: the global `commit.lock` is gone from
+  `update_schema` — schema/index-spec evolution is now pure optimistic
+  concurrency (`PutMode::Create` + rebase). `CommitMetadata::skip_missing_remove_paths`
+  lets a writer rebase onto a newer snapshot when a candidate file was
+  concurrently removed (compaction uses it, so racing compactions no longer
+  abort). New `Table::snapshot_version()` exposes the monotonic snapshot id
+  (also on the Python `Table`). Metrics: `hyperstreamdb_manifest_commit_rebases_total`,
+  `hyperstreamdb_manifest_commit_skipped_removals_total`.
+- **Cross-partition compaction**: `PartitionSpec::partition_batch` now applies
+  the declared Iceberg transform (`identity`/`void`/`bucket`/`truncate`/`year`/
+  `month`/`day`/`hour`) via the canonical `IcebergTransform`, so a merged bin
+  re-partitions deterministically. `CompactionOptions::allow_cross_partition`
+  (default `true`) controls whether bins may span partitions.
+
+### Fixed
+- **Partition values were the raw source value, not the transform result**:
+  `partition_batch` ignored `PartitionField::transform`, so `bucket`/`truncate`/
+  time partitions stored the untransformed value. Now routed through
+  `IcebergTransform` (which also gained `bucket(N)`/`truncate(W)` parenthesis
+  syntax and `large_string`/`Utf8View` support).
+- **Manifest Avro partition type was derived from the source column**: a
+  `bucket` transform yields an `int`, but the writer declared the source type
+  (e.g. `string`), so the commit failed with an Avro type mismatch. The type is
+  now derived from the transform.
+- **Compaction dropped the Hive partition directory**: compacted files were
+  written to the table root instead of `col=value/`, silently losing the
+  physical partitioning. Compaction now preserves the partition path.
+- **`ManifestValue::from_array` ignored `LargeUtf8`**: `large_string` partition
+  columns (PyArrow's default) silently became `null`. Also added `Utf8View`,
+  `Date32`, `Date64`, and `Timestamp` handling.
+
 ### Performance
 - **Chunked-ingest memory is now a knob, not a wall**: demo load defaults to
   fresh-process 2M-row chunks (measured 9.5 GB peak per chunk, 2M rows/118 s);

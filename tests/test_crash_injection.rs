@@ -188,6 +188,153 @@ async fn test_compaction_precondition_aborts_on_missing_candidate() -> Result<()
     Ok(())
 }
 
+/// Test 3b: MVCC rebase — a concurrent writer already removed our candidate.
+///
+/// With `skip_missing_remove_paths` the commit must *succeed* (rebasing onto
+/// the newer snapshot) instead of aborting, and the new file must be present.
+#[tokio::test]
+async fn test_mvcc_soft_removal_rebases() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
+
+    let store = create_object_store(&uri)?;
+    let manifest = ManifestManager::new(store, "", &uri);
+
+    let entry_a = ManifestEntry {
+        file_path: "data/file_a.parquet".to_string(),
+        file_size_bytes: 1024,
+        record_count: 100,
+        ..Default::default()
+    };
+    manifest
+        .commit(
+            std::slice::from_ref(&entry_a),
+            &[],
+            CommitMetadata::default(),
+        )
+        .await?;
+
+    // A concurrent writer removes file A first.
+    manifest
+        .commit(
+            &[],
+            std::slice::from_ref(&entry_a.file_path),
+            CommitMetadata::default(),
+        )
+        .await?;
+
+    // Our compaction now tries to remove A (already gone) and add C, with the
+    // MVCC rebase policy enabled.
+    let entry_c = ManifestEntry {
+        file_path: "data/file_c.parquet".to_string(),
+        file_size_bytes: 2048,
+        record_count: 200,
+        ..Default::default()
+    };
+    let commit_meta = CommitMetadata {
+        require_remove_paths_exist: true,
+        skip_missing_remove_paths: true,
+        ..Default::default()
+    };
+
+    manifest
+        .commit(
+            &[entry_c],
+            std::slice::from_ref(&entry_a.file_path),
+            commit_meta,
+        )
+        .await
+        .expect("MVCC rebase must succeed when a candidate was concurrently removed");
+
+    let (_, entries_after, _) = manifest.load_latest_full().await?;
+    assert!(
+        entries_after
+            .iter()
+            .any(|e| e.file_path == "data/file_c.parquet"),
+        "New compacted file must be committed"
+    );
+    assert!(
+        !entries_after
+            .iter()
+            .any(|e| e.file_path == "data/file_a.parquet"),
+        "Concurrently-removed file must stay removed"
+    );
+
+    Ok(())
+}
+
+/// Test 3c: concurrent appends must not lose updates (MVCC).
+#[tokio::test]
+async fn test_concurrent_appends_no_lost_updates() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
+
+    let store = create_object_store(&uri)?;
+    let manifest = ManifestManager::new(store, "", &uri);
+
+    // Seed v1.
+    manifest
+        .commit(
+            &[ManifestEntry {
+                file_path: "data/seed.parquet".to_string(),
+                file_size_bytes: 1,
+                record_count: 1,
+                ..Default::default()
+            }],
+            &[],
+            CommitMetadata::default(),
+        )
+        .await?;
+
+    // Two writers append concurrently.
+    let m1 = manifest.clone();
+    let m2 = manifest.clone();
+    let w1 = tokio::spawn(async move {
+        m1.commit(
+            &[ManifestEntry {
+                file_path: "data/w1.parquet".to_string(),
+                file_size_bytes: 1,
+                record_count: 1,
+                ..Default::default()
+            }],
+            &[],
+            CommitMetadata::default(),
+        )
+        .await
+    });
+    let w2 = tokio::spawn(async move {
+        m2.commit(
+            &[ManifestEntry {
+                file_path: "data/w2.parquet".to_string(),
+                file_size_bytes: 1,
+                record_count: 1,
+                ..Default::default()
+            }],
+            &[],
+            CommitMetadata::default(),
+        )
+        .await
+    });
+
+    w1.await??;
+    w2.await??;
+
+    let (_, entries, _) = manifest.load_latest_full().await?;
+    let paths: std::collections::HashSet<&str> =
+        entries.iter().map(|e| e.file_path.as_str()).collect();
+    assert!(paths.contains("data/seed.parquet"));
+    assert!(
+        paths.contains("data/w1.parquet"),
+        "writer 1's append must survive the concurrent commit"
+    );
+    assert!(
+        paths.contains("data/w2.parquet"),
+        "writer 2's append must survive the concurrent commit"
+    );
+
+    Ok(())
+}
+
 /// Test 4: Maintenance Coordination and Staging Protection
 /// Verifies that `remove_orphan_files` ignores `_staging/`, `_wal/`, and `commit.lock`.
 #[tokio::test]

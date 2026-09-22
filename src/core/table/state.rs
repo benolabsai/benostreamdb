@@ -156,4 +156,33 @@ impl Table {
                 .await?;
         Ok(manifest)
     }
+
+    /// MVCC snapshot version: the latest committed manifest version.
+    ///
+    /// Every commit is a monotonically increasing `v{N}.json` written with
+    /// `PutMode::Create`, so this value is a stable snapshot identifier. A
+    /// reader can pin it and later read exactly that snapshot via
+    /// [`Table::read_at_version`].
+    pub async fn snapshot_version(&self) -> Result<u64> {
+        let (_, version) =
+            crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri)
+                .load_latest_direct()
+                .await?;
+        Ok(version)
+    }
+
+    /// Load a specific historical snapshot (MVCC read).
+    ///
+    /// Returns the manifest for `version`, or an error if that version does not
+    /// exist. This is the read half of MVCC: a long-running reader can hold a
+    /// version and observe a consistent view even while writers commit newer
+    /// versions.
+    pub async fn manifest_at_version(
+        &self,
+        version: u64,
+    ) -> Result<crate::core::manifest::Manifest> {
+        crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri)
+            .load_version(version)
+            .await
+    }
 }

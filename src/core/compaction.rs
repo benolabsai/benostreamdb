@@ -28,6 +28,11 @@ pub struct CompactionOptions {
     pub strategy: String,
     pub max_concurrent_bins: usize,
     pub clustering: Option<ClusteringOptions>,
+    /// Allow a single bin to span multiple partitions. The merged batch is
+    /// re-partitioned via `PartitionSpec::partition_batch`, which applies the
+    /// declared transforms, so this is safe for identity/bucket/truncate/
+    /// time transforms. Set to `false` to keep each bin within one partition.
+    pub allow_cross_partition: bool,
 }
 
 impl Default for CompactionOptions {
@@ -38,8 +43,35 @@ impl Default for CompactionOptions {
             strategy: "binpack".to_string(),
             max_concurrent_bins: 4,
             clustering: None,
+            allow_cross_partition: true,
         }
     }
+}
+
+/// Greedy bin-packing of candidate entries into target-sized bins.
+fn binpack(
+    candidates: Vec<crate::core::manifest::ManifestEntry>,
+    target_file_size_bytes: i64,
+) -> Vec<Vec<crate::core::manifest::ManifestEntry>> {
+    let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();
+    let mut current_bin = Vec::new();
+    let mut current_size = 0_i64;
+
+    for candidate in candidates {
+        if current_size + candidate.file_size_bytes > target_file_size_bytes
+            && !current_bin.is_empty()
+        {
+            bins.push(current_bin);
+            current_bin = Vec::new();
+            current_size = 0;
+        }
+        current_size += candidate.file_size_bytes;
+        current_bin.push(candidate);
+    }
+    if !current_bin.is_empty() {
+        bins.push(current_bin);
+    }
+    bins
 }
 
 #[derive(Clone)]
@@ -132,29 +164,43 @@ impl Compactor {
             return Ok(());
         }
 
-        // 2. BinPack (Cross-Partition enabled by treating all candidates as one group)
-        let mut bins: Vec<Vec<crate::core::manifest::ManifestEntry>> = Vec::new();
-        let mut current_bin = Vec::new();
-        let mut current_size = 0_i64;
-
-        for candidate in candidates {
-            if current_size + candidate.file_size_bytes > self.options.target_file_size_bytes
-                && !current_bin.is_empty()
-            {
-                bins.push(current_bin);
-                current_bin = Vec::new();
-                current_size = 0;
-            }
-            current_size += candidate.file_size_bytes;
-            current_bin.push(candidate);
-        }
-        if !current_bin.is_empty() {
-            bins.push(current_bin);
-        }
+        // 2. BinPack
+        //
+        // Cross-partition compaction merges small files from *different*
+        // partitions into one bin and re-partitions the merged batch. This is
+        // only correct when every partition transform is a deterministic
+        // function of the row data (see `PartitionSpec::partition_batch`), so
+        // merged rows land back in the right partitions. Set
+        // `allow_cross_partition = false` to keep each bin within a single
+        // partition (the conservative behaviour).
+        let bins: Vec<Vec<crate::core::manifest::ManifestEntry>> =
+            if self.options.allow_cross_partition {
+                binpack(candidates, self.options.target_file_size_bytes)
+            } else {
+                let mut groups: HashMap<
+                    Vec<(String, String)>,
+                    Vec<crate::core::manifest::ManifestEntry>,
+                > = HashMap::new();
+                for candidate in candidates {
+                    let mut key: Vec<(String, String)> = candidate
+                        .partition_values
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_string()))
+                        .collect();
+                    key.sort();
+                    groups.entry(key).or_default().push(candidate);
+                }
+                let mut grouped_bins = Vec::new();
+                for (_, group) in groups {
+                    grouped_bins.extend(binpack(group, self.options.target_file_size_bytes));
+                }
+                grouped_bins
+            };
 
         tracing::info!(
-            "Plan: Identified {} bins across partitions to compact.",
-            bins.len()
+            "Plan: Identified {} bins (cross_partition={}) to compact.",
+            bins.len(),
+            self.options.allow_cross_partition
         );
 
         // 3. Parallel Execution
@@ -207,6 +253,10 @@ impl Compactor {
             );
             let commit_meta = crate::core::manifest::CommitMetadata {
                 require_remove_paths_exist: true,
+                // MVCC: if a concurrent writer already removed one of our
+                // candidates, rebase onto the newer snapshot and skip it
+                // instead of aborting the whole compaction.
+                skip_missing_remove_paths: true,
                 ..Default::default()
             };
             self.manifest
@@ -336,6 +386,19 @@ impl Compactor {
                 uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
             );
 
+            // Preserve the Hive partition directory. Compaction re-partitions
+            // the merged batch, so the output must land under the same
+            // `col=value/` prefix the write path uses — otherwise the physical
+            // layout silently loses its partitioning.
+            let hive_path = partition_spec.partition_to_path(&part_vals);
+            let remote_prefix = if hive_path.is_empty() {
+                self.base_path.clone()
+            } else if self.base_path.is_empty() {
+                hive_path.clone()
+            } else {
+                format!("{}/{}", self.base_path, hive_path)
+            };
+
             // Rebuild indexes for the merged segment: carry the table's index
             // configuration into the writer (compaction must preserve indexes).
             let mut cols_to_index = self.index_columns.clone();
@@ -367,10 +430,10 @@ impl Compactor {
                     .into_iter()
                     .find(|f| f.ends_with(&main_name));
                 if let Some(local) = local {
-                    let remote = if self.base_path.is_empty() {
+                    let remote = if remote_prefix.is_empty() {
                         Path::from(main_name.clone())
                     } else {
-                        Path::from(format!("{}/{}", self.base_path, main_name))
+                        Path::from(format!("{}/{}", remote_prefix, main_name))
                     };
                     let content = fs::read(&local).await?;
                     self.store.put(&remote, content.into()).await?;
@@ -414,10 +477,10 @@ impl Compactor {
                     }
                 };
 
-                let remote_path = if self.base_path.is_empty() {
+                let remote_path = if remote_prefix.is_empty() {
                     Path::from(file_name)
                 } else {
-                    Path::from(format!("{}/{}", self.base_path, file_name))
+                    Path::from(format!("{}/{}", remote_prefix, file_name))
                 };
 
                 let content = fs::read(&local_path).await?;
