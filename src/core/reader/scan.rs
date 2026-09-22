@@ -1323,9 +1323,33 @@ impl HybridReader {
     pub async fn read_rows_by_id(
         &self,
         matches: Vec<(u32, f32)>,
-        _columns: Option<&[&str]>,
+        columns: Option<&[&str]>,
     ) -> Result<RecordBatch> {
-        self.read_rows_by_id_with_schema(matches, None).await
+        // Honour the projection. This parameter used to be ignored (`_columns`),
+        // so a vector search projecting two columns still read *every* column
+        // of the row from Parquet. Build a projected schema and let the scan
+        // read only what was asked for; fall back to the full schema if any
+        // requested name is unknown.
+        let target_schema = match columns.filter(|c| !c.is_empty()) {
+            Some(cols) => match self.get_arrow_schema().await {
+                Ok(full) => {
+                    let fields: Vec<_> = cols
+                        .iter()
+                        .filter_map(|c| full.field_with_name(c).ok().cloned())
+                        .collect();
+                    if fields.len() == cols.len() {
+                        Some(Arc::new(arrow::datatypes::Schema::new(fields)))
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            },
+            None => None,
+        };
+
+        self.read_rows_by_id_with_schema(matches, target_schema)
+            .await
     }
 
     pub async fn read_rows_by_id_with_schema(
