@@ -230,5 +230,131 @@ fn parse_binary_expr(bin: &BinaryExpr) -> Option<(VectorMetric, String, VectorVa
         }
     }
 
+    // Case 4: Sparse as a `Map<key, f32>` — e.g. `{'1': 0.5, '10': 0.3}`.
+    //
+    // A map has no place to carry the vector dimension, so it is inferred as
+    // `max(index) + 1`. Use the Struct form (`indices`/`values`/`dim`) when the
+    // true dimension matters.
+    if let ScalarValue::Map(map_array) = literal.value() {
+        if let Some(map) = map_array
+            .as_any()
+            .downcast_ref::<arrow::array::MapArray>()
+        {
+            if let Some(sv) = sparse_from_map(map) {
+                return Some((m, col.name().to_string(), VectorValue::Sparse(sv)));
+            }
+        }
+    }
+
     None
+}
+
+/// Parse a sparse vector from a `Map<key, f32>` array element.
+///
+/// Keys may be integer or numeric-string typed (SQL map literals such as
+/// `{'1': 0.5, '10': 0.3}` produce string keys). A map cannot carry the vector
+/// dimension, so it is inferred as `max(index) + 1`; use the Struct form
+/// (`indices`/`values`/`dim`) when the true dimension matters.
+fn sparse_from_map(map: &arrow::array::MapArray) -> Option<crate::core::index::SparseVector> {
+    use arrow::array::{
+        Float32Array, Int32Array, Int64Array, StringArray, UInt32Array, UInt64Array,
+    };
+    use arrow::datatypes::DataType;
+
+    if map.is_empty() {
+        return None;
+    }
+
+    let keys = map.keys();
+    let vals = map.values();
+    let mut pairs: Vec<(u32, f32)> = Vec::new();
+
+    for i in 0..keys.len() {
+        let idx = match keys.data_type() {
+            DataType::UInt32 => keys
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .map(|a| a.value(i)),
+            DataType::Int32 => keys
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .map(|a| a.value(i) as u32),
+            DataType::Int64 => keys
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .map(|a| a.value(i) as u32),
+            DataType::UInt64 => keys
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .map(|a| a.value(i) as u32),
+            DataType::Utf8 => keys
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .and_then(|a| a.value(i).parse::<u32>().ok()),
+            _ => None,
+        };
+        let val = vals
+            .as_any()
+            .downcast_ref::<Float32Array>()
+            .map(|a| a.value(i));
+        if let (Some(ix), Some(v)) = (idx, val) {
+            pairs.push((ix, v));
+        }
+    }
+
+    if pairs.is_empty() {
+        return None;
+    }
+
+    // Sparse vectors must be sorted by index.
+    pairs.sort_by_key(|(i, _)| *i);
+    pairs.dedup_by_key(|(i, _)| *i);
+    let dim = pairs.last().map(|(i, _)| *i as usize + 1).unwrap_or(0);
+    let (indices, values): (Vec<u32>, Vec<f32>) = pairs.into_iter().unzip();
+    Some(crate::core::index::SparseVector {
+        indices,
+        values,
+        dim,
+    })
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+    use arrow::array::{Float32Builder, MapBuilder, StringBuilder};
+
+    fn build_map(entries: &[(&str, f32)]) -> arrow::array::MapArray {
+        let mut b = MapBuilder::new(None, StringBuilder::new(), Float32Builder::new());
+        for (k, v) in entries {
+            b.keys().append_value(k);
+            b.values().append_value(*v);
+        }
+        b.append(true).unwrap();
+        b.finish()
+    }
+
+    #[test]
+    fn parses_string_keyed_map() {
+        let map = build_map(&[("10", 0.3), ("1", 0.5)]);
+        let sv = sparse_from_map(&map).expect("map should parse");
+        // Sorted by index, dimension inferred from the largest index.
+        assert_eq!(sv.indices, vec![1, 10]);
+        assert_eq!(sv.values, vec![0.5, 0.3]);
+        assert_eq!(sv.dim, 11);
+    }
+
+    #[test]
+    fn empty_map_is_none() {
+        let map = build_map(&[]);
+        assert!(sparse_from_map(&map).is_none());
+    }
+
+    #[test]
+    fn non_numeric_keys_are_skipped() {
+        let map = build_map(&[("nope", 1.0), ("3", 2.0)]);
+        let sv = sparse_from_map(&map).expect("one valid entry");
+        assert_eq!(sv.indices, vec![3]);
+        assert_eq!(sv.values, vec![2.0]);
+        assert_eq!(sv.dim, 4);
+    }
 }

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Sparse query vectors as SQL maps**: the vector-search sort-expr parser now
+  accepts a sparse query as a `Map<key, f32>` literal
+  (`{'1': 0.5, '10': 0.3}`), in addition to the existing `Struct` form
+  (`indices`/`values`/`dim`). Keys may be integer or numeric-string typed;
+  entries are sorted by index and de-duplicated. A map cannot carry the vector
+  dimension, so it is inferred as `max(index) + 1` — use the Struct form to
+  state the true dimension.
 - **OR-over-ranges pushdown (A1.6)**: `TableProvider::scan` recognises a
   same-column disjunction of ranges — `(id BETWEEN 1 AND 5) OR (id BETWEEN 50
   AND 55)`, including the lowered `a >= x AND a <= y` form — and unions the
