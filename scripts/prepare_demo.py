@@ -87,6 +87,43 @@ def _run(cmd, **kw):
     return subprocess.run(cmd, cwd=REPO, check=True, **kw)
 
 
+def _enable_cuda_jit():
+    """Make the engine's CUDA JIT path work with pip's CUDA wheels.
+
+    cudarc 0.13.9 probes libnvrtc under libnvrtc.so / .so.{12,11,10,1}, but the
+    `nvidia-*-cu13` wheels ship only `libnvrtc.so.13`, so every index build
+    panicked on the probe and silently ran on CPU. Create symlinks for the
+    probed names and re-exec this script once with LD_LIBRARY_PATH pointing at
+    them (dlopen reads the search path at process start, so it can't be fixed
+    from inside a running interpreter).
+    """
+    if os.environ.get("HDB_CUDA_SHIMS") == "1" or os.environ.get("HDB_NO_CUDA_SHIMS"):
+        return
+    import glob
+    libs = sorted(glob.glob(os.path.join(REPO, ".venv*", "lib", "python3*",
+                                         "site-packages", "nvidia", "cu*", "lib",
+                                         "libnvrtc.so.*")))
+    real = next((p for p in libs if p.endswith(".13")), libs[0] if libs else None)
+    if not real:
+        return
+    shim_dir = os.path.join(REPO, ".venv-cuda-shims")
+    os.makedirs(shim_dir, exist_ok=True)
+    for name in ("libnvrtc.so", "libnvrtc.so.12", "libnvrtc.so.11", "libnvrtc.so.10",
+                 "libnvrtc.so.1", "libnvrtc64.so", "libnvrtc64_120_0.so"):
+        dst = os.path.join(shim_dir, name)
+        if not os.path.exists(dst):
+            try:
+                os.symlink(real, dst)
+            except OSError:
+                pass
+    ld = f"{shim_dir}:{os.path.dirname(real)}"
+    env = dict(os.environ)
+    env["LD_LIBRARY_PATH"] = f"{ld}:{env['LD_LIBRARY_PATH']}" if env.get("LD_LIBRARY_PATH") else ld
+    env["HDB_CUDA_SHIMS"] = "1"
+    log(f"cuda: re-exec with nvrtc shims ({real})")
+    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), *sys.argv[1:]], env)
+
+
 def _full_dir() -> str:
     """Parser output dir: prefer data/full, then legacy data_full."""
     for d in (os.path.join(DATA, "full"), os.path.join(REPO, "data_full")):
@@ -490,6 +527,8 @@ def stage_compact(min_file_size_bytes: int = 2_000_000_000):
 
 
 def main():
+    _enable_cuda_jit()  # no-op unless nvrtc needs shimming (re-execs once)
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "compact", "all"], default="all")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")

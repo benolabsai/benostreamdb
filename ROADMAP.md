@@ -641,6 +641,19 @@ First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG 
 - [ ] Official LlamaIndex integration packages (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`): vector store, edge-table property-graph store, and the two-level Graph-RAG retriever (seed index → CSR expansion → bitmap-filtered rerank, as demonstrated by the full-site Wikipedia demo).
 - [ ] Runnable examples and docs for both frameworks (see Active Roadmap §9c).
 
+### CUDA Library Discovery [Free]
+- [ ] **Find nvrtc/cudart from installed wheels**: cudarc 0.13.9 probes only
+  `libnvrtc.so` / `.so.{12,11,10,1}`, so pip's `nvidia-*-cu13` layout
+  (`nvidia/cu13/lib/libnvrtc.so.13`) is never found — the JIT path panics and
+  silently falls back to CPU (the demo ships `scripts/create_cuda_shims.sh` and
+  auto-re-execs with `LD_LIBRARY_PATH` as a workaround). Proper fix: resolve the
+  library path ourselves (glob `site-packages/nvidia/*/lib`, honour
+  `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so
+  `pip install` alone is enough — no env-var prefix.
+- [ ] **GPU-accelerated index construction beyond bucketing**: k-means centroid
+  training and, where the metric allows, per-cluster graph construction are
+  still CPU-bound (the batched assignment already dispatches to CUDA).
+
 ### Native Ingest Orchestrator (tokio) — cluster-free bulk ingest [Free]
 Spark stays for pre-write transforms and existing lake pipelines, but ingestion must
 not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes,
