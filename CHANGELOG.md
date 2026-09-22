@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sparse vectors; fixed-width `f32`/`u8` still `bytemuck`-cast.
   `ArrowHnsw::get_vector` returns an owned `Vec<T>`.
 
+### Fixed
+- **Vector-search column projection was ignored**: `HybridReader::read_rows_by_id`
+  took a `columns` parameter but never used it (`_columns`), so a vector search
+  projecting two columns still read *every* column of the row from Parquet. It
+  now builds a projected schema and reads only what was asked for, falling back
+  to the full schema when a requested name is unknown.
+
 ### Removed
 - Dead code: `src/core/planner/filter.rs` and `src/core/planner/vector_search.rs`.
   Neither was declared as a module (`planner.rs` has no `mod filter;` /
