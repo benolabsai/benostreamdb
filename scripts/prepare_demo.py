@@ -435,9 +435,41 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
     log(f"load nodes: all chunks complete ({total:,} rows)")
 
 
+def _count_segments(nodes_dir: str) -> int:
+    if not os.path.isdir(nodes_dir):
+        return 0
+    return len([f for f in os.listdir(nodes_dir)
+                if f.endswith(".parquet")
+                and not any(x in f for x in ("title", "centroids", "tq8", ".inv."))])
+
+
+def stage_compact(min_file_size_bytes: int = 2_000_000_000):
+    """Final step: compact the nodes table into fewer, larger indexed segments.
+
+    Chunked loads create many small segments and every query fans out over all
+    of them. Compaction rewrites them into ~2x-min-size segments and rebuilds
+    their vector/inverted indexes (the engine carries the table's index config
+    into the compactor; the config itself is restored from the manifest on open).
+    """
+    import hyperstreamdb as hdb
+
+    nodes_dir = os.path.join(DB, "nodes")
+    if not _table_loaded(nodes_dir):
+        log("compact: nodes table missing — run --stage load first")
+        return
+    before = _count_segments(nodes_dir)
+    log(f"compact: {before} segments -> target {min_file_size_bytes * 2 / 1e9:.1f} GB "
+        f"(min {min_file_size_bytes / 1e9:.1f} GB)")
+    t = hdb.Table(f"file://{nodes_dir}")
+    t0 = time.time()
+    t.rewrite_data_files(min_file_size_bytes)
+    after = _count_segments(nodes_dir)
+    log(f"compact: {before} -> {after} segments in {time.time()-t0:.0f}s")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "all"], default="all")
+    ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "compact", "all"], default="all")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")
     ap.add_argument("--embed-model", default="all-MiniLM-L6-v2",
                     help="384-d centroid embedder (fast+small). bge-small-en-v1.5 (384d) or "
@@ -455,9 +487,12 @@ def main():
                          "MemAvailable at 4.5 GB/M rows, clamped 250k..10M). -1 = single process")
     ap.add_argument("--row-start", type=int, default=0, help=argparse.SUPPRESS)
     ap.add_argument("--row-end", type=int, default=0, help=argparse.SUPPRESS)
+    ap.add_argument("--compact-min-bytes", type=int, default=2_000_000_000,
+                    help="compaction candidate threshold; output segments target 2x this")
     args = ap.parse_args()
 
-    stages = ["download", "parse", "resolve", "embed", "load"] if args.stage == "all" else [args.stage]
+    stages = (["download", "parse", "resolve", "embed", "load", "compact"]
+              if args.stage == "all" else [args.stage])
     for s in stages:
         log(f"=== stage {s} ===")
         if s == "download":
@@ -482,6 +517,8 @@ def main():
                 _disk_guard(inputs)
             stage_load(args.rebuild, args.quant, not args.keep_shards,
                        chunk, args.row_start, args.row_end)
+        elif s == "compact":
+            stage_compact(args.compact_min_bytes)
     log("requested stages complete.")
 
 
