@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OR-over-ranges pushdown (A1.6)**: `TableProvider::scan` recognises a
+  same-column disjunction of ranges — `(id BETWEEN 1 AND 5) OR (id BETWEEN 50
+  AND 55)`, including the lowered `a >= x AND a <= y` form — and unions the
+  per-range index bitmaps to skip segments that cannot match before reading
+  them. Mixed-column disjunctions are left to DataFusion, and pruning only
+  happens when the column is indexed and every range yields a bitmap.
+- **Row-value IN-list pushdown on the read path (A1.7)**: new
+  `Table::read_pk_filter_async`, plus a `TableProvider::scan` hook, push
+  `(c1, c2) IN ((..), (..))` down as a single expression and use the per-column
+  inverted indexes to prune non-matching segments. The guard requires *every*
+  PK column to be indexed, since a partial index would under-count matches.
+- **Sparse vector Arrow IPC serialization (A1.9)**: the `ArrowType` trait was a
+  zero-copy `as_bytes(&[Self]) -> &[u8]`, which a variable-length `SparseVector`
+  cannot satisfy (its elements live in separate allocations). It is now an owned
+  `to_bytes`/`from_bytes` pair with a self-describing little-endian encoding for
+  sparse vectors; fixed-width `f32`/`u8` still `bytemuck`-cast.
+  `ArrowHnsw::get_vector` returns an owned `Vec<T>`.
+
+### Removed
+- Dead code: `src/core/planner/filter.rs` and `src/core/planner/vector_search.rs`.
+  Neither was declared as a module (`planner.rs` has no `mod filter;` /
+  `mod vector_search;`) and nothing referenced them, so they were orphaned
+  duplicates of the live `QueryFilter` / `VectorSearchParams` in `planner.rs`.
+  Removing them is a no-op for behaviour.
 - **MVCC manifest commits (lock-free)**: the global `commit.lock` is gone from
   `update_schema` — schema/index-spec evolution is now pure optimistic
   concurrency (`PutMode::Create` + rebase). `CommitMetadata::skip_missing_remove_paths`

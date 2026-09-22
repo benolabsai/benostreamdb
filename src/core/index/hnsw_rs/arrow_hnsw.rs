@@ -183,8 +183,12 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         })
     }
 
-    // Internal helper to get a vector slice safely using ArrowType trait
-    pub fn get_vector(&self, idx: usize) -> &[T] {
+    /// Decode the value stored for `idx`.
+    ///
+    /// Returns an owned `Vec<T>`: the byte blob in the Arrow array is only a
+    /// contiguous `&[T]` for fixed-width types, so variable-length values (e.g.
+    /// `SparseVector`) must be decoded.
+    pub fn get_vector(&self, idx: usize) -> Vec<T> {
         let bytes = self.vector_array.value(idx);
         T::from_bytes(bytes)
     }
@@ -230,7 +234,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             return return_points;
         }
 
-        let dist_to_entry = self.distance.eval(query, self.get_vector(entry_point));
+        let dist_to_entry = self.distance.eval(query, &self.get_vector(entry_point));
 
         // visited points
         let mut visited = std::collections::HashSet::new();
@@ -279,7 +283,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 if !visited.contains(&e_idx) {
                     visited.insert(e_idx);
                     let v = self.get_vector(e_idx);
-                    let e_dist = self.distance.eval(query, v);
+                    let e_dist = self.distance.eval(query, &v);
 
                     let mut enters_return = false;
                     if let Some(f) = filter {
@@ -335,7 +339,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         }
 
         let mut pivot = self.entry_point;
-        let mut dist_to_entry = self.distance.eval(query, self.get_vector(pivot));
+        let mut dist_to_entry = self.distance.eval(query, &self.get_vector(pivot));
         let mut new_pivot = None;
 
         for layer in (1..=self.max_layer as usize).rev() {
@@ -344,7 +348,7 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 let neighbors = self.get_neighbors(pivot, layer);
                 for n_idx in neighbors {
                     let n_idx = n_idx as usize;
-                    let tmp_dist = self.distance.eval(query, self.get_vector(n_idx));
+                    let tmp_dist = self.distance.eval(query, &self.get_vector(n_idx));
                     if tmp_dist < dist_to_entry {
                         new_pivot = Some(n_idx);
                         has_changed = true;
