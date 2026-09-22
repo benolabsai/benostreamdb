@@ -193,14 +193,23 @@ def stage_resolve():
 def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     os.makedirs(EMB, exist_ok=True)
     src = os.path.join(DATA, "wiki_nodes.parquet")
-    done_shards = sorted(f for f in os.listdir(EMB)
-                         if f.startswith("part-") and f.endswith(".parquet"))
-    if done_shards:
-        log(f"embed: {len(done_shards)} shard(s) present — skipping (delete data/embeddings/ to redo)")
-        return
-    for stale in os.listdir(EMB):  # leftovers from a crashed run
+    for stale in os.listdir(EMB):  # leftovers from an interrupted run
         if stale.endswith(".tmp"):
             os.remove(os.path.join(EMB, stale))
+    done_shards = sorted(f for f in os.listdir(EMB)
+                         if f.startswith("part-") and f.endswith(".parquet"))
+    # RESUME: shards are contiguous row-order slices, so finished ones tell us
+    # exactly how many source rows are already embedded — continue from there
+    # instead of redoing hours of GPU work.
+    done_rows = sum(pq.ParquetFile(os.path.join(EMB, s)).metadata.num_rows
+                    for s in done_shards)
+    total_rows = pq.ParquetFile(src).metadata.num_rows
+    if done_rows >= total_rows:
+        log(f"embed: all {done_rows:,} rows embedded across {len(done_shards)} shard(s) — done")
+        return
+    if done_shards:
+        log(f"embed: resuming — {done_rows:,}/{total_rows:,} rows already embedded "
+            f"({len(done_shards)} shard(s))")
 
     import torch
     from sentence_transformers import SentenceTransformer
@@ -223,16 +232,24 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     # Rotate shards every SHARD_ROWS so the load stage can delete each shard
     # after ingesting it (bounds peak disk); tmp+rename keeps files atomic.
     SHARD_ROWS = int(os.environ.get("HDB_EMBED_SHARD_ROWS", 5_000_000))
-    shard = 0
+    shard = len(done_shards)          # continue numbering after finished shards
     writer = None
     cur_tmp = cur_final = None
     rows_in_shard = 0
     dim = None
-    done = 0
+    done = done_rows                  # rows already on disk (resume)
+    skip = done_rows                  # source rows to fast-forward past
     t0 = time.time()
     pf = pq.ParquetFile(src)
     n_rows = pf.metadata.num_rows
     for batch_df in pl.scan_parquet(src).collect_batches(chunk_size=200_000):
+        if skip > 0:                  # fast-forward over already-embedded rows
+            h = batch_df.height
+            if skip >= h:
+                skip -= h
+                continue
+            batch_df = batch_df.slice(skip, h - skip)
+            skip = 0
         titles = batch_df["title"].to_list()
         summaries = batch_df["summary"].to_list()
         combined = [f"{t}. {(s or '')[:lead_chars]}" for t, s in zip(titles, summaries)]
