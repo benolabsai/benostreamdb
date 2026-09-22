@@ -610,8 +610,32 @@ First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG 
 - [ ] **[Free] Property-graph store**: `GraphStore` over edge tables (`subgraph`, `connecting_paths`, `graph_neighbors` UDAFs) enabling `PropertyGraphIndex` / HippoRAG-style retrievers on lakehouse data.
 - [ ] **[Free] Two-level Graph-RAG retriever**: Composite retriever mirroring the full-site Wikipedia demo pattern — 384-d seed index → CSR expansion → bitmap-filtered rerank.
 
-#### 9c. [Free] Examples & Docs
-- [ ] **[Free] Runnable examples**: `examples/langchain_rag.py` and `examples/llamaindex_graph_rag.py` with integration docs.
+#### 9c. [Free] Haystack (`hyperstream-haystack`)
+- [ ] **[Free] `HyperStreamDocumentStore`**: implement deepset's `DocumentStore`
+  contract (`write_documents`, `filter_documents`, `delete_documents`, embedding
+  retrieval) over HyperStreamDB tables, with metadata filters pushed down as
+  RoaringBitmap predicates and embeddings served by the TQ HNSW indexes.
+- [ ] **[Free] `HyperStreamEmbeddingRetriever`**: dense/sparse (BM25) and hybrid
+  (RRF) retrieval components usable in a Haystack pipeline.
+- [ ] **[Free] Graph-RAG retriever component**: wraps `graph_rag_search`
+  (seed index → CSR expansion → bitmap-filtered rerank) for Haystack pipelines.
+
+#### 9d. [Free] LangGraph & agent tooling
+LangGraph is an orchestration layer rather than a store framework: the
+integration is the reverse direction — expose HyperStreamDB retrievers as graph
+nodes/tools so agent workflows can use them.
+
+- [ ] **[Free] Retrieval tools**: `HyperStreamRetrieverTool`,
+  `HyperStreamGraphRagTool`, `HyperStreamDriftTool` (typed tool wrappers with
+  provenance: seed pages, PPR scores, hop paths).
+- [ ] **[Free] Reference agent graph**: `examples/langgraph_agentic_rag.py` —
+  planner → hybrid retrieve → graph expand/rerank → synthesize, demonstrating
+  agentic Graph RAG over the whole-site Wikipedia tables.
+
+#### 9e. [Free] Examples & Docs
+- [ ] **[Free] Runnable examples**: `examples/langchain_rag.py`,
+  `examples/llamaindex_graph_rag.py`, `examples/haystack_pipeline.py` and the
+  LangGraph agent above, with integration docs.
 
 ---
 
@@ -650,9 +674,17 @@ First-class integrations exposing HyperStreamDB's vector, hybrid, and Graph RAG 
   library path ourselves (glob `site-packages/nvidia/*/lib`, honour
   `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so
   `pip install` alone is enough — no env-var prefix.
-- [ ] **GPU-accelerated index construction beyond bucketing**: k-means centroid
-  training and, where the metric allows, per-cluster graph construction are
-  still CPU-bound (the batched assignment already dispatches to CUDA).
+- [x] **GPU-accelerated k-means centroid training**: `simple_kmeans` now dispatches
+  its assignment step (iters × sample × k × dim) to
+  `gpu::compute_kmeans_assignment` when a GPU backend is usable, keeping the
+  rayon CPU scan as the fallback. ✅
+- [ ] **GPU distance computation inside graph construction**: `hnsw_rs` builds
+  neighbour graphs CPU-only and the CUDA backend has no HNSW kernel. Implementing
+  GPU HNSW construction is research-grade; the realistically GPU-accelerable
+  piece is the *distance computation during insertion (neighbor search)*, which
+  cannot be wired in trivially because `hnsw_rs` owns that loop — it requires
+  either a custom CUDA HNSW build or an IVF-flat GPU path for large clusters.
+  Tracked as design work, deliberately not a dispatcher change.
 
 ### Native Ingest Orchestrator (tokio) — cluster-free bulk ingest [Free]
 Spark stays for pre-write transforms and existing lake pipelines, but ingestion must
