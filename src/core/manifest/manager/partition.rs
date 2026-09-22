@@ -117,10 +117,14 @@ impl PartitionSpec {
                     anyhow::bail!("Cannot find source column for partition field '{}'. Ensure the column exists in the batch or is named correctly.", field.name);
                 }
 
-                // Take the first matching column for the partition key value
-                let col = &cols[0];
-                let manifest_val = crate::core::manifest::ManifestValue::from_array(col, i);
-                key.push(manifest_val.to_json_value());
+                // Apply the declared transform to the raw source arrays. The
+                // transform must be a deterministic function of the row data so
+                // that a merged batch can be re-partitioned correctly — this is
+                // what makes cross-partition compaction safe.
+                let transform = crate::core::iceberg::IcebergTransform::parse(&field.transform);
+                let arrays: Vec<&dyn arrow::array::Array> =
+                    cols.iter().map(|c| c.as_ref()).collect();
+                key.push(transform.apply_multi(&arrays, i));
             }
 
             row_groups.entry(key).or_default().push(i as u32);
@@ -151,5 +155,77 @@ impl PartitionSpec {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn spec(transform: &str, name: &str) -> PartitionSpec {
+        PartitionSpec {
+            spec_id: 0,
+            fields: vec![PartitionField::new_single(
+                1,
+                Some(1000),
+                name.to_string(),
+                transform.to_string(),
+            )],
+        }
+    }
+
+    fn string_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("category", DataType::Utf8, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn identity_partition_uses_raw_value() {
+        let parts = spec("identity", "category")
+            .partition_batch(&string_batch())
+            .unwrap();
+        let mut vals: Vec<String> = parts
+            .iter()
+            .map(|(k, _)| k["category"].as_str().unwrap().to_string())
+            .collect();
+        vals.sort();
+        assert_eq!(vals, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn bucket_partition_is_bounded_int() {
+        let parts = spec("bucket(8)", "category")
+            .partition_batch(&string_batch())
+            .unwrap();
+        assert!(!parts.is_empty());
+        for (k, _) in &parts {
+            let v = k["category"].as_u64().expect("bucket value must be an int");
+            assert!(v < 8, "bucket value must be < 8, got {v}");
+        }
+    }
+
+    #[test]
+    fn truncate_partition_floors_integers() {
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from(vec![123, 127]))],
+        )
+        .unwrap();
+        let parts = spec("truncate(10)", "n").partition_batch(&batch).unwrap();
+        assert_eq!(parts.len(), 1, "123 and 127 share a partition");
+        assert_eq!(parts[0].0["n"], serde_json::json!(120));
     }
 }

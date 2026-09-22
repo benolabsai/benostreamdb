@@ -55,6 +55,15 @@ pub struct CommitMetadata {
     /// If true, verifies that all remove_paths still exist in the current snapshot version.
     /// Used by compaction to prevent removing files concurrently replaced or deleted.
     pub require_remove_paths_exist: bool,
+    /// MVCC rebase policy: when true, a `remove_path` that no longer exists in
+    /// the current snapshot is *skipped* rather than aborting the commit.
+    ///
+    /// This is what makes concurrent writers safe: if two compactions race on
+    /// the same candidate file, the loser rebases onto the winner's snapshot
+    /// and simply drops the already-removed path instead of failing hard. Only
+    /// meaningful together with `require_remove_paths_exist`; when that is
+    /// false, missing paths are already ignored.
+    pub skip_missing_remove_paths: bool,
 }
 
 impl ManifestManager {

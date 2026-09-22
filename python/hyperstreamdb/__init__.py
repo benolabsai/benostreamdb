@@ -2464,6 +2464,15 @@ class Table:
         """Alias for `rewrite_data_files`."""
         return self.rewrite_data_files(min_file_size_bytes)
 
+    def snapshot_version(self) -> int:
+        """Return the latest committed manifest version (MVCC snapshot id).
+
+        Every commit is a monotonically increasing ``v{N}.json`` written with
+        an atomic create, so this value is a stable snapshot identifier. Pin it
+        to reason about a consistent view while other writers commit.
+        """
+        return self._inner.snapshot_version()
+
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
         """
         Add an indexing strategy to a column.

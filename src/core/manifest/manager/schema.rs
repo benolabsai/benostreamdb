@@ -3,7 +3,6 @@
 //! Schema management: updating schemas, identifier fields, and index specifications.
 
 use anyhow::Result;
-use object_store::path::Path;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -15,17 +14,20 @@ fn is_already_exists(err: &object_store::Error) -> bool {
 }
 
 impl ManifestManager {
+    /// Commit a schema evolution.
+    ///
+    /// MVCC: this is a pure optimistic-concurrency operation. It does **not**
+    /// take the global `commit.lock` — the `PutMode::Create` write of
+    /// `v{N+1}.json` is the linearization point, and the retry loop rebases
+    /// onto the latest snapshot on conflict. Holding a coarse table-wide lock
+    /// here would serialize schema/index-spec updates against every other
+    /// writer and defeat the lock-free commit path.
     pub async fn update_schema(
         &self,
         new_schemas: Vec<Schema>,
         new_schema_id: i32,
         last_column_id: Option<i32>,
     ) -> Result<Manifest> {
-        let dist_lock_path = Path::from(format!("{}/commit.lock", self.manifest_dir));
-        let dist_lock =
-            crate::core::lock::FileBasedLock::new(self.store.clone(), dist_lock_path, 30);
-        let _dist_guard = dist_lock.acquire().await?;
-
         let max_retries = 10;
         let mut attempt = 0;
 
