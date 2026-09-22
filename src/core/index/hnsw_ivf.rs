@@ -969,8 +969,8 @@ impl HnswIvfIndex {
             .take(n_probe)
             .map(|(i, _)| *i)
             .collect();
-        println!("Sorted cluster distances: {:?}", cluster_distances);
-        println!("Clusters to search: {:?}", clusters_to_search);
+        tracing::debug!("Sorted cluster distances: {:?}", cluster_distances);
+        tracing::debug!("Clusters to search: {:?}", clusters_to_search);
         let t_coarse = t_start.elapsed();
         let t_fine_start = std::time::Instant::now();
 
@@ -1030,7 +1030,7 @@ impl HnswIvfIndex {
             .collect();
 
         // Step 3: Merge and return top-k
-        println!("Candidates before sort/dedup: len={}", candidates.len());
+        tracing::debug!("Candidates before sort/dedup: len={}", candidates.len());
         candidates.sort_by(|a, b| {
             match a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal) {
                 std::cmp::Ordering::Equal => a.0.cmp(&b.0),

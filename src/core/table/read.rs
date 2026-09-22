@@ -859,7 +859,7 @@ impl Table {
         columns: Option<&[&str]>,
         cached_iceberg_schema: Option<&crate::core::manifest::Schema>,
     ) -> Result<Vec<RecordBatch>> {
-        println!(">>> read_segment_expr called with entry={}, manifest_version={}, columns={:?}, expr={:?}", entry.file_path, manifest_version, columns, expr);
+        tracing::debug!("read_segment_expr entry={} manifest_version={} columns={:?} expr={:?}", entry.file_path, manifest_version, columns, expr);
         let file_path_str = entry.file_path.clone();
         let segment_id = file_path_str
             .split('/')

@@ -41,7 +41,13 @@ impl Table {
         self.flush_async().await?;
 
         let opts = options.unwrap_or_default();
-        let compactor = Compactor::new(&self.uri, opts)?;
+        // Carry the table's index configuration so compacted segments are
+        // re-indexed (otherwise queries fall back to full scans).
+        let compactor = Compactor::new(&self.uri, opts)?.with_index_configs(
+            self.indexing.index_all,
+            self.indexing.index_columns.read().clone(),
+            self.indexing.index_configs.read().clone(),
+        );
         compactor.rewrite_data_files().await
     }
 

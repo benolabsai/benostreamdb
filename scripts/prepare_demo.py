@@ -319,9 +319,12 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
     else:
         shutil.rmtree(nodes_dir, ignore_errors=True)   # clear crashed-run shell
         t = hdb.Table.create(f"file://{nodes_dir}", schema)
-        if has_vec:
-            t.add_index("embedding", f"hnsw_{quant}" if quant != "none" else "hnsw")
-        t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
+    # Index config must be applied in EVERY process: a freshly opened table does
+    # not inherit it, and segments written without it are silently unindexed
+    # (queries then flat-scan them — measured 197 GB read for one search).
+    if has_vec:
+        t.add_index("embedding", f"hnsw_{quant}" if quant != "none" else "hnsw")
+    t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
 
     def ranged_batches(path, s, e, batch=250_000, columns=None):
         """Batches from `path` clipped to the row range [s, e)."""
