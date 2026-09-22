@@ -1025,6 +1025,94 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
 
+    /// Does `ArrowWriter::close()` hand back metadata that still carries the
+    /// chunk-level statistics we just asked it to write?
+    ///
+    /// `merge_parquet_stats` populates `column_stats` from exactly that
+    /// metadata, so if the stats are absent here, every segment ends up with
+    /// empty `column_stats` and the planner's stats pruning can never fire.
+    #[test]
+    fn parquet_close_metadata_carries_chunk_statistics() {
+        use arrow::array::{Int64Array, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("v", DataType::Utf8, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )
+        .unwrap();
+
+        let props = parquet::file::properties::WriterProperties::builder()
+            .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Chunk)
+            .build();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        let rg = metadata.row_groups().first().expect("one row group");
+        let mut seen = Vec::new();
+        for col in rg.columns() {
+            seen.push((
+                col.column_path().string(),
+                col.statistics().is_some(),
+                col.statistics()
+                    .and_then(|s| s.null_count_opt())
+                    .map(|_| "nulls"),
+            ));
+        }
+        println!("close() metadata statistics: {seen:?}");
+        assert!(
+            seen.iter().any(|(_, has, _)| *has),
+            "ArrowWriter::close() metadata carried no column statistics: {seen:?}"
+        );
+    }
+
+    /// Does the real write path actually populate `column_stats`?
+    ///
+    /// The parquet metadata carries statistics (previous test), so if this
+    /// comes back empty the loss is between `write_batch` and
+    /// `to_manifest_entry`.
+    #[tokio::test]
+    async fn write_batch_populates_column_stats() -> Result<()> {
+        use arrow::array::{Int64Array, StringArray};
+
+        let dir = tempfile::tempdir()?;
+        let base = dir.path().to_str().unwrap().to_string();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("v", DataType::Utf8, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![40, 41, 42])),
+                Arc::new(StringArray::from(vec!["a", "b", "c"])),
+            ],
+        )?;
+
+        let w = HybridSegmentWriter::new(SegmentConfig::new(&base, "seg_stats_test"));
+        w.write_batch(&batch)?;
+        let stats = w.get_stats();
+        println!("column_stats after write_batch: {stats:?}");
+        assert!(
+            stats.get("id").and_then(|s| s.min.as_ref()).is_some(),
+            "id min missing from column_stats: {stats:?}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_write_hybrid_segment() -> Result<()> {
         // 1. Setup Data: Int32 Column + Vector Column
