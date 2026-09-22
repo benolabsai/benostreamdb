@@ -242,13 +242,17 @@ pub fn simple_kmeans(
         .collect();
 
     // Step 2: Training iterations on sub-sample
-    for iter in 0..max_iters {
-        // Parallel assignment (Flat Storage batching)
-        // We use par_chunks for optimal work-stealing distribution
-        let batch_labels: Vec<usize> = flat_training_set
-            .par_chunks(dim)
+    // Assignment is the hot loop here (iters x sample x k x dim), so dispatch it
+    // to the GPU backend when one is actually usable and keep the parallel CPU
+    // scan as the fallback.
+    let gpu_ctx = crate::core::index::gpu::get_thread_gpu_context()
+        .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
+    let use_gpu = gpu_ctx.is_gpu() && gpu_ctx.is_available();
+    let mut centroids_flat: Vec<f32> = Vec::with_capacity(k * dim);
+    let cpu_assign = |flat: &[f32], cents: &[Vec<f32>]| -> Vec<usize> {
+        flat.par_chunks(dim)
             .map(|vec_slice| {
-                centroids
+                cents
                     .iter()
                     .enumerate()
                     .map(|(i, centroid)| (i, l2_distance_squared(vec_slice, centroid)))
@@ -256,7 +260,24 @@ pub fn simple_kmeans(
                     .map(|(i, _)| i)
                     .unwrap_or(0)
             })
-            .collect();
+            .collect()
+    };
+
+    for iter in 0..max_iters {
+        let batch_labels: Vec<usize> = if use_gpu {
+            centroids_flat.clear();
+            centroids_flat.extend(centroids.iter().flatten().copied());
+            match crate::core::index::gpu::compute_kmeans_assignment(
+                &flat_training_set,
+                &centroids_flat,
+                dim,
+            ) {
+                Ok(a) if a.len() == sample_size => a.into_iter().map(|x| x as usize).collect(),
+                _ => cpu_assign(&flat_training_set, &centroids),
+            }
+        } else {
+            cpu_assign(&flat_training_set, &centroids)
+        };
 
         // Update centroids using parallel reduction for accumulation
         let (new_centroids_sum, new_counts) = flat_training_set
