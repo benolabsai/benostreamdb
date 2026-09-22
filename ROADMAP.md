@@ -459,7 +459,7 @@ hdb repair s3://bucket/table
 - [ ] **EXPLAIN / EXPLAIN ANALYZE as SQL**: verified working through `execute_sql` (`EXPLAIN SELECT ...` returns the logical + physical plan; `EXPLAIN ANALYZE` returns "Plan with Metrics" including `output_rows`/`elapsed_compute`). Worth surfacing the pruning breakdown into the DataFusion plan too, so one EXPLAIN shows everything.
 - [ ] **Early Pruning for L2 Distance Scans**: Accumulate `diff_sq` early-pruning threshold (`src/core/planner.rs`).
 - [ ] **Graph Construction Profiling Hooks**: Profiling for HNSW build/search phases (`src/core/index/hnsw_rs/hnsw.rs`).
-- [ ] **AWS Glue Snapshot Paths**: Compute new metadata path from the snapshot (`src/core/catalog/glue.rs`).
+- [x] **AWS Glue metadata location** *(reframed from "compute new metadata path from the snapshot")*: Glue is the only catalog whose commit API cannot hand back an authoritative metadata location — REST/Nessie return it, Hive/JDBC set it directly — so the client must supply it. The old code *reconstructed* it from the snapshot's `sequence-number`, which only matches the metadata version by coincidence (`write.rs` happens to set `sequence_number = new_manifest.version`). The writer now captures the path `save_to_store` returns and sends an explicit `set-metadata-location` update; Glue prefers it, falls back to the old derivation with a warning, and warns (instead of silently no-op'ing) when neither is available. ✅
 - [ ] **Configuration from SQL**: Parse configuration from SQL hints.
 
 #### A2. Connector & Pushdown Enhancements

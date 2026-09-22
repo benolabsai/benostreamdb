@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **AWS Glue `metadata_location` is now authoritative**: Glue is the only
+  catalog whose commit API cannot return a metadata location (REST/Nessie
+  return it; Hive/JDBC set it directly), so the client must supply one. The
+  code reconstructed it from the snapshot's `sequence-number`, which only
+  matches the metadata version because `write.rs` happens to set those two
+  counters equal. The writer now captures the path `TableMetadata::save_to_store`
+  returns and sends an explicit `set-metadata-location` update; Glue prefers it,
+  falls back to the old derivation with a warning, and warns rather than
+  silently no-op'ing when neither is available.
+
 ### Added
 - **`vector_search_scored` — ids and scores with no Parquet I/O**: new Python
   method returning `(segment_id, row_id, score)` straight from the HNSW/BM25
