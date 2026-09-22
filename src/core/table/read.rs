@@ -16,6 +16,7 @@ use crate::SegmentConfig;
 use arrow::datatypes::Schema;
 use roaring::RoaringBitmap;
 
+use super::primary_key::PrimaryKeyFilter;
 use super::Table;
 use crate::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
 use futures::stream::BoxStream;
@@ -837,6 +838,74 @@ impl Table {
             self.query_config.clone(),
         )
         .await
+    }
+
+    /// Read the rows matching a row-value `IN` list over the primary key
+    /// columns, e.g. `(id, region) IN ((1, 'US'), (2, 'CA'))`.
+    ///
+    /// This is the read-side counterpart of the write-path PK enforcement. It
+    /// pushes the whole tuple set down as a single DataFusion expression (so
+    /// the predicate is evaluated inside the parquet scan instead of after it),
+    /// and additionally consults the per-column inverted indexes to skip whole
+    /// segments that contain no matching row — which is where the win comes
+    /// from on a wide table.
+    pub async fn read_pk_filter_async(
+        &self,
+        pk_filter: &PrimaryKeyFilter,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        if pk_filter.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, all_entries, version) = manifest_manager.load_latest_full().await?;
+
+        // Single-column PK: a plain IN list is already index-accelerated.
+        if pk_filter.columns.len() == 1 {
+            if let Some(qf) = pk_filter.to_query_filter() {
+                return self
+                    .read_filter_with_config_async(
+                        vec![qf],
+                        None,
+                        columns,
+                        self.query_config.clone(),
+                    )
+                    .await;
+            }
+        }
+
+        let expr = FilterExpr::DataFusion(pk_filter.to_expr());
+        let planner = QueryPlanner::new();
+        let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
+        let cached_schema = manifest.schemas.last().cloned();
+
+        let mut out = Vec::new();
+        for (entry, _) in candidates {
+            // Index-assisted segment skip: when the PK columns carry inverted
+            // indexes and no row matches, don't read the segment at all.
+            if let Ok(reader) = self.segment_reader(&entry) {
+                if let Ok(Some(bm)) = Self::pk_match_bitmap(&reader, pk_filter).await {
+                    let deleted = reader.load_merged_deletes().await.unwrap_or_default();
+                    if (bm - deleted).is_empty() {
+                        continue;
+                    }
+                }
+            }
+
+            let batches = self
+                .read_segment_expr(
+                    &entry,
+                    Some(&expr),
+                    version,
+                    columns,
+                    cached_schema.as_ref(),
+                )
+                .await?;
+            out.extend(batches);
+        }
+
+        Ok(out)
     }
 
     pub async fn read_filter_with_config_async(

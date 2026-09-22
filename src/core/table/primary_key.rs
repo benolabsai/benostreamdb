@@ -402,7 +402,7 @@ impl Table {
 
     /// Build a [`HybridReader`] for a manifest entry, resolving the
     /// partition-aware base path and segment id.
-    fn segment_reader(&self, entry: &ManifestEntry) -> Result<HybridReader> {
+    pub(crate) fn segment_reader(&self, entry: &ManifestEntry) -> Result<HybridReader> {
         let path = std::path::Path::new(&entry.file_path);
         let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
         let full_base_path = if rel_parent.is_empty() {
@@ -429,7 +429,7 @@ impl Table {
     /// For each candidate PK row, intersects the per-column equality bitmaps,
     /// then unions the result across rows (row-value IN list semantics).
     /// Returns `None` if no inverted index is available for the PK columns.
-    async fn pk_match_bitmap(
+    pub(crate) async fn pk_match_bitmap(
         reader: &HybridReader,
         pk_filter: &PrimaryKeyFilter,
     ) -> Result<Option<RoaringBitmap>> {

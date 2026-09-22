@@ -100,11 +100,56 @@ impl TableProvider for HyperStreamTableProvider {
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         // Fetch segments from table state
-        let segments = self
+        let mut segments = self
             .table
             .get_snapshot_segments()
             .await
             .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+
+        // Row-value IN-list pushdown over the primary key (A1.7).
+        //
+        // When the pushed-down predicate is a tuple set like
+        // `(id, region) IN ((1,'US'), (2,'CA'))` we can consult the per-column
+        // inverted indexes and drop segments that cannot match, before they are
+        // ever read. This is only sound when *every* PK column is indexed: a
+        // partial index would under-count matches and prune real rows.
+        let pk_cols = self.table.primary_key.read().clone();
+        let indexed_cols = self.table.get_index_columns();
+        let pk_filter = if !pk_cols.is_empty() && pk_cols.iter().all(|c| indexed_cols.contains(c))
+        {
+            filters.iter().find_map(|f| {
+                crate::core::table::primary_key::PrimaryKeyFilter::from_expr(f, &pk_cols)
+                    .filter(|pf| !pf.is_empty())
+            })
+        } else {
+            None
+        };
+
+        if let Some(pf) = &pk_filter {
+            let before = segments.len();
+            let mut kept = Vec::with_capacity(before);
+            for segment in segments {
+                let mut matched = true;
+                if let Ok(reader) = self.table.segment_reader(&segment) {
+                    if let Ok(Some(bm)) =
+                        crate::core::table::Table::pk_match_bitmap(&reader, pf).await
+                    {
+                        let deleted = reader.load_merged_deletes().await.unwrap_or_default();
+                        matched = !(bm - deleted).is_empty();
+                    }
+                }
+                if matched {
+                    kept.push(segment);
+                }
+            }
+            tracing::info!(
+                "SQL Scan: PK row-value pushdown ({}) pruned {}/{} segment(s)",
+                pf.describe(),
+                before - kept.len(),
+                before
+            );
+            segments = kept;
+        }
 
         // Determine parallelism
         let target_partitions = self.table.get_max_parallel_readers().unwrap_or(4);
