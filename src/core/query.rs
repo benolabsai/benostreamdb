@@ -606,6 +606,12 @@ pub async fn execute_vector_search_with_config(
                         .iter()
                         .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
                         .collect();
+                    // An empty projection means the caller named only
+                    // synthesised columns (e.g. a score-only `["distance"]`).
+                    // Keep it as `Some(empty)`: the reader uses that signal to
+                    // skip Parquet entirely. Passing it straight to Parquet
+                    // would fail with "must either specify a row count or at
+                    // least one column".
                     Some(Arc::new(arrow::datatypes::Schema::new(fields)))
                 } else {
                     None

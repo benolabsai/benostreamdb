@@ -1298,6 +1298,39 @@ impl Table {
             return Ok(vec![]);
         }
 
+        // Score-only short-circuit (vector-search I/O optimisation).
+        //
+        // The score is already in hand from the HNSW/BM25 index search, and the
+        // engine synthesises the distance column *after* reading Parquet. So a
+        // query that projects nothing but the score was reading every column of
+        // every matched row for a value it already had. Emit it directly.
+        if let Some(cols) = columns.filter(|c| !c.is_empty()) {
+            let score_like =
+                |c: &str| c == "distance" || c == "_distance" || c == "score";
+            if cols.iter().all(|c| score_like(c)) {
+                let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+                let fields: Vec<arrow::datatypes::Field> = cols
+                    .iter()
+                    .map(|c| {
+                        arrow::datatypes::Field::new(
+                            *c,
+                            arrow::datatypes::DataType::Float32,
+                            false,
+                        )
+                    })
+                    .collect();
+                let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+                let arrays: Vec<Arc<dyn arrow::array::Array>> = cols
+                    .iter()
+                    .map(|_| {
+                        Arc::new(arrow::array::Float32Array::from(scores.clone()))
+                            as Arc<dyn arrow::array::Array>
+                    })
+                    .collect();
+                return Ok(vec![RecordBatch::try_new(schema, arrays)?]);
+            }
+        }
+
         // Group by segment to minimize I/O
         let mut by_segment: HashMap<String, Vec<(u32, f32)>> = HashMap::new();
         for r in results {

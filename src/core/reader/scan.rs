@@ -949,7 +949,6 @@ impl HybridReader {
                         }
                     })
                     .collect();
-                println!("Chunk indices len: {}", chunk_indices.len());
                 let results = futures::future::join_all(futures).await;
                 let mut merged: Vec<(usize, f32)> = Vec::new();
                 let mut any_ok = false;
@@ -1410,6 +1409,38 @@ impl HybridReader {
 
         if bitmap.is_empty() {
             return Ok(vec![]);
+        }
+
+        // Score-only short-circuit: an empty `target_schema` means the caller
+        // named only synthesised columns — in practice just the score. The
+        // score is already in hand from the index search, so there is nothing
+        // to read from Parquet. Emit the distance column directly.
+        if let Some(schema) = target_schema.as_ref() {
+            if schema.fields().is_empty() {
+                let row_ids: Vec<u32> = bitmap.iter().collect();
+                let batch_distances: Vec<f32> = row_ids
+                    .iter()
+                    .map(|id| row_distances.get(id).copied().unwrap_or(f32::MAX))
+                    .collect();
+
+                let distance_array = std::sync::Arc::new(
+                    arrow::array::Float32Array::from(batch_distances.clone()),
+                );
+                let final_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+                    arrow::datatypes::Field::new(
+                        "distance",
+                        arrow::datatypes::DataType::Float32,
+                        false,
+                    ),
+                ]));
+                let final_batch = RecordBatch::try_new_with_options(
+                    final_schema,
+                    vec![distance_array],
+                    &arrow::record_batch::RecordBatchOptions::new()
+                        .with_row_count(Some(batch_distances.len())),
+                )?;
+                return Ok(vec![(final_batch, batch_distances)]);
+            }
         }
 
         // Fetch Rows - use resolved path
