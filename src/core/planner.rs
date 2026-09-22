@@ -24,6 +24,43 @@ pub struct QueryFilter {
     pub negated: bool,
 }
 
+/// Why a manifest entry was ruled out during scan planning.
+///
+/// `explain()` reports a breakdown of these so a plan says *why* files were
+/// skipped, not just how many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PruneReason {
+    /// The file's partition value is below the filter's lower bound.
+    PartitionBelowMin,
+    /// The file's partition value is above the filter's upper bound.
+    PartitionAboveMax,
+    /// The file's partition value is absent from the filter's IN list.
+    PartitionNotInList,
+    /// Column statistics show every value in the file is NULL.
+    StatsAllNull,
+    /// Column statistics `max` is below the filter's lower bound.
+    StatsBelowMin,
+    /// Column statistics `min` is above the filter's upper bound.
+    StatsAboveMax,
+    /// No value in the filter's IN list falls inside the file's `[min, max]`.
+    StatsNotInList,
+}
+
+impl PruneReason {
+    /// Human-readable label used in `EXPLAIN` output.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::PartitionBelowMin => "partition value < min",
+            Self::PartitionAboveMax => "partition value > max",
+            Self::PartitionNotInList => "partition value not in IN-list",
+            Self::StatsAllNull => "all values NULL",
+            Self::StatsBelowMin => "column max < filter min",
+            Self::StatsAboveMax => "column min > filter max",
+            Self::StatsNotInList => "IN-list outside column [min, max]",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VectorSearchParams {
     pub column: String,
@@ -1017,10 +1054,32 @@ impl QueryPlanner {
     }
 
     pub fn might_match_condition(&self, entry: &ManifestEntry, filter: &QueryFilter) -> bool {
+        self.classify_condition(entry, filter, true).is_none()
+    }
+
+    /// Decide whether a manifest entry can be skipped, and **why**.
+    ///
+    /// Returns `None` when the entry must be scanned, or `Some(reason)` naming
+    /// the first pruning rule that ruled it out. `explain()` uses this to show a
+    /// breakdown instead of a bare "N segments pruned".
+    ///
+    /// Pass `emit_metrics = false` on diagnostic paths (EXPLAIN) so the
+    /// operational pruning counters reflect real scans only.
+    pub fn classify_condition(
+        &self,
+        entry: &ManifestEntry,
+        filter: &QueryFilter,
+        emit_metrics: bool,
+    ) -> Option<PruneReason> {
+        let bump = |name: &'static str| {
+            if emit_metrics {
+                metrics::counter!(name).increment(1);
+            }
+        };
         if filter.negated {
             // Pruning negated conditions is coarse for now.
-            metrics::counter!("hyperstreamdb.kept.negated_condition").increment(1);
-            return true;
+            bump("hyperstreamdb.kept.negated_condition");
+            return None;
         }
         // 1. Partition-level Pruning (Coarse-grained)
         // If the query column is a partition column, we can prune entire files instantly.
@@ -1040,13 +1099,13 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
-                    metrics::counter!("hyperstreamdb.pruned.partition_min").increment(1);
+                    bump("hyperstreamdb.pruned.partition_min");
                     tracing::debug!(
                         "  -> Pruned by partition min: {} < {:?}",
                         entry_val,
                         min_val
                     );
-                    return false;
+                    return Some(PruneReason::PartitionBelowMin);
                 }
             }
 
@@ -1059,25 +1118,25 @@ impl QueryPlanner {
                         || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
-                    metrics::counter!("hyperstreamdb.pruned.partition_max").increment(1);
+                    bump("hyperstreamdb.pruned.partition_max");
                     tracing::debug!(
                         "  -> Pruned by partition max: {} > {:?}",
                         entry_val,
                         max_val
                     );
-                    return false;
+                    return Some(PruneReason::PartitionAboveMax);
                 }
             }
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
-                    metrics::counter!("hyperstreamdb.pruned.partition_in_list").increment(1);
+                    bump("hyperstreamdb.pruned.partition_in_list");
                     tracing::debug!(
                         "  -> Pruned by partition values IN list: {:?} not in {:?}",
                         entry_val,
                         values
                     );
-                    return false;
+                    return Some(PruneReason::PartitionNotInList);
                 }
             }
         }
@@ -1085,8 +1144,8 @@ impl QueryPlanner {
         // 2. Statistics Pruning (Fine-grained)
         if let Some(stats) = entry.column_stats.get(&filter.column) {
             if stats.null_count == entry.record_count {
-                metrics::counter!("hyperstreamdb.pruned.stats_all_null").increment(1);
-                return false;
+                bump("hyperstreamdb.pruned.stats_all_null");
+                return Some(PruneReason::StatsAllNull);
             }
 
             if let Some(entry_max) = &stats.max {
@@ -1101,8 +1160,8 @@ impl QueryPlanner {
                     };
 
                     if too_small {
-                        metrics::counter!("hyperstreamdb.pruned.stats_max").increment(1);
-                        return false;
+                        bump("hyperstreamdb.pruned.stats_max");
+                        return Some(PruneReason::StatsBelowMin);
                     }
                 }
             }
@@ -1118,8 +1177,8 @@ impl QueryPlanner {
                             || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_large {
-                        metrics::counter!("hyperstreamdb.pruned.stats_min").increment(1);
-                        return false;
+                        bump("hyperstreamdb.pruned.stats_min");
+                        return Some(PruneReason::StatsAboveMax);
                     }
                 }
             }
@@ -1130,8 +1189,8 @@ impl QueryPlanner {
                 let max_val = stats.max.as_ref();
 
                 if min_val.is_none() && max_val.is_none() {
-                    metrics::counter!("hyperstreamdb.kept.missing_stats").increment(1);
-                    return true;
+                    bump("hyperstreamdb.kept.missing_stats");
+                    return None;
                 }
 
                 for v in values {
@@ -1155,16 +1214,16 @@ impl QueryPlanner {
                 }
 
                 if !possible_match {
-                    metrics::counter!("hyperstreamdb.pruned.stats_in_list").increment(1);
-                    return false;
+                    bump("hyperstreamdb.pruned.stats_in_list");
+                    return Some(PruneReason::StatsNotInList);
                 }
             }
 
-            metrics::counter!("hyperstreamdb.kept.in_range").increment(1);
-            true
+            bump("hyperstreamdb.kept.in_range");
+            None
         } else {
-            metrics::counter!("hyperstreamdb.kept.missing_stats").increment(1);
-            true
+            bump("hyperstreamdb.kept.missing_stats");
+            None
         }
     }
 

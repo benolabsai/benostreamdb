@@ -158,6 +158,30 @@ impl Table {
                 "  -> Pruning Activity: {} segments pruned via Partition/Stats mapping",
                 total_segments_table - scanned_segments
             ));
+
+            // Reason breakdown: which rule ruled each pruned segment out. An
+            // entry is pruned as soon as any sub-filter rules it out, so we
+            // report the first matching reason — the same precedence the scan
+            // itself uses. Metrics are suppressed here: EXPLAIN must not
+            // inflate the operational pruning counters.
+            if let Some(ref e) = expr {
+                let sub_filters = e.extract_and_conditions();
+                let mut reasons: std::collections::HashMap<&'static str, usize> =
+                    std::collections::HashMap::new();
+                for entry in &all_entries {
+                    if let Some(reason) = sub_filters
+                        .iter()
+                        .find_map(|f| planner.classify_condition(entry, f, false))
+                    {
+                        *reasons.entry(reason.label()).or_insert(0) += 1;
+                    }
+                }
+                let mut pairs: Vec<(&'static str, usize)> = reasons.into_iter().collect();
+                pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+                for (label, count) in pairs {
+                    plan.push(format!("       - {} segment(s): {}", count, label));
+                }
+            }
         }
         plan.push(format!(
             "  -> Execution Scope: {} rows in {} segments",

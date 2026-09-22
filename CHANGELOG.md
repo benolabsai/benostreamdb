@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`vector_search_scored` — ids and scores with no Parquet I/O**: new Python
+  method returning `(segment_id, row_id, score)` straight from the HNSW/BM25
+  index, for seed discovery, RRF fusion, and candidate reranking. Fetch rows
+  only for the winners. (`Table::execute_vector_search_as_scored` and
+  `HybridReader::vector_search_index_raw` already existed underneath.)
+- **`EXPLAIN` now says *why* segments were pruned**: `QueryPlanner::might_match_condition`
+  gained `classify_condition(entry, filter, emit_metrics)`, returning a
+  `PruneReason` (partition below-min / above-max / not-in-IN-list, stats
+  all-null / below-min / above-max / not-in-IN-list). `explain()` prints a
+  ranked breakdown instead of a bare count, and suppresses metric emission so
+  diagnostic EXPLAINs don't inflate the operational pruning counters.
 - **Sparse query vectors as SQL maps**: the vector-search sort-expr parser now
   accepts a sparse query as a `Map<key, f32>` literal
   (`{'1': 0.5, '10': 0.3}`), in addition to the existing `Struct` form

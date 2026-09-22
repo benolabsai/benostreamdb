@@ -74,3 +74,27 @@ def test_projection_excludes_unrequested_payload_columns(table):
     assert "title" not in res.columns
     assert "embedding" not in res.columns
     assert len(res) == 3
+
+
+def test_vector_search_scored_returns_ids_and_scores(table):
+    """`vector_search_scored` returns (segment_id, row_id, score) with no Parquet I/O."""
+    t, vecs = table
+    scored = t.vector_search_scored("embedding", vecs[7].tolist(), k=5)
+
+    assert list(scored.columns) == ["segment_id", "row_id", "score"]
+    assert len(scored) == 5
+    # Every hit names the segment it came from, and the top hit is the row itself.
+    assert scored["segment_id"].notna().all()
+    assert int(scored["row_id"].iloc[0]) == 7
+    assert scored["score"].iloc[0] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_vector_search_scored_matches_full_search(table):
+    """The scored path must agree with a payload-fetching search on ids and order."""
+    t, vecs = table
+    q = vecs[7].tolist()
+    scored = t.vector_search_scored("embedding", q, k=5)
+    full = t.vector_search("embedding", q, k=5, columns=["id", "distance"])
+
+    assert scored["row_id"].tolist() == full["id"].tolist()
+    assert scored["score"].tolist() == pytest.approx(full["distance"].tolist())

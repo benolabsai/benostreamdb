@@ -2339,6 +2339,25 @@ class Table:
         """
         return self.to_arrow(filter, vector_filter, columns, device=device, **kwargs)
 
+    def vector_search_scored(
+        self,
+        column: str,
+        query: List[float],
+        k: int = 10,
+        metric: Optional[str] = None,
+    ):
+        """Vector search returning only ``(segment_id, row_id, score)``.
+
+        Reads nothing but the HNSW/BM25 index — no Parquet I/O. Use this for
+        seed discovery, RRF fusion, or candidate reranking, then fetch rows only
+        for the winners with :meth:`to_pandas`/:meth:`vector_search`.
+
+        Returns a pandas DataFrame with columns ``segment_id``, ``row_id``,
+        ``score``.
+        """
+        res = self._inner.vector_search_scored(column, list(query), k, metric)
+        return res.to_pandas()
+
     def vector_search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """Backward compatibility alias for to_pandas with vector filter."""
         vf = {"column": column, "query": query, "k": k}
