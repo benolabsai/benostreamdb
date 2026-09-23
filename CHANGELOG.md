@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **CUDA JIT now works with pip's CUDA 13 wheels.** cudarc 0.13's nvrtc loader
+  probes a fixed candidate list (`libnvrtc.so`, `libnvrtc64*.so`,
+  `libnvrtc.so.{12,11,10,1}`) that predates CUDA 13, so `nvidia-*-cu13` wheels
+  (`libnvrtc.so.13`) were never found: the probe panicked and the GPU silently
+  fell back to CPU. `core::index::nvrtc` now resolves *whatever* `libnvrtc.so*`
+  is installed — any version, any layout (`HDB_NVRTC_PATH`, the interpreter's
+  `site-packages`, `CUDA_HOME`/`CUDA_PATH`, `PYTHONPATH`, `LD_LIBRARY_PATH`,
+  system paths) — preloads the `libnvrtc-builtins` companion with `RTLD_GLOBAL`,
+  and compiles the embedded `.cu` sources itself, handing the PTX to cudarc. No
+  re-exec, no env-var prefix, no shim script (`scripts/create_cuda_shims.sh`
+  removed).
 - **Demo load resume no longer duplicates rows.** `scripts/prepare_demo.py`
   resumed from the rounded-down chunk boundary on the assumption that chunks
   commit atomically. They don't: the write path spills to a real commit whenever

@@ -52,7 +52,7 @@ observability = ["dep:metrics-exporter-prometheus"]
 # GPU Acceleration Features
 wgpu = ["dep:wgpu"]
 pollster = ["dep:pollster"]
-cuda = ["dep:cudarc"]
+cuda = ["dep:cudarc", "dep:libloading"]
 metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 
@@ -160,6 +160,10 @@ tempfile = "3.10"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
+# Version-agnostic libnvrtc discovery (see src/core/index/nvrtc.rs). Already in
+# the tree transitively via cudarc; declared directly so we can dlopen nvrtc
+# ourselves instead of relying on cudarc's hardcoded candidate list.
+libloading = { version = "0.7", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.27.0" } # MPS 

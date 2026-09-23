@@ -3710,6 +3710,7 @@ dependencies = [
  "hive_metastore",
  "jni",
  "lazy_static",
+ "libloading 0.7.4",
  "log",
  "memmap2",
  "metal 0.27.0",
