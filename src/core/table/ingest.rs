@@ -106,6 +106,115 @@ fn read_parquet_range(path: &str, start: usize, end: usize) -> Result<RecordBatc
     Ok(arrow::compute::concat_batches(&schema, &batches)?)
 }
 
+/// Input file format, detected from the path extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IngestFormat {
+    Parquet,
+    Csv,
+    Json,
+    Ipc,
+}
+
+impl IngestFormat {
+    /// Detect the format from a path's extension (case-insensitive).
+    pub fn from_path(path: &str) -> Option<Self> {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".parquet") {
+            Some(Self::Parquet)
+        } else if lower.ends_with(".csv") {
+            Some(Self::Csv)
+        } else if lower.ends_with(".json")
+            || lower.ends_with(".ndjson")
+            || lower.ends_with(".jsonl")
+        {
+            Some(Self::Json)
+        } else if lower.ends_with(".arrow")
+            || lower.ends_with(".ipc")
+            || lower.ends_with(".feather")
+        {
+            Some(Self::Ipc)
+        } else {
+            None
+        }
+    }
+
+    /// Only parquet supports random-access row ranges; the others are streamed
+    /// whole-file (one work unit per file).
+    pub fn is_random_access(&self) -> bool {
+        matches!(self, Self::Parquet)
+    }
+}
+
+/// Read a whole CSV file into a single `RecordBatch` (schema inferred from the
+/// header + a sample of rows).
+fn read_csv(path: &str) -> Result<RecordBatch> {
+    use arrow::csv::reader::Format;
+    let file = std::fs::File::open(path).with_context(|| format!("open csv {}", path))?;
+    let (schema, _) = Format::default()
+        .with_header(true)
+        .infer_schema(file, Some(100))?;
+    let schema = std::sync::Arc::new(schema);
+    let file = std::fs::File::open(path)?;
+    let reader = arrow::csv::ReaderBuilder::new(schema.clone())
+        .with_header(true)
+        .build(file)?;
+    let mut batches = Vec::new();
+    for b in reader {
+        batches.push(b?);
+    }
+    if batches.is_empty() {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+    Ok(arrow::compute::concat_batches(&schema, &batches)?)
+}
+
+/// Read a whole NDJSON / JSON-array file into a single `RecordBatch`.
+fn read_json(path: &str) -> Result<RecordBatch> {
+    use std::io::BufReader;
+    let file = std::fs::File::open(path).with_context(|| format!("open json {}", path))?;
+    let (schema, _) = arrow::json::reader::infer_json_schema(BufReader::new(file), Some(100))?;
+    let schema = std::sync::Arc::new(schema);
+    let file = std::fs::File::open(path)?;
+    let reader = arrow::json::ReaderBuilder::new(schema.clone()).build(BufReader::new(file))?;
+    let mut batches = Vec::new();
+    for b in reader {
+        batches.push(b?);
+    }
+    if batches.is_empty() {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+    Ok(arrow::compute::concat_batches(&schema, &batches)?)
+}
+
+/// Read a whole Arrow IPC / Feather file into a single `RecordBatch`.
+fn read_ipc(path: &str) -> Result<RecordBatch> {
+    let file = std::fs::File::open(path).with_context(|| format!("open ipc {}", path))?;
+    let reader = arrow::ipc::reader::FileReader::try_new(file, None)?;
+    let schema = reader.schema();
+    let mut batches = Vec::new();
+    for b in reader {
+        batches.push(b?);
+    }
+    if batches.is_empty() {
+        return Ok(RecordBatch::new_empty(schema));
+    }
+    Ok(arrow::compute::concat_batches(&schema, &batches)?)
+}
+
+/// Read a work unit's rows, dispatching on the detected format.
+fn read_range(path: &str, start: usize, end: usize) -> Result<RecordBatch> {
+    match IngestFormat::from_path(path) {
+        Some(IngestFormat::Parquet) => read_parquet_range(path, start, end),
+        Some(IngestFormat::Csv) => read_csv(path),
+        Some(IngestFormat::Json) => read_json(path),
+        Some(IngestFormat::Ipc) => read_ipc(path),
+        None => anyhow::bail!(
+            "Unsupported input format for '{}' (expected .parquet/.csv/.json/.ndjson/.arrow/.ipc)",
+            path
+        ),
+    }
+}
+
 impl Table {
     /// Plan a bulk ingest of parquet `paths` into `(path, row_start, row_end)`
     /// work units of at most `chunk_rows` rows each.
@@ -117,12 +226,24 @@ impl Table {
         let chunk = chunk_rows.max(1);
         let mut units = Vec::new();
         for p in paths {
-            let n = parquet_row_count(p)?;
-            let mut s = 0usize;
-            while s < n {
-                let e = (s + chunk).min(n);
-                units.push((p.clone(), s, e));
-                s = e;
+            let fmt = IngestFormat::from_path(p).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unsupported input format for '{}' (expected .parquet/.csv/.json/.ndjson/.arrow/.ipc)",
+                    p
+                )
+            })?;
+            if fmt.is_random_access() {
+                // Parquet: split into row-range units (parallel-friendly).
+                let n = parquet_row_count(p)?;
+                let mut s = 0usize;
+                while s < n {
+                    let e = (s + chunk).min(n);
+                    units.push((p.clone(), s, e));
+                    s = e;
+                }
+            } else {
+                // Streaming formats (CSV/JSON/IPC): one unit per file.
+                units.push((p.clone(), 0, 0));
             }
         }
         Ok(units)
@@ -220,7 +341,7 @@ impl Table {
                 let default_device = default_device.clone();
                 let pk = pk.clone();
                 async move {
-                    let batch = read_parquet_range(&unit.path, unit.row_start, unit.row_end)?;
+                    let batch = read_range(&unit.path, unit.row_start, unit.row_end)?;
                     let rows = batch.num_rows();
                     let entry = table
                         .build_ingest_segment(
@@ -405,6 +526,35 @@ mod tests {
         let batches = table.read_async(None, None, None).await?;
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 2500);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ingest_csv_and_json() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let csv = dir.path().join("src.csv");
+        std::fs::write(&csv, "id,name\n1,a\n2,b\n3,c\n")?;
+        let json = dir.path().join("src.ndjson");
+        std::fs::write(
+            &json,
+            "{\"id\":4,\"name\":\"d\"}\n{\"id\":5,\"name\":\"e\"}\n",
+        )?;
+
+        let table_uri = format!("file://{}", dir.path().join("tbl2").to_string_lossy());
+        let table = Table::new_async(table_uri).await?;
+
+        let paths = vec![
+            csv.to_string_lossy().to_string(),
+            json.to_string_lossy().to_string(),
+        ];
+        let report = table.ingest_async(&paths, IngestOptions::default()).await?;
+        assert_eq!(report.units_total, 2, "one unit per streaming file");
+        assert_eq!(report.units_committed, 2);
+        assert_eq!(report.rows_ingested, 5);
+
+        let batches = table.read_async(None, None, None).await?;
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 5);
         Ok(())
     }
 }

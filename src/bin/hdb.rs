@@ -68,7 +68,7 @@ enum TableCommands {
         /// Table URI
         #[arg(short, long)]
         uri: String,
-        /// Parquet file(s) to ingest
+        /// Input file(s) to ingest (.parquet/.csv/.json/.ndjson/.arrow/.ipc)
         #[arg(short, long, num_args = 1..)]
         input: Vec<String>,
         /// Rows per work unit
