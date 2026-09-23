@@ -796,9 +796,9 @@ pub fn py_jaccard_batch<'py>(
 /// 2.0
 #[pyclass(name = "SparseVector")]
 pub struct PySparseVector {
-    indices: Vec<u32>,
-    values: Vec<f32>,
-    dim: usize,
+    pub(crate) indices: Vec<u32>,
+    pub(crate) values: Vec<f32>,
+    pub(crate) dim: usize,
 }
 
 #[pymethods]
@@ -1103,6 +1103,101 @@ pub fn py_inner_product_sparse(
     let dot = distance::sparse_dot_product(&a.indices, &a.values, &b.indices, &b.values);
 
     Ok(dot)
+}
+
+/// Shared implementation for the batched sparse distance functions.
+///
+/// Sparse vectors are converted to dense and dispatched to the existing dense
+/// GPU kernels (the "dense-conversion" path). The conversion costs
+/// `n * dim * 4` bytes of transfer, so it pays off when the batch is large
+/// enough to clear `GPU_DISPATCH_THRESHOLD`.
+fn sparse_distance_batch<'py>(
+    py: Python<'py>,
+    query: &PySparseVector,
+    vectors: Vec<Py<PySparseVector>>,
+    device: Option<&PyDevice>,
+    metric: VectorMetric,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let dim = query.dim;
+    if dim == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "query dimension must be > 0",
+        ));
+    }
+
+    let mut q_dense = vec![0.0f32; dim];
+    for (&i, &v) in query.indices.iter().zip(query.values.iter()) {
+        q_dense[i as usize] = v;
+    }
+
+    let n = vectors.len();
+    let mut v_dense = vec![0.0f32; n * dim];
+    for (row, sv) in vectors.iter().enumerate() {
+        let sv = sv.borrow(py);
+        if sv.dim != dim {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "vector {row} has dimension {} but query has dimension {dim}",
+                sv.dim
+            )));
+        }
+        for (&i, &v) in sv.indices.iter().zip(sv.values.iter()) {
+            v_dense[row * dim + i as usize] = v;
+        }
+    }
+
+    if let Some(ctx) = device {
+        ctx.activate();
+    }
+    let result = crate::core::index::gpu::compute_distance(&q_dense, &v_dense, dim, metric);
+    if device.is_some() {
+        PyDevice::deactivate();
+    }
+    let out = result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyArray1::from_vec(py, out))
+}
+
+/// Batched L2 distance between a sparse query and N sparse vectors.
+///
+/// Sparse inputs are converted to dense and run through the dense GPU kernels,
+/// so this is the "dense-conversion" GPU path for sparse data. Returns one
+/// distance per vector (float32).
+#[pyfunction]
+#[pyo3(name = "sparse_l2_batch", signature = (query, vectors, device=None))]
+pub fn py_sparse_l2_batch<'py>(
+    py: Python<'py>,
+    query: &PySparseVector,
+    vectors: Vec<Py<PySparseVector>>,
+    device: Option<&PyDevice>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    sparse_distance_batch(py, query, vectors, device, VectorMetric::L2)
+}
+
+/// Batched cosine distance between a sparse query and N sparse vectors.
+///
+/// See [`py_sparse_l2_batch`] for the argument/return contract.
+#[pyfunction]
+#[pyo3(name = "sparse_cosine_batch", signature = (query, vectors, device=None))]
+pub fn py_sparse_cosine_batch<'py>(
+    py: Python<'py>,
+    query: &PySparseVector,
+    vectors: Vec<Py<PySparseVector>>,
+    device: Option<&PyDevice>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    sparse_distance_batch(py, query, vectors, device, VectorMetric::Cosine)
+}
+
+/// Batched inner product between a sparse query and N sparse vectors.
+///
+/// See [`py_sparse_l2_batch`] for the argument/return contract.
+#[pyfunction]
+#[pyo3(name = "sparse_inner_product_batch", signature = (query, vectors, device=None))]
+pub fn py_sparse_inner_product_batch<'py>(
+    py: Python<'py>,
+    query: &PySparseVector,
+    vectors: Vec<Py<PySparseVector>>,
+    device: Option<&PyDevice>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    sparse_distance_batch(py, query, vectors, device, VectorMetric::InnerProduct)
 }
 
 // ============================================================================
