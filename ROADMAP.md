@@ -521,9 +521,12 @@ hdb repair s3://bucket/table
 - [x] **GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
 
 **Next Steps**
-- [ ] **Find nvrtc/cudart from installed wheels**: cudarc 0.13.9 probes only `libnvrtc.so` / `.so.{12,11,10,1}`, so pip's `nvidia-*-cu13` layout (`nvidia/cu13/lib/libnvrtc.so.13`) is never found — the JIT path panics and silently falls back to CPU (the demo ships `scripts/create_cuda_shims.sh` and auto-re-execs with `LD_LIBRARY_PATH` as a workaround). Proper fix: resolve the library path ourselves (glob `site-packages/nvidia/*/lib`, honour `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so `pip install` alone is enough — no env-var prefix.
-- [ ] **GPU distance computation inside graph construction**: `hnsw_rs` builds neighbour graphs CPU-only and the CUDA backend has no HNSW kernel. Implementing GPU HNSW construction is research-grade; the realistically GPU-accelerable piece is the *distance computation during insertion (neighbor search)*, which cannot be wired in trivially because `hnsw_rs` owns that loop — it requires either a custom CUDA HNSW build or an IVF-flat GPU path for large clusters. Tracked as design work, deliberately not a dispatcher change.
-- [ ] **GPU Acceleration for Sparse & Binary Vectors**: GPU acceleration is not yet implemented for sparse and binary vectors (`src/python_distance.rs`).
+- [ ] **Find nvrtc/cudart from installed wheels**: cudarc 0.13.9 probes only `libnvrtc.so` / `.so.{12,11,10,1}`, so pip's `nvidia-*-cu13` layout (`nvidia/cu13/lib/libnvrtc.so.13`) is never found — the JIT path panics and silently falls back to CPU (the demo ships `scripts/create_cuda_shims.sh` and auto-re-execs with `LD_LIBRARY_PATH` as a workaround). Proper fix: resolve the library path ourselves (glob `site-packages/nvidia/*/lib`, honour `CUDA_HOME`/`CUDA_PATH`, try `.so.13`) and dlopen by absolute path, so `pip install` alone is enough — no env-var prefix. **CUDA-only** (nvrtc is CUDA's JIT; Metal uses the Metal framework, WGPU uses the driver).
+- [ ] **Cross-backend correctness harness**: one test that runs the same vectors through CUDA, Metal, WGPU, and CPU and asserts they agree. This is the prerequisite that makes the 3× kernel cost tolerable (native Metal is retained for Mac-developer appeal). CPU-equivalence mode runs in CI; GPU mode is opt-in for local/self-hosted runs (CI skips `gpu_execution`).
+- [ ] **GPU Acceleration for Sparse & Binary Vectors**: packed-u8 Hamming/Jaccard kernels for **CUDA, Metal, and WGPU** (the dense kernels already exist in all three; the Python API uses packed u8 and calls the CPU path). Sparse via a dense-conversion path (backend-agnostic — reuses the existing dense kernels). Requires a **batched** entry point: the current single-vector API never clears `GPU_DISPATCH_THRESHOLD`, so GPU would never engage.
+- [ ] **Cleanup**: delete the dead `opencl/*.cl` kernels — no `OpenClBackend` is wired into `ComputeBackend`.
+
+> **Long-term / research work moved to [A11](#a11-gpu-native-index-construction-research--long-term).** A5 ships the bounded GPU work; A11 tracks the open-ended work of moving index *construction* onto the GPU.
 
 #### A6. Catalog & Interoperability
 
@@ -588,6 +591,20 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 
 **Next Steps**
 - [ ] (none outstanding)
+
+#### A11. GPU-Native Index Construction (Research / Long-Term)
+
+*Deliberately separated from A5: this is research-grade and must not gate A5's completion. A5 ships the bounded GPU work (nvrtc discovery, sparse/binary kernels, cross-backend harness); A11 tracks the open-ended work of moving index **construction** onto the GPU.*
+
+**Objective**
+Move the distance computation that dominates HNSW graph construction onto the GPU, without forking `hnsw_rs`'s insertion loop.
+
+**Next Steps**
+- [ ] **IVF-flat GPU path for large clusters** (the bounded subset): in `build_bucket_graph`, clusters above a size threshold build as a flat GPU-searchable index instead of HNSW, and the query-time flat scan dispatches to `compute_distance`. This sidesteps `hnsw_rs` entirely for the oversized clusters — the same pathological case the IVF clustering fix addressed. Backend-agnostic (uses the existing dispatcher), so no per-backend work.
+- [ ] **Full GPU HNSW construction** (research): `hnsw_rs` owns the per-point insertion loop and calls a CPU `Distance` trait; batching queries for the GPU requires forking or replacing that loop. Research-grade — no CUDA HNSW kernel exists.
+- [ ] **GPU-accelerated neighbor search during insertion**: the realistically accelerable piece, but blocked on the same `hnsw_rs` ownership problem.
+
+**Why separate**: A5's items are days-to-a-week each with clear acceptance criteria; A11's are open-ended with no known upper bound. Keeping them in one branch would make A5 look perpetually incomplete.
 
 ### Part B — Ecosystem, Vertical & Commercial
 
@@ -781,7 +798,7 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Phase 10: Streaming Commit & Delete Lifecycle** — HNSW overlay stability across snapshots, partition splits, and position/equality deletes.
 
 **Active Roadmap (core-first, dependency-ordered)** — see the [Active Roadmap](#-active-roadmap--core-product-first-dependency-ordered) section above:
-- **Part A — Core Product**: A1 Core Engine Correctness & Concurrency → A2 Connector & Pushdown → A3 Advanced Search → A4 Native Ingest Orchestrator → A5 GPU & Hardware → A6 Catalog → A7 Graph RAG → A8 Correctness Suite → A9 Competitive Benchmarking → A10 Packaging & CI.
+- **Part A — Core Product**: A1 Core Engine Correctness & Concurrency → A2 Connector & Pushdown → A3 Advanced Search → A4 Native Ingest Orchestrator → A5 GPU & Hardware → A6 Catalog → A7 Graph RAG → A8 Correctness Suite → A9 Competitive Benchmarking → A10 Packaging & CI → **A11 GPU-Native Index Construction (Research / Long-Term)**.
 - **Part B — Ecosystem, Vertical & Commercial**: B1 Client Ecosystem → B2 Codebase Intelligence & MCP → B3 High-Cardinality Scale Lighthouse → B4 Enterprise Security [Paid] → B5 Accelerator & Lifecycle [Paid].
 
 ---
@@ -794,7 +811,8 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Distributed Locking:** Vendor-neutral `FileBasedLock` using object storage CAS (`PutMode::Create`) with heartbeats & leases (no proprietary services like DynamoDB). Commits themselves are **lock-free** (OCC + rebase); the lock is only used for maintenance (expire/vacuum) serialization.
 - **Filtering Style:** Pushdown via sidecar inverted and roaring bitmap indexes
 - **Pruning:** Partition pruning + column-statistics pruning (min/max persisted through the Avro manifest as Iceberg `lower_bounds`/`upper_bounds`/`null_value_counts`), with per-reason reporting in `explain()`
-- **Vector Index:** Standardized on HNSW-IVF with GPU acceleration (`cudarc` for CUDA, WGPU for Vulkan/Metal/DirectX)
+- **Vector Index:** Standardized on HNSW-IVF with GPU acceleration (`cudarc` for CUDA, native Metal for macOS, WGPU for Vulkan/ROCm/Intel)
+- **GPU Scope Split:** A5 holds the bounded GPU work (nvrtc discovery, sparse/binary kernels, cross-backend correctness harness); A11 holds the research-grade work of moving index *construction* onto the GPU. Native Metal is retained deliberately (Mac-developer appeal, Apache 2.0 community tier), so new kernels are written for CUDA + Metal + WGPU.
 - **SQL & Analytics:** DataFusion native integration + Arrow Flight SQL gateway + dbt adapter (`dbt-hyperstreamdb`)
 - **REST APIs:** OpenSearch / Elasticsearch 7.10 + Qdrant compatibility via `hyperstreamdb-search`
 
@@ -808,5 +826,5 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 
 ---
 
-**Last Updated:** 2026-09-22
-**Status:** Phases 1–10 COMPLETE ✅ | **A1 Core Engine Correctness & Concurrency COMPLETE ✅** (MVCC lock-free commits, cross-partition compaction, index-join key types, row-value & OR-range pushdown, statistics pruning fixed, Time32/64, sparse IPC + SQL maps, Glue metadata location) | Active: Part A Core Product (Native Ingest Orchestrator — unblocked) + Part B Client Ecosystem | Planned: High-Cardinality Scale Lighthouse (scale objective satisfied by the full-site Wikipedia demo), Codebase Intelligence & MCP, Enterprise & Accelerator tiers
+**Last Updated:** 2026-09-23
+**Status:** Phases 1–10 COMPLETE ✅ | **A1 Core Engine Correctness & Concurrency COMPLETE ✅** | **A4 Native Ingest Orchestrator COMPLETE ✅** (work planner, bounded pool, OCC commit, resume, multi-format, scheduled compaction, memory discipline, multi-machine work stealing) | Active: A5 GPU & Hardware (bounded items) + Part B Client Ecosystem | Long-Term: A11 GPU-Native Index Construction (research) | Planned: High-Cardinality Scale Lighthouse (scale objective satisfied by the full-site Wikipedia demo), Codebase Intelligence & MCP, Enterprise & Accelerator tiers
