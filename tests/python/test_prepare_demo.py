@@ -170,6 +170,17 @@ def test_auto_chunk_rows(gb, expected):
     assert pdemo._auto_chunk_rows(gb) == expected
 
 
+def test_resume_offset_does_not_round_down_to_chunk_boundary():
+    """A killed chunk can leave partial rows committed: the engine spills to a
+    real commit whenever the write buffer exceeds HYPERSTREAM_CACHE_GB (default
+    1 GB), so chunks are NOT atomic. Resume must continue from the exact
+    committed count — rounding down to the chunk boundary re-wrote those rows
+    and duplicated them."""
+    assert pdemo._resume_offset(25_000_000, 10_000_000) == 25_000_000
+    assert pdemo._resume_offset(20_000_000, 10_000_000) == 20_000_000
+    assert pdemo._resume_offset(0, 10_000_000) == 0
+
+
 def test_shards_survive_mid_loop_crash(wiki_like):
     """Deletion must happen only AFTER commit — never during the write loop."""
     _, src, emb_dir = wiki_like
