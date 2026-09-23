@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression test.
 
 ### Added
+- **GPU-accelerated packed-binary distance (CUDA + WGPU)**: `GpuBackend::compute_binary_distance`
+  plus packed-u8 Hamming/Jaccard kernels for CUDA (`hamming_packed.cu`,
+  `jaccard_packed.cu`) and WGPU (`wgpu_binary_kernel.wgsl`, covering AMD/Intel
+  via Vulkan). New batched Python API `hdb.hamming_distance_batch` /
+  `hdb.jaccard_distance_batch` (one packed query vs N packed vectors). Metal is
+  gated to the CPU reference until its packed kernels land — the trait's default
+  impl errors, so the dispatcher falls back transparently. Verified by the
+  cross-backend harness on an RTX 3090 (`["cpu", "cuda", "wgpu"]`).
 - **Cross-backend GPU correctness harness**: `cross_backend_matches_cpu_all_metrics`
   runs the same vectors through every *available* backend (CUDA, Metal, WGPU)
   and asserts agreement with the **CPU reference (the gold source)** within

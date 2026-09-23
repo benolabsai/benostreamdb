@@ -47,6 +47,22 @@ pub trait GpuBackend: Send + Sync + std::fmt::Debug {
         centroids: &[f32],
         dim: usize,
     ) -> Result<Vec<u32>>;
+
+    /// Batched packed-binary distance: one packed query vs N packed vectors.
+    ///
+    /// `query` is `dim_bytes` long; `vectors` is `n * dim_bytes`. Returns one
+    /// distance per vector. Backends that don't implement it return an error so
+    /// the caller falls back to CPU — this is how Metal is gated until its
+    /// packed kernels land.
+    fn compute_binary_distance(
+        &self,
+        _query: &[u8],
+        _vectors: &[u8],
+        _dim_bytes: usize,
+        _metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        anyhow::bail!("{} does not implement packed-binary distance", self.name())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +116,10 @@ static CUDA_SRC_L1: &str = include_str!("cuda/l1_distance.cu");
 static CUDA_SRC_HAMMING: &str = include_str!("cuda/hamming_distance.cu");
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 static CUDA_SRC_JACCARD: &str = include_str!("cuda/jaccard_distance.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_HAMMING_PACKED: &str = include_str!("cuda/hamming_packed.cu");
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+static CUDA_SRC_JACCARD_PACKED: &str = include_str!("cuda/jaccard_packed.cu");
 
 // Backend Implementations
 // ============================================================================
@@ -154,6 +174,18 @@ impl CudaBackend {
             CUDA_SRC_JACCARD,
             "jaccard_distance",
             "jaccard_distance_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_HAMMING_PACKED,
+            "hamming_packed",
+            "hamming_packed_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_JACCARD_PACKED,
+            "jaccard_packed",
+            "jaccard_packed_kernel"
         );
         compile_and_load!(device, CUDA_SRC_KMEANS, "kmeans", "kmeans_assignment");
 
@@ -222,6 +254,39 @@ impl GpuBackend for CudaBackend {
             )?;
         }
         Ok(self.device.dtoh_sync_copy(&d_l)?)
+    }
+    fn compute_binary_distance(
+        &self,
+        query: &[u8],
+        vectors: &[u8],
+        dim_bytes: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        let (mod_name, kernel_name) = match metric {
+            VectorMetric::Hamming => ("hamming_packed", "hamming_packed_kernel"),
+            VectorMetric::Jaccard => ("jaccard_packed", "jaccard_packed_kernel"),
+            other => anyhow::bail!("CUDA packed-binary supports Hamming/Jaccard, not {other:?}"),
+        };
+        let n_vectors = vectors.len() / dim_bytes;
+        let d_q = self.device.htod_copy(query.to_vec())?;
+        let d_v = self.device.htod_copy(vectors.to_vec())?;
+        let mut d_d = self.device.alloc_zeros::<f32>(n_vectors)?;
+        let func = self.device.get_func(mod_name, kernel_name).unwrap();
+        // Same shape as the dense kernels: one block per row, shared-memory
+        // reduction (2x slots for Jaccard's interleaved intersection/union).
+        const BLOCK: u32 = 256;
+        let config = LaunchConfig {
+            grid_dim: (n_vectors as u32, 1, 1),
+            block_dim: (BLOCK, 1, 1),
+            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * 2,
+        };
+        unsafe {
+            func.launch(
+                config,
+                (&d_q, &d_v, &mut d_d, dim_bytes as u32, n_vectors as u32),
+            )?;
+        }
+        Ok(self.device.dtoh_sync_copy(&d_d)?)
     }
 }
 
@@ -578,6 +643,154 @@ impl GpuBackend for WgpuBackend {
     fn compute_kmeans_assignment(&self, _v: &[f32], _c: &[f32], _d: usize) -> Result<Vec<u32>> {
         super::ivf::simple_kmeans_assignment(_v, _c, _d)
     }
+
+    fn compute_binary_distance(
+        &self,
+        query: &[u8],
+        vectors: &[u8],
+        dim_bytes: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        use wgpu::util::DeviceExt;
+
+        fn as_u8_slice<T>(data: &[T]) -> &[u8] {
+            unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, std::mem::size_of_val(data))
+            }
+        }
+
+        let metric_type: u32 = match metric {
+            VectorMetric::Hamming => 0,
+            VectorMetric::Jaccard => 1,
+            other => anyhow::bail!("WGPU packed-binary supports Hamming/Jaccard, not {other:?}"),
+        };
+
+        // Pack bytes into little-endian u32 words, zero-padded to a 4-byte
+        // multiple (WGSL storage buffers are u32-indexed).
+        let dim_words = dim_bytes.div_ceil(4);
+        let num_vectors = vectors.len() / dim_bytes;
+        let mut q_words = vec![0u32; dim_words];
+        for (i, &b) in query.iter().enumerate() {
+            q_words[i / 4] |= (b as u32) << ((i % 4) * 8);
+        }
+        let mut v_words = vec![0u32; num_vectors * dim_words];
+        for row in 0..num_vectors {
+            for i in 0..dim_bytes {
+                let b = vectors[row * dim_bytes + i];
+                v_words[row * dim_words + i / 4] |= (b as u32) << ((i % 4) * 8);
+            }
+        }
+
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Packed Binary Shader"),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                    "wgpu_binary_kernel.wgsl"
+                ))),
+            });
+        let pipeline = self
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Packed Binary Pipeline"),
+                layout: None,
+                module: &shader,
+                entry_point: "main",
+                compilation_options: Default::default(),
+            });
+
+        let query_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Query Words"),
+                contents: as_u8_slice(&q_words),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let vectors_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vector Words"),
+                contents: as_u8_slice(&v_words),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let output_size = (num_vectors * std::mem::size_of::<f32>()) as wgpu::BufferAddress;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Output Buffer"),
+            size: output_size,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let staging_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Staging Buffer"),
+            size: output_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let config_data = [dim_words as u32, num_vectors as u32, metric_type, 0];
+        let config_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Config Buffer"),
+                contents: as_u8_slice(&config_data),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+
+        let bind_group_layout = pipeline.get_bind_group_layout(0);
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: query_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: vectors_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: output_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: config_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&pipeline);
+            cpass.set_bind_group(0, &bind_group, &[]);
+            cpass.dispatch_workgroups((num_vectors as u32).div_ceil(64), 1, 1);
+        }
+        encoder.copy_buffer_to_buffer(&output_buffer, 0, &staging_buffer, 0, output_size);
+        self.queue.submit(Some(encoder.finish()));
+
+        let buffer_slice = staging_buffer.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+        self.device.poll(wgpu::Maintain::Wait);
+
+        if let Ok(Ok(())) = receiver.recv() {
+            let data = buffer_slice.get_mapped_range();
+            let result = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const f32, num_vectors).to_vec()
+            };
+            drop(data);
+            staging_buffer.unmap();
+            Ok(result)
+        } else {
+            Err(anyhow::anyhow!("Failed to read WGPU packed-binary output"))
+        }
+    }
 }
 
 // ComputeContext & Dispatch
@@ -927,6 +1140,56 @@ fn compute_cpu(q: &[f32], v: &[f32], d: usize, m: VectorMetric) -> Result<Vec<f3
     Ok(dists)
 }
 
+/// Batched packed-binary distance (Hamming/Jaccard) with GPU dispatch.
+///
+/// One packed `query` (`dim_bytes` long) against `n` packed `vectors`
+/// (`n * dim_bytes`). Backends without a packed kernel (Metal, until its kernels
+/// land) error out and are transparently replaced by the CPU reference.
+pub fn compute_binary_distance(
+    query: &[u8],
+    vectors: &[u8],
+    dim_bytes: usize,
+    metric: VectorMetric,
+) -> Result<Vec<f32>> {
+    let context = get_thread_gpu_context().unwrap_or_else(ComputeContext::auto_detect);
+    let n = vectors.len().checked_div(dim_bytes).unwrap_or(0);
+    if n < GPU_DISPATCH_THRESHOLD && context.backend != ComputeBackend::Cpu {
+        return compute_binary_cpu(query, vectors, dim_bytes, metric);
+    }
+    if let Some(imp) = &context.implementation {
+        if let Ok(out) = imp.compute_binary_distance(query, vectors, dim_bytes, metric) {
+            return Ok(out);
+        }
+        // Backend has no packed kernel -> fall through to CPU.
+    }
+    compute_binary_cpu(query, vectors, dim_bytes, metric)
+}
+
+fn compute_binary_cpu(
+    query: &[u8],
+    vectors: &[u8],
+    dim_bytes: usize,
+    metric: VectorMetric,
+) -> Result<Vec<f32>> {
+    let n = vectors.len().checked_div(dim_bytes).unwrap_or(0);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let v = &vectors[i * dim_bytes..(i + 1) * dim_bytes];
+        out.push(match metric {
+            VectorMetric::Hamming => {
+                crate::core::index::distance::hamming_distance_packed(query, v) as f32
+            }
+            VectorMetric::Jaccard => {
+                crate::core::index::distance::jaccard_distance_packed(query, v)
+            }
+            other => {
+                anyhow::bail!("packed-binary distance supports Hamming/Jaccard, not {other:?}")
+            }
+        });
+    }
+    Ok(out)
+}
+
 /// Set the global GPU context.
 pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
     *GLOBAL_GPU_CONTEXT.write() = ctx;
@@ -1117,6 +1380,54 @@ mod tests {
             VectorMetric::Jaccard,
         ] {
             assert_backend_matches_cpu(metric, 128, 1_000);
+        }
+    }
+
+    fn random_packed(n: usize, dim_bytes: usize, seed: u64) -> (Vec<u8>, Vec<u8>) {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let query: Vec<u8> = (0..dim_bytes).map(|_| rng.gen()).collect();
+        let vectors: Vec<u8> = (0..n * dim_bytes).map(|_| rng.gen()).collect();
+        (query, vectors)
+    }
+
+    /// Assert every backend with a packed kernel agrees with the CPU reference.
+    /// Backends without one (Metal, until its kernels land) error and are
+    /// skipped — that is the gate.
+    fn assert_binary_backend_matches_cpu(metric: VectorMetric, dim_bytes: usize, n: usize) {
+        let backends = available_backends();
+        let (query, vectors) = random_packed(n, dim_bytes, 0xBEEF);
+        let gold = compute_binary_cpu(&query, &vectors, dim_bytes, metric).expect("cpu gold");
+
+        for (name, backend) in &backends {
+            if *name == "cpu" {
+                continue;
+            }
+            let Ok(got) = backend.compute_binary_distance(&query, &vectors, dim_bytes, metric)
+            else {
+                continue; // no packed kernel on this backend
+            };
+            assert_eq!(
+                got.len(),
+                gold.len(),
+                "{name} {metric:?} packed: length mismatch"
+            );
+            for (i, (g, c)) in gold.iter().zip(got.iter()).enumerate() {
+                let tol = 1e-3 * g.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tol,
+                    "{name} {metric:?} packed dim_bytes={dim_bytes} n={n} idx={i}: cpu={g} gpu={c}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cross_backend_binary_matches_cpu() {
+        for metric in [VectorMetric::Hamming, VectorMetric::Jaccard] {
+            // 16 bytes (word-aligned) and 13 bytes (needs zero-padding).
+            assert_binary_backend_matches_cpu(metric, 16, 1_000);
+            assert_binary_backend_matches_cpu(metric, 13, 1_000);
         }
     }
 

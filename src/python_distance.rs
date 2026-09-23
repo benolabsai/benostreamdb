@@ -3,7 +3,10 @@
 use crate::core::index::gpu::{compute_distance, ComputeBackend};
 use crate::core::index::{distance, VectorMetric};
 use crate::python_gpu_context::PyDevice;
-use numpy::{AllowTypeChange, PyArray1, PyArrayLike1, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{
+    AllowTypeChange, PyArray1, PyArrayLike1, PyReadonlyArray1, PyReadonlyArray2,
+    PyUntypedArrayMethods,
+};
 /// Python bindings for vector distance functions
 ///
 /// This module provides Python bindings for all 6 distance metrics with GPU acceleration support.
@@ -1190,6 +1193,81 @@ pub fn py_hamming_packed(
 
     let distance = distance::hamming_distance_packed(a_slice, b_slice);
     Ok(distance)
+}
+
+/// Shared implementation for the batched packed-binary distance functions.
+fn binary_distance_batch<'py>(
+    py: Python<'py>,
+    query: PyReadonlyArray1<u8>,
+    vectors: PyReadonlyArray2<u8>,
+    device: Option<&PyDevice>,
+    metric: VectorMetric,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    let q = query.as_slice()?;
+    let shape = vectors.shape();
+    let dim_bytes = q.len();
+    if shape[1] != dim_bytes {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "query has {} bytes but vectors have {} columns",
+            dim_bytes, shape[1]
+        )));
+    }
+    let v = vectors.as_slice().map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("vectors must be C-contiguous: {e}"))
+    })?;
+
+    // Activate the requested device for this call (falls back to the active or
+    // auto-detected backend). Backends without a packed kernel use the CPU path.
+    if let Some(ctx) = device {
+        ctx.activate();
+    }
+    let result = crate::core::index::gpu::compute_binary_distance(q, v, dim_bytes, metric);
+    if device.is_some() {
+        PyDevice::deactivate();
+    }
+    let out = result.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyArray1::from_vec(py, out))
+}
+
+/// Batched Hamming distance: one packed query vs N packed vectors.
+///
+/// Parameters
+/// ----------
+/// query : array_like
+///     Packed query vector (uint8, `dim_bytes` long).
+/// vectors : array_like
+///     Packed vectors (uint8, shape `(n, dim_bytes)`).
+/// device : Device, optional
+///     GPU device. Backends without a packed kernel (Metal, until its kernels
+///     land) transparently fall back to the CPU reference.
+///
+/// Returns
+/// -------
+/// numpy.ndarray
+///     Hamming distance per vector (float32).
+#[pyfunction]
+#[pyo3(name = "hamming_distance_batch", signature = (query, vectors, device=None))]
+pub fn py_hamming_distance_batch<'py>(
+    py: Python<'py>,
+    query: PyReadonlyArray1<u8>,
+    vectors: PyReadonlyArray2<u8>,
+    device: Option<&PyDevice>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    binary_distance_batch(py, query, vectors, device, VectorMetric::Hamming)
+}
+
+/// Batched Jaccard distance: one packed query vs N packed vectors.
+///
+/// See [`py_hamming_distance_batch`] for the argument/return contract.
+#[pyfunction]
+#[pyo3(name = "jaccard_distance_batch", signature = (query, vectors, device=None))]
+pub fn py_jaccard_distance_batch<'py>(
+    py: Python<'py>,
+    query: PyReadonlyArray1<u8>,
+    vectors: PyReadonlyArray2<u8>,
+    device: Option<&PyDevice>,
+) -> PyResult<Bound<'py, PyArray1<f32>>> {
+    binary_distance_batch(py, query, vectors, device, VectorMetric::Jaccard)
 }
 
 /// Compute Hamming distance with auto-packing support for unpacked binary vectors
