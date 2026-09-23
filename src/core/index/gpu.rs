@@ -186,7 +186,17 @@ impl GpuBackend for CudaBackend {
         let d_v = self.device.htod_copy(vectors.to_vec())?;
         let mut d_d = self.device.alloc_zeros::<f32>(n_vectors)?;
         let func = self.device.get_func(mod_name, kernel_name).unwrap();
-        let config = LaunchConfig::for_num_elems(n_vectors as u32);
+        // The kernels use one block per row with a shared-memory reduction, so
+        // the grid must be `n_vectors` blocks (not `for_num_elems`, which packs
+        // rows into 1024-thread blocks) and the shared memory must be sized for
+        // the block — 2x for Jaccard's interleaved intersection/union slots.
+        // Getting this wrong is an illegal memory access, not a wrong answer.
+        const BLOCK: u32 = 256;
+        let config = LaunchConfig {
+            grid_dim: (n_vectors as u32, 1, 1),
+            block_dim: (BLOCK, 1, 1),
+            shared_mem_bytes: BLOCK * std::mem::size_of::<f32>() as u32 * 2,
+        };
         unsafe {
             func.launch(config, (&d_q, &d_v, &mut d_d, dim as u32, n_vectors as u32))?;
         }
@@ -995,5 +1005,124 @@ mod tests {
         }
         let backend = CudaBackend::new(0).expect("CUDA JIT should compile on a CUDA machine");
         assert_eq!(backend.name(), "CUDA");
+    }
+
+    // ========================================================================
+    // Cross-backend correctness harness
+    // ========================================================================
+    //
+    // CPU is the gold source: every available backend must agree with the CPU
+    // reference within tolerance. Backends absent from this machine are skipped,
+    // so the same test runs everywhere and validates whatever hardware exists:
+    //   - CUDA  -> NVIDIA (local / self-hosted runner)
+    //   - WGPU  -> any Vulkan adapter, *including NVIDIA*, so the portable WGSL
+    //              kernel is validated even on an NVIDIA box (different driver
+    //              path from CUDA)
+    //   - Metal -> macOS (GitHub's macos-14 runners, or a local Mac)
+    //   - ROCm/Intel native -> self-hosted AMD/Intel runners; the WGPU test
+    //              covers the same WGSL kernel
+    //
+    // Run it (the `--nocapture` line prints which backends were exercised):
+    //
+    //   cargo test --lib --features cuda,wgpu,pollster cross_backend -- --nocapture
+    //
+    // `cuda` needs an NVIDIA GPU, `wgpu`/`pollster` a Vulkan adapter; drop the
+    // features you don't have — the harness skips what's absent.
+
+    /// Backends available on this machine, CPU first (the gold source).
+    fn available_backends() -> Vec<(&'static str, Arc<dyn GpuBackend>)> {
+        #[allow(unused_mut)]
+        let mut out: Vec<(&'static str, Arc<dyn GpuBackend>)> =
+            vec![("cpu", Arc::new(CpuBackend))];
+        #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+        {
+            // Under `cargo test` the interpreter's site-packages isn't reported,
+            // so point the resolver at a repo-local venv if one exists.
+            if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
+                if let Some(p) = crate::core::index::nvrtc::dev_repo_venv_nvrtc() {
+                    std::env::set_var("HDB_NVRTC_PATH", &p);
+                }
+            }
+            if let Ok(b) = CudaBackend::new(0) {
+                out.push(("cuda", Arc::new(b)));
+            }
+        }
+        #[cfg(target_os = "macos")]
+        if let Ok(b) = MetalBackend::new() {
+            out.push(("mps", Arc::new(b)));
+        }
+        // Vendor-agnostic WGPU: exercises the portable WGSL kernel on whatever
+        // Vulkan adapter exists (NVIDIA included).
+        #[cfg(all(target_os = "linux", feature = "wgpu"))]
+        if let Ok(b) = WgpuBackend::new("wgpu", None) {
+            out.push(("wgpu", Arc::new(b)));
+        }
+        out
+    }
+
+    fn random_vectors(n: usize, dim: usize, seed: u64, binary: bool) -> (Vec<f32>, Vec<f32>) {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let gen = |rng: &mut rand::rngs::StdRng| {
+            if binary {
+                if rng.gen_bool(0.5) {
+                    1.0
+                } else {
+                    0.0
+                }
+            } else {
+                rng.gen_range(-1.0f32..1.0f32)
+            }
+        };
+        let query: Vec<f32> = (0..dim).map(|_| gen(&mut rng)).collect();
+        let vectors: Vec<f32> = (0..n * dim).map(|_| gen(&mut rng)).collect();
+        (query, vectors)
+    }
+
+    /// Assert every available GPU backend agrees with the CPU reference.
+    fn assert_backend_matches_cpu(metric: VectorMetric, dim: usize, n: usize) {
+        let backends = available_backends();
+        let binary = matches!(metric, VectorMetric::Hamming | VectorMetric::Jaccard);
+        let (query, vectors) = random_vectors(n, dim, 0xC0FFEE, binary);
+        let gold = compute_cpu(&query, &vectors, dim, metric).expect("cpu gold");
+
+        for (name, backend) in &backends {
+            if *name == "cpu" {
+                continue;
+            }
+            let got = backend
+                .compute_distance(&query, &vectors, dim, metric)
+                .unwrap_or_else(|e| panic!("{name} {metric:?} failed: {e}"));
+            assert_eq!(got.len(), gold.len(), "{name} {metric:?}: length mismatch");
+            for (i, (g, c)) in gold.iter().zip(got.iter()).enumerate() {
+                let tol = 1e-3 * g.abs().max(1.0);
+                assert!(
+                    (g - c).abs() <= tol,
+                    "{name} {metric:?} dim={dim} n={n} idx={i}: cpu={g} gpu={c}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cross_backend_matches_cpu_all_metrics() {
+        for metric in [
+            VectorMetric::L2,
+            VectorMetric::Cosine,
+            VectorMetric::InnerProduct,
+            VectorMetric::L1,
+            VectorMetric::Hamming,
+            VectorMetric::Jaccard,
+        ] {
+            assert_backend_matches_cpu(metric, 128, 1_000);
+        }
+    }
+
+    /// Reports which backends this machine exercised (visible with `--nocapture`).
+    #[test]
+    fn cross_backend_reports_available_backends() {
+        let names: Vec<&str> = available_backends().iter().map(|(n, _)| *n).collect();
+        eprintln!("cross-backend harness: available backends = {names:?}");
+        assert!(names.contains(&"cpu"), "cpu must always be available");
     }
 }

@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **CUDA distance kernels launched with the wrong grid and no shared memory.**
+  `CudaBackend::compute_distance` used `LaunchConfig::for_num_elems`, which packs
+  rows into 1024-thread blocks and sets `shared_mem_bytes: 0`, but the kernels
+  use one block per row with an `extern __shared__` reduction — an illegal
+  memory access, not a wrong answer. Now launches `n_vectors` blocks of 256
+  threads with the shared memory sized for the block. Caught by the new
+  cross-backend harness.
 - **CUDA JIT now works with pip's CUDA 13 wheels.** cudarc 0.13's nvrtc loader
   probes a fixed candidate list (`libnvrtc.so`, `libnvrtc64*.so`,
   `libnvrtc.so.{12,11,10,1}`) that predates CUDA 13, so `nvidia-*-cu13` wheels
@@ -28,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression test.
 
 ### Added
+- **Cross-backend GPU correctness harness**: `cross_backend_matches_cpu_all_metrics`
+  runs the same vectors through every *available* backend (CUDA, Metal, WGPU)
+  and asserts agreement with the **CPU reference (the gold source)** within
+  tolerance. Backends absent from the machine are skipped, so the same test runs
+  everywhere. Verified on an RTX 3090 with `["cpu", "cuda", "wgpu"]` across
+  L2/Cosine/IP/L1/Hamming/Jaccard.
 - **Native ingest orchestrator (A4)**: `Table::ingest_async` /
   `table.ingest(paths, chunk_rows, parallelism, index_all, resume)` plans parquet
   inputs into row-range work units, runs a bounded `buffer_unordered(parallelism)`
