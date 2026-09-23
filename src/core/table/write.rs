@@ -1217,9 +1217,9 @@ impl Table {
 
         // Save metadata file (vX.metadata.json)
         let new_meta_version = (new_manifest.version) as i32; // Sync with manifest version for simplicity
-        // `save_to_store` returns the relative path it wrote. Capture it so we
-        // can hand catalogs the authoritative location instead of making them
-        // reconstruct it (AWS Glue cannot be told by its server, unlike REST).
+                                                              // `save_to_store` returns the relative path it wrote. Capture it so we
+                                                              // can hand catalogs the authoritative location instead of making them
+                                                              // reconstruct it (AWS Glue cannot be told by its server, unlike REST).
         let written_metadata_path = table_meta
             .save_to_store(meta_store, new_meta_version)
             .await?;

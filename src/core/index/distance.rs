@@ -688,10 +688,7 @@ mod early_exit_tests {
         let a = [0.0f32, 0.0, 0.0];
         let b = [1.0f32, 1.0, 1.0];
         let full = l2_distance_squared(&a, &b); // 3.0
-        assert_eq!(
-            l2_distance_squared_early_exit(&a, &b, full).unwrap(),
-            full
-        );
+        assert_eq!(l2_distance_squared_early_exit(&a, &b, full).unwrap(), full);
         assert_eq!(
             l2_distance_squared_early_exit(&a, &b, full + 1.0).unwrap(),
             full

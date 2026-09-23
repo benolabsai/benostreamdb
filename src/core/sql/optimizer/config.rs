@@ -296,7 +296,8 @@ mod hint_tests {
 
     #[test]
     fn parses_wrapped_hint() {
-        let cfg = VectorSearchConfig::from_sql_hints("INDEX_HINT(ef_search=128, probes=10)").unwrap();
+        let cfg =
+            VectorSearchConfig::from_sql_hints("INDEX_HINT(ef_search=128, probes=10)").unwrap();
         assert_eq!(cfg.ef_search, Some(128));
         assert_eq!(cfg.probes, Some(10));
     }

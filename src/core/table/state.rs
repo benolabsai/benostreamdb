@@ -162,7 +162,7 @@ impl Table {
     /// Every commit is a monotonically increasing `v{N}.json` written with
     /// `PutMode::Create`, so this value is a stable snapshot identifier. A
     /// reader can pin it and later read exactly that snapshot via
-    /// [`Table::read_at_version`].
+    /// [`Table::manifest_at_version`].
     pub async fn snapshot_version(&self) -> Result<u64> {
         let (_, version) =
             crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri)

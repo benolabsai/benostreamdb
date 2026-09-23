@@ -236,10 +236,7 @@ fn parse_binary_expr(bin: &BinaryExpr) -> Option<(VectorMetric, String, VectorVa
     // `max(index) + 1`. Use the Struct form (`indices`/`values`/`dim`) when the
     // true dimension matters.
     if let ScalarValue::Map(map_array) = literal.value() {
-        if let Some(map) = map_array
-            .as_any()
-            .downcast_ref::<arrow::array::MapArray>()
-        {
+        if let Some(map) = map_array.as_any().downcast_ref::<arrow::array::MapArray>() {
             if let Some(sv) = sparse_from_map(map) {
                 return Some((m, col.name().to_string(), VectorValue::Sparse(sv)));
             }

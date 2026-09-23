@@ -72,7 +72,8 @@ impl HnswProfile {
 
     #[inline]
     pub(crate) fn record_search_layer(&self) {
-        self.search_layer_calls.fetch_add(1, AtomicOrdering::Relaxed);
+        self.search_layer_calls
+            .fetch_add(1, AtomicOrdering::Relaxed);
     }
 
     #[inline]

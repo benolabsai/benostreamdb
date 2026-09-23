@@ -219,11 +219,8 @@ mod tests {
     #[test]
     fn truncate_partition_floors_integers() {
         let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int64Array::from(vec![123, 127]))],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![123, 127]))]).unwrap();
         let parts = spec("truncate(10)", "n").partition_batch(&batch).unwrap();
         assert_eq!(parts.len(), 1, "123 and 127 share a partition");
         assert_eq!(parts[0].0["n"], serde_json::json!(120));

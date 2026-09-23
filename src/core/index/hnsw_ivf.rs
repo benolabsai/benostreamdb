@@ -511,10 +511,10 @@ impl HnswIvfIndex {
             }
 
             let assignments: Vec<u32> = match use_gpu_assign {
-                true => crate::core::index::gpu::compute_kmeans_assignment(
-                    &vecs, &centroids_flat, dim,
-                )
-                .unwrap_or_else(|_| cpu_assignments(&vecs, &centroids, dim, metric)),
+                true => {
+                    crate::core::index::gpu::compute_kmeans_assignment(&vecs, &centroids_flat, dim)
+                        .unwrap_or_else(|_| cpu_assignments(&vecs, &centroids, dim, metric))
+                }
                 false => cpu_assignments(&vecs, &centroids, dim, metric),
             };
 

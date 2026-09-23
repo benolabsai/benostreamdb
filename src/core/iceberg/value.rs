@@ -88,7 +88,18 @@ pub fn decode_iceberg_value(
             }
         }
         "binary" | "fixed" => {
-            ManifestValue::String(base64::engine::general_purpose::STANDARD.encode(bytes))
+            // `encode_iceberg_value` writes the raw bytes (Iceberg's Avro form),
+            // so this must be the symmetric inverse: UTF-8 when the bytes are
+            // valid UTF-8 (the only case a Utf8 filter literal can match),
+            // otherwise base64. Decoding unconditionally to base64 made binary
+            // column stats incomparable with raw filter literals — e.g. the
+            // `blob` stats came back as "YmFy"/"cXV4" while the filter value was
+            // "foo", so `"cXV4" < "foo"` held and a matching row was pruned.
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                ManifestValue::String(s.to_string())
+            } else {
+                ManifestValue::String(base64::engine::general_purpose::STANDARD.encode(bytes))
+            }
         }
         _ => {
             // Best effort fallback
@@ -167,9 +178,7 @@ pub fn json_to_avro_value(v: &serde_json::Value) -> AvroValue {
 /// Used to populate the manifest's `lower_bounds` / `upper_bounds`, which the
 /// reader turns back into `column_stats`. Returns `None` for values with no
 /// binary representation (e.g. `Null`).
-pub fn encode_iceberg_value(
-    value: &crate::core::manifest::ManifestValue,
-) -> Option<Vec<u8>> {
+pub fn encode_iceberg_value(value: &crate::core::manifest::ManifestValue) -> Option<Vec<u8>> {
     use crate::core::manifest::ManifestValue;
     match value {
         ManifestValue::Boolean(b) => Some(vec![u8::from(*b)]),
@@ -180,5 +189,37 @@ pub fn encode_iceberg_value(
         ManifestValue::Float64(f) => Some(f.to_le_bytes().to_vec()),
         ManifestValue::String(s) => Some(s.as_bytes().to_vec()),
         ManifestValue::Null => None,
+    }
+}
+
+#[cfg(test)]
+mod binary_bounds_tests {
+    use super::*;
+    use crate::core::manifest::ManifestValue;
+
+    /// `encode_iceberg_value` writes raw bytes, so decoding a binary column's
+    /// bounds must return those same bytes as a UTF-8 string — otherwise the
+    /// stats come back base64-encoded and compare wrongly against raw filter
+    /// literals (this caused a false `StatsBelowMin` prune of a matching row).
+    #[test]
+    fn binary_bounds_round_trip_as_utf8() {
+        let encoded = encode_iceberg_value(&ManifestValue::String("foo".to_string())).unwrap();
+        match decode_iceberg_value(&serde_json::json!("binary"), &encoded) {
+            ManifestValue::String(s) => assert_eq!(s, "foo"),
+            other => panic!("expected utf8 string, got {:?}", other),
+        }
+    }
+
+    /// Non-UTF-8 binary cannot be represented as a `String` literal, so it
+    /// falls back to base64 (never a lossy panic).
+    #[test]
+    fn non_utf8_binary_bounds_fall_back_to_base64() {
+        let raw = vec![0xff, 0xfe, 0x00, 0x80];
+        match decode_iceberg_value(&serde_json::json!("binary"), &raw) {
+            ManifestValue::String(s) => {
+                assert_eq!(s, base64::engine::general_purpose::STANDARD.encode(&raw))
+            }
+            other => panic!("expected base64 string, got {:?}", other),
+        }
     }
 }

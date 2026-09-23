@@ -1448,9 +1448,8 @@ impl HybridReader {
                     .map(|id| row_distances.get(id).copied().unwrap_or(f32::MAX))
                     .collect();
 
-                let distance_array = std::sync::Arc::new(
-                    arrow::array::Float32Array::from(batch_distances.clone()),
-                );
+                let distance_array =
+                    std::sync::Arc::new(arrow::array::Float32Array::from(batch_distances.clone()));
                 let final_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                     arrow::datatypes::Field::new(
                         "distance",
