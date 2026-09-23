@@ -13,9 +13,12 @@ use anyhow::{Context, Result};
 use arrow::record_batch::RecordBatch;
 use futures::stream::{self, StreamExt};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Duration;
 
 use crate::core::manifest::{CommitMetadata, ManifestEntry, ManifestManager};
 use crate::core::segment::HybridSegmentWriter;
+use crate::core::table::coordinator::{ObjectStoreCoordinator, WorkCoordinator, WorkUnit};
 use crate::core::table::state::ColumnIndexConfig;
 use crate::core::table::Table;
 use crate::SegmentConfig;
@@ -70,20 +73,6 @@ pub struct IngestReport {
     pub rows_ingested: usize,
     /// Committed segment file paths.
     pub segments: Vec<String>,
-}
-
-/// A single unit of work: a row range within one parquet file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct WorkUnit {
-    path: String,
-    row_start: usize,
-    row_end: usize,
-}
-
-impl WorkUnit {
-    fn key(&self) -> String {
-        format!("{}:{}:{}", self.path, self.row_start, self.row_end)
-    }
 }
 
 /// Row count of a parquet file (from its footer metadata).
@@ -287,6 +276,158 @@ impl Table {
         if options.compact_after {
             self.rewrite_data_files_async(None).await?;
         }
+        Ok(report)
+    }
+
+    /// Build the default (object-store lease) coordinator for `paths`.
+    ///
+    /// Multi-machine mode: run this on N machines with the same `paths`; each
+    /// claims a disjoint share of the units through the shared lease store.
+    pub fn object_store_coordinator(
+        &self,
+        paths: &[String],
+        chunk_rows: usize,
+        ttl: Duration,
+    ) -> Result<Arc<dyn WorkCoordinator>> {
+        let units: Vec<WorkUnit> = self
+            .plan_ingest(paths, chunk_rows)?
+            .into_iter()
+            .map(|(p, s, e)| WorkUnit::new(p, s, e))
+            .collect();
+        Ok(Arc::new(ObjectStoreCoordinator::new(
+            self.store.clone(),
+            units,
+            ttl,
+        )))
+    }
+
+    /// Multi-machine ingest: claim units from a shared [`WorkCoordinator`].
+    ///
+    /// Unlike [`Table::ingest_async`], the unit list is not fixed up front — each
+    /// round claims up to `parallelism` unleased units, builds them in parallel,
+    /// and commits them serially through the OCC CAS. A unit whose build fails is
+    /// released (not completed) so another node can retry it.
+    pub async fn ingest_coordinated_async(
+        &self,
+        options: IngestOptions,
+        coordinator: Arc<dyn WorkCoordinator>,
+    ) -> Result<IngestReport> {
+        let report = self
+            .ingest_coordinated_units_async(&options, coordinator)
+            .await?;
+        if options.compact_after {
+            self.rewrite_data_files_async(None).await?;
+        }
+        Ok(report)
+    }
+
+    async fn ingest_coordinated_units_async(
+        &self,
+        options: &IngestOptions,
+        coordinator: Arc<dyn WorkCoordinator>,
+    ) -> Result<IngestReport> {
+        let mut report = IngestReport {
+            units_total: coordinator.total_units(),
+            ..Default::default()
+        };
+        let mut completed = coordinator.completed().await?;
+
+        let parallelism = options.parallelism.max(1);
+        let index_all = options.index_all || self.indexing.index_all;
+        let index_cols = self.indexing.index_columns.read().clone();
+        let index_configs: HashMap<String, ColumnIndexConfig> =
+            self.indexing.index_configs.read().clone();
+        let default_device = self.indexing.default_device.read().clone();
+        let pk = self.primary_key.read().clone();
+        let base_path = self
+            .uri
+            .strip_prefix("file://")
+            .unwrap_or(&self.uri)
+            .to_string();
+        std::fs::create_dir_all(&base_path)?;
+
+        let mut trim_policy =
+            crate::core::memory::HeapTrimPolicy::from_budget_or_env(options.memory_budget_bytes);
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+
+        loop {
+            // Claim up to `parallelism` unleased units.
+            let mut leases = Vec::new();
+            for _ in 0..parallelism {
+                match coordinator.claim(&completed).await? {
+                    Some(lease) => leases.push(lease),
+                    None => break,
+                }
+            }
+            if leases.is_empty() {
+                break;
+            }
+
+            // Build the claimed units in parallel.
+            let builds = futures::future::join_all(leases.iter().map(|lease| {
+                let table = self.clone();
+                let unit = lease.unit.clone();
+                let base_path = base_path.clone();
+                let index_cols = index_cols.clone();
+                let index_configs = index_configs.clone();
+                let default_device = default_device.clone();
+                let pk = pk.clone();
+                async move {
+                    let batch = read_range(&unit.path, unit.row_start, unit.row_end)?;
+                    let rows = batch.num_rows();
+                    let entry = table
+                        .build_ingest_segment(
+                            &base_path,
+                            &batch,
+                            index_all,
+                            &index_cols,
+                            &index_configs,
+                            default_device.as_deref(),
+                            &pk,
+                        )
+                        .await?;
+                    Ok::<_, anyhow::Error>((unit, entry, rows))
+                }
+            }))
+            .await;
+
+            // Commit serially so manifest versions stay ordered. A failed build
+            // returns early, dropping its lease (released, not completed) so the
+            // unit is retryable by another node.
+            for (lease, build) in leases.into_iter().zip(builds) {
+                let (unit, entry, rows) = build?;
+                let path = entry.file_path.clone();
+                manifest_manager
+                    .commit(
+                        &[entry],
+                        &[],
+                        CommitMetadata {
+                            skip_missing_remove_paths: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                completed.insert(unit.key());
+                coordinator.complete(lease).await?;
+                report.units_committed += 1;
+                report.rows_ingested += rows;
+                report.segments.push(path);
+
+                if let Some(policy) = trim_policy.as_mut() {
+                    if policy.maybe_trim() {
+                        tracing::info!(
+                            rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
+                            budget_mb = policy.budget_bytes() / (1024 * 1024),
+                            trims = policy.trims(),
+                            released_mb = policy.released_bytes() / (1024 * 1024),
+                            "ingest: trimmed heap after unit (RSS over budget)"
+                        );
+                    }
+                }
+            }
+        }
+
+        report.units_skipped = report.units_total.saturating_sub(report.units_committed);
         Ok(report)
     }
 
@@ -581,6 +722,40 @@ mod tests {
 
         assert_eq!(report.units_committed, 2, "1500 rows / 1000 = 2 units");
         assert_eq!(report.rows_ingested, 1500);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ingest_coordinated_commits_all_units() -> Result<()> {
+        // Multi-machine path: units are claimed from a shared object-store lease
+        // coordinator rather than a fixed list.
+        let dir = tempfile::tempdir()?;
+        let src = dir.path().join("src.parquet");
+        write_parquet(&src, 2500);
+
+        let table_uri = format!("file://{}", dir.path().join("tbl_coord").to_string_lossy());
+        let table = Table::new_async(table_uri).await?;
+
+        let paths = vec![src.to_string_lossy().to_string()];
+        let coordinator = table.object_store_coordinator(&paths, 1000, Duration::from_secs(60))?;
+        let report = table
+            .ingest_coordinated_async(
+                IngestOptions {
+                    chunk_rows: 1000,
+                    parallelism: 2,
+                    ..Default::default()
+                },
+                coordinator,
+            )
+            .await?;
+
+        assert_eq!(report.units_total, 3, "2500 rows / 1000 = 3 units");
+        assert_eq!(report.units_committed, 3);
+        assert_eq!(report.rows_ingested, 2500);
+
+        let batches = table.read_async(None, None, None).await?;
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 2500);
         Ok(())
     }
 

@@ -1994,7 +1994,7 @@ impl PyTable {
     /// Native bulk ingest of parquet files: plan → bounded parallel execute →
     /// OCC commit. Returns a report dict with `units_total`, `units_skipped`,
     /// `units_committed`, `rows_ingested`, `segments`.
-    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true, compact_after=false, memory_budget_gb=None))]
+    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true, compact_after=false, memory_budget_gb=None, coordinate=false, lease_ttl_secs=300))]
     #[allow(clippy::too_many_arguments)]
     fn ingest(
         &self,
@@ -2006,6 +2006,8 @@ impl PyTable {
         resume: bool,
         compact_after: bool,
         memory_budget_gb: Option<f64>,
+        coordinate: bool,
+        lease_ttl_secs: u64,
     ) -> PyResult<Py<PyAny>> {
         let opts = crate::core::table::IngestOptions {
             chunk_rows: chunk_rows.unwrap_or(1_000_000),
@@ -2020,7 +2022,18 @@ impl PyTable {
         let report = py
             .allow_threads(|| {
                 let rt = self.table.runtime();
-                rt.block_on(async { self.table.ingest_async(&paths, opts).await })
+                rt.block_on(async {
+                    if coordinate {
+                        let coordinator = self.table.object_store_coordinator(
+                            &paths,
+                            opts.chunk_rows,
+                            std::time::Duration::from_secs(lease_ttl_secs.max(1)),
+                        )?;
+                        self.table.ingest_coordinated_async(opts, coordinator).await
+                    } else {
+                        self.table.ingest_async(&paths, opts).await
+                    }
+                })
             })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 

@@ -2537,6 +2537,8 @@ class Table:
         resume: bool = True,
         compact_after: bool = False,
         memory_budget_gb: Optional[float] = None,
+        coordinate: bool = False,
+        lease_ttl_secs: int = 300,
     ) -> Dict[str, Any]:
         """Native bulk ingest of parquet files (plan → parallel execute → commit).
 
@@ -2558,6 +2560,11 @@ class Table:
                 RSS exceeds this budget (GB). Falls back to the
                 ``HDB_INGEST_MEMORY_BUDGET_GB`` env var when unset; disabled if
                 neither is set.
+            coordinate: multi-machine mode — claim units from a shared
+                object-store lease queue instead of a fixed local list. Run on N
+                machines with the same ``paths`` to split the work; a dead
+                node's lease expires and another node steals its unit.
+            lease_ttl_secs: lease TTL for ``coordinate`` (default 300).
 
         Returns:
             A report dict: ``units_total``, ``units_skipped``, ``units_committed``,
@@ -2573,6 +2580,8 @@ class Table:
             resume,
             compact_after,
             memory_budget_gb,
+            coordinate,
+            lease_ttl_secs,
         )
 
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
