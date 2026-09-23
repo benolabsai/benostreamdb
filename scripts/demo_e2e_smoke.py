@@ -11,6 +11,7 @@ os.environ.setdefault("HYPERSTREAM_CACHE_GB", "40")  # same default as app.py
 import hyperstreamdb as hdb
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Tables live on the SSD in the repo's original location.
 DB = f"file://{os.path.join(REPO, 'data', 'wiki_graph_db')}"
 
 t0 = time.time()

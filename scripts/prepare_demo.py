@@ -39,9 +39,16 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(REPO, "data")
-DB = os.path.join(DATA, "wiki_graph_db")   # persistent hdb tables
+# Dumps (raw XML, parsed parquets, embedding shards) live on the 14 TB HDD by
+# default so they never fill the root disk. Override with --dumps-dir or
+# HYPERSTREAM_DATA.
+DATA = os.environ.get(
+    "HYPERSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+)
 EMB = os.path.join(DATA, "embeddings")
+# HyperStreamDB tables stay on the SSD in the repo's original location.
+DB = os.path.join(REPO, "data", "wiki_graph_db")
 
 log = lambda m: print(f"[prepare] {m}", flush=True)
 
@@ -502,6 +509,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
         log(f"load nodes: chunk [{s:,}, {e:,}) in a fresh process")
         rc = subprocess.run(
             [sys.executable, os.path.abspath(__file__), "--stage", "load",
+             "--dumps-dir", DATA,
              "--load-chunk-rows", "0", "--row-start", str(s), "--row-end", str(e),
              "--quant", quant, "--keep-shards"])
         if rc.returncode != 0:
@@ -545,10 +553,15 @@ def stage_compact(min_file_size_bytes: int = 2_000_000_000):
 
 
 def main():
+    global DATA, EMB
     _enable_cuda_jit()  # no-op unless nvrtc needs shimming (re-execs once)
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "compact", "all"], default="all")
+    ap.add_argument("--dumps-dir", default=DATA,
+                    help="directory holding the wiki dumps, parsed parquets and "
+                         "embedding shards (default: $HOME/data/hyperstreamdb). "
+                         "Tables are always written to <repo>/data/wiki_graph_db.")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")
     ap.add_argument("--embed-model", default="all-MiniLM-L6-v2",
                     help="384-d centroid embedder (fast+small). bge-small-en-v1.5 (384d) or "
@@ -569,6 +582,10 @@ def main():
     ap.add_argument("--compact-min-bytes", type=int, default=2_000_000_000,
                     help="compaction candidate threshold; output segments target 2x this")
     args = ap.parse_args()
+
+    # Resolve the dumps root from --dumps-dir (children inherit it via the flag).
+    DATA = os.path.abspath(os.path.expanduser(args.dumps_dir))
+    EMB = os.path.join(DATA, "embeddings")
 
     stages = (["download", "parse", "resolve", "embed", "load", "compact"]
               if args.stage == "all" else [args.stage])

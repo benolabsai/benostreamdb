@@ -17,6 +17,7 @@ os.environ.setdefault("HYPERSTREAM_CACHE_GB", "40")
 import hyperstreamdb as hdb
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Tables live on the SSD in the repo's original location.
 NODES = f"file://{os.path.join(REPO, 'data', 'wiki_graph_db', 'nodes')}"
 MIN = int(sys.argv[1]) if len(sys.argv) > 1 else 2_000_000_000  # 2 GB -> 4 GB targets
 
