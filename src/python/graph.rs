@@ -200,8 +200,10 @@ impl PyGraphAPI {
                 }
 
                 for neighbor in graph.get_neighbors(current) {
-                    if !visited.contains_key(&neighbor) {
-                        visited.insert(neighbor, current);
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        visited.entry(neighbor)
+                    {
+                        entry.insert(current);
                         queue.push_back(neighbor);
                     }
                 }

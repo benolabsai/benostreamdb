@@ -1318,7 +1318,7 @@ impl PyTable {
                 let batches = df.collect().await.map_err(|e| e.to_string())?;
                 Ok::<_, String>((batches, schema))
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
         crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
@@ -1361,7 +1361,7 @@ impl PyTable {
                 let batches = df.collect().await.map_err(|e| e.to_string())?;
                 Ok::<_, String>((batches, schema))
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
         crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
@@ -1397,7 +1397,7 @@ impl PyTable {
                 let _ = std::fs::remove_dir_all(&tmp);
                 res
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
         let neighbors: Vec<u64> = visited.into_iter().filter(|&n| n != node).collect();
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
@@ -1469,7 +1469,7 @@ impl PyTable {
                 let batches = df.collect().await.map_err(|e| e.to_string())?;
                 Ok::<_, String>((batches, schema))
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
         crate::python::helpers::arrow_batches_to_pyarrow(py, result.0, result.1)
     }
 
@@ -1561,7 +1561,7 @@ impl PyTable {
                 let batches = df.collect().await.map_err(|e| e.to_string())?;
                 Ok::<_, String>((batches, schema))
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
         crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
@@ -1770,12 +1770,13 @@ impl PyTable {
 
                 Ok::<_, String>(dot)
             })
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
         Ok(pyo3::types::PyString::new(py, &result_string).into())
     }
 
     #[pyo3(signature = (query, community_map, top_communities, graph_column=None, follow_up_fn=None, n_depth=2, k_followups=3, top_k=5, hops=2, confidence_threshold=0.0))]
+    #[allow(clippy::too_many_arguments)]
     fn drift_search(
         &self,
         py: Python<'_>,
@@ -1834,7 +1835,7 @@ impl PyTable {
                     }
                     Ok::<_, String>((manifest, segments))
                 })
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
             let multi_graph = crate::core::index::csr_graph::MultiSegmentCsrGraph::new(segments);
 
@@ -1871,7 +1872,7 @@ impl PyTable {
             // Fallback to in-memory graph
             let (batches, _) = self
                 .execute_sql_internal("SELECT source, target FROM t".to_string())
-                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
             let mut graph = crate::core::sql::graph_udf::drift_search::SimpleGraph {
                 adjacency: std::collections::HashMap::new(),
