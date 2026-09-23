@@ -6,15 +6,19 @@ kernel void jaccard_distance_kernel(
     device const float* vectors [[ buffer(1) ]],
     device float* distances [[ buffer(2) ]],
     constant uint& dim [[ buffer(3) ]],
+    constant uint& n_vectors [[ buffer(4) ]],
     uint id [[ thread_position_in_grid ]]
 ) {
-    // Each thread handles one vector (row)
+    // Each thread handles one vector (row). The dispatch rounds the thread
+    // count up to a multiple of the threadgroup size, so guard the tail.
     uint row = id;
+    if (row >= n_vectors) return;
     
     // Calculate pointer to the start of the current vector
     device const float* current_vector = vectors + row * dim;
     
-    // Compute Jaccard distance for binary/set-like vectors
+    // Compute Jaccard distance for binary/set-like vectors. Membership is
+    // "> 0.0" to match the CPU/CUDA definition.
     // Jaccard similarity = |A ∩ B| / |A ∪ B|
     // Jaccard distance = 1 - Jaccard similarity
     
@@ -25,14 +29,10 @@ kernel void jaccard_distance_kernel(
         float q = query[i];
         float v = current_vector[i];
         
-        // Treat non-zero values as set membership
-        bool q_present = (abs(q) > 1e-7);
-        bool v_present = (abs(v) > 1e-7);
-        
-        if (q_present && v_present) {
-            intersection += 1.0;
-        }
-        if (q_present || v_present) {
+        if (q > 0.0 || v > 0.0) {
+            if (q == v && q > 0.0) {
+                intersection += 1.0;
+            }
             union_count += 1.0;
         }
     }

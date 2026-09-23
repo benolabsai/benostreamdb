@@ -301,6 +301,9 @@ impl GpuBackend for MetalBackend {
         enc.set_buffer(1, Some(&v_buf), 0);
         enc.set_buffer(2, Some(&o_buf), 0);
         enc.set_bytes(3, 4, &(dim as u32) as *const _ as *const _);
+        // The dispatch rounds the thread count up to a multiple of the
+        // threadgroup size; the kernel guards the tail against `n_vectors`.
+        enc.set_bytes(4, 4, &(n_vectors as u32) as *const _ as *const _);
         enc.dispatch_thread_groups(
             MTLSize::new((n_vectors as u64 + 255) / 256, 1, 1),
             MTLSize::new(256, 1, 1),
@@ -1032,8 +1035,7 @@ mod tests {
     /// Backends available on this machine, CPU first (the gold source).
     fn available_backends() -> Vec<(&'static str, Arc<dyn GpuBackend>)> {
         #[allow(unused_mut)]
-        let mut out: Vec<(&'static str, Arc<dyn GpuBackend>)> =
-            vec![("cpu", Arc::new(CpuBackend))];
+        let mut out: Vec<(&'static str, Arc<dyn GpuBackend>)> = vec![("cpu", Arc::new(CpuBackend))];
         #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
         {
             // Under `cargo test` the interpreter's site-packages isn't reported,
