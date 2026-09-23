@@ -126,6 +126,11 @@ jobs:
           shared-key: "metal"
 
       - name: Cross-backend correctness harness (CPU gold vs Metal)
+        env:
+          # Opt into the gated Metal packed-binary kernels so the harness
+          # validates them against the CPU reference. Drop this once macOS CI
+          # has confirmed them and the gate is removed.
+          HDB_METAL_PACKED: "1"
         run: cargo test --lib cross_backend -- --nocapture
 
   #########################

@@ -530,7 +530,7 @@ hdb repair s3://bucket/table
 **Next Steps**
 - [ ] **A5.4 — GPU acceleration for sparse & binary vectors** *(partially done; mark complete once Metal is in)*:
   - [x] **Packed-binary kernels for CUDA + WGPU**: `GpuBackend::compute_binary_distance` + `hamming_packed.cu`/`jaccard_packed.cu` and `wgpu_binary_kernel.wgsl` (AMD/Intel via Vulkan). Batched Python API `hdb.hamming_distance_batch` / `hdb.jaccard_distance_batch`. Verified by the cross-backend harness on an RTX 3090 (`["cpu", "cuda", "wgpu"]`, including a non-word-aligned 13-byte case). ✅
-  - [ ] **Metal packed kernels**: gated to the CPU reference for now — the trait's default impl errors, so the dispatcher falls back transparently. Add `hamming_packed`/`jaccard_packed` `.metal` kernels + the `n_vectors` guard, then the macOS CI job covers it.
+  - [x] **Metal packed kernels (written, gated)**: `mps/hamming_packed.metal` + `mps/jaccard_packed.metal` (popcount, `n_vectors` guard) and the `compute_binary_distance` impl. **Gated** behind `HDB_METAL_PACKED=1` because they can't be verified on the NVIDIA dev box — by default the dispatcher uses the CPU reference. The macOS CI job sets the flag, so a green run there confirms them; remove the gate afterwards. ✅ (code) / ⏳ (verification)
   - [ ] **Sparse GPU via dense-conversion**: backend-agnostic (reuses the existing dense kernels); still pending.
 
 > **Long-term / research work moved to [A11](#a11-gpu-native-index-construction-research--long-term).** A5 ships the bounded GPU work; A11 tracks the open-ended work of moving index *construction* onto the GPU.
