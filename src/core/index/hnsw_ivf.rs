@@ -368,7 +368,7 @@ fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetr
 }
 
 /// Magic marker for the out-of-core vector temp file written by
-/// [`crate::core::segment::HybridSegmentWriter::build_vector_index`] and read by
+/// `HybridSegmentWriter::build_vector_index` and read by
 /// [`HnswIvfIndex::build_from_file`].
 ///
 /// Layout: `[magic u32][dim u32]` followed by repeated

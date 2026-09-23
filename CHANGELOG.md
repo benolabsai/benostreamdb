@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Metal distance kernels read past the end of the vector buffer.** The
+  dispatch covers `ceil(n/256)*256` threads, but the kernels indexed rows by
+  `thread_position_in_grid` with no bounds guard, so up to 255 threads read out
+  of bounds. Added an `n_vectors` argument + guard to all six kernels, and
+  aligned the Hamming (`!=`) and Jaccard (`> 0.0`) comparisons with the CPU/CUDA
+  definition. Covered by the new macOS CI job (Apple Silicon).
+- **rustdoc: `VEC_TMP_MAGIC` linked to a private item**, breaking
+  `cargo doc --features python,wgpu,enterprise,java`. Now plain text.
 - **CUDA distance kernels launched with the wrong grid and no shared memory.**
   `CudaBackend::compute_distance` used `LaunchConfig::for_num_elems`, which packs
   rows into 1024-thread blocks and sets `shared_mem_bytes: 0`, but the kernels
@@ -74,6 +82,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hdb table ingest --coordinate [--lease-ttl-secs N]` and
   `table.ingest(..., coordinate=True, lease_ttl_secs=300)`. No broker, no etcd,
   no Raft cluster.
+
+### Removed
+- **Dead OpenCL kernels** (`src/core/index/opencl/*.cl`) — no `OpenClBackend`
+  was ever wired into `ComputeBackend`.
 
 ### Performance
 - **IVF clustering is now balanced (k-means++ seeding + capacity cap).** The
