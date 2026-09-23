@@ -4,13 +4,28 @@ import pandas as pd
 import hyperstreamdb
 import shutil
 
+# Dumps (full wiki parquets) live on the 14 TB HDD by default; override with
+# --dumps-dir or HYPERSTREAM_DATA.
+DEFAULT_DUMPS = os.environ.get(
+    "HYPERSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+)
+
 def main():
     parser = argparse.ArgumentParser(description="Prune the wiki graph and export for GitHub releases")
-    parser.add_argument("--nodes", type=str, default="data/nodes_with_embeddings.parquet", help="Input nodes")
-    parser.add_argument("--edges", type=str, default="data/edges.parquet", help="Input edges")
-    parser.add_argument("--out_nodes", type=str, default="data/demo_nodes.parquet", help="Output pruned nodes")
-    parser.add_argument("--out_edges", type=str, default="data/demo_edges.parquet", help="Output pruned edges")
+    parser.add_argument("--dumps-dir", type=str, default=DEFAULT_DUMPS,
+                        help="directory holding the wiki parquets (default: $HOME/data/hyperstreamdb)")
+    parser.add_argument("--nodes", type=str, default=None, help="default: <dumps-dir>/nodes_with_embeddings.parquet")
+    parser.add_argument("--edges", type=str, default=None, help="default: <dumps-dir>/edges.parquet")
+    parser.add_argument("--out_nodes", type=str, default=None, help="default: <dumps-dir>/demo_nodes.parquet")
+    parser.add_argument("--out_edges", type=str, default=None, help="default: <dumps-dir>/demo_edges.parquet")
     args = parser.parse_args()
+
+    dumps = os.path.abspath(os.path.expanduser(args.dumps_dir))
+    args.nodes = args.nodes or os.path.join(dumps, "nodes_with_embeddings.parquet")
+    args.edges = args.edges or os.path.join(dumps, "edges.parquet")
+    args.out_nodes = args.out_nodes or os.path.join(dumps, "demo_nodes.parquet")
+    args.out_edges = args.out_edges or os.path.join(dumps, "demo_edges.parquet")
 
     print(f"Loading {args.nodes} and {args.edges}...")
     nodes_df = pd.read_parquet(args.nodes)

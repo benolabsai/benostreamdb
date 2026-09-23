@@ -35,6 +35,13 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+# Dumps (full wiki parquets) live on the 14 TB HDD by default; override with
+# --dumps-dir or HYPERSTREAM_DATA.
+DEFAULT_DUMPS = os.environ.get(
+    "HYPERSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+)
+
 
 def log(msg: str) -> None:
     print(f"[build_demo] {msg}", flush=True)
@@ -272,10 +279,17 @@ def embed_nodes(df: pd.DataFrame, model_name: str) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--nodes", default="data/nodes.parquet")
-    parser.add_argument("--edges", default="data/edges.parquet")
-    parser.add_argument("--out_nodes", default="data/demo_nodes.parquet")
-    parser.add_argument("--out_edges", default="data/demo_edges.parquet")
+    parser.add_argument("--dumps-dir", default=DEFAULT_DUMPS,
+                        help="directory holding the full wiki parquets "
+                             "(default: $HOME/data/hyperstreamdb)")
+    parser.add_argument("--nodes", default=None,
+                        help="default: <dumps-dir>/nodes.parquet")
+    parser.add_argument("--edges", default=None,
+                        help="default: <dumps-dir>/edges.parquet")
+    parser.add_argument("--out_nodes", default=None,
+                        help="default: <dumps-dir>/demo_nodes.parquet")
+    parser.add_argument("--out_edges", default=None,
+                        help="default: <dumps-dir>/demo_edges.parquet")
     parser.add_argument("--max-nodes", type=int, default=50_000,
                         help="Cap the demo to N nodes (0 = no cap)")
     parser.add_argument("--embed-model", default="BAAI/bge-large-en-v1.5",
@@ -289,6 +303,12 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 8,
                         help="Parallel processes for the CPU-bound resolve phase")
     args = parser.parse_args()
+
+    dumps = os.path.abspath(os.path.expanduser(args.dumps_dir))
+    args.nodes = args.nodes or os.path.join(dumps, "nodes.parquet")
+    args.edges = args.edges or os.path.join(dumps, "edges.parquet")
+    args.out_nodes = args.out_nodes or os.path.join(dumps, "demo_nodes.parquet")
+    args.out_edges = args.out_edges or os.path.join(dumps, "demo_edges.parquet")
 
     os.makedirs(args.workdir, exist_ok=True)
     edges_int = os.path.join(args.workdir, "edges_int64.parquet")
