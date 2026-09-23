@@ -781,7 +781,7 @@ impl PyTable {
         k: usize,
         metric: Option<String>,
     ) -> PyResult<Py<PyAny>> {
-        use crate::core::index::{VectorValue, VectorMetric};
+        use crate::core::index::{VectorMetric, VectorValue};
         use crate::core::planner::VectorSearchParams;
 
         let metric = match metric {
@@ -793,7 +793,9 @@ impl PyTable {
             VectorSearchParams::new(&column, VectorValue::Float32(query), k).with_metric(metric);
 
         let results = py
-            .allow_threads(|| TOKIO_RUNTIME.block_on(self.table.execute_vector_search_as_scored(params)))
+            .allow_threads(|| {
+                TOKIO_RUNTIME.block_on(self.table.execute_vector_search_as_scored(params))
+            })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let segments: Vec<&str> = results.iter().map(|r| r.segment_id.as_str()).collect();

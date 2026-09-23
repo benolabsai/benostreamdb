@@ -297,8 +297,7 @@ impl TableProvider for HyperStreamTableProvider {
         // partial index would under-count matches and prune real rows.
         let pk_cols = self.table.primary_key.read().clone();
         let indexed_cols = self.table.get_index_columns();
-        let pk_filter = if !pk_cols.is_empty() && pk_cols.iter().all(|c| indexed_cols.contains(c))
-        {
+        let pk_filter = if !pk_cols.is_empty() && pk_cols.iter().all(|c| indexed_cols.contains(c)) {
             filters.iter().find_map(|f| {
                 crate::core::table::primary_key::PrimaryKeyFilter::from_expr(f, &pk_cols)
                     .filter(|pf| !pf.is_empty())

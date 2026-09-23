@@ -961,7 +961,13 @@ impl Table {
         columns: Option<&[&str]>,
         cached_iceberg_schema: Option<&crate::core::manifest::Schema>,
     ) -> Result<Vec<RecordBatch>> {
-        tracing::debug!("read_segment_expr entry={} manifest_version={} columns={:?} expr={:?}", entry.file_path, manifest_version, columns, expr);
+        tracing::debug!(
+            "read_segment_expr entry={} manifest_version={} columns={:?} expr={:?}",
+            entry.file_path,
+            manifest_version,
+            columns,
+            expr
+        );
         let file_path_str = entry.file_path.clone();
         let segment_id = file_path_str
             .split('/')
@@ -1338,18 +1344,13 @@ impl Table {
         // query that projects nothing but the score was reading every column of
         // every matched row for a value it already had. Emit it directly.
         if let Some(cols) = columns.filter(|c| !c.is_empty()) {
-            let score_like =
-                |c: &str| c == "distance" || c == "_distance" || c == "score";
+            let score_like = |c: &str| c == "distance" || c == "_distance" || c == "score";
             if cols.iter().all(|c| score_like(c)) {
                 let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
                 let fields: Vec<arrow::datatypes::Field> = cols
                     .iter()
                     .map(|c| {
-                        arrow::datatypes::Field::new(
-                            *c,
-                            arrow::datatypes::DataType::Float32,
-                            false,
-                        )
+                        arrow::datatypes::Field::new(*c, arrow::datatypes::DataType::Float32, false)
                     })
                     .collect();
                 let schema = Arc::new(arrow::datatypes::Schema::new(fields));

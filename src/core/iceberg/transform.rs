@@ -100,8 +100,9 @@ impl IcebergTransform {
                     }
                     // `large_string` is PyArrow's default string type.
                     arrow::datatypes::DataType::LargeUtf8 => {
-                        let a = if let Some(arr) =
-                            array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                        let a = if let Some(arr) = array
+                            .as_any()
+                            .downcast_ref::<arrow::array::LargeStringArray>()
                         {
                             arr
                         } else {
@@ -110,8 +111,9 @@ impl IcebergTransform {
                         serde_json::json!(a.value(row_i))
                     }
                     arrow::datatypes::DataType::Utf8View => {
-                        let a = if let Some(arr) =
-                            array.as_any().downcast_ref::<arrow::array::StringViewArray>()
+                        let a = if let Some(arr) = array
+                            .as_any()
+                            .downcast_ref::<arrow::array::StringViewArray>()
                         {
                             arr
                         } else {
@@ -183,8 +185,9 @@ impl IcebergTransform {
                             murmur3_32_x86(s.as_bytes(), hash_val)
                         }
                         arrow::datatypes::DataType::LargeUtf8 => {
-                            let a = if let Some(arr) =
-                                array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                            let a = if let Some(arr) = array
+                                .as_any()
+                                .downcast_ref::<arrow::array::LargeStringArray>()
                             {
                                 arr
                             } else {
@@ -194,8 +197,9 @@ impl IcebergTransform {
                             murmur3_32_x86(s.as_bytes(), hash_val)
                         }
                         arrow::datatypes::DataType::Utf8View => {
-                            let a = if let Some(arr) =
-                                array.as_any().downcast_ref::<arrow::array::StringViewArray>()
+                            let a = if let Some(arr) = array
+                                .as_any()
+                                .downcast_ref::<arrow::array::StringViewArray>()
                             {
                                 arr
                             } else {
@@ -239,8 +243,9 @@ impl IcebergTransform {
                         serde_json::json!(&s[..limit])
                     }
                     arrow::datatypes::DataType::LargeUtf8 => {
-                        let a = if let Some(arr) =
-                            array.as_any().downcast_ref::<arrow::array::LargeStringArray>()
+                        let a = if let Some(arr) = array
+                            .as_any()
+                            .downcast_ref::<arrow::array::LargeStringArray>()
                         {
                             arr
                         } else {
@@ -251,8 +256,9 @@ impl IcebergTransform {
                         serde_json::json!(&s[..limit])
                     }
                     arrow::datatypes::DataType::Utf8View => {
-                        let a = if let Some(arr) =
-                            array.as_any().downcast_ref::<arrow::array::StringViewArray>()
+                        let a = if let Some(arr) = array
+                            .as_any()
+                            .downcast_ref::<arrow::array::StringViewArray>()
                         {
                             arr
                         } else {

@@ -55,10 +55,8 @@ impl ManifestManager {
                         );
                     }
                     if metadata.skip_missing_remove_paths {
-                        metrics::counter!(
-                            "hyperstreamdb_manifest_commit_skipped_removals_total"
-                        )
-                        .increment(1);
+                        metrics::counter!("hyperstreamdb_manifest_commit_skipped_removals_total")
+                            .increment(1);
                         tracing::debug!(
                             "MVCC rebase: '{}' already removed in snapshot v{}, skipping",
                             path,

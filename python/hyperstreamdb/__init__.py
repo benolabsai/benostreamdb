@@ -62,18 +62,31 @@ class Device:
         if _has_torch():
             import torch
             if torch.cuda.is_available():
-                if getattr(torch.version, 'hip', None):
-                    return _Device("rocm")
-                return _Device("cuda")
-            
+                # `torch.cuda.is_available()` can report True from a CUDA build
+                # even when the runtime cannot actually hand out a device (no
+                # GPU, or a missing libnvrtc). Constructing the device then
+                # raises; fall through to native probing instead of propagating.
+                try:
+                    if getattr(torch.version, 'hip', None):
+                        return _Device("rocm")
+                    return _Device("cuda")
+                except Exception:
+                    pass
+
             # Check for Intel IPEX
             if hasattr(torch, "xpu") and torch.xpu.is_available():
-                return _Device("intel")
+                try:
+                    return _Device("intel")
+                except Exception:
+                    pass
 
         # 2. Fallback to native probing
         for b in ['cuda', 'rocm', 'mps', 'intel']:
             if _Device.is_available(b):
-                return _Device(b)
+                try:
+                    return _Device(b)
+                except Exception:
+                    continue
         return _Device('cpu')
 
     @staticmethod

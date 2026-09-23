@@ -375,6 +375,7 @@ fn bench_compaction(c: &mut Criterion) {
                         strategy: "binpack".to_string(),
                         max_concurrent_bins: 4,
                         clustering: None,
+                        allow_cross_partition: true,
                     };
                     let compactor = Compactor::new(&uri, options).unwrap();
 

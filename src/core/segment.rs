@@ -1056,8 +1056,7 @@ mod tests {
             .build();
 
         let mut buf: Vec<u8> = Vec::new();
-        let mut writer =
-            ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props)).unwrap();
         writer.write(&batch).unwrap();
         let metadata = writer.close().unwrap();
 

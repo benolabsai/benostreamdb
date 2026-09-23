@@ -121,8 +121,8 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         // the hot search path stays zero-copy.
         let align = std::mem::align_of::<T>();
         if align > 1
-            && vector_array.len() > 0
-            && vector_array.value(0).as_ptr() as usize % align != 0
+            && !vector_array.is_empty()
+            && !(vector_array.value(0).as_ptr() as usize).is_multiple_of(align)
         {
             let total_bytes = (*vector_array.value_offsets().last().unwrap_or(&0)) as usize;
             let mut builder =

@@ -24,6 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Result: `id >= 100` prunes 5/5 segments ("column max < filter min"),
   `id = 15` prunes 4/5, `id >= 40` keeps exactly the matching segment; query
   results unchanged.
+- **Binary column statistics pruned matching rows** — the manifest writer
+  encodes bounds as raw bytes (`encode_iceberg_value`), but the reader decoded
+  `binary`/`fixed` bounds unconditionally to **base64**, so a `blob` column's
+  stats came back as `"YmFy"`/`"cXV4"` while the filter literal was `"foo"`.
+  `"cXV4" < "foo"` therefore held and the segment was pruned with
+  `StatsBelowMin`, dropping the matching row (surfaced by
+  `tests/all_types_index_test.rs`). `decode_iceberg_value` now treats
+  `binary`/`fixed` symmetrically with `string` — UTF-8 when valid, base64 only
+  as a fallback for non-UTF-8 bytes.
+- **`Device.auto_detect()` raised instead of falling back** when
+  `torch.cuda.is_available()` reported `True` but no usable device existed (no
+  GPU, or a missing `libnvrtc`): constructing the CUDA/ROCm/Intel device now
+  falls through to native probing and finally CPU rather than propagating the
+  error. Previously this failed every GPU-context test on a GPU-less host with
+  a CUDA-enabled torch build.
 - **AWS Glue `metadata_location` is now authoritative**: Glue is the only
   catalog whose commit API cannot return a metadata location (REST/Nessie
   return it; Hive/JDBC set it directly), so the client must supply one. The

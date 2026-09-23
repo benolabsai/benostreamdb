@@ -861,8 +861,8 @@ fn bounds_avro_values(
     apache_avro::types::Value,
     apache_avro::types::Value,
 ) {
-    use apache_avro::types::Value as AvroValue;
     use crate::core::iceberg::value::encode_iceberg_value;
+    use apache_avro::types::Value as AvroValue;
 
     let mut nulls: Vec<AvroValue> = Vec::new();
     let mut lowers: Vec<AvroValue> = Vec::new();
@@ -877,21 +877,13 @@ fn bounds_avro_values(
             ("key".to_string(), AvroValue::Int(field.id)),
             ("value".to_string(), AvroValue::Long(col_stats.null_count)),
         ]));
-        if let Some(bytes) = col_stats
-            .min
-            .as_ref()
-            .and_then(encode_iceberg_value)
-        {
+        if let Some(bytes) = col_stats.min.as_ref().and_then(encode_iceberg_value) {
             lowers.push(AvroValue::Record(vec![
                 ("key".to_string(), AvroValue::Int(field.id)),
                 ("value".to_string(), AvroValue::Bytes(bytes)),
             ]));
         }
-        if let Some(bytes) = col_stats
-            .max
-            .as_ref()
-            .and_then(encode_iceberg_value)
-        {
+        if let Some(bytes) = col_stats.max.as_ref().and_then(encode_iceberg_value) {
             uppers.push(AvroValue::Record(vec![
                 ("key".to_string(), AvroValue::Int(field.id)),
                 ("value".to_string(), AvroValue::Bytes(bytes)),
@@ -944,6 +936,28 @@ fn partition_field_avro_type(
         Some("Float64") | Some("double") => r#"["null", "double"]"#,
         Some("Boolean") | Some("bool") | Some("boolean") => r#"["null", "boolean"]"#,
         _ => r#"["null", "string"]"#,
+    }
+}
+
+/// GPU Accelerated Puffin Index Writer for Iceberg
+pub struct GpuPuffinWriter {
+    // Orchestrates GPU-based index builds (HNSW, Bloom)
+}
+
+impl Default for GpuPuffinWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GpuPuffinWriter {
+    pub fn new() -> Self {
+        Self {}
+    }
+
+    pub async fn build_index(&self, _column: &str) -> Result<String> {
+        // GPU build...
+        Ok("sidecar_path".to_string())
     }
 }
 
@@ -1020,10 +1034,8 @@ mod bounds_roundtrip_tests {
                     continue;
                 };
                 // Top level is {status, snapshot_id, ..., data_file}.
-                let Some(apache_avro::types::Value::Record(fields)) = top
-                    .iter()
-                    .find(|(k, _)| k == "data_file")
-                    .map(|(_, v)| v)
+                let Some(apache_avro::types::Value::Record(fields)) =
+                    top.iter().find(|(k, _)| k == "data_file").map(|(_, v)| v)
                 else {
                     continue;
                 };
@@ -1048,27 +1060,5 @@ mod bounds_roundtrip_tests {
             "manifest did not carry non-empty bounds for a column with min/max \
              (lower={saw_lower}, upper={saw_upper})"
         );
-    }
-}
-
-/// GPU Accelerated Puffin Index Writer for Iceberg
-pub struct GpuPuffinWriter {
-    // Orchestrates GPU-based index builds (HNSW, Bloom)
-}
-
-impl Default for GpuPuffinWriter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GpuPuffinWriter {
-    pub fn new() -> Self {
-        Self {}
-    }
-
-    pub async fn build_index(&self, _column: &str) -> Result<String> {
-        // GPU build...
-        Ok("sidecar_path".to_string())
     }
 }
