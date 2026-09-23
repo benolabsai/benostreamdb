@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-23
+
 ### Fixed
 - **Statistics pruning was inert — four independent faults, all fixed.** Per-column
   min/max never reached the planner, so only partition pruning did any work:
@@ -702,7 +704,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/rla3rd/hyperstreamdb/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/rla3rd/hyperstreamdb/compare/v0.8.1...v0.9.0
 [0.5.3]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/rla3rd/hyperstreamdb/compare/v0.5.0...v0.5.1
