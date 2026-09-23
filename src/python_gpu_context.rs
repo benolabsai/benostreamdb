@@ -218,12 +218,12 @@ impl PyDevice {
         *stats = GPUStats::default();
     }
 
-    fn activate(&self) {
+    pub(crate) fn activate(&self) {
         crate::core::index::gpu::set_thread_gpu_context(Some(self.context.clone()));
     }
 
     #[staticmethod]
-    fn deactivate() {
+    pub(crate) fn deactivate() {
         crate::core::index::gpu::set_thread_gpu_context(None);
     }
 

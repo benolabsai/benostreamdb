@@ -160,6 +160,15 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_packed, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_auto, m)?)?;
     m.add_function(wrap_pyfunction!(python_distance::py_jaccard_auto, m)?)?;
+    // Batched packed-binary (GPU-accelerated where a packed kernel exists)
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_hamming_distance_batch,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_jaccard_distance_batch,
+        m
+    )?)?;
 
     // Add version constant from build.rs
     m.add("__version__", VERSION)?;

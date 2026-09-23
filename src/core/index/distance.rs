@@ -390,6 +390,24 @@ pub fn hamming_distance_packed(a: &[u8], b: &[u8]) -> u32 {
     hamming_distance_packed_portable(a, b)
 }
 
+/// Jaccard distance for bit-packed binary vectors (1 bit per element).
+///
+/// `1 - |A ∩ B| / |A ∪ B|` over the set bits, computed with popcount. Returns
+/// `0.0` when the union is empty (matching the dense definition).
+pub fn jaccard_distance_packed(a: &[u8], b: &[u8]) -> f32 {
+    let mut intersection: u32 = 0;
+    let mut union: u32 = 0;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        intersection += (x & y).count_ones();
+        union += (x | y).count_ones();
+    }
+    if union == 0 {
+        0.0
+    } else {
+        1.0 - (intersection as f32 / union as f32)
+    }
+}
+
 #[inline(always)]
 fn hamming_distance_packed_portable(a: &[u8], b: &[u8]) -> u32 {
     a.iter()

@@ -528,7 +528,10 @@ hdb repair s3://bucket/table
 - [x] **A5.5 — Cleanup**: deleted the dead `opencl/*.cl` kernels — no `OpenClBackend` was ever wired into `ComputeBackend`. ✅
 
 **Next Steps**
-- [ ] **A5.4 — GPU acceleration for sparse & binary vectors** *(held until Metal correctness is confirmed green in CI)*: packed-u8 Hamming/Jaccard kernels for **CUDA, Metal, and WGPU** (the dense kernels already exist in all three; the Python API uses packed u8 and calls the CPU path). Sparse via a dense-conversion path (backend-agnostic — reuses the existing dense kernels). Requires a **batched** entry point: the current single-vector API never clears `GPU_DISPATCH_THRESHOLD`, so GPU would never engage. The WGPU/WGSL path is testable on any Vulkan adapter (NVIDIA included); Metal is covered by the macOS CI job; ROCm/Intel need their hardware.
+- [ ] **A5.4 — GPU acceleration for sparse & binary vectors** *(partially done; mark complete once Metal is in)*:
+  - [x] **Packed-binary kernels for CUDA + WGPU**: `GpuBackend::compute_binary_distance` + `hamming_packed.cu`/`jaccard_packed.cu` and `wgpu_binary_kernel.wgsl` (AMD/Intel via Vulkan). Batched Python API `hdb.hamming_distance_batch` / `hdb.jaccard_distance_batch`. Verified by the cross-backend harness on an RTX 3090 (`["cpu", "cuda", "wgpu"]`, including a non-word-aligned 13-byte case). ✅
+  - [ ] **Metal packed kernels**: gated to the CPU reference for now — the trait's default impl errors, so the dispatcher falls back transparently. Add `hamming_packed`/`jaccard_packed` `.metal` kernels + the `n_vectors` guard, then the macOS CI job covers it.
+  - [ ] **Sparse GPU via dense-conversion**: backend-agnostic (reuses the existing dense kernels); still pending.
 
 > **Long-term / research work moved to [A11](#a11-gpu-native-index-construction-research--long-term).** A5 ships the bounded GPU work; A11 tracks the open-ended work of moving index *construction* onto the GPU.
 
