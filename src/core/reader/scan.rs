@@ -643,7 +643,14 @@ impl HybridReader {
         let mut stream = self
             .stream_all(None as Option<arrow::datatypes::SchemaRef>)
             .await?;
-        let mut matches = Vec::new();
+        if k == 0 {
+            return Ok(Vec::new());
+        }
+        // Streaming top-k, kept sorted ascending by distance. The current
+        // worst (k-th best) distance doubles as the early-exit threshold for
+        // L2 scans, so candidates that cannot enter the top-k are abandoned
+        // mid-accumulation instead of being fully computed and discarded.
+        let mut topk: Vec<(usize, f32)> = Vec::with_capacity(k);
         let mut current_row_offset = 0usize;
 
         let q_vec = match query {
@@ -713,7 +720,6 @@ impl HybridReader {
                         _ => vec![],
                     };
 
-                    let mut local_matches = Vec::with_capacity(vectors.len());
                     for (i, v) in vectors.iter().enumerate() {
                         let row_id = offset + i;
 
@@ -724,12 +730,26 @@ impl HybridReader {
                             }
                         }
 
+                        // The k-th best distance so far bounds how good a
+                        // candidate must be to enter the top-k.
+                        let threshold = if topk.len() >= k {
+                            topk.last().map(|(_, d)| *d).unwrap_or(f32::INFINITY)
+                        } else {
+                            f32::INFINITY
+                        };
+
                         let dist = match metric {
-                            VectorMetric::L2 => v
-                                .iter()
-                                .zip(q_vec_clone.iter())
-                                .map(|(a, b)| (a - b) * (a - b))
-                                .sum::<f32>(),
+                            VectorMetric::L2 => {
+                                match crate::core::index::distance::l2_distance_squared_early_exit(
+                                    v,
+                                    &q_vec_clone,
+                                    threshold,
+                                ) {
+                                    Some(d) => d,
+                                    // Cannot beat the current k-th best; skip.
+                                    None => continue,
+                                }
+                            }
                             VectorMetric::Cosine => {
                                 let dot: f32 =
                                     v.iter().zip(q_vec_clone.iter()).map(|(a, b)| a * b).sum();
@@ -772,25 +792,30 @@ impl HybridReader {
                                 }
                             }
                         };
-                        local_matches.push((row_id, dist));
+
+                        // Insert into the bounded top-k (sorted ascending).
+                        // `partition_point` keeps ties in insertion order,
+                        // matching the previous stable-sort-then-truncate.
+                        if topk.len() < k {
+                            let pos = topk.partition_point(|(_, d)| *d <= dist);
+                            topk.insert(pos, (row_id, dist));
+                        } else if dist < topk.last().map(|(_, d)| *d).unwrap_or(f32::INFINITY) {
+                            let pos = topk.partition_point(|(_, d)| *d <= dist);
+                            topk.insert(pos, (row_id, dist));
+                            topk.pop();
+                        }
                     }
-                    Ok::<Vec<(usize, f32)>, anyhow::Error>(local_matches)
+                    Ok::<Vec<(usize, f32)>, anyhow::Error>(topk)
                 })
                 .await
                 .context("Blocking vector distance computation panicked")??;
 
-                matches.extend(batch_matches);
+                topk = batch_matches;
             }
             current_row_offset += rows;
         }
 
-        // Sort by distance and take k
-        matches.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-        if matches.len() > k {
-            matches.truncate(k);
-        }
-
-        Ok(matches)
+        Ok(topk)
     }
 
     #[tracing::instrument(skip(self, query, filter, target_schema))]

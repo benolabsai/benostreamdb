@@ -762,6 +762,7 @@ pub fn load_hnsw<
         data_dimension: data_dim,
         dist_f: D::default(),
         searching: false,
+        profile: Arc::new(HnswProfile::new()),
     };
     //
     log::debug!("load_hnsw completed");
@@ -842,6 +843,7 @@ pub fn load_hnsw_with_dist<
         data_dimension: data_dim,
         dist_f: f,
         searching: false,
+        profile: Arc::new(HnswProfile::new()),
     };
     //
     log::debug!("load_hnsw_with_dist completed");

@@ -11,6 +11,31 @@ pub fn l2_distance(a: &[f32], b: &[f32]) -> f32 {
     l2_distance_squared(a, b).sqrt()
 }
 
+/// L2 squared distance with an early-exit threshold.
+///
+/// Returns `None` as soon as the running sum exceeds `threshold`, so a
+/// candidate that cannot beat the current k-th best is abandoned without
+/// scanning the rest of the vector. Used by the flat scan, where the threshold
+/// is the k-th best distance found so far.
+///
+/// The result is identical to [`l2_distance_squared`] whenever it returns
+/// `Some`; `None` means "strictly worse than the threshold".
+#[inline]
+pub fn l2_distance_squared_early_exit(a: &[f32], b: &[f32], threshold: f32) -> Option<f32> {
+    if !threshold.is_finite() {
+        return Some(l2_distance_squared(a, b));
+    }
+    let mut sum = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let d = x - y;
+        sum += d * d;
+        if sum > threshold {
+            return None;
+        }
+    }
+    Some(sum)
+}
+
 #[inline(always)]
 pub fn l2_distance_squared(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -642,5 +667,94 @@ impl DistL2u4 {
 impl super::hnsw_rs::dist::Distance<u8> for DistL2u4 {
     fn eval(&self, va: &[u8], vb: &[u8]) -> f32 {
         self.distance(va, vb)
+    }
+}
+
+#[cfg(test)]
+mod early_exit_tests {
+    use super::*;
+
+    #[test]
+    fn infinite_threshold_matches_full_distance() {
+        let a = [1.0f32, 2.0, 3.0, 4.0];
+        let b = [4.0f32, 3.0, 2.0, 1.0];
+        let full = l2_distance_squared(&a, &b);
+        let got = l2_distance_squared_early_exit(&a, &b, f32::INFINITY).unwrap();
+        assert_eq!(full, got);
+    }
+
+    #[test]
+    fn threshold_at_or_above_distance_returns_some() {
+        let a = [0.0f32, 0.0, 0.0];
+        let b = [1.0f32, 1.0, 1.0];
+        let full = l2_distance_squared(&a, &b); // 3.0
+        assert_eq!(
+            l2_distance_squared_early_exit(&a, &b, full).unwrap(),
+            full
+        );
+        assert_eq!(
+            l2_distance_squared_early_exit(&a, &b, full + 1.0).unwrap(),
+            full
+        );
+    }
+
+    #[test]
+    fn threshold_below_distance_returns_none() {
+        let a = [0.0f32, 0.0, 0.0];
+        let b = [1.0f32, 1.0, 1.0];
+        let full = l2_distance_squared(&a, &b); // 3.0
+        assert!(l2_distance_squared_early_exit(&a, &b, full - 0.5).is_none());
+        assert!(l2_distance_squared_early_exit(&a, &b, 0.0).is_none());
+    }
+
+    /// The streaming top-k used by the flat scan must produce exactly the same
+    /// result as the previous full-scan-then-stable-sort-then-truncate.
+    #[test]
+    fn streaming_topk_matches_full_sort() {
+        let q = [0.5f32, 0.5, 0.5, 0.5];
+        // Deliberately include ties to exercise insertion-order stability.
+        let candidates: Vec<Vec<f32>> = vec![
+            vec![0.0, 0.0, 0.0, 0.0],
+            vec![1.0, 1.0, 1.0, 1.0],
+            vec![0.5, 0.5, 0.5, 0.5],
+            vec![0.0, 0.0, 0.0, 0.0],
+            vec![2.0, 2.0, 2.0, 2.0],
+            vec![0.5, 0.5, 0.5, 0.5],
+            vec![0.25, 0.25, 0.25, 0.25],
+        ];
+        let k = 3;
+
+        // Reference: full distances, stable sort, truncate.
+        let mut reference: Vec<(usize, f32)> = candidates
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, l2_distance_squared(v, &q)))
+            .collect();
+        reference.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        reference.truncate(k);
+
+        // Streaming bounded top-k with early exit.
+        let mut topk: Vec<(usize, f32)> = Vec::with_capacity(k);
+        for (i, v) in candidates.iter().enumerate() {
+            let threshold = if topk.len() >= k {
+                topk.last().map(|(_, d)| *d).unwrap_or(f32::INFINITY)
+            } else {
+                f32::INFINITY
+            };
+            let dist = match l2_distance_squared_early_exit(v, &q, threshold) {
+                Some(d) => d,
+                None => continue,
+            };
+            if topk.len() < k {
+                let pos = topk.partition_point(|(_, d)| *d <= dist);
+                topk.insert(pos, (i, dist));
+            } else if dist < topk.last().map(|(_, d)| *d).unwrap_or(f32::INFINITY) {
+                let pos = topk.partition_point(|(_, d)| *d <= dist);
+                topk.insert(pos, (i, dist));
+                topk.pop();
+            }
+        }
+
+        assert_eq!(topk, reference);
     }
 }

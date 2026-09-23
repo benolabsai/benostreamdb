@@ -44,10 +44,19 @@ impl Table {
 
     #[tracing::instrument(skip(self))]
     pub async fn sql(&self, query: &str) -> Result<Vec<RecordBatch>> {
+        use crate::core::sql::optimizer::VectorSearchConfig;
         use crate::core::sql::HyperStreamTableProvider;
-        use datafusion::prelude::SessionContext;
+        use datafusion::prelude::{SessionConfig, SessionContext};
 
-        let mut ctx = SessionContext::new();
+        // Apply any `/*+ ... */` optimizer hints to the session configuration
+        // so the vector-search optimizer rule can pick them up.
+        let mut session_config = SessionConfig::new();
+        if let Some(hints) = VectorSearchConfig::extract_sql_hints(query) {
+            let vs_config = VectorSearchConfig::from_sql_hints(&hints)?;
+            session_config.options_mut().extensions.insert(vs_config);
+        }
+
+        let mut ctx = SessionContext::new_with_config(session_config);
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
