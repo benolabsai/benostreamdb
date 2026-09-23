@@ -67,10 +67,31 @@ fn tame_glibc_arenas() {
 #[cfg(all(feature = "python", not(all(target_os = "linux", target_env = "gnu"))))]
 fn tame_glibc_arenas() {}
 
+/// Tell the nvrtc resolver where this interpreter's `site-packages` is, so
+/// pip-installed `nvidia-*-cuXX` wheels are discoverable without env vars.
+#[cfg(all(feature = "python", not(target_os = "macos"), feature = "cuda"))]
+fn register_python_site_packages(m: &Bound<'_, PyModule>) {
+    let py = m.py();
+    let Ok(sysconfig) = py.import("sysconfig") else {
+        return;
+    };
+    let Ok(paths) = sysconfig.call_method0("get_paths") else {
+        return;
+    };
+    let Ok(purelib) = paths.get_item("purelib") else {
+        return;
+    };
+    if let Ok(s) = purelib.extract::<String>() {
+        crate::core::index::nvrtc::set_python_site_packages(std::path::PathBuf::from(s));
+    }
+}
+
 #[cfg(feature = "python")]
 #[pymodule]
 fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     tame_glibc_arenas();
+    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    register_python_site_packages(m);
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(

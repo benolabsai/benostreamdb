@@ -12,6 +12,8 @@ pub mod hnsw_ivf;
 pub mod hnsw_rs;
 pub mod ivf;
 pub mod memory;
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+pub mod nvrtc;
 pub mod pq;
 pub mod tokenizer;
 pub mod turboquant;

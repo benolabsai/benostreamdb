@@ -14,8 +14,6 @@ use std::sync::Arc;
 
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use cudarc::driver::{LaunchAsync, LaunchConfig};
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
-use cudarc::nvrtc::compile_ptx;
 
 // The global context to ensure PTX modules and device memory are not duplicated per thread.
 // cudarc is Send+Sync and safely manages CUDA contexts internally.
@@ -117,12 +115,16 @@ impl CudaBackend {
     pub fn new(id: usize) -> Result<Self> {
         let device = cudarc::driver::CudaDevice::new(id)?;
 
-        // JIT-compile .cu source to PTX at runtime via nvrtc (no nvcc needed at build time)
+        // JIT-compile .cu source to PTX at runtime via nvrtc (no nvcc needed at
+        // build time). We compile with our own version-agnostic resolver
+        // (`core::index::nvrtc`) because cudarc's loader probes a fixed
+        // candidate list that predates CUDA 13, then hand the PTX to cudarc.
         macro_rules! compile_and_load {
             ($device:expr, $src:expr, $mod_name:expr, $kernel_name:expr) => {
-                let ptx = compile_ptx($src).map_err(|e| {
+                let ptx_src = crate::core::index::nvrtc::compile_ptx($src).map_err(|e| {
                     anyhow::anyhow!("nvrtc compile failed for {}: {:?}", $mod_name, e)
                 })?;
+                let ptx = cudarc::nvrtc::Ptx::from_src(ptx_src);
                 $device.load_ptx(ptx, $mod_name, &[$kernel_name])?;
             };
         }
@@ -966,5 +968,32 @@ mod tests {
         };
         assert_eq!(cpu.backend_name(), "cpu");
         assert!(!cpu.is_gpu());
+    }
+
+    /// Regression test for the CUDA 13 nvrtc discovery bug: on a machine with a
+    /// CUDA device, the JIT must actually compile (cudarc's fixed candidate list
+    /// missed `libnvrtc.so.13`, so this used to panic into a CPU fallback).
+    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    #[test]
+    fn cuda_backend_jit_compiles_when_a_device_is_present() {
+        // Skip on machines without a CUDA device (e.g. CI).
+        let has_device = cudarc::driver::CudaDevice::count()
+            .map(|c| c > 0)
+            .unwrap_or(false);
+        if !has_device {
+            return;
+        }
+        // Make nvrtc discoverable: the environment, or a repo-local venv (local
+        // dev). Skip cleanly if neither is available.
+        if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
+            if let Some(p) = crate::core::index::nvrtc::dev_repo_venv_nvrtc() {
+                std::env::set_var("HDB_NVRTC_PATH", &p);
+            }
+        }
+        if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
+            return;
+        }
+        let backend = CudaBackend::new(0).expect("CUDA JIT should compile on a CUDA machine");
+        assert_eq!(backend.name(), "CUDA");
     }
 }
