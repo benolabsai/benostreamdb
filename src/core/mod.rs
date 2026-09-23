@@ -12,6 +12,7 @@ pub mod iceberg;
 pub mod index;
 pub mod maintenance;
 pub mod manifest;
+pub mod memory;
 pub mod merge;
 pub mod metadata;
 pub mod nessie;

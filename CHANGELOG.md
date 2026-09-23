@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Multi-format inputs**: `.parquet` (row-range units) plus `.csv`, `.json` /
   `.ndjson`, and `.arrow` / `.ipc` / `.feather` (one unit per file, streamed
   whole-file with schema inference) — all via Arrow readers already in the tree.
+- **Ingest memory discipline**: `core::memory::HeapTrimPolicy` returns freed
+  heap pages to the OS (`malloc_trim`) at work-unit boundaries once RSS exceeds
+  a budget, so long-lived in-process loads no longer ratchet toward the sum of
+  every glibc arena's high-water mark. Wired through
+  `IngestOptions::memory_budget_bytes`, the `HDB_INGEST_MEMORY_BUDGET_GB` env
+  var, `hdb table ingest --memory-budget-gb`, and
+  `table.ingest(..., memory_budget_gb=…)`. Allocator evaluation recorded in
+  `core::memory`: glibc + `malloc_trim` chosen; jemalloc deferred; mimalloc
+  rejected (static-TLS under pyo3).
 
 ### Performance
 - **IVF clustering is now balanced (k-means++ seeding + capacity cap).** The

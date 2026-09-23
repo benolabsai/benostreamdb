@@ -38,6 +38,10 @@ pub struct IngestOptions {
     /// Run `rewrite_data_files` after the ingest so segment/manifest counts stay
     /// bounded at TB scale (chunked loads create many small segments by design).
     pub compact_after: bool,
+    /// Return freed heap pages to the OS after a committed unit once RSS exceeds
+    /// this budget. `None` falls back to `HDB_INGEST_MEMORY_BUDGET_GB`; if
+    /// neither is set, trimming is disabled. See [`crate::core::memory`].
+    pub memory_budget_bytes: Option<u64>,
 }
 
 impl Default for IngestOptions {
@@ -48,6 +52,7 @@ impl Default for IngestOptions {
             index_all: false,
             resume: true,
             compact_after: false,
+            memory_budget_bytes: None,
         }
     }
 }
@@ -364,6 +369,14 @@ impl Table {
         // Coordinator: commit each completed segment via the OCC CAS and record
         // resume state. Commits are serialized here so manifest versions stay
         // ordered and the sidecar is written consistently.
+        //
+        // Heap discipline: the per-unit index builds churn millions of small
+        // allocations, and glibc keeps the freed pages in per-thread arenas
+        // (RSS ratchets toward the sum of every arena's high-water mark). Trim
+        // at unit boundaries once RSS exceeds the budget so the pages go back to
+        // the kernel. See `crate::core::memory`.
+        let mut trim_policy =
+            crate::core::memory::HeapTrimPolicy::from_budget_or_env(options.memory_budget_bytes);
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         for res in results {
             let (unit, entry, rows) = res?;
@@ -383,6 +396,18 @@ impl Table {
             report.units_committed += 1;
             report.rows_ingested += rows;
             report.segments.push(path);
+
+            if let Some(policy) = trim_policy.as_mut() {
+                if policy.maybe_trim() {
+                    tracing::info!(
+                        rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
+                        budget_mb = policy.budget_bytes() / (1024 * 1024),
+                        trims = policy.trims(),
+                        released_mb = policy.released_bytes() / (1024 * 1024),
+                        "ingest: trimmed heap after unit (RSS over budget)"
+                    );
+                }
+            }
         }
 
         Ok(report)
@@ -526,6 +551,36 @@ mod tests {
         let batches = table.read_async(None, None, None).await?;
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, 2500);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ingest_trims_heap_when_over_budget() -> Result<()> {
+        // A zero budget means "always over" -> the trim path runs after every
+        // committed unit. This exercises the wiring end-to-end; the trim itself
+        // is a no-op on non-glibc platforms.
+        let dir = tempfile::tempdir()?;
+        let src = dir.path().join("src.parquet");
+        write_parquet(&src, 1500);
+
+        let table_uri = format!("file://{}", dir.path().join("tbl_mem").to_string_lossy());
+        let table = Table::new_async(table_uri).await?;
+
+        let paths = vec![src.to_string_lossy().to_string()];
+        let report = table
+            .ingest_async(
+                &paths,
+                IngestOptions {
+                    chunk_rows: 1000,
+                    parallelism: 1,
+                    memory_budget_bytes: Some(0),
+                    ..Default::default()
+                },
+            )
+            .await?;
+
+        assert_eq!(report.units_committed, 2, "1500 rows / 1000 = 2 units");
+        assert_eq!(report.rows_ingested, 1500);
         Ok(())
     }
 

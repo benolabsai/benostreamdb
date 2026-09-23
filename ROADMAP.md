@@ -506,11 +506,11 @@ hdb repair s3://bucket/table
 - [x] **Multi-format inputs**: the planner detects `.parquet` (row-range units) vs `.csv`/`.json`/`.ndjson`/`.arrow`/`.ipc` (one unit per file, streamed whole-file); `read_range` dispatches to the matching Arrow reader with schema inference. ✅
 - [x] **CLI surface**: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N] [--parallelism N] [--index-all] [--compact]`; `--row-start/--row-end` is the serverless thin-runner mode (`Table::ingest_range_async`), each runner committing independently via CAS. ✅
 - [x] **Scheduled compaction**: `IngestOptions::compact_after` drives `rewrite_data_files` at the end of an ingest so segment/manifest counts stay bounded at TB scale. ✅
+- [x] **Memory discipline**: budget-gated `malloc_trim` at work-unit boundaries (`core::memory::HeapTrimPolicy`), wired into `ingest_async` via `IngestOptions::memory_budget_bytes` / `HDB_INGEST_MEMORY_BUDGET_GB` / `hdb table ingest --memory-budget-gb`. Returns freed arena pages to the OS once RSS exceeds the budget, so long-lived in-process loads no longer ratchet toward the sum of every arena's high-water mark. ✅
+- [x] **Allocator evaluation**: glibc + `malloc_trim` chosen (zero new deps, pyo3-safe, explicit and observable); jemalloc deferred (a global-allocator swap affects CPython's own allocations and needs a feature flag + platform matrix); mimalloc rejected (static-TLS failure under pyo3); slab-allocating the HNSW/TQ builders deferred (large refactor of the index builders). Rationale documented in `core::memory`. ✅
 
 **Next Steps**
-- [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the HNSW/TQ builders so freed memory is actually reusable.
-- [ ] **Allocator evaluation** (shared with the memory-discipline item, for long-lived daemons that rebuild indexes in-process): jemalloc vs glibc (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the HNSW/TQ builders.
-- [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based work stealing over an object-store lease file / Flight gateway later.
+- [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based work stealing over an object-store lease file / Flight gateway later. Design settled: reuse `FileBasedLock` (object-store CAS lease) as the default — the same "custom coordination" the incumbents build with Raft, minus the cluster. Broker adapters (Kafka/RabbitMQ/NATS) are an optional *integration surface*, not the coordination mechanism, and stay free (connectors are universally free per the business plan's viability matrix); the paid tier is governance (RBAC on unit ownership, mTLS, audit, dashboards).
 
 #### A5. GPU & Hardware Acceleration
 
