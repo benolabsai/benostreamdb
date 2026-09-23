@@ -76,6 +76,20 @@ pub struct Table {
     pub(crate) write_buffer: Arc<parking_lot::RwLock<Vec<RecordBatch>>>,
     pub(crate) wal: Arc<Mutex<WriteAheadLog>>,
     pub(crate) background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// Bounds how many segment index builds run at once.
+    ///
+    /// Index building is spawned onto the tokio runtime, whose worker count is
+    /// the CPU count (32 on a typical workstation). Each build holds its
+    /// segment's vectors plus the HNSW/IVF/quantizer structures — several GB at
+    /// the demo's 1 GB flush size. Unbounded, N concurrent builds blow past
+    /// physical RAM: the workstation OOM-killed the Wikipedia load at **105 GB
+    /// RSS**, and before that thrashed so badly that per-chunk time exploded
+    /// 43 min → 8.65 h. This gate keeps the build working set inside the memory
+    /// budget (see [`crate::core::memory`]) and, by avoiding page-cache
+    /// eviction, is usually *faster* than unbounded fan-out.
+    ///
+    /// Sized by `HDB_INDEX_BUILD_CONCURRENCY` (default 2).
+    pub(crate) index_build_gate: Arc<tokio::sync::Semaphore>,
 
     /// Sort order to apply when writing data (Iceberg V2 spec compliance)
     pub(crate) sort_order: Arc<parking_lot::RwLock<Option<SortOrder>>>,
@@ -119,6 +133,27 @@ pub fn excel_column_label(mut index: usize) -> String {
     label.chars().rev().collect()
 }
 
+/// Build the concurrency gate for background segment index builds.
+///
+/// Defaults to `2` concurrent builds; override with `HDB_INDEX_BUILD_CONCURRENCY`.
+/// A value of `0` re-enables unbounded fan-out (only sensible when the segments
+/// are small enough that `nproc` of them fit in RAM).
+pub(crate) fn new_index_build_gate() -> Arc<tokio::sync::Semaphore> {
+    let n = std::env::var("HDB_INDEX_BUILD_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(2);
+    let permits = if n == 0 {
+        std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(8)
+    } else {
+        n
+    };
+    tracing::debug!(permits, "index build concurrency gate initialised");
+    Arc::new(tokio::sync::Semaphore::new(permits))
+}
+
 impl Clone for Table {
     fn clone(&self) -> Self {
         Self {
@@ -133,6 +168,7 @@ impl Clone for Table {
             write_buffer: self.write_buffer.clone(),
             wal: self.wal.clone(),
             background_tasks: self.background_tasks.clone(),
+            index_build_gate: self.index_build_gate.clone(),
             sort_order: self.sort_order.clone(),
             sort_order_columns: self.sort_order_columns.clone(),
             #[cfg(feature = "enterprise")]
@@ -349,6 +385,22 @@ impl Table {
                 "No runtime configured for Table to wait for background tasks synchronously"
             )
         }
+    }
+
+    /// Acquire a permit bounding concurrent segment index builds.
+    ///
+    /// The permit is released when dropped, so the caller must move it into the
+    /// spawned build task. This back-pressures the writer instead of letting the
+    /// tokio runtime fan out `nproc` multi-GB builds at once (the Wikipedia
+    /// load OOM-killed at 105 GB RSS). See [`Table::index_build_gate`].
+    pub(crate) async fn acquire_index_build_permit(
+        &self,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        self.index_build_gate
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| anyhow::anyhow!("index build gate closed: {}", e))
     }
 
     #[cfg(feature = "enterprise")]

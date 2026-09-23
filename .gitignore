@@ -133,6 +133,7 @@ docs/roo_task_*.md
 
 # Local secrets — never commit
 .streamlit/secrets.toml
+.streamlit/config.toml
 .env
 .env.local
 

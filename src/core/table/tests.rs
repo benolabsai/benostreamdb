@@ -6,6 +6,26 @@ use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 use tempfile::tempdir;
 
+#[test]
+fn index_build_gate_is_bounded_and_releases_permits() {
+    // The gate exists so the runtime cannot fan out `nproc` multi-GB index
+    // builds at once (the Wikipedia load OOM-killed at 105 GB RSS).
+    let gate = new_index_build_gate();
+    let n = gate.available_permits();
+    assert!(n >= 1, "gate must admit at least one build, got {n}");
+
+    // Exhaust it: no more than `n` concurrent holders.
+    let held: Vec<_> = (0..n)
+        .map(|_| gate.clone().try_acquire_owned().expect("permit available"))
+        .collect();
+    assert_eq!(gate.available_permits(), 0);
+    assert!(gate.clone().try_acquire_owned().is_err());
+
+    // Dropping a holder returns its permit.
+    drop(held);
+    assert_eq!(gate.available_permits(), n);
+}
+
 #[tokio::test]
 async fn test_table_lifecycle() -> Result<()> {
     let dir = tempdir()?;

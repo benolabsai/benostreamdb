@@ -68,6 +68,37 @@ pub fn rss_bytes() -> Option<u64> {
     None
 }
 
+/// Default RSS budget for opportunistic trimming, in GiB.
+pub const DEFAULT_MEMORY_BUDGET_GB: f64 = 8.0;
+
+/// Resolve the RSS trim budget in bytes.
+///
+/// A positive `HDB_INGEST_MEMORY_BUDGET_GB` overrides `default_gb`.
+pub fn memory_budget_bytes(default_gb: f64) -> u64 {
+    let gb = std::env::var("HDB_INGEST_MEMORY_BUDGET_GB")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|g| *g > 0.0)
+        .unwrap_or(default_gb);
+    (gb * 1024.0 * 1024.0 * 1024.0) as u64
+}
+
+/// Trim the heap if RSS is over budget.
+///
+/// Convenience wrapper for one-shot trim sites (flush boundaries, the end of a
+/// background index build) that don't keep a [`HeapTrimPolicy`]. Reading RSS is
+/// a `/proc` read, so the under-budget path is cheap.
+pub fn trim_if_over_budget(default_gb: f64) -> bool {
+    if rss_bytes()
+        .map(|r| r > memory_budget_bytes(default_gb))
+        .unwrap_or(false)
+    {
+        trim_heap()
+    } else {
+        false
+    }
+}
+
 /// Budget-gated heap trimming for a long-running loop.
 ///
 /// Call [`HeapTrimPolicy::maybe_trim`] at work-unit boundaries. It only invokes

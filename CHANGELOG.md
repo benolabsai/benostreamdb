@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Unbounded concurrent index builds OOM-killed large loads.** The write path
+  spawns one segment index build per flush onto the tokio runtime, whose worker
+  count is the CPU count. On a 32-core workstation that meant up to 32 builds in
+  flight, each holding its segment's vectors plus the HNSW/IVF/quantizer
+  structures (several GB at the demo's 1 GB flush size) — the Wikipedia load hit
+  **105 GB RSS** and was OOM-killed, and before that thrashed so badly that
+  per-chunk time exploded 43 min → 8.65 h. Builds now go through a shared
+  semaphore (`Table::index_build_gate`, default 2, `HDB_INDEX_BUILD_CONCURRENCY`)
+  that back-pressures the writer; the bounded working set also removes the
+  page-cache eviction that made the unbounded case slow, not just fatal.
+- **Heap not returned to the OS at flush/build boundaries.** glibc keeps freed
+  memory in per-thread arenas, so the HNSW/TQ builders' millions of small
+  allocations ratcheted RSS toward the sum of every arena's high-water mark. Both
+  the flush path and the end of each background index build now call
+  `memory::trim_if_over_budget` (budget via `HDB_INGEST_MEMORY_BUDGET_GB`,
+  default 8 GiB) so freed arena pages are released before the next build starts.
+- **`simple_kmeans` allocated a `Vec` per vector** in the capacity-capped final
+  assignment. Over millions of vectors that churned and fragmented the heap. It
+  now reuses a thread-local scratch buffer, keeping the strict capacity cap.
+
 ## [0.9.1] - 2026-09-23
 
 ### Fixed

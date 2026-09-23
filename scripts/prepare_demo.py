@@ -319,6 +319,11 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
     main heap — RSS ratcheted ~2.6 GB per million rows regardless of arena
     caps, OOM-killing single-process runs around 30-40M rows. A new process
     resets the allocator high-water mark.
+
+    The library now bounds its own footprint too (see `core::table::mod` and
+    `core::memory`): concurrent index builds are gated by
+    ``HDB_INDEX_BUILD_CONCURRENCY`` (default 2) and the heap is trimmed at flush
+    and build boundaries. Chunking remains the demo's belt-and-braces reset.
     """
     import hyperstreamdb as hdb
 

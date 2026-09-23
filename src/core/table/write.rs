@@ -917,7 +917,17 @@ impl Table {
                 let table_store = self.store.clone();
 
                 let spec_bg = spec.clone();
+
+                // Bound concurrent index builds. Each build holds its segment's
+                // vectors plus the HNSW/IVF/quantizer structures — several GB at
+                // this flush size. Without a gate, the runtime fans out one build
+                // per worker thread (nproc), which exceeds RAM and both OOMs and
+                // thrashes (see `Table::index_build_gate`). Acquiring here
+                // back-pressures the writer instead.
+                let permit = self.acquire_index_build_permit().await?;
+
                 let handle = tokio::spawn(async move {
+                    let _permit = permit;
                     let _start = std::time::Instant::now();
 
                     let hive_path = spec_bg.partition_to_path(&partition_values_clone);
@@ -1018,6 +1028,15 @@ impl Table {
                             );
                         }
                     }
+
+                    // The index writer is dropped above, freeing its vectors and
+                    // graph structures. Return the freed arena pages now, before
+                    // the permit is released and the next build starts — otherwise
+                    // the next build reuses the ratcheted arenas and RSS compounds
+                    // across every segment in the chunk.
+                    crate::core::memory::trim_if_over_budget(
+                        crate::core::memory::DEFAULT_MEMORY_BUDGET_GB,
+                    );
                 });
                 self.background_tasks.lock().await.push(handle);
             }
@@ -1278,6 +1297,18 @@ impl Table {
                 wal.cleanup_files(&paths).unwrap_or_default();
                 recovered.clear();
             }
+        }
+
+        // 6. Heap discipline at flush boundaries (see `core::memory`): the index
+        // builders churn millions of small allocations and glibc keeps the freed
+        // pages in per-thread arenas, so RSS ratchets toward the sum of every
+        // arena's high-water mark. Return freed pages to the OS once RSS exceeds
+        // the budget.
+        if crate::core::memory::trim_if_over_budget(crate::core::memory::DEFAULT_MEMORY_BUDGET_GB) {
+            tracing::info!(
+                rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
+                "flush: trimmed heap (RSS over budget)"
+            );
         }
 
         Ok(())

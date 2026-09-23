@@ -403,6 +403,7 @@ impl TableBuilder {
             write_buffer: Arc::new(parking_lot::RwLock::new(initial_buffer)),
             wal: Arc::new(Mutex::new(wal)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
+            index_build_gate: super::new_index_build_gate(),
             sort_order: Arc::new(parking_lot::RwLock::new(None)),
             sort_order_columns: Arc::new(parking_lot::RwLock::new(None)),
             #[cfg(feature = "enterprise")]

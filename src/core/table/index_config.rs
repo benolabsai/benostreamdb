@@ -87,7 +87,11 @@ impl Table {
         // Trigger backfill for updated columns
         let cols_to_backfill: Vec<String> = column_indexes.keys().cloned().collect();
         let table_clone = self.clone();
+        // Backfill rebuilds every segment's index, so it shares the build gate
+        // (see `Table::index_build_gate`) with the write path.
+        let permit = self.acquire_index_build_permit().await?;
         let handle = tokio::spawn(async move {
+            let _permit = permit;
             if let Err(e) = table_clone.backfill_indexes_async(cols_to_backfill).await {
                 tracing::error!("Failed to backfill indexes: {}", e);
             }

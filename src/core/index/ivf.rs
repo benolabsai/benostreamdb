@@ -200,6 +200,24 @@ impl IvfIndex {
     }
 }
 
+/// Try to claim a slot in cluster `i`, respecting `capacity`.
+///
+/// Used by the capacity-capped final assignment so no single cluster can
+/// dominate the (superlinear) HNSW build.
+fn try_claim(counts: &[std::sync::atomic::AtomicUsize], i: usize, capacity: usize) -> bool {
+    use std::sync::atomic::Ordering;
+    let mut cur = counts[i].load(Ordering::Relaxed);
+    loop {
+        if cur >= capacity {
+            return false;
+        }
+        match counts[i].compare_exchange_weak(cur, cur + 1, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            Err(actual) => cur = actual,
+        }
+    }
+}
+
 /// Professional-grade k-means implementation using Flat Storage for SIMD throughput.
 /// Optimized for many-core CPU and GPU dispatch.
 pub fn simple_kmeans(
@@ -374,7 +392,16 @@ pub fn simple_kmeans(
     // would overflow a full cluster spill to their next-nearest cluster. The
     // capacity is 1.5x the mean, so only dense-region overflow is displaced and
     // recall impact is small.
-    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use std::cell::RefCell;
+    use std::sync::atomic::AtomicUsize;
+
+    thread_local! {
+        /// Per-thread scratch for the sorted distance list, reused across
+        /// vectors so the hot loop doesn't allocate per vector (a `Vec` per
+        /// vector over millions of vectors fragments the heap badly).
+        static DISTS: RefCell<Vec<(usize, f32)>> = const { RefCell::new(Vec::new()) };
+    }
+
     let capacity = (((vectors.len() as f64) / (k as f64)) * 1.5).ceil() as usize;
     let capacity = capacity.max(1);
     let counts: Vec<AtomicUsize> = (0..k).map(|_| AtomicUsize::new(0)).collect();
@@ -382,34 +409,27 @@ pub fn simple_kmeans(
     let labels: Vec<usize> = vectors
         .par_iter()
         .map(|v| {
-            let mut dists: Vec<(usize, f32)> = centroids
-                .iter()
-                .enumerate()
-                .map(|(i, centroid)| (i, l2_distance_squared(v, centroid)))
-                .collect();
-            dists.sort_unstable_by(|a, b| {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for &(i, _) in &dists {
-                let mut cur = counts[i].load(AtomicOrdering::Relaxed);
-                loop {
-                    if cur >= capacity {
-                        break;
-                    }
-                    match counts[i].compare_exchange_weak(
-                        cur,
-                        cur + 1,
-                        AtomicOrdering::Relaxed,
-                        AtomicOrdering::Relaxed,
-                    ) {
-                        Ok(_) => return i,
-                        Err(actual) => cur = actual,
+            DISTS.with(|cell| {
+                let mut dists = cell.borrow_mut();
+                dists.clear();
+                dists.extend(
+                    centroids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| (i, l2_distance_squared(v, c))),
+                );
+                dists.sort_unstable_by(|a, b| {
+                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for &(i, _) in dists.iter() {
+                    if try_claim(&counts, i, capacity) {
+                        return i;
                     }
                 }
-            }
-            // Every cluster is full (shouldn't happen with capacity > mean):
-            // fall back to the nearest.
-            dists[0].0
+                // Every cluster is full (shouldn't happen with capacity > mean):
+                // fall back to the nearest.
+                dists[0].0
+            })
         })
         .collect();
 
