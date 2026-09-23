@@ -1991,6 +1991,41 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Native bulk ingest of parquet files: plan → bounded parallel execute →
+    /// OCC commit. Returns a report dict with `units_total`, `units_skipped`,
+    /// `units_committed`, `rows_ingested`, `segments`.
+    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true))]
+    fn ingest(
+        &self,
+        py: Python<'_>,
+        paths: Vec<String>,
+        chunk_rows: Option<usize>,
+        parallelism: Option<usize>,
+        index_all: bool,
+        resume: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let opts = crate::core::table::IngestOptions {
+            chunk_rows: chunk_rows.unwrap_or(1_000_000),
+            parallelism: parallelism.unwrap_or(4),
+            index_all,
+            resume,
+        };
+        let report = py
+            .allow_threads(|| {
+                let rt = self.table.runtime();
+                rt.block_on(async { self.table.ingest_async(&paths, opts).await })
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("units_total", report.units_total)?;
+        dict.set_item("units_skipped", report.units_skipped)?;
+        dict.set_item("units_committed", report.units_committed)?;
+        dict.set_item("rows_ingested", report.rows_ingested)?;
+        dict.set_item("segments", report.segments)?;
+        Ok(dict.into())
+    }
+
     // ============================================================================
     // Connector APIs (Spark/Trino)
     // ============================================================================

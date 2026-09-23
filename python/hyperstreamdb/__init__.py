@@ -2528,6 +2528,37 @@ class Table:
         """
         return self._inner.snapshot_version()
 
+    def ingest(
+        self,
+        paths: Union[str, List[str]],
+        chunk_rows: Optional[int] = None,
+        parallelism: Optional[int] = None,
+        index_all: bool = False,
+        resume: bool = True,
+    ) -> Dict[str, Any]:
+        """Native bulk ingest of parquet files (plan → parallel execute → commit).
+
+        Runs entirely inside the engine: the input set is planned into row-range
+        work units, a bounded pool of workers builds a private segment (with its
+        indexes) per unit, and completed segments are committed via the OCC
+        manifest CAS. Completed units are recorded in a sidecar, so an
+        interrupted load resumes at the unit boundary.
+
+        Args:
+            paths: one parquet path or a list of them.
+            chunk_rows: rows per work unit (default 1,000,000).
+            parallelism: max work units in flight (default 4).
+            index_all: build indexes for every column (else only configured ones).
+            resume: skip units already recorded as complete (default True).
+
+        Returns:
+            A report dict: ``units_total``, ``units_skipped``, ``units_committed``,
+            ``rows_ingested``, ``segments``.
+        """
+        if isinstance(paths, str):
+            paths = [paths]
+        return self._inner.ingest(list(paths), chunk_rows, parallelism, index_all, resume)
+
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
         """
         Add an indexing strategy to a column.

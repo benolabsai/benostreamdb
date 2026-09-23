@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Native ingest orchestrator (A4)**: `Table::ingest_async` /
+  `table.ingest(paths, chunk_rows, parallelism, index_all, resume)` plans parquet
+  inputs into row-range work units, runs a bounded `buffer_unordered(parallelism)`
+  pool where each worker builds a *private* segment (data + indexes) concurrently,
+  and commits completed segments through the OCC manifest CAS. Completed units are
+  recorded in a `_ingest_state.json` sidecar so an interrupted load resumes at the
+  unit boundary. Returns a report (`units_total/skipped/committed`,
+  `rows_ingested`, `segments`).
+
 ### Performance
 - **Out-of-core HNSW-IVF build is now parallel and skips a full file re-scan.**
   Two changes to `HnswIvfIndex::build_from_file`:

@@ -498,14 +498,15 @@ hdb repair s3://bucket/table
 
 **Completed**
 - [x] **Working prototype**: whole-site Wikipedia demo fresh-process chunking (`scripts/prepare_demo.py`: 2M-row chunks, 118 s @ ~10 GB, per-chunk OCC commits).
+- [x] **Work planner**: `Table::plan_ingest` enumerates parquet inputs into `(path, row_start, row_end)` work units sized by `chunk_rows` (the memory-budget knob). ✅
+- [x] **Bounded worker pool**: `Table::ingest_async` runs a `buffer_unordered(parallelism)` pool; each worker reads its range and builds a *private* segment (data + indexes) via `HybridSegmentWriter`, so index builds run concurrently. ✅
+- [x] **Commit strategy**: the coordinator commits each completed segment through the OCC manifest CAS (`CommitMetadata::skip_missing_remove_paths`), serialized so manifest versions stay ordered. ✅
+- [x] **Resume & idempotency**: completed work-unit keys are recorded in a `_ingest_state.json` sidecar; a re-run skips them and resumes at the unit boundary. ✅
+- [x] **Python surface**: `table.ingest(paths, chunk_rows=None, parallelism=None, index_all=False, resume=True)` returns a report dict (`units_total/skipped/committed`, `rows_ingested`, `segments`). ✅
 
 **Next Steps**
-- [ ] **Work planner**: enumerate inputs (parquet files / row groups / streams) into row-range work units sized from a memory budget (measured ~4.5 GB per million 384-d vectors incl. allocator churn; auto-detected from `MemAvailable`, env-overridable).
-- [ ] **Bounded tokio worker pool**: each worker streams its range into a *private* segment builder (segments are already independent), flushes with per-segment index builds, under a `Semaphore`-bounded queue; per-worker RSS ceiling = chunk size knob.
-- [ ] **Commit strategy**: coordinator drains completed segments into multi-segment snapshots via the existing OCC manifest CAS (`FileBasedLock`, `PutMode::Create`) — N segments per snapshot to keep manifest versions bounded; retries on conflict.
-- [ ] **Resume & idempotency**: durable job state (completed work-unit list as a table property or sidecar) so an interrupted multi-TB load restarts at the unit boundary.
+- [ ] **CLI surface**: `hdb ingest --plan/--run`; serverless tasks become thin runners (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
 - [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the HNSW/TQ builders so freed memory is actually reusable.
-- [ ] **Python/CLI surface**: `table.ingest(paths, chunk_rows=None, parallelism=None)` with progress; `hdb ingest --plan/--run`; serverless tasks become thin runners (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
 - [ ] **Scheduled compaction**: drive `rewrite_data_files` from the orchestrator so segment and manifest counts stay bounded at TB scale (chunked loads create many small segments by design).
 - [ ] **Allocator evaluation** (shared with the memory-discipline item, for long-lived daemons that rebuild indexes in-process): jemalloc vs glibc (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the HNSW/TQ builders.
 - [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based work stealing over an object-store lease file / Flight gateway later.
