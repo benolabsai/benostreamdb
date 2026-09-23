@@ -502,12 +502,12 @@ hdb repair s3://bucket/table
 - [x] **Bounded worker pool**: `Table::ingest_async` runs a `buffer_unordered(parallelism)` pool; each worker reads its range and builds a *private* segment (data + indexes) via `HybridSegmentWriter`, so index builds run concurrently. ✅
 - [x] **Commit strategy**: the coordinator commits each completed segment through the OCC manifest CAS (`CommitMetadata::skip_missing_remove_paths`), serialized so manifest versions stay ordered. ✅
 - [x] **Resume & idempotency**: completed work-unit keys are recorded in a `_ingest_state.json` sidecar; a re-run skips them and resumes at the unit boundary. ✅
-- [x] **Python surface**: `table.ingest(paths, chunk_rows=None, parallelism=None, index_all=False, resume=True)` returns a report dict (`units_total/skipped/committed`, `rows_ingested`, `segments`). ✅
+- [x] **Python surface**: `table.ingest(paths, chunk_rows=None, parallelism=None, index_all=False, resume=True, compact_after=False)` returns a report dict (`units_total/skipped/committed`, `rows_ingested`, `segments`). ✅
+- [x] **CLI surface**: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N] [--parallelism N] [--index-all] [--compact]`; `--row-start/--row-end` is the serverless thin-runner mode (`Table::ingest_range_async`), each runner committing independently via CAS. ✅
+- [x] **Scheduled compaction**: `IngestOptions::compact_after` drives `rewrite_data_files` at the end of an ingest so segment/manifest counts stay bounded at TB scale. ✅
 
 **Next Steps**
-- [ ] **CLI surface**: `hdb ingest --plan/--run`; serverless tasks become thin runners (`hdb ingest --range 500k --uri …`), each committing independently via CAS.
 - [ ] **Memory discipline**: worker recycling policy (fresh process/task per memory budget) to reset glibc's unreturnable main-heap churn — or slab-allocating the HNSW/TQ builders so freed memory is actually reusable.
-- [ ] **Scheduled compaction**: drive `rewrite_data_files` from the orchestrator so segment and manifest counts stay bounded at TB scale (chunked loads create many small segments by design).
 - [ ] **Allocator evaluation** (shared with the memory-discipline item, for long-lived daemons that rebuild indexes in-process): jemalloc vs glibc (mimalloc failed static-TLS under pyo3), `M_PURGE` on flush boundaries, or slab-allocating the HNSW/TQ builders.
 - [ ] **Multi-machine mode (later)**: disjoint file subsets per node today; lease-based work stealing over an object-store lease file / Flight gateway later.
 

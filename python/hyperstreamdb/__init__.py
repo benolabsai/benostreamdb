@@ -2535,6 +2535,7 @@ class Table:
         parallelism: Optional[int] = None,
         index_all: bool = False,
         resume: bool = True,
+        compact_after: bool = False,
     ) -> Dict[str, Any]:
         """Native bulk ingest of parquet files (plan → parallel execute → commit).
 
@@ -2550,6 +2551,8 @@ class Table:
             parallelism: max work units in flight (default 4).
             index_all: build indexes for every column (else only configured ones).
             resume: skip units already recorded as complete (default True).
+            compact_after: run ``rewrite_data_files`` after the ingest so segment
+                and manifest counts stay bounded at TB scale.
 
         Returns:
             A report dict: ``units_total``, ``units_skipped``, ``units_committed``,
@@ -2557,7 +2560,9 @@ class Table:
         """
         if isinstance(paths, str):
             paths = [paths]
-        return self._inner.ingest(list(paths), chunk_rows, parallelism, index_all, resume)
+        return self._inner.ingest(
+            list(paths), chunk_rows, parallelism, index_all, resume, compact_after
+        )
 
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):
         """

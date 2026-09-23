@@ -1994,7 +1994,7 @@ impl PyTable {
     /// Native bulk ingest of parquet files: plan → bounded parallel execute →
     /// OCC commit. Returns a report dict with `units_total`, `units_skipped`,
     /// `units_committed`, `rows_ingested`, `segments`.
-    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true))]
+    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true, compact_after=false))]
     fn ingest(
         &self,
         py: Python<'_>,
@@ -2003,12 +2003,14 @@ impl PyTable {
         parallelism: Option<usize>,
         index_all: bool,
         resume: bool,
+        compact_after: bool,
     ) -> PyResult<Py<PyAny>> {
         let opts = crate::core::table::IngestOptions {
             chunk_rows: chunk_rows.unwrap_or(1_000_000),
             parallelism: parallelism.unwrap_or(4),
             index_all,
             resume,
+            compact_after,
         };
         let report = py
             .allow_threads(|| {

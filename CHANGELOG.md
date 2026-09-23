@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and commits completed segments through the OCC manifest CAS. Completed units are
   recorded in a `_ingest_state.json` sidecar so an interrupted load resumes at the
   unit boundary. Returns a report (`units_total/skipped/committed`,
-  `rows_ingested`, `segments`).
+  `rows_ingested`, `segments`). `IngestOptions::compact_after` runs
+  `rewrite_data_files` at the end so segment/manifest counts stay bounded.
+  CLI: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N]
+  [--parallelism N] [--index-all] [--compact]`, with `--row-start/--row-end` as
+  the serverless thin-runner mode (`Table::ingest_range_async`).
 
 ### Performance
 - **Out-of-core HNSW-IVF build is now parallel and skips a full file re-scan.**

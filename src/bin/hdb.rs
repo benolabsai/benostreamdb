@@ -63,6 +63,36 @@ enum TableCommands {
         #[arg(long, default_value_t = 7)]
         older_than_days: u64,
     },
+    /// Bulk-ingest parquet files (native orchestrator: plan → parallel → commit)
+    Ingest {
+        /// Table URI
+        #[arg(short, long)]
+        uri: String,
+        /// Parquet file(s) to ingest
+        #[arg(short, long, num_args = 1..)]
+        input: Vec<String>,
+        /// Rows per work unit
+        #[arg(long, default_value_t = 1_000_000)]
+        chunk_rows: usize,
+        /// Max work units in flight
+        #[arg(long, default_value_t = 4)]
+        parallelism: usize,
+        /// Build indexes for every column
+        #[arg(long, default_value_t = false)]
+        index_all: bool,
+        /// Print the planned work units and exit (do not execute)
+        #[arg(long, default_value_t = false)]
+        plan: bool,
+        /// Restrict to a single row range [start, end) of the first input
+        /// (serverless thin-runner mode)
+        #[arg(long)]
+        row_start: Option<usize>,
+        #[arg(long)]
+        row_end: Option<usize>,
+        /// Run compaction after the ingest
+        #[arg(long, default_value_t = false)]
+        compact: bool,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +113,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 uri,
                 older_than_days,
             } => vacuum_table(&uri, older_than_days).await?,
+            TableCommands::Ingest {
+                uri,
+                input,
+                chunk_rows,
+                parallelism,
+                index_all,
+                plan,
+                row_start,
+                row_end,
+                compact,
+            } => {
+                ingest_table(
+                    &uri,
+                    &input,
+                    chunk_rows,
+                    parallelism,
+                    index_all,
+                    plan,
+                    row_start,
+                    row_end,
+                    compact,
+                )
+                .await?
+            }
         },
         Some(Commands::Register { name, uri }) => {
             println!("Registering table '{}' at '{}'", name, uri);
@@ -129,6 +183,60 @@ async fn vacuum_table(uri: &str, days: u64) -> Result<(), Box<dyn std::error::Er
         "Vacuum completed in {:.2?}. Deleted {} files.",
         start.elapsed(),
         deleted_count
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_table(
+    uri: &str,
+    input: &[String],
+    chunk_rows: usize,
+    parallelism: usize,
+    index_all: bool,
+    plan: bool,
+    row_start: Option<usize>,
+    row_end: Option<usize>,
+    compact: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use hyperstreamdb::core::table::IngestOptions;
+
+    let table = Table::new_async(uri.to_string()).await?;
+
+    if plan {
+        let units = table.plan_ingest(input, chunk_rows)?;
+        println!("Planned {} work unit(s):", units.len());
+        for (p, s, e) in &units {
+            println!("  {} [{}..{})", p, s, e);
+        }
+        return Ok(());
+    }
+
+    let opts = IngestOptions {
+        chunk_rows,
+        parallelism,
+        index_all,
+        resume: true,
+        compact_after: compact,
+    };
+
+    let start = Instant::now();
+    let report = match (row_start, row_end) {
+        (Some(s), Some(e)) => {
+            let path = input
+                .first()
+                .ok_or("--row-start/--row-end require --input")?;
+            table.ingest_range_async(path, s, e, opts).await?
+        }
+        _ => table.ingest_async(input, opts).await?,
+    };
+    println!(
+        "Ingest complete in {:.2?}: {} unit(s) committed, {} skipped, {} rows, {} segment(s)",
+        start.elapsed(),
+        report.units_committed,
+        report.units_skipped,
+        report.rows_ingested,
+        report.segments.len()
     );
     Ok(())
 }
