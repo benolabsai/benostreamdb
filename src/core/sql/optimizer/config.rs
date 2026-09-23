@@ -194,37 +194,59 @@ impl VectorSearchConfig {
         Self::new()
     }
 
-    /// Parse configuration from SQL hints (future extension)
-    /// Format: /*+ INDEX_HINT(ef_search=128, probes=10) */
+    /// Extract the body of a SQL optimizer hint comment from a query.
+    ///
+    /// Recognizes the standard `/*+ ... */` form and returns the inner text
+    /// (trimmed). Returns `None` when the query contains no hint comment.
+    pub fn extract_sql_hints(query: &str) -> Option<String> {
+        let start = query.find("/*+")?;
+        let rest = &query[start + 3..];
+        let end = rest.find("*/")?;
+        let body = rest[..end].trim();
+        if body.is_empty() {
+            None
+        } else {
+            Some(body.to_string())
+        }
+    }
+
+    /// Parse configuration from SQL hints.
+    ///
+    /// Accepts either the bare key/value list or the wrapped form:
+    ///   `/*+ INDEX_HINT(ef_search=128, probes=10) */`
+    ///   `/*+ ef_search=128, probes=10 */`
+    ///
+    /// Unknown keys are ignored; malformed values for known keys are an error.
+    /// Parsing delegates to [`ExtensionOptions::set`] so the hint path and the
+    /// session-config path stay in lock-step.
     pub fn from_sql_hints(hints: &str) -> Result<Self> {
         let mut config = Self::new();
 
-        // Simple parsing for MVP - look for key=value pairs
-        for part in hints.split(',') {
-            let part = part.trim();
-            if let Some((key, value)) = part.split_once('=') {
-                let key = key.trim();
-                let value = value.trim();
+        // Strip an optional `NAME(...)` wrapper, e.g. `INDEX_HINT(...)`.
+        let body = hints.trim();
+        let body = match (body.find('('), body.ends_with(')')) {
+            (Some(open), true) => &body[open + 1..body.len() - 1],
+            _ => body,
+        };
 
-                match key {
-                    "ef_search" => {
-                        if let Ok(ef) = value.parse::<usize>() {
-                            config.ef_search = Some(ef);
-                        }
-                    }
-                    "probes" => {
-                        if let Ok(probes) = value.parse::<usize>() {
-                            config.probes = Some(probes);
-                        }
-                    }
-                    "use_index" => {
-                        if let Ok(use_idx) = value.parse::<bool>() {
-                            config.use_index = use_idx;
-                        }
-                    }
-                    _ => {} // Ignore unknown parameters
-                }
+        let known_keys: Vec<String> = config.entries().into_iter().map(|e| e.key).collect();
+
+        for part in body.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
             }
+            let (key, value) = match part.split_once('=') {
+                Some(kv) => kv,
+                None => continue,
+            };
+            let key = key.trim();
+            let value = value.trim();
+            if !known_keys.iter().any(|k| k == key) {
+                // Ignore hints that belong to other extensions.
+                continue;
+            }
+            config.set(key, value)?;
         }
 
         Ok(config)
@@ -252,5 +274,66 @@ impl VectorSearchConfig {
 impl Default for VectorSearchConfig {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod hint_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_hint_body_from_query() {
+        let q = "SELECT * FROM t /*+ INDEX_HINT(ef_search=128, probes=10) */ ORDER BY v <-> '[1,2]' LIMIT 5";
+        let hints = VectorSearchConfig::extract_sql_hints(q).unwrap();
+        assert_eq!(hints, "INDEX_HINT(ef_search=128, probes=10)");
+    }
+
+    #[test]
+    fn no_hint_returns_none() {
+        assert!(VectorSearchConfig::extract_sql_hints("SELECT 1").is_none());
+        assert!(VectorSearchConfig::extract_sql_hints("SELECT 1 /*+ */").is_none());
+    }
+
+    #[test]
+    fn parses_wrapped_hint() {
+        let cfg = VectorSearchConfig::from_sql_hints("INDEX_HINT(ef_search=128, probes=10)").unwrap();
+        assert_eq!(cfg.ef_search, Some(128));
+        assert_eq!(cfg.probes, Some(10));
+    }
+
+    #[test]
+    fn parses_bare_hint_and_all_keys() {
+        let cfg = VectorSearchConfig::from_sql_hints(
+            "ef_search=64, probes=4, use_index=false, limit_pushdown=false, \
+             skip_row_groups=false, cache_manifests=false, fast_path=false",
+        )
+        .unwrap();
+        assert_eq!(cfg.ef_search, Some(64));
+        assert_eq!(cfg.probes, Some(4));
+        assert!(!cfg.use_index);
+        assert!(!cfg.limit_pushdown);
+        assert!(!cfg.skip_row_groups);
+        assert!(!cfg.cache_manifests);
+        assert!(!cfg.fast_path);
+    }
+
+    #[test]
+    fn unknown_keys_are_ignored() {
+        let cfg = VectorSearchConfig::from_sql_hints("ef_search=32, other_ext=foo").unwrap();
+        assert_eq!(cfg.ef_search, Some(32));
+    }
+
+    #[test]
+    fn malformed_known_value_is_an_error() {
+        assert!(VectorSearchConfig::from_sql_hints("ef_search=not_a_number").is_err());
+    }
+
+    #[test]
+    fn session_config_round_trips_hint_config() {
+        let cfg = VectorSearchConfig::from_sql_hints("ef_search=256").unwrap();
+        let mut session_config = datafusion::prelude::SessionConfig::new();
+        session_config.options_mut().extensions.insert(cfg);
+        let read_back = VectorSearchConfig::from_session_config(session_config.options());
+        assert_eq!(read_back.ef_search, Some(256));
     }
 }

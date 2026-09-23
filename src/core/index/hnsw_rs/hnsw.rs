@@ -9,7 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use cpu_time::ProcessTime;
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::time::{Instant, SystemTime};
 
 use std::cmp::Ordering;
 
@@ -30,8 +31,108 @@ use log::trace;
 
 pub use crate::core::index::hnsw_rs::dist::Distance;
 
-// Future work: Add profiling hooks for graph construction and search phases.
-// Key metrics: entry point selection time, layer traversal count, candidate set growth.
+/// Lock-free profiling counters for HNSW graph construction and search.
+///
+/// All counters are monotonic and updated with `Relaxed` ordering, so they are
+/// safe to bump from the parallel (Rayon) insertion and search paths without
+/// introducing contention. Read them via [`Hnsw::profile_snapshot`].
+#[derive(Debug, Default)]
+pub struct HnswProfile {
+    /// Number of points inserted (build phase).
+    pub inserts: AtomicU64,
+    /// Cumulative wall-clock time spent inserting points, in nanoseconds.
+    pub insert_nanos: AtomicU64,
+    /// Number of top-level searches performed.
+    pub searches: AtomicU64,
+    /// Cumulative wall-clock time spent in `search`, in nanoseconds.
+    pub search_nanos: AtomicU64,
+    /// Number of `search_layer` invocations (layer traversals).
+    pub search_layer_calls: AtomicU64,
+    /// Number of distance evaluations performed during traversal.
+    pub distance_evals: AtomicU64,
+}
+
+impl HnswProfile {
+    /// Create a zeroed profile.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub(crate) fn record_insert(&self, nanos: u64) {
+        self.inserts.fetch_add(1, AtomicOrdering::Relaxed);
+        self.insert_nanos.fetch_add(nanos, AtomicOrdering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_search(&self, nanos: u64) {
+        self.searches.fetch_add(1, AtomicOrdering::Relaxed);
+        self.search_nanos.fetch_add(nanos, AtomicOrdering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_search_layer(&self) {
+        self.search_layer_calls.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    #[inline]
+    pub(crate) fn record_distance_eval(&self) {
+        self.distance_evals.fetch_add(1, AtomicOrdering::Relaxed);
+    }
+
+    /// Take a snapshot of the current counter values.
+    pub fn snapshot(&self) -> HnswProfileSnapshot {
+        HnswProfileSnapshot {
+            inserts: self.inserts.load(AtomicOrdering::Relaxed),
+            insert_nanos: self.insert_nanos.load(AtomicOrdering::Relaxed),
+            searches: self.searches.load(AtomicOrdering::Relaxed),
+            search_nanos: self.search_nanos.load(AtomicOrdering::Relaxed),
+            search_layer_calls: self.search_layer_calls.load(AtomicOrdering::Relaxed),
+            distance_evals: self.distance_evals.load(AtomicOrdering::Relaxed),
+        }
+    }
+
+    /// Reset every counter to zero.
+    pub fn reset(&self) {
+        self.inserts.store(0, AtomicOrdering::Relaxed);
+        self.insert_nanos.store(0, AtomicOrdering::Relaxed);
+        self.searches.store(0, AtomicOrdering::Relaxed);
+        self.search_nanos.store(0, AtomicOrdering::Relaxed);
+        self.search_layer_calls.store(0, AtomicOrdering::Relaxed);
+        self.distance_evals.store(0, AtomicOrdering::Relaxed);
+    }
+}
+
+/// Plain-data snapshot of [`HnswProfile`], suitable for logging or assertions.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HnswProfileSnapshot {
+    pub inserts: u64,
+    pub insert_nanos: u64,
+    pub searches: u64,
+    pub search_nanos: u64,
+    pub search_layer_calls: u64,
+    pub distance_evals: u64,
+}
+
+impl HnswProfileSnapshot {
+    /// Average insert time in microseconds (0 when no inserts were recorded).
+    pub fn avg_insert_micros(&self) -> f64 {
+        if self.inserts == 0 {
+            0.0
+        } else {
+            self.insert_nanos as f64 / self.inserts as f64 / 1000.0
+        }
+    }
+
+    /// Average search time in microseconds (0 when no searches were recorded).
+    pub fn avg_search_micros(&self) -> f64 {
+        if self.searches == 0 {
+            0.0
+        } else {
+            self.search_nanos as f64 / self.searches as f64 / 1000.0
+        }
+    }
+}
 
 /// This unit structure provides the type to instanciate Hnsw with,
 /// to get reload of graph only in the the structure.
@@ -693,6 +794,8 @@ pub struct Hnsw<T: Clone + Send + Sync, D: Distance<T>> {
     pub(crate) dist_f: D,
     /// insertion mode or searching mode. This flag prevents a internal thread to do a write when searching with other threads.
     pub(crate) searching: bool,
+    /// Lock-free profiling counters for build/search phases.
+    pub(crate) profile: Arc<HnswProfile>,
 } // end of Hnsw
 
 impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
@@ -735,8 +838,19 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
             data_dimension: 0,
             dist_f: f,
             searching: false,
+            profile: Arc::new(HnswProfile::new()),
         }
     } // end of new
+
+    /// Access the lock-free profiling counters for this graph.
+    pub fn profile(&self) -> &HnswProfile {
+        &self.profile
+    }
+
+    /// Snapshot the profiling counters (build/search phase timings and counts).
+    pub fn profile_snapshot(&self) -> HnswProfileSnapshot {
+        self.profile.snapshot()
+    }
 
     /// get ef_construction used in graph creation
     pub fn get_ef_construction(&self) -> usize {
@@ -839,6 +953,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         filter: Option<&roaring::RoaringBitmap>,
     ) -> BinaryHeap<Arc<PointWithOrder<T>>> {
         let _span = tracing::debug_span!("hnsw_search_layer", layer = layer, ef = ef).entered();
+        self.profile.record_search_layer();
         //
         trace!(
             "entering search_layer with entry_point_id {:?} layer : {:?} ef {:?} ",
@@ -863,6 +978,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
             return return_points;
         }
         // initialize visited points
+        self.profile.record_distance_eval();
         let dist_to_entry_point = self.dist_f.eval(point, &entry_point.v);
         log::trace!("       distance to entry point: {:?} ", dist_to_entry_point);
         // keep a list of id visited
@@ -928,6 +1044,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
                 if !visited_point_id.contains_key(&e.point_ref.p_id) {
                     visited_point_id.insert(e.point_ref.p_id, Arc::clone(&e.point_ref));
                     log::trace!("             visited insertion {:?}", e.point_ref.p_id);
+                    self.profile.record_distance_eval();
                     let e_dist_to_p = self.dist_f.eval(point, &e.point_ref.v);
 
                     // We must EXPLORE this node regardless of filter, but filter determines if it enters return_points
@@ -1003,7 +1120,7 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
     ///  The slice insertion makes integration with ndarray crate easier than the vector insertion
     pub fn insert_slice(&self, data_with_id: (&[T], usize)) {
         let _span = tracing::debug_span!("hnsw_insert", origin_id = data_with_id.1).entered();
-        let _t_start = SystemTime::now();
+        let t_start = Instant::now();
         let (data, origin_id) = data_with_id;
         let keep_pruned = self.keep_pruned;
         // insert in indexation and get point_id adn generate a new entry_point if necessary
@@ -1026,6 +1143,8 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
                         "Hnsw  stored first point , direct return  {:?} ",
                         new_point.p_id
                     );
+                    self.profile
+                        .record_insert(t_start.elapsed().as_nanos() as u64);
                     return;
                 }
                 max_level_observed = enter_point_copy.as_ref().unwrap().p_id.0;
@@ -1033,6 +1152,8 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         }
         if enter_point_copy.is_none() {
             self.layer_indexed_points.check_entry_point(&new_point);
+            self.profile
+                .record_insert(t_start.elapsed().as_nanos() as u64);
             return;
         }
         let mut dist_to_entry = self
@@ -1140,6 +1261,8 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         self.layer_indexed_points.check_entry_point(&new_point);
         //
         log::trace!("Hnsw exiting insert new point {:?} ", new_point.p_id);
+        self.profile
+            .record_insert(t_start.elapsed().as_nanos() as u64);
     } // end of insert
 
     /// Insert in parallel a slice of Vec\<T\> each associated to its id.    
@@ -1410,11 +1533,14 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
         filter: Option<&roaring::RoaringBitmap>,
     ) -> Vec<Neighbour> {
         //
+        let t_start = Instant::now();
         let entry_point;
         {
             // a lock on an option an a Arc<Point>
             let entry_point_opt_ref = self.layer_indexed_points.entry_point.read();
             if entry_point_opt_ref.is_none() {
+                self.profile
+                    .record_search(t_start.elapsed().as_nanos() as u64);
                 return Vec::<Neighbour>::new();
             } else {
                 entry_point = Arc::clone((*entry_point_opt_ref).as_ref().unwrap());
@@ -1464,6 +1590,8 @@ impl<T: Clone + Send + Sync, D: Distance<T> + Send + Sync> Hnsw<T, D> {
             })
             .collect();
 
+        self.profile
+            .record_search(t_start.elapsed().as_nanos() as u64);
         knn_neighbours
     } // end of knn_search
 
@@ -1747,4 +1875,39 @@ mod tests {
         //
         assert_eq!(nb_dumped, nbpl);
     } // end of test_iter_layerpoint
+
+    #[test]
+    fn test_profile_hooks_record_build_and_search() {
+        let nbcolumn = 200;
+        let nbrow = 8;
+        let mut rng = rand::thread_rng();
+        let unif = Uniform::<f32>::new(0., 1.);
+        let data: Vec<Vec<f32>> = (0..nbcolumn)
+            .map(|_| (0..nbrow).map(|_| rng.sample(unif)).collect())
+            .collect();
+
+        let hns = Hnsw::<f32, dist::DistL1>::new(10, nbcolumn, 16, 25, dist::DistL1 {});
+        for (i, v) in data.iter().enumerate() {
+            hns.insert((v, i));
+        }
+
+        let after_build = hns.profile_snapshot();
+        assert_eq!(after_build.inserts, nbcolumn as u64);
+        assert!(after_build.search_layer_calls > 0);
+        assert!(after_build.distance_evals > 0);
+        assert_eq!(after_build.searches, 0);
+
+        // A search must bump the search counters without touching inserts.
+        let _ = hns.search(&data[0], 5, 20, None);
+        let after_search = hns.profile_snapshot();
+        assert_eq!(after_search.searches, 1);
+        assert_eq!(after_search.inserts, nbcolumn as u64);
+        assert!(after_search.search_layer_calls > after_build.search_layer_calls);
+        assert!(after_search.avg_search_micros() >= 0.0);
+
+        // Reset zeroes everything.
+        hns.profile().reset();
+        let reset = hns.profile_snapshot();
+        assert_eq!(reset, HnswProfileSnapshot::default());
+    } // end of test_profile_hooks_record_build_and_search
 } // end of module test

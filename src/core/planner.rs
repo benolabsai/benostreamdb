@@ -517,7 +517,7 @@ fn extract_filters_from_expr(expr: &Expr, filters: &mut Vec<QueryFilter>) {
 }
 
 /// Strip casts and return the underlying column name.
-fn expr_column_name(expr: &Expr) -> Option<String> {
+pub(crate) fn expr_column_name(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Column(c) => Some(c.name.clone()),
         Expr::Cast(cast) => expr_column_name(&cast.expr),
@@ -533,6 +533,67 @@ fn expr_literal_json(expr: &Expr) -> Option<Value> {
         Expr::Cast(cast) => expr_literal_json(&cast.expr),
         Expr::TryCast(cast) => expr_literal_json(&cast.expr),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod between_dump_tests {
+    use super::*;
+
+    fn one_field_schema() -> SchemaRef {
+        std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int64, false),
+        ]))
+    }
+
+    fn entry_with_id_range(min: i64, max: i64) -> ManifestEntry {
+        let mut column_stats = std::collections::HashMap::new();
+        column_stats.insert(
+            "id".to_string(),
+            crate::core::manifest::ColumnStats {
+                min: Some(crate::core::manifest::ManifestValue::Int64(min)),
+                max: Some(crate::core::manifest::ManifestValue::Int64(max)),
+                null_count: 0,
+                distinct_count: None,
+                vector_stats: None,
+            },
+        );
+        ManifestEntry {
+            file_path: "seg.parquet".to_string(),
+            file_size_bytes: 1,
+            record_count: 10,
+            column_stats,
+            ..Default::default()
+        }
+    }
+
+    /// `BETWEEN` must produce a QueryFilter *and* be honoured by the pruning
+    /// path. It used to do the former but not the latter: `might_match_df_expr`
+    /// had no `Between` arm, so it fell through to `_ => true` and never pruned.
+    #[tokio::test]
+    async fn between_parses_and_prunes() {
+        let fe = FilterExpr::parse_sql("id BETWEEN 25 AND 32", one_field_schema())
+            .await
+            .expect("parse ok");
+
+        let filters = fe.extract_and_conditions();
+        assert_eq!(filters.len(), 1, "BETWEEN should yield one QueryFilter");
+        assert_eq!(filters[0].column, "id");
+        assert!(filters[0].min.is_some() && filters[0].max.is_some());
+
+        let planner = QueryPlanner::new();
+        // Segment 0-9 is entirely below the range; 40-49 entirely above.
+        assert!(
+            !planner.might_match_expr(&entry_with_id_range(0, 9), &fe),
+            "segment below the BETWEEN range must be pruned"
+        );
+        assert!(
+            !planner.might_match_expr(&entry_with_id_range(40, 49), &fe),
+            "segment above the BETWEEN range must be pruned"
+        );
+        // 20-29 and 30-39 overlap the range and must be kept.
+        assert!(planner.might_match_expr(&entry_with_id_range(20, 29), &fe));
+        assert!(planner.might_match_expr(&entry_with_id_range(30, 39), &fe));
     }
 }
 
@@ -1085,6 +1146,32 @@ impl QueryPlanner {
             Expr::InList(in_list) => {
                 if let Some(filter) = convert_in_list_to_query_filter(in_list) {
                     self.might_match_condition(entry, &filter)
+                } else {
+                    true
+                }
+            }
+            // `BETWEEN` is not lowered to `>= AND <=` by DataFusion, so without
+            // this arm it fell through to `_ => true` and never pruned — even
+            // though `extract_and_conditions` (used by `explain`) did produce a
+            // correct QueryFilter for it.
+            Expr::Between(between) if !between.negated => {
+                if let (Some(col), Some(min), Some(max)) = (
+                    expr_column_name(&between.expr),
+                    expr_literal_json(&between.low),
+                    expr_literal_json(&between.high),
+                ) {
+                    self.might_match_condition(
+                        entry,
+                        &QueryFilter {
+                            column: col,
+                            min: Some(min),
+                            min_inclusive: true,
+                            max: Some(max),
+                            max_inclusive: true,
+                            values: None,
+                            negated: false,
+                        },
+                    )
                 } else {
                     true
                 }
