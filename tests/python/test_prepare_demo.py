@@ -16,6 +16,11 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+# prepare_demo imports polars, which is a demo-script dependency and is not part
+# of the package's `dev` extras. Skip cleanly (rather than erroring at
+# collection) when it isn't installed.
+pytest.importorskip("polars")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"))
 import prepare_demo as pdemo  # noqa: E402
 
