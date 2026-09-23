@@ -367,6 +367,191 @@ fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetr
     best_cluster
 }
 
+/// Magic marker for the out-of-core vector temp file written by
+/// [`crate::core::segment::HybridSegmentWriter::build_vector_index`] and read by
+/// [`HnswIvfIndex::build_from_file`].
+///
+/// Layout: `[magic u32][dim u32]` followed by repeated
+/// `[row_id u32][dim u32][f32 * dim]` records. The vector count is derived from
+/// the file length, so appending more batches stays correct without rewriting
+/// the header.
+pub const VEC_TMP_MAGIC: u32 = 0x4853_5631; // "HSV1"
+
+/// Build the HNSW graph for a single IVF bucket from its on-disk cluster file.
+///
+/// Extracted from [`HnswIvfIndex::build_from_file`] so buckets can be built in
+/// parallel (they are independent). Returns `Ok(None)` for an empty bucket.
+#[allow(clippy::too_many_arguments)]
+fn build_bucket_graph(
+    c: usize,
+    c_path: &str,
+    dim: usize,
+    hnsw_m: usize,
+    max_layers: usize,
+    ef_construction: usize,
+    metric: VectorMetric,
+    quantizer: Option<&QuantizerImpl>,
+) -> Result<Option<(usize, (HnswGraph, Vec<usize>))>> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(c_path)?;
+    let mut c_vectors: Vec<Vec<f32>> = Vec::new();
+    let mut c_row_ids: Vec<usize> = Vec::new();
+    let mut id_buf = [0u8; 4];
+    loop {
+        if f.read_exact(&mut id_buf).is_err() {
+            break;
+        }
+        let mut vec_f32 = vec![0f32; dim];
+        f.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+        c_row_ids.push(u32::from_le_bytes(id_buf) as usize);
+        c_vectors.push(vec_f32);
+    }
+    let _ = std::fs::remove_file(c_path);
+
+    if c_vectors.is_empty() {
+        return Ok(None);
+    }
+
+    let mut hnsw = if let Some(q) = quantizer {
+        match q {
+            QuantizerImpl::TurboQuant(tq) => {
+                if tq.bits() == 4 {
+                    HnswGraph::TurboQuant4(Hnsw::new(
+                        hnsw_m,
+                        c_vectors.len(),
+                        max_layers,
+                        ef_construction,
+                        crate::core::index::distance::DistL2u4,
+                    ))
+                } else {
+                    HnswGraph::TurboQuant8(Hnsw::new(
+                        hnsw_m,
+                        c_vectors.len(),
+                        max_layers,
+                        ef_construction,
+                        crate::core::index::distance::DistL2u8,
+                    ))
+                }
+            }
+            QuantizerImpl::Pq(pq) => {
+                let dist = crate::core::index::pq::DistPqSdc {
+                    pq: std::sync::Arc::new(pq.clone()),
+                };
+                HnswGraph::Pq(Hnsw::new(
+                    hnsw_m,
+                    c_vectors.len(),
+                    max_layers,
+                    ef_construction,
+                    dist,
+                ))
+            }
+        }
+    } else {
+        match metric {
+            VectorMetric::L2 => HnswGraph::L2(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistL2,
+            )),
+            VectorMetric::Cosine => HnswGraph::Cosine(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistCosine,
+            )),
+            VectorMetric::InnerProduct => HnswGraph::Dot(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistDot,
+            )),
+            VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistL1,
+            )),
+            VectorMetric::Hamming => HnswGraph::Hamming(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistHamming,
+            )),
+            VectorMetric::Jaccard => HnswGraph::Jaccard(Hnsw::new(
+                hnsw_m,
+                c_vectors.len(),
+                max_layers,
+                ef_construction,
+                DistJaccard,
+            )),
+        }
+    };
+
+    if let Some(q) = quantizer {
+        let encoded = q.encode_batch(&c_vectors);
+        match &mut hnsw {
+            HnswGraph::TurboQuant8(g) => {
+                for (i, v) in encoded.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::TurboQuant4(g) => {
+                for (i, v) in encoded.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Pq(g) => {
+                for (i, v) in encoded.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            _ => {}
+        }
+    } else {
+        match &mut hnsw {
+            HnswGraph::L2(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Cosine(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Dot(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::L1(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Hamming(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            HnswGraph::Jaccard(g) => {
+                for (i, v) in c_vectors.iter().enumerate() {
+                    g.insert((v, i));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Some((c, (hnsw, c_row_ids))))
+}
+
 impl HnswIvfIndex {
     pub fn build_from_file(
         tmp_path: &str,
@@ -379,39 +564,65 @@ impl HnswIvfIndex {
         tracing::info!("Building HNSW-IVF out-of-core from file: {}", tmp_path);
 
         let mut file = std::fs::File::open(tmp_path)?;
+        let file_len = file.metadata()?.len();
         let mut n_vectors = 0;
         let mut dim = 0;
         let mut vectors_sampled = Vec::new();
 
-        use std::io::Read;
+        use std::io::{Read, Seek, SeekFrom};
         let mut id_buf = [0u8; 4];
         let mut dim_buf = [0u8; 4];
         let max_samples = 100_000;
 
-        // Pass 1: Count and Sample
-        loop {
-            if file.read_exact(&mut id_buf).is_err() {
-                break;
-            }
-            if file.read_exact(&mut dim_buf).is_err() {
-                break;
-            }
-            let current_dim = u32::from_le_bytes(dim_buf) as usize;
-            if dim == 0 {
-                dim = current_dim;
-            }
+        // Pass 1: count + sample. Prefer the self-describing header (magic +
+        // dim) so the count is derived from the file length instead of
+        // re-reading every vector; fall back to a full scan for legacy files.
+        let mut magic_buf = [0u8; 4];
+        let has_header = file.read_exact(&mut magic_buf).is_ok()
+            && u32::from_le_bytes(magic_buf) == VEC_TMP_MAGIC
+            && file.read_exact(&mut dim_buf).is_ok();
 
-            // Read into an f32-ALIGNED buffer: Vec<u8> has alignment 1 in Rust's
-            // layout, so casting it to &[f32] panics intermittently
-            // ("cast_slice>TargetAlignmentGreaterAndInputNotAligned").
-            let mut vec_f32 = vec![0f32; current_dim];
-            file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-
-            n_vectors += 1;
-
-            if vectors_sampled.len() < max_samples {
-                let vec: &[f32] = &vec_f32;
-                vectors_sampled.push(vec.to_vec());
+        if has_header {
+            dim = u32::from_le_bytes(dim_buf) as usize;
+            let record = 8 + dim * 4;
+            n_vectors = if file_len >= 8 && record > 0 {
+                ((file_len - 8) / record as u64) as usize
+            } else {
+                0
+            };
+            // Sample the contiguous prefix of up to `max_samples` vectors.
+            let to_sample = n_vectors.min(max_samples);
+            for _ in 0..to_sample {
+                if file.read_exact(&mut id_buf).is_err() || file.read_exact(&mut dim_buf).is_err() {
+                    break;
+                }
+                let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                // f32-ALIGNED buffer: Vec<u8> has alignment 1, so casting it to
+                // &[f32] panics intermittently ("TargetAlignmentGreaterAndInputNotAligned").
+                let mut vec_f32 = vec![0f32; current_dim];
+                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                vectors_sampled.push(vec_f32);
+            }
+        } else {
+            // Legacy file without a header: full scan.
+            file.seek(SeekFrom::Start(0))?;
+            loop {
+                if file.read_exact(&mut id_buf).is_err() {
+                    break;
+                }
+                if file.read_exact(&mut dim_buf).is_err() {
+                    break;
+                }
+                let current_dim = u32::from_le_bytes(dim_buf) as usize;
+                if dim == 0 {
+                    dim = current_dim;
+                }
+                let mut vec_f32 = vec![0f32; current_dim];
+                file.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
+                n_vectors += 1;
+                if vectors_sampled.len() < max_samples {
+                    vectors_sampled.push(vec_f32);
+                }
             }
         }
 
@@ -420,7 +631,14 @@ impl HnswIvfIndex {
         }
 
         let num_cpus = num_cpus::get();
+        // `HDB_HNSW_N_LISTS` overrides the IVF list count for tuning without a
+        // rebuild (more lists = smaller, faster-to-build buckets).
         let n_lists = n_lists
+            .or_else(|| {
+                std::env::var("HDB_HNSW_N_LISTS")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
             .unwrap_or_else(|| {
                 if n_vectors < 1000 {
                     num_cpus.min(4)
@@ -434,7 +652,14 @@ impl HnswIvfIndex {
             .min(n_vectors / 10)
             .max(1);
 
-        let hnsw_m = hnsw_m.unwrap_or(16);
+        // `HDB_HNSW_M` overrides the per-node neighbour count.
+        let hnsw_m = hnsw_m
+            .or_else(|| {
+                std::env::var("HDB_HNSW_M")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .unwrap_or(16);
 
         let (centroids, _) = simple_kmeans(&vectors_sampled, n_lists, 10)?;
 
@@ -474,6 +699,16 @@ impl HnswIvfIndex {
 
         let mut file = std::fs::File::open(tmp_path)?;
         use std::io::Write;
+        // Skip the self-describing header if present (Pass 1 already consumed
+        // it on its own handle; this is a fresh open).
+        {
+            let mut m = [0u8; 4];
+            if file.read_exact(&mut m).is_ok() && u32::from_le_bytes(m) == VEC_TMP_MAGIC {
+                file.seek(SeekFrom::Start(8))?;
+            } else {
+                file.seek(SeekFrom::Start(0))?;
+            }
+        }
 
         // Batched bucketing. The previous per-vector loop did a CPU centroid
         // scan AND two write syscalls per vector, which dominated index build
@@ -533,171 +768,43 @@ impl HnswIvfIndex {
             }
         }
 
-        // Pass 3: Build HNSW graphs per bucket
-        let mut cluster_graphs = HashMap::new();
-        let ef_construction = (hnsw_m * 2).max(40);
+        // Pass 3: Build HNSW graphs per bucket — in parallel.
+        //
+        // Buckets are independent and each is bounded in size
+        // (~n_vectors / n_lists), so at most `num_threads` buckets are resident
+        // at once. This was previously a sequential loop and dominated the
+        // whole out-of-core build.
+        // `HDB_HNSW_EF_CONSTRUCTION` overrides the build beam width.
+        let ef_construction = std::env::var("HDB_HNSW_EF_CONSTRUCTION")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or((hnsw_m * 2).max(40));
         let max_layers = 16;
 
-        // We do this sequentially or lightly parallel since each bucket could be somewhat large
-        // But doing it sequentially uses strictly bounded memory (1 bucket at a time)
-        for (c, (c_path, _)) in cluster_files {
-            let mut f = std::fs::File::open(&c_path)?;
-            let mut c_vectors = Vec::new();
-            let mut c_row_ids = Vec::new();
+        let cluster_list: Vec<(usize, String)> = cluster_files
+            .into_iter()
+            .map(|(c, (p, _f))| (c, p))
+            .collect();
 
-            loop {
-                if f.read_exact(&mut id_buf).is_err() {
-                    break;
-                }
-                let mut vec_f32 = vec![0f32; dim];
-                f.read_exact(bytemuck::cast_slice_mut::<f32, u8>(&mut vec_f32))?;
-                c_row_ids.push(u32::from_le_bytes(id_buf) as usize);
-                c_vectors.push(vec_f32);
-            }
-
-            if !c_vectors.is_empty() {
-                let mut hnsw = if let Some(q) = quantizer.as_ref() {
-                    match q {
-                        QuantizerImpl::TurboQuant(tq) => {
-                            if tq.bits() == 4 {
-                                HnswGraph::TurboQuant4(Hnsw::new(
-                                    hnsw_m,
-                                    c_vectors.len(),
-                                    max_layers,
-                                    ef_construction,
-                                    crate::core::index::distance::DistL2u4,
-                                ))
-                            } else {
-                                HnswGraph::TurboQuant8(Hnsw::new(
-                                    hnsw_m,
-                                    c_vectors.len(),
-                                    max_layers,
-                                    ef_construction,
-                                    crate::core::index::distance::DistL2u8,
-                                ))
-                            }
-                        }
-                        QuantizerImpl::Pq(pq) => {
-                            let dist = crate::core::index::pq::DistPqSdc {
-                                pq: std::sync::Arc::new(pq.clone()),
-                            };
-                            HnswGraph::Pq(Hnsw::new(
-                                hnsw_m,
-                                c_vectors.len(),
-                                max_layers,
-                                ef_construction,
-                                dist,
-                            ))
-                        }
-                    }
-                } else {
-                    match metric {
-                        VectorMetric::L2 => HnswGraph::L2(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistL2,
-                        )),
-                        VectorMetric::Cosine => HnswGraph::Cosine(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistCosine,
-                        )),
-                        VectorMetric::InnerProduct => HnswGraph::Dot(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistDot,
-                        )),
-                        VectorMetric::L1 => HnswGraph::L1(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistL1,
-                        )),
-                        VectorMetric::Hamming => HnswGraph::Hamming(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistHamming,
-                        )),
-                        VectorMetric::Jaccard => HnswGraph::Jaccard(Hnsw::new(
-                            hnsw_m,
-                            c_vectors.len(),
-                            max_layers,
-                            ef_construction,
-                            DistJaccard,
-                        )),
-                    }
-                };
-
-                if let Some(q) = quantizer.as_ref() {
-                    let encoded = q.encode_batch(&c_vectors);
-                    match &mut hnsw {
-                        HnswGraph::TurboQuant8(g) => {
-                            for (i, v) in encoded.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::TurboQuant4(g) => {
-                            for (i, v) in encoded.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::Pq(g) => {
-                            for (i, v) in encoded.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match &mut hnsw {
-                        HnswGraph::L2(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::Cosine(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::Dot(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::L1(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::Hamming(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        HnswGraph::Jaccard(g) => {
-                            for (i, v) in c_vectors.iter().enumerate() {
-                                g.insert((v, i));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                cluster_graphs.insert(c, (hnsw, c_row_ids));
-            }
-
-            let _ = std::fs::remove_file(&c_path);
-        }
+        let quantizer_ref = quantizer.as_ref();
+        let cluster_graphs: HashMap<usize, (HnswGraph, Vec<usize>)> = cluster_list
+            .into_par_iter()
+            .map(|(c, c_path)| {
+                build_bucket_graph(
+                    c,
+                    &c_path,
+                    dim,
+                    hnsw_m,
+                    max_layers,
+                    ef_construction,
+                    metric,
+                    quantizer_ref,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
 
         tracing::info!(
             "HNSW-IVF out-of-core build complete in {:?}",
@@ -1989,5 +2096,59 @@ mod tests {
             }
             assert_eq!(root, base_path_str, "Failed to strip suffix from {}", p);
         }
+    }
+
+    /// The out-of-core builder must accept both the new self-describing header
+    /// and legacy header-less files, and index every vector either way.
+    #[test]
+    fn header_and_legacy_vector_files_build_equivalent_indexes() {
+        use std::io::Write;
+
+        fn write_vec_file(path: &std::path::Path, dim: usize, n: usize, with_header: bool) {
+            let mut f = std::fs::File::create(path).unwrap();
+            if with_header {
+                f.write_all(&VEC_TMP_MAGIC.to_le_bytes()).unwrap();
+                f.write_all(&(dim as u32).to_le_bytes()).unwrap();
+            }
+            for i in 0..n {
+                let v: Vec<f32> = (0..dim).map(|d| (i * dim + d) as f32).collect();
+                f.write_all(&(i as u32).to_le_bytes()).unwrap();
+                f.write_all(&(dim as u32).to_le_bytes()).unwrap();
+                f.write_all(bytemuck::cast_slice(&v)).unwrap();
+            }
+        }
+
+        fn total_points(idx: &HnswIvfIndex) -> usize {
+            idx.cluster_graphs.values().map(|(_, ids)| ids.len()).sum()
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let dim = 8;
+        let n = 500;
+        let algo = crate::core::manifest::IndexAlgorithm::hnsw();
+
+        let p1 = dir.path().join("with_header.bin");
+        write_vec_file(&p1, dim, n, true);
+        let idx1 = HnswIvfIndex::build_from_file(
+            p1.to_str().unwrap(),
+            VectorMetric::L2,
+            None,
+            None,
+            &algo,
+        )
+        .unwrap();
+        assert_eq!(total_points(&idx1), n, "header path dropped vectors");
+
+        let p2 = dir.path().join("legacy.bin");
+        write_vec_file(&p2, dim, n, false);
+        let idx2 = HnswIvfIndex::build_from_file(
+            p2.to_str().unwrap(),
+            VectorMetric::L2,
+            None,
+            None,
+            &algo,
+        )
+        .unwrap();
+        assert_eq!(total_points(&idx2), n, "legacy path dropped vectors");
     }
 }

@@ -90,6 +90,14 @@ impl crate::core::segment::HybridSegmentWriter {
 
                 use std::io::Write;
                 let dim = vectors[0].len() as u32;
+                // Self-describing header, written once when the file is created.
+                // The out-of-core builder derives the vector count from the file
+                // length, so it no longer has to re-read the whole file just to
+                // count vectors (a multi-GB read per segment).
+                if file.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+                    file.write_all(&crate::core::index::hnsw_ivf::VEC_TMP_MAGIC.to_le_bytes())?;
+                    file.write_all(&dim.to_le_bytes())?;
+                }
                 for (i, vec) in vectors.iter().enumerate() {
                     let global_row_id = (_row_offset + i) as u32;
                     file.write_all(&global_row_id.to_le_bytes())?;
