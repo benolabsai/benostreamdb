@@ -70,16 +70,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
         
     } else if (mt == 5u) {
-        // Jaccard Distance
+        // Jaccard Distance. Matches the CPU/CUDA definition: membership is
+        // "> 0.0" (not "== 1.0"), so non-binary indicators agree too.
         var intersection = 0.0;
         var union_count = 0.0;
         for (var i = 0u; i < dim; i++) {
             let q = query[i];
             let v = vectors[offset + i];
-            if (q == 1.0 && v == 1.0) {
-                intersection += 1.0;
-            }
-            if (q == 1.0 || v == 1.0) {
+            if (q > 0.0 || v > 0.0) {
+                if (q == v && q > 0.0) {
+                    intersection += 1.0;
+                }
                 union_count += 1.0;
             }
         }
