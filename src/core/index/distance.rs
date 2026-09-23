@@ -689,6 +689,65 @@ impl super::hnsw_rs::dist::Distance<u8> for DistL2u4 {
 }
 
 #[cfg(test)]
+mod sparse_dense_equivalence_tests {
+    use super::*;
+
+    /// The sparse GPU path converts sparse vectors to dense and reuses the dense
+    /// kernels, so the two must agree on the converted data.
+    #[test]
+    fn sparse_and_dense_l2_agree() {
+        let dim = 64usize;
+        let a_idx = vec![0u32, 5, 10, 63];
+        let a_val = vec![1.0f32, 2.0, 3.0, 4.0];
+        let b_idx = vec![0u32, 5, 20];
+        let b_val = vec![1.0f32, 1.0, 5.0];
+
+        let sparse = sparse_l2_distance_squared(&a_idx, &a_val, &b_idx, &b_val);
+
+        let mut a_dense = vec![0.0f32; dim];
+        for (&i, &v) in a_idx.iter().zip(a_val.iter()) {
+            a_dense[i as usize] = v;
+        }
+        let mut b_dense = vec![0.0f32; dim];
+        for (&i, &v) in b_idx.iter().zip(b_val.iter()) {
+            b_dense[i as usize] = v;
+        }
+        let dense = l2_distance_squared(&a_dense, &b_dense);
+
+        assert!(
+            (sparse - dense).abs() < 1e-6,
+            "sparse={sparse} dense={dense}"
+        );
+    }
+
+    #[test]
+    fn sparse_and_dense_dot_agree() {
+        let dim = 32usize;
+        let a_idx = vec![1u32, 4, 9];
+        let a_val = vec![2.0f32, 3.0, 5.0];
+        let b_idx = vec![1u32, 4, 17];
+        let b_val = vec![1.0f32, 2.0, 7.0];
+
+        let sparse = sparse_dot_product(&a_idx, &a_val, &b_idx, &b_val);
+
+        let mut a_dense = vec![0.0f32; dim];
+        for (&i, &v) in a_idx.iter().zip(a_val.iter()) {
+            a_dense[i as usize] = v;
+        }
+        let mut b_dense = vec![0.0f32; dim];
+        for (&i, &v) in b_idx.iter().zip(b_val.iter()) {
+            b_dense[i as usize] = v;
+        }
+        let dense = dot_product(&a_dense, &b_dense);
+
+        assert!(
+            (sparse - dense).abs() < 1e-6,
+            "sparse={sparse} dense={dense}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod early_exit_tests {
     use super::*;
 

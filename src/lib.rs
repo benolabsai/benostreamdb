@@ -154,6 +154,16 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
         python_distance::py_inner_product_sparse,
         m
     )?)?;
+    // Batched sparse (dense-conversion GPU path)
+    m.add_function(wrap_pyfunction!(python_distance::py_sparse_l2_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_sparse_cosine_batch,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_sparse_inner_product_batch,
+        m
+    )?)?;
 
     // Binary Vector API
     m.add_function(wrap_pyfunction!(python_distance::py_hamming_packed, m)?)?;

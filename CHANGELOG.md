@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regression test.
 
 ### Added
+- **GPU acceleration for sparse vectors (dense-conversion path)**: batched
+  `hdb.sparse_l2_batch` / `hdb.sparse_cosine_batch` /
+  `hdb.sparse_inner_product_batch` convert a sparse query plus N sparse vectors
+  to dense and dispatch to the existing dense GPU kernels. Backend-agnostic, so
+  it works on every backend; it pays off once the batch clears
+  `GPU_DISPATCH_THRESHOLD`. Equivalence with the sparse CPU reference is covered
+  by `sparse_dense_equivalence_tests`.
 - **GPU-accelerated packed-binary distance (CUDA + WGPU)**: `GpuBackend::compute_binary_distance`
   plus packed-u8 Hamming/Jaccard kernels for CUDA (`hamming_packed.cu`,
   `jaccard_packed.cu`) and WGPU (`wgpu_binary_kernel.wgsl`, covering AMD/Intel
