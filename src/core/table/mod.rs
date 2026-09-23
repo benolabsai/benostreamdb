@@ -26,6 +26,8 @@ pub mod catalog;
 pub mod fluent;
 pub use fluent::TableQuery;
 pub mod index_config;
+pub mod ingest;
+pub use ingest::{IngestOptions, IngestReport};
 pub mod maintenance;
 pub mod merge;
 pub use merge::MergeMode;
