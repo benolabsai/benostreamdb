@@ -96,6 +96,15 @@ enum TableCommands {
         /// budget (GB). Falls back to HDB_INGEST_MEMORY_BUDGET_GB when unset.
         #[arg(long)]
         memory_budget_gb: Option<f64>,
+        /// Multi-machine mode: claim units from a shared object-store lease
+        /// queue instead of a fixed local list. Run on N machines with the same
+        /// --input to split the work.
+        #[arg(long, default_value_t = false)]
+        coordinate: bool,
+        /// Lease TTL (seconds) for --coordinate. A dead node's lease expires
+        /// after this and another node steals its unit.
+        #[arg(long, default_value_t = 300)]
+        lease_ttl_secs: u64,
     },
 }
 
@@ -128,6 +137,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 row_end,
                 compact,
                 memory_budget_gb,
+                coordinate,
+                lease_ttl_secs,
             } => {
                 ingest_table(
                     &uri,
@@ -140,6 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     row_end,
                     compact,
                     memory_budget_gb,
+                    coordinate,
+                    lease_ttl_secs,
                 )
                 .await?
             }
@@ -205,6 +218,8 @@ async fn ingest_table(
     row_end: Option<usize>,
     compact: bool,
     memory_budget_gb: Option<f64>,
+    coordinate: bool,
+    lease_ttl_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use hyperstreamdb::core::table::IngestOptions;
 
@@ -231,14 +246,23 @@ async fn ingest_table(
     };
 
     let start = Instant::now();
-    let report = match (row_start, row_end) {
-        (Some(s), Some(e)) => {
-            let path = input
-                .first()
-                .ok_or("--row-start/--row-end require --input")?;
-            table.ingest_range_async(path, s, e, opts).await?
+    let report = if coordinate {
+        let coordinator = table.object_store_coordinator(
+            input,
+            chunk_rows,
+            std::time::Duration::from_secs(lease_ttl_secs.max(1)),
+        )?;
+        table.ingest_coordinated_async(opts, coordinator).await?
+    } else {
+        match (row_start, row_end) {
+            (Some(s), Some(e)) => {
+                let path = input
+                    .first()
+                    .ok_or("--row-start/--row-end require --input")?;
+                table.ingest_range_async(path, s, e, opts).await?
+            }
+            _ => table.ingest_async(input, opts).await?,
         }
-        _ => table.ingest_async(input, opts).await?,
     };
     println!(
         "Ingest complete in {:.2?}: {} unit(s) committed, {} skipped, {} rows, {} segment(s)",

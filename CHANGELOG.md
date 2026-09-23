@@ -41,6 +41,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `table.ingest(..., memory_budget_gb=…)`. Allocator evaluation recorded in
   `core::memory`: glibc + `malloc_trim` chosen; jemalloc deferred; mimalloc
   rejected (static-TLS under pyo3).
+- **Multi-machine ingest (A4)**: `WorkCoordinator` trait + `ObjectStoreCoordinator`
+  backend (`core::table::coordinator`) — lease-based work stealing over the
+  object store, reusing `FileBasedLock` (CAS claim + heartbeat + expiry-steal).
+  `Table::ingest_coordinated_async` claims units dynamically (build in parallel,
+  commit serially via the OCC CAS, release-on-failure so another node retries);
+  a dead node's lease expires and its unit is stolen. Surfaces:
+  `hdb table ingest --coordinate [--lease-ttl-secs N]` and
+  `table.ingest(..., coordinate=True, lease_ttl_secs=300)`. No broker, no etcd,
+  no Raft cluster.
 
 ### Performance
 - **IVF clustering is now balanced (k-means++ seeding + capacity cap).** The

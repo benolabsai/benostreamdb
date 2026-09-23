@@ -23,6 +23,8 @@ use tracing;
 pub mod builder;
 pub use builder::TableBuilder;
 pub mod catalog;
+pub mod coordinator;
+pub use coordinator::{Lease, ObjectStoreCoordinator, WorkCoordinator, WorkUnit};
 pub mod fluent;
 pub use fluent::TableQuery;
 pub mod index_config;
