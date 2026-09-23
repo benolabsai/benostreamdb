@@ -99,6 +99,10 @@ static MSL_L1: &str = include_str!("mps/l1_distance.metal");
 static MSL_HAMMING: &str = include_str!("mps/hamming_distance.metal");
 #[cfg(target_os = "macos")]
 static MSL_JACCARD: &str = include_str!("mps/jaccard_distance.metal");
+#[cfg(target_os = "macos")]
+static MSL_HAMMING_PACKED: &str = include_str!("mps/hamming_packed.metal");
+#[cfg(target_os = "macos")]
+static MSL_JACCARD_PACKED: &str = include_str!("mps/jaccard_packed.metal");
 
 // CUDA kernels: embed .cu source at compile-time, JIT-compile at runtime via nvrtc.
 // This eliminates the need for nvcc at build time — only libcuda.so is required at runtime.
@@ -434,6 +438,81 @@ impl GpuBackend for MetalBackend {
         cmd_buf.wait_until_completed();
         unsafe {
             Ok(std::slice::from_raw_parts(l_buf.contents() as *const u32, n_vectors).to_vec())
+        }
+    }
+
+    fn compute_binary_distance(
+        &self,
+        query: &[u8],
+        vectors: &[u8],
+        dim_bytes: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        use metal::*;
+
+        // GATED: the packed kernels are written but not yet verified on Apple
+        // Silicon hardware. Until the macOS CI job confirms them, opt in with
+        // HDB_METAL_PACKED=1; by default this errors so the dispatcher uses the
+        // CPU reference. Remove the gate once macOS CI passes.
+        if std::env::var_os("HDB_METAL_PACKED").is_none() {
+            anyhow::bail!(
+                "Metal packed-binary distance is gated pending macOS verification \
+                 (set HDB_METAL_PACKED=1 to opt in)"
+            );
+        }
+
+        let (src, name) = match metric {
+            VectorMetric::Hamming => (MSL_HAMMING_PACKED, "hamming_packed_kernel"),
+            VectorMetric::Jaccard => (MSL_JACCARD_PACKED, "jaccard_packed_kernel"),
+            other => anyhow::bail!("Metal packed-binary supports Hamming/Jaccard, not {other:?}"),
+        };
+        let n_vectors = vectors.len() / dim_bytes;
+        let lib = self
+            .device
+            .new_library_with_source(src, &CompileOptions::new())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let func = lib
+            .get_function(name, None)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let pipeline = self
+            .device
+            .new_compute_pipeline_state_with_function(&func)
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        let q_buf = self.device.new_buffer_with_data(
+            query.as_ptr() as *const _,
+            query.len() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let v_buf = self.device.new_buffer_with_data(
+            vectors.as_ptr() as *const _,
+            vectors.len() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let o_buf = self.device.new_buffer(
+            (n_vectors * 4) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+
+        let cmd_buf = self.command_queue.new_command_buffer();
+        let enc = cmd_buf.new_compute_command_encoder();
+        enc.set_compute_pipeline_state(&pipeline);
+        enc.set_buffer(0, Some(&q_buf), 0);
+        enc.set_buffer(1, Some(&v_buf), 0);
+        enc.set_buffer(2, Some(&o_buf), 0);
+        enc.set_bytes(3, 4, &(dim_bytes as u32) as *const _ as *const _);
+        // The dispatch rounds the thread count up to a multiple of the
+        // threadgroup size; the kernel guards the tail against `n_vectors`.
+        enc.set_bytes(4, 4, &(n_vectors as u32) as *const _ as *const _);
+        enc.dispatch_thread_groups(
+            MTLSize::new((n_vectors as u64 + 255) / 256, 1, 1),
+            MTLSize::new(256, 1, 1),
+        );
+        enc.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+        unsafe {
+            Ok(std::slice::from_raw_parts(o_buf.contents() as *const f32, n_vectors).to_vec())
         }
     }
 }
