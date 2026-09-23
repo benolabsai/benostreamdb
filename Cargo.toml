@@ -189,7 +189,10 @@ rand_distr = "0.4"
 # hnsw_rs removed and internalized
 tempfile = "3.10"
 proptest = "1.4"
-skiplist = "0.3"
+# Unused: only src/core/index/hnsw_rs/test.rs references it and that file is not
+# declared as a module. Pinned forward to clear RUSTSEC-2026-0300 (use-after-free
+# in skiplist < 1.1.1).
+skiplist = "1"
 
 [[bin]]
 name = "generate_iceberg_manifests"
