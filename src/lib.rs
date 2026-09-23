@@ -89,6 +89,7 @@ fn register_python_site_packages(m: &Bound<'_, PyModule>) {
     }
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn check_jemalloc() -> PyResult<String> {
     #[cfg(target_env = "gnu")]
