@@ -1269,6 +1269,16 @@ pub fn get_thread_gpu_context() -> Option<ComputeContext> {
     lock.clone()
 }
 
+/// Check if a hardware GPU context is currently active globally.
+pub fn is_hardware_gpu_active() -> bool {
+    let lock = GLOBAL_GPU_CONTEXT.read();
+    if let Some(ctx) = &*lock {
+        ctx.backend != ComputeBackend::Cpu
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

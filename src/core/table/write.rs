@@ -19,6 +19,43 @@ use arrow::datatypes::Schema;
 use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
+
+#[cfg(target_os = "linux")]
+fn current_rss_bytes() -> usize {
+    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
+        if let Some(rss_pages) = statm.split_whitespace().nth(1) {
+            if let Ok(pages) = rss_pages.parse::<usize>() {
+                return pages * 4096;
+            }
+        }
+    }
+    0
+}
+
+#[cfg(target_os = "macos")]
+fn current_rss_bytes() -> usize {
+    unsafe {
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        let res = libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            &mut info as *mut _ as libc::task_info_t,
+            &mut count,
+        );
+        if res == libc::KERN_SUCCESS {
+            info.resident_size as usize
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn current_rss_bytes() -> usize {
+    0
+}
+
 impl Table {
     /// Write Arrow RecordBatches to the table (Buffered)
     ///
@@ -132,6 +169,22 @@ impl Table {
         batches: Vec<RecordBatch>,
         durability: crate::core::table::WalDurability,
     ) -> Result<()> {
+        if let Some(max_gb) = self.max_ingest_ram_gb {
+            let max_bytes = (max_gb * 1_000_000_000.0) as usize;
+            let mut logged = false;
+            loop {
+                let rss = current_rss_bytes();
+                if rss == 0 || rss < max_bytes {
+                    break;
+                }
+                if !logged {
+                    tracing::warn!("RSS ({:.2} GB) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion for background tasks to reclaim memory...", rss as f64 / 1_000_000_000.0, max_gb);
+                    logged = true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         INGEST_ROWS_TOTAL.inc_by(total_rows as u64);
 
@@ -1029,14 +1082,7 @@ impl Table {
                         }
                     }
 
-                    // The index writer is dropped above, freeing its vectors and
-                    // graph structures. Return the freed arena pages now, before
-                    // the permit is released and the next build starts — otherwise
-                    // the next build reuses the ratcheted arenas and RSS compounds
-                    // across every segment in the chunk.
-                    crate::core::memory::trim_if_over_budget(
-                        crate::core::memory::DEFAULT_MEMORY_BUDGET_GB,
-                    );
+
                 });
                 self.background_tasks.lock().await.push(handle);
             }
@@ -1299,17 +1345,7 @@ impl Table {
             }
         }
 
-        // 6. Heap discipline at flush boundaries (see `core::memory`): the index
-        // builders churn millions of small allocations and glibc keeps the freed
-        // pages in per-thread arenas, so RSS ratchets toward the sum of every
-        // arena's high-water mark. Return freed pages to the OS once RSS exceeds
-        // the budget.
-        if crate::core::memory::trim_if_over_budget(crate::core::memory::DEFAULT_MEMORY_BUDGET_GB) {
-            tracing::info!(
-                rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
-                "flush: trimmed heap (RSS over budget)"
-            );
-        }
+
 
         Ok(())
     }

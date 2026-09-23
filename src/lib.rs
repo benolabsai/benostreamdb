@@ -11,6 +11,9 @@
     clippy::collapsible_match
 )]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 use std::sync::Arc;
 extern crate log;
@@ -53,7 +56,7 @@ use pyo3::prelude::*;
 /// `MALLOC_ARENA_MAX`; musl/macOS use different allocators entirely.
 #[cfg(all(feature = "python", target_os = "linux", target_env = "gnu"))]
 fn tame_glibc_arenas() {
-    const M_ARENA_MAX: i32 = -101; // glibc mallopt param (not exported by libc crate)
+    const M_ARENA_MAX: i32 = -8; // glibc mallopt param (not exported by libc crate)
     extern "C" {
         fn mallopt(param: i32, value: i32) -> i32;
     }
@@ -84,6 +87,19 @@ fn register_python_site_packages(m: &Bound<'_, PyModule>) {
     if let Ok(s) = purelib.extract::<String>() {
         crate::core::index::nvrtc::set_python_site_packages(std::path::PathBuf::from(s));
     }
+}
+
+#[pyfunction]
+fn check_jemalloc() -> PyResult<String> {
+    #[cfg(target_env = "gnu")]
+    {
+        use tikv_jemalloc_ctl::epoch;
+        let e = epoch::mib().unwrap();
+        e.advance().unwrap();
+        return Ok(format!("jemalloc active and linked!"));
+    }
+    #[allow(unreachable_code)]
+    Ok("jemalloc not enabled via target_env=gnu".to_string())
 }
 
 #[cfg(feature = "python")]
@@ -125,6 +141,7 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyManifestEntry>()?;
 
     // Device API
+    m.add_function(wrap_pyfunction!(check_jemalloc, m)?)?;
     m.add_class::<python_gpu_context::PyDevice>()?;
 
     // Distance API - Single-pair functions

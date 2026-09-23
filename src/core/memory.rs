@@ -18,11 +18,12 @@
 //! so the (arena-walking) cost is only paid when RSS has actually grown.
 //!
 //! ## Allocator evaluation (A4)
-//! - **glibc + `malloc_trim`** (chosen): zero new dependencies, works inside the
-//!   pyo3 extension, and the trim is explicit and observable.
-//! - **jemalloc**: better fragmentation behaviour and per-thread arenas, but a
-//!   global allocator swap affects the whole process (including CPython's own
-//!   allocations) and needs a feature flag + a platform matrix. Deferred.
+//! - **jemalloc** (chosen): better fragmentation behaviour and returns memory to the OS
+//!   naturally. With `tikv-jemallocator` without the `unprefixed` feature, it correctly
+//!   only routes Rust allocations to jemalloc and avoids corrupting the Python runtime's
+//!   own malloc state.
+//! - **glibc + `malloc_trim`**: caused OS/driver deadlocks when the NVIDIA GPU driver
+//!   was active concurrently with heap trimming. Removed.
 //! - **mimalloc**: rejected — static-TLS failure under pyo3.
 //! - **slab-allocating the HNSW/TQ builders**: the real fix (freed memory
 //!   becomes reusable), but a large refactor of the index builders. Deferred.
@@ -32,21 +33,9 @@
 //! equivalent for the library's `ingest_async` path.
 
 /// Return freed heap pages to the OS.
-///
-/// No-op (returns `false`) on non-glibc platforms. Returns `true` when the
-/// allocator reported releasing memory.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
 pub fn trim_heap() -> bool {
-    extern "C" {
-        fn malloc_trim(pad: usize) -> i32;
-    }
-    // SAFETY: `malloc_trim` is a glibc allocator entry point. It is safe to call
-    // from any thread and only affects the calling process's heap.
-    unsafe { malloc_trim(0) != 0 }
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-pub fn trim_heap() -> bool {
+    // No-op because jemalloc automatically returns memory to the OS
+    // via background threads.
     false
 }
 

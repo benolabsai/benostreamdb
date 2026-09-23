@@ -57,6 +57,7 @@ metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 
 [dependencies]
+libc = "0.2"
 # core columnar memory format
 arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }
 lazy_static = "1.4"
@@ -157,6 +158,8 @@ dhat = "0.3"
 memmap2 = "0.9.11"
 arrow-ipc = "=57.3.1"
 tempfile = "3.10"
+tikv-jemallocator = { version = "0.7.0", features = ["background_threads", "disable_initial_exec_tls"] }
+tikv-jemalloc-ctl = "0.7.0"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
@@ -167,6 +170,9 @@ libloading = { version = "0.7", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = { version = "0.27.0" } # MPS 
+
+[target.'cfg(target_env = "gnu")'.dependencies]
+tikv-jemalloc-ctl = "0.7.0"
 
 [dependencies.jni]
 version = "0.21"

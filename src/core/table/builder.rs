@@ -19,6 +19,49 @@ use tracing;
 
 use super::Table;
 
+#[cfg(target_os = "linux")]
+fn get_total_system_memory_bytes() -> Option<usize> {
+    if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+        for line in contents.lines() {
+            if line.starts_with("MemTotal:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(kb) = parts[1].parse::<usize>() {
+                        return Some(kb * 1024);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn get_total_system_memory_bytes() -> Option<usize> {
+    unsafe {
+        let mut memsize: u64 = 0;
+        let mut size = std::mem::size_of_val(&memsize);
+        let name = std::ffi::CString::new("hw.memsize").ok()?;
+        if libc::sysctlbyname(
+            name.as_ptr(),
+            &mut memsize as *mut _ as *mut libc::c_void,
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        ) == 0
+        {
+            Some(memsize as usize)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn get_total_system_memory_bytes() -> Option<usize> {
+    None
+}
+
 /// Remove internal WAL tracking metadata from schema
 fn clean_wal_metadata(schema: &Schema) -> Schema {
     let mut meta = schema.metadata().clone();
@@ -187,6 +230,7 @@ pub struct TableBuilder {
     wal_dir: Option<std::path::PathBuf>,
     durability: crate::core::table::WalDurability,
     streaming_flush_interval: Option<std::time::Duration>,
+    max_ingest_ram_gb: Option<f64>,
 }
 
 impl TableBuilder {
@@ -216,6 +260,15 @@ impl TableBuilder {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map(std::time::Duration::from_secs),
+            max_ingest_ram_gb: std::env::var("HDB_MAX_INGEST_RAM_GB")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .or_else(|| {
+                    // Default to 80% of total system RAM, or fallback to 16GB
+                    get_total_system_memory_bytes()
+                        .map(|bytes| (bytes as f64 * 0.8) / 1_000_000_000.0)
+                        .or(Some(16.0))
+                }),
         }
     }
 
@@ -253,6 +306,11 @@ impl TableBuilder {
 
     pub fn with_default_device(mut self, device: &str) -> Self {
         self.default_device = Some(device.to_string());
+        self
+    }
+
+    pub fn with_max_ingest_ram_gb(mut self, gb: f64) -> Self {
+        self.max_ingest_ram_gb = Some(gb);
         self
     }
 
@@ -414,6 +472,7 @@ impl TableBuilder {
             partition_spec,
             label_pattern: self.label_pattern,
             durability: self.durability,
+            max_ingest_ram_gb: self.max_ingest_ram_gb,
         };
 
         table.sync_primary_key_from_schema_async().await.ok();

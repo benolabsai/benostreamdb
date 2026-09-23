@@ -105,6 +105,8 @@ pub struct Table {
     pub(crate) label_pattern: LabelPattern,
     /// Durability mode for WAL writes
     pub(crate) durability: WalDurability,
+    /// Maximum RAM (in GB) allowed for ingest before blocking writes
+    pub(crate) max_ingest_ram_gb: Option<f64>,
 }
 
 /// Durability level for WAL writes.
@@ -138,18 +140,24 @@ pub fn excel_column_label(mut index: usize) -> String {
 /// Defaults to `2` concurrent builds; override with `HDB_INDEX_BUILD_CONCURRENCY`.
 /// A value of `0` re-enables unbounded fan-out (only sensible when the segments
 /// are small enough that `nproc` of them fit in RAM).
-pub(crate) fn new_index_build_gate() -> Arc<tokio::sync::Semaphore> {
+pub(crate) fn index_build_concurrency() -> usize {
     let n = std::env::var("HDB_INDEX_BUILD_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(2);
-    let permits = if n == 0 {
+    if n == 0 {
+        // 0 = unbounded: only sensible when segments are small enough that
+        // `nproc` of them fit in RAM.
         std::thread::available_parallelism()
             .map(|p| p.get())
             .unwrap_or(8)
     } else {
         n
-    };
+    }
+}
+
+pub(crate) fn new_index_build_gate() -> Arc<tokio::sync::Semaphore> {
+    let permits = index_build_concurrency();
     tracing::debug!(permits, "index build concurrency gate initialised");
     Arc::new(tokio::sync::Semaphore::new(permits))
 }
@@ -179,6 +187,7 @@ impl Clone for Table {
             partition_spec: self.partition_spec.clone(),
             label_pattern: self.label_pattern,
             durability: self.durability,
+            max_ingest_ram_gb: self.max_ingest_ram_gb,
         }
     }
 }
