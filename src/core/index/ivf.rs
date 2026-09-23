@@ -235,11 +235,51 @@ pub fn simple_kmeans(
         .cloned()
         .collect();
 
-    // Initialize centroids
-    let mut centroids: Vec<Vec<f32>> = training_indices
-        .choose_multiple(&mut rng, k)
-        .map(|&idx| vectors[idx].clone())
-        .collect();
+    // Initialize centroids with k-means++ (D^2 seeding).
+    //
+    // Random seeding left large regions uncovered, so a handful of clusters grew
+    // to ~25x the mean (measured: one 110k-point cluster vs an 80-point one in a
+    // 750k-row segment). The HNSW build is superlinear in cluster size, so those
+    // few clusters dominated the whole index build. k-means++ spreads the seeds
+    // by sampling each next centroid with probability proportional to its
+    // squared distance from the nearest existing centroid.
+    use rand::Rng;
+    let mut centroids: Vec<Vec<f32>> = Vec::with_capacity(k);
+    {
+        let first = training_indices[rng.gen_range(0..training_indices.len())];
+        centroids.push(vectors[first].clone());
+        let mut min_d2: Vec<f32> = training_indices
+            .iter()
+            .map(|&idx| l2_distance_squared(&vectors[idx], &centroids[0]))
+            .collect();
+        while centroids.len() < k {
+            let total: f64 = min_d2.iter().map(|&d| d as f64).sum();
+            if total <= 0.0 {
+                // All training points coincide with existing centroids; fill the
+                // remainder with random picks.
+                let idx = training_indices[rng.gen_range(0..training_indices.len())];
+                centroids.push(vectors[idx].clone());
+                continue;
+            }
+            let mut target = rng.gen::<f64>() * total;
+            let mut chosen = training_indices.len() - 1;
+            for (i, &d) in min_d2.iter().enumerate() {
+                target -= d as f64;
+                if target <= 0.0 {
+                    chosen = i;
+                    break;
+                }
+            }
+            let new_c = vectors[training_indices[chosen]].clone();
+            for (i, &ti) in training_indices.iter().enumerate() {
+                let d = l2_distance_squared(&vectors[ti], &new_c);
+                if d < min_d2[i] {
+                    min_d2[i] = d;
+                }
+            }
+            centroids.push(new_c);
+        }
+    }
 
     // Step 2: Training iterations on sub-sample
     // Assignment is the hot loop here (iters x sample x k x dim), so dispatch it
@@ -329,20 +369,47 @@ pub fn simple_kmeans(
         }
     }
 
-    // Final assignment uses CPU parallel iteration.
-    // GPU dispatch is handled at a higher level by the caller if needed.
+    // Final assignment: nearest centroid, but with a per-cluster capacity so no
+    // single cluster can dominate the (superlinear) HNSW build. Points that
+    // would overflow a full cluster spill to their next-nearest cluster. The
+    // capacity is 1.5x the mean, so only dense-region overflow is displaced and
+    // recall impact is small.
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    let capacity = (((vectors.len() as f64) / (k as f64)) * 1.5).ceil() as usize;
+    let capacity = capacity.max(1);
+    let counts: Vec<AtomicUsize> = (0..k).map(|_| AtomicUsize::new(0)).collect();
 
-    // We already have nested Vec<Vec<f32>>, so we'll do direct assignment
     let labels: Vec<usize> = vectors
         .par_iter()
         .map(|v| {
-            centroids
+            let mut dists: Vec<(usize, f32)> = centroids
                 .iter()
                 .enumerate()
                 .map(|(i, centroid)| (i, l2_distance_squared(v, centroid)))
-                .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(i, _)| i)
-                .unwrap_or(0)
+                .collect();
+            dists.sort_unstable_by(|a, b| {
+                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for &(i, _) in &dists {
+                let mut cur = counts[i].load(AtomicOrdering::Relaxed);
+                loop {
+                    if cur >= capacity {
+                        break;
+                    }
+                    match counts[i].compare_exchange_weak(
+                        cur,
+                        cur + 1,
+                        AtomicOrdering::Relaxed,
+                        AtomicOrdering::Relaxed,
+                    ) {
+                        Ok(_) => return i,
+                        Err(actual) => cur = actual,
+                    }
+                }
+            }
+            // Every cluster is full (shouldn't happen with capacity > mean):
+            // fall back to the nearest.
+            dists[0].0
         })
         .collect();
 
@@ -365,5 +432,50 @@ mod tests {
         let query = crate::core::index::VectorValue::Float32(vec![1.0, 0.0]);
         let results = index.search(&query, 2, 1, None);
         assert_eq!(results.len(), 2);
+    }
+
+    /// Regression test for the pathologically uneven IVF clustering that made the
+    /// HNSW-IVF index build superlinear: random seeding left a dense region
+    /// uncovered, so one cluster absorbed ~25x the mean and dominated Pass 3.
+    ///
+    /// The dataset here is deliberately skewed (a tight blob plus a sparse
+    /// spread). With k-means++ seeding and the capacity cap, no cluster may
+    /// exceed 1.5x the mean, and every cluster must be non-empty.
+    #[test]
+    fn test_kmeans_clusters_are_balanced_on_skewed_data() {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let n = 10_000usize;
+        let k = 20usize;
+        let dim = 8usize;
+
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(n);
+        // 90% of points packed into a tiny blob around the origin.
+        for _ in 0..(n * 9 / 10) {
+            vectors.push((0..dim).map(|_| rng.gen_range(-0.01..0.01)).collect());
+        }
+        // 10% spread across a much wider region.
+        for _ in 0..(n / 10) {
+            vectors.push((0..dim).map(|_| rng.gen_range(-10.0..10.0)).collect());
+        }
+
+        let (_centroids, labels) = simple_kmeans(&vectors, k, 10).unwrap();
+        assert_eq!(labels.len(), n);
+
+        let mut counts = vec![0usize; k];
+        for &l in &labels {
+            assert!(l < k, "label {l} out of range");
+            counts[l] += 1;
+        }
+
+        let mean = n as f64 / k as f64;
+        let capacity = (mean * 1.5).ceil() as usize;
+        let max = *counts.iter().max().unwrap();
+        let min = *counts.iter().min().unwrap();
+        assert!(
+            max <= capacity,
+            "largest cluster {max} exceeds capacity {capacity} (mean {mean:.1}); counts={counts:?}"
+        );
+        assert!(min > 0, "empty cluster present; counts={counts:?}");
     }
 }

@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole-file with schema inference) — all via Arrow readers already in the tree.
 
 ### Performance
+- **IVF clustering is now balanced (k-means++ seeding + capacity cap).** The
+  index build slowed down over successive ingest chunks because `simple_kmeans`
+  seeded centroids at random, leaving dense regions uncovered: one 750k-row
+  segment produced 173 clusters where the largest held ~25x the mean (604 KB vs
+  443 B of row-id mappings). Since the per-bucket HNSW build is superlinear in
+  cluster size, those few oversized clusters dominated Pass 3. Centroids are now
+  seeded with **k-means++ (D² sampling)** and the final assignment is
+  **capacity-capped** at 1.5x the mean, spilling overflow points to their
+  next-nearest cluster. Regression test
+  `test_kmeans_clusters_are_balanced_on_skewed_data` asserts no cluster exceeds
+  the cap on a deliberately skewed dataset.
 - **Out-of-core HNSW-IVF build is now parallel and skips a full file re-scan.**
   Two changes to `HnswIvfIndex::build_from_file`:
   1. The per-bucket HNSW graphs (Pass 3) were built in a **sequential** loop —
