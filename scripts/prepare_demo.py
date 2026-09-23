@@ -444,6 +444,18 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
         _delete_shards()
 
 
+def _resume_offset(loaded: int, chunk_rows: int) -> int:
+    """Row offset to resume a chunked load from.
+
+    Writes are NOT chunk-atomic: the engine spills to a real commit whenever the
+    write buffer exceeds ``HYPERSTREAM_CACHE_GB`` (default 1 GB), so a killed
+    chunk leaves partial rows committed. Resuming from the exact committed count
+    avoids re-writing (and duplicating) those rows. ``chunk_rows`` is accepted
+    for call-site clarity but deliberately not used to round down.
+    """
+    return loaded
+
+
 def stage_load(rebuild: bool, quant: str, delete_shards: bool,
                chunk_rows: int, row_start: int, row_end: int):
     # hyperstreamdb self-tunes glibc arenas (mallopt M_ARENA_MAX=2) at import;
@@ -482,9 +494,11 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
     # ── nodes: parent orchestrates fresh-process chunks ──
     total = pq.ParquetFile(os.path.join(DATA, "wiki_nodes.parquet")).metadata.num_rows
 
-    # Resume from the last committed chunk. Each chunk commits atomically, so a
-    # crashed/killed run leaves a whole number of chunks behind; restarting
-    # continues from there instead of redoing (or skipping) the whole load.
+    # Resume from the EXACT committed row count. Chunks are NOT atomic: the
+    # write path spills to a real commit whenever the buffer exceeds
+    # HYPERSTREAM_CACHE_GB (default 1 GB), so a killed chunk leaves partial rows
+    # committed. Rounding down to the chunk boundary would re-write those rows
+    # and duplicate them, so continue from `loaded` itself.
     loaded = 0
     if _table_loaded(nodes_dir):
         try:
@@ -498,7 +512,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
         return
 
     if loaded > 0:
-        s = (loaded // chunk_rows) * chunk_rows
+        s = _resume_offset(loaded, chunk_rows)
         log(f"load nodes: resuming at {s:,} ({loaded:,} rows already committed)")
     else:
         shutil.rmtree(nodes_dir, ignore_errors=True)  # clear crashed-run shell

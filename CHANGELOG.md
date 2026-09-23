@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Demo load resume no longer duplicates rows.** `scripts/prepare_demo.py`
+  resumed from the rounded-down chunk boundary on the assumption that chunks
+  commit atomically. They don't: the write path spills to a real commit whenever
+  the buffer exceeds `HYPERSTREAM_CACHE_GB` (default 1 GB), so a killed chunk
+  leaves partial rows committed and the round-down re-wrote them. Resume now
+  continues from the exact committed row count (`_resume_offset`), guarded by a
+  regression test.
+
 ### Added
 - **Native ingest orchestrator (A4)**: `Table::ingest_async` /
   `table.ingest(paths, chunk_rows, parallelism, index_all, resume)` plans parquet
