@@ -2536,6 +2536,7 @@ class Table:
         index_all: bool = False,
         resume: bool = True,
         compact_after: bool = False,
+        memory_budget_gb: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Native bulk ingest of parquet files (plan → parallel execute → commit).
 
@@ -2553,6 +2554,10 @@ class Table:
             resume: skip units already recorded as complete (default True).
             compact_after: run ``rewrite_data_files`` after the ingest so segment
                 and manifest counts stay bounded at TB scale.
+            memory_budget_gb: return freed heap pages to the OS after a unit once
+                RSS exceeds this budget (GB). Falls back to the
+                ``HDB_INGEST_MEMORY_BUDGET_GB`` env var when unset; disabled if
+                neither is set.
 
         Returns:
             A report dict: ``units_total``, ``units_skipped``, ``units_committed``,
@@ -2561,7 +2566,13 @@ class Table:
         if isinstance(paths, str):
             paths = [paths]
         return self._inner.ingest(
-            list(paths), chunk_rows, parallelism, index_all, resume, compact_after
+            list(paths),
+            chunk_rows,
+            parallelism,
+            index_all,
+            resume,
+            compact_after,
+            memory_budget_gb,
         )
 
     def add_index(self, column: str, algorithm: Union[str, Dict[str, Any]] = "hnsw", **kwargs):

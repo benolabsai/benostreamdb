@@ -1,0 +1,184 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+//! Heap memory discipline for long-lived processes that rebuild indexes
+//! in-process (the A4 ingest orchestrator, the compaction daemon).
+//!
+//! ## The problem
+//! glibc gives each thread its own malloc arena and keeps freed memory in the
+//! arena that released it. Heavy small-allocation churn — the HNSW/TQ builders
+//! do millions of tiny allocations per segment — therefore ratchets RSS toward
+//! the sum of every arena's high-water mark. Measured on the whole-site
+//! Wikipedia node load: **82 GB RSS vs 18 GB live**. Capping arenas
+//! (`M_ARENA_MAX=2`, see `tame_glibc_arenas` in `lib.rs`) bounds the *number* of
+//! arenas but does not return the freed pages to the kernel.
+//!
+//! ## The fix
+//! `malloc_trim(0)` walks the arenas and releases free pages back to the OS. We
+//! call it at work-unit boundaries in the ingest loop, gated by a memory budget
+//! so the (arena-walking) cost is only paid when RSS has actually grown.
+//!
+//! ## Allocator evaluation (A4)
+//! - **glibc + `malloc_trim`** (chosen): zero new dependencies, works inside the
+//!   pyo3 extension, and the trim is explicit and observable.
+//! - **jemalloc**: better fragmentation behaviour and per-thread arenas, but a
+//!   global allocator swap affects the whole process (including CPython's own
+//!   allocations) and needs a feature flag + a platform matrix. Deferred.
+//! - **mimalloc**: rejected — static-TLS failure under pyo3.
+//! - **slab-allocating the HNSW/TQ builders**: the real fix (freed memory
+//!   becomes reusable), but a large refactor of the index builders. Deferred.
+//!
+//! The demo's *external* strategy (a fresh process per chunk) resets the
+//! allocator high-water mark entirely; `malloc_trim` is the in-process
+//! equivalent for the library's `ingest_async` path.
+
+/// Return freed heap pages to the OS.
+///
+/// No-op (returns `false`) on non-glibc platforms. Returns `true` when the
+/// allocator reported releasing memory.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+pub fn trim_heap() -> bool {
+    extern "C" {
+        fn malloc_trim(pad: usize) -> i32;
+    }
+    // SAFETY: `malloc_trim` is a glibc allocator entry point. It is safe to call
+    // from any thread and only affects the calling process's heap.
+    unsafe { malloc_trim(0) != 0 }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+pub fn trim_heap() -> bool {
+    false
+}
+
+/// Resident set size in bytes, if the platform exposes it.
+#[cfg(target_os = "linux")]
+pub fn rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn rss_bytes() -> Option<u64> {
+    None
+}
+
+/// Budget-gated heap trimming for a long-running loop.
+///
+/// Call [`HeapTrimPolicy::maybe_trim`] at work-unit boundaries. It only invokes
+/// [`trim_heap`] when RSS exceeds the budget, so the trim cost is paid only when
+/// memory has actually grown.
+#[derive(Debug, Clone)]
+pub struct HeapTrimPolicy {
+    budget_bytes: u64,
+    trims: u64,
+    released_bytes: u64,
+}
+
+impl HeapTrimPolicy {
+    /// Create a policy that trims whenever RSS exceeds `budget_bytes`.
+    pub fn new(budget_bytes: u64) -> Self {
+        Self {
+            budget_bytes,
+            trims: 0,
+            released_bytes: 0,
+        }
+    }
+
+    /// Resolve a policy from an explicit budget or the
+    /// `HDB_INGEST_MEMORY_BUDGET_GB` environment variable. Returns `None` when
+    /// neither is set (trimming disabled).
+    pub fn from_budget_or_env(budget_bytes: Option<u64>) -> Option<Self> {
+        if let Some(b) = budget_bytes {
+            return Some(Self::new(b));
+        }
+        let gb: f64 = std::env::var("HDB_INGEST_MEMORY_BUDGET_GB")
+            .ok()?
+            .parse()
+            .ok()?;
+        if gb <= 0.0 {
+            return None;
+        }
+        Some(Self::new((gb * 1024.0 * 1024.0 * 1024.0) as u64))
+    }
+
+    /// Trim if RSS exceeds the budget. Returns `true` when a trim ran.
+    pub fn maybe_trim(&mut self) -> bool {
+        let Some(rss) = rss_bytes() else {
+            return false;
+        };
+        if rss <= self.budget_bytes {
+            return false;
+        }
+        let trimmed = trim_heap();
+        self.trims += 1;
+        if let Some(after) = rss_bytes() {
+            self.released_bytes += rss.saturating_sub(after);
+        }
+        trimmed
+    }
+
+    /// Number of trims performed.
+    pub fn trims(&self) -> u64 {
+        self.trims
+    }
+
+    /// Total bytes observed released across all trims.
+    pub fn released_bytes(&self) -> u64 {
+        self.released_bytes
+    }
+
+    /// The configured budget in bytes.
+    pub fn budget_bytes(&self) -> u64 {
+        self.budget_bytes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_heap_is_callable_and_idempotent() {
+        // Must not panic on any platform. On glibc the return value is whether
+        // anything was released (false is valid when the heap is already tight).
+        let _ = trim_heap();
+        let _ = trim_heap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rss_bytes_reports_a_plausible_value() {
+        let rss = rss_bytes().expect("VmRSS should be readable on linux");
+        assert!(rss > 0, "rss should be positive, got {rss}");
+    }
+
+    #[test]
+    fn policy_only_trims_over_budget() {
+        // A huge budget means "never over" -> no trim, no counter movement.
+        let mut q = HeapTrimPolicy::new(u64::MAX);
+        assert!(!q.maybe_trim());
+        assert_eq!(q.trims(), 0);
+        assert_eq!(q.released_bytes(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn policy_trims_when_over_budget() {
+        // Budget of 0 means "always over" -> a trim runs and is counted.
+        let mut p = HeapTrimPolicy::new(0);
+        p.maybe_trim();
+        assert_eq!(p.trims(), 1);
+    }
+
+    #[test]
+    fn policy_from_explicit_budget() {
+        let p = HeapTrimPolicy::from_budget_or_env(Some(1024)).expect("explicit budget");
+        assert_eq!(p.budget_bytes(), 1024);
+    }
+}

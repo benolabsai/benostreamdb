@@ -92,6 +92,10 @@ enum TableCommands {
         /// Run compaction after the ingest
         #[arg(long, default_value_t = false)]
         compact: bool,
+        /// Return freed heap pages to the OS after a unit once RSS exceeds this
+        /// budget (GB). Falls back to HDB_INGEST_MEMORY_BUDGET_GB when unset.
+        #[arg(long)]
+        memory_budget_gb: Option<f64>,
     },
 }
 
@@ -123,6 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 row_start,
                 row_end,
                 compact,
+                memory_budget_gb,
             } => {
                 ingest_table(
                     &uri,
@@ -134,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     row_start,
                     row_end,
                     compact,
+                    memory_budget_gb,
                 )
                 .await?
             }
@@ -198,6 +204,7 @@ async fn ingest_table(
     row_start: Option<usize>,
     row_end: Option<usize>,
     compact: bool,
+    memory_budget_gb: Option<f64>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use hyperstreamdb::core::table::IngestOptions;
 
@@ -218,6 +225,9 @@ async fn ingest_table(
         index_all,
         resume: true,
         compact_after: compact,
+        memory_budget_bytes: memory_budget_gb
+            .filter(|gb| *gb > 0.0)
+            .map(|gb| (gb * 1024.0 * 1024.0 * 1024.0) as u64),
     };
 
     let start = Instant::now();
