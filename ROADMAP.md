@@ -503,6 +503,7 @@ hdb repair s3://bucket/table
 - [x] **Commit strategy**: the coordinator commits each completed segment through the OCC manifest CAS (`CommitMetadata::skip_missing_remove_paths`), serialized so manifest versions stay ordered. ✅
 - [x] **Resume & idempotency**: completed work-unit keys are recorded in a `_ingest_state.json` sidecar; a re-run skips them and resumes at the unit boundary. ✅
 - [x] **Python surface**: `table.ingest(paths, chunk_rows=None, parallelism=None, index_all=False, resume=True, compact_after=False)` returns a report dict (`units_total/skipped/committed`, `rows_ingested`, `segments`). ✅
+- [x] **Multi-format inputs**: the planner detects `.parquet` (row-range units) vs `.csv`/`.json`/`.ndjson`/`.arrow`/`.ipc` (one unit per file, streamed whole-file); `read_range` dispatches to the matching Arrow reader with schema inference. ✅
 - [x] **CLI surface**: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N] [--parallelism N] [--index-all] [--compact]`; `--row-start/--row-end` is the serverless thin-runner mode (`Table::ingest_range_async`), each runner committing independently via CAS. ✅
 - [x] **Scheduled compaction**: `IngestOptions::compact_after` drives `rewrite_data_files` at the end of an ingest so segment/manifest counts stay bounded at TB scale. ✅
 

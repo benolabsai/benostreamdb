@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N]
   [--parallelism N] [--index-all] [--compact]`, with `--row-start/--row-end` as
   the serverless thin-runner mode (`Table::ingest_range_async`).
+  **Multi-format inputs**: `.parquet` (row-range units) plus `.csv`, `.json` /
+  `.ndjson`, and `.arrow` / `.ipc` / `.feather` (one unit per file, streamed
+  whole-file with schema inference) — all via Arrow readers already in the tree.
 
 ### Performance
 - **Out-of-core HNSW-IVF build is now parallel and skips a full file re-scan.**
