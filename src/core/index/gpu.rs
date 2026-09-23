@@ -1320,7 +1320,16 @@ mod tests {
     #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
     #[test]
     fn cuda_backend_jit_compiles_when_a_device_is_present() {
-        // Skip on machines without a CUDA device (e.g. CI).
+        // Require a *real* NVIDIA device node. CI installs CUDA stubs
+        // (`libcuda.so` without a GPU): `CudaDevice::count()` still reports a
+        // device there, but running the nvrtc JIT OOMs the runner. The kernel
+        // driver only creates `/dev/nvidiactl` when a GPU is actually present.
+        let has_device_node = std::path::Path::new("/dev/nvidiactl").exists()
+            || std::path::Path::new("/dev/nvidia0").exists();
+        if !has_device_node {
+            eprintln!("skipping: no NVIDIA device node (stub driver or no GPU)");
+            return;
+        }
         let has_device = cudarc::driver::CudaDevice::count()
             .map(|c| c > 0)
             .unwrap_or(false);
@@ -1338,10 +1347,13 @@ mod tests {
             return;
         }
         // A *usable* device is required. CI installs CUDA stubs (`libcuda.so`
-        // without a GPU): they report a device count but cannot create a
-        // context, so treat an init failure as a skip, not a test failure. On a
-        // real GPU this asserts the JIT path compiles.
-        let Ok(backend) = CudaBackend::new(0) else {
+        // without a GPU): they can even "succeed" at device/module creation with
+        // garbage handles, and cudarc panics when it can't find the driver. Catch
+        // both the error and the panic and skip — on a real GPU this asserts the
+        // JIT path compiles.
+        let backend =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0)));
+        let Ok(Ok(backend)) = backend else {
             eprintln!("skipping: no usable CUDA device (stub driver?)");
             return;
         };
