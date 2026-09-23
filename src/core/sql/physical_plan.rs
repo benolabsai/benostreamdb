@@ -30,6 +30,9 @@ pub struct HyperStreamExec {
     base_schema: SchemaRef, // Original table schema for projection
     schema: SchemaRef,      // Projected schema
     properties: PlanProperties,
+    /// Human-readable breakdown of why segments were pruned by partition /
+    /// statistics rules, surfaced in `EXPLAIN` output.
+    pruning_summary: Option<String>,
 }
 
 impl HyperStreamExec {
@@ -72,8 +75,16 @@ impl HyperStreamExec {
             base_schema,
             schema: projected_schema,
             properties,
+            pruning_summary: None,
         })
     }
+
+    /// Attach a pruning-reason breakdown to be shown in `EXPLAIN` output.
+    pub fn with_pruning_summary(mut self, summary: Option<String>) -> Self {
+        self.pruning_summary = summary;
+        self
+    }
+
     pub fn projection(&self) -> Option<&Vec<usize>> {
         self.projection.as_ref()
     }
@@ -99,7 +110,11 @@ impl DisplayAs for HyperStreamExec {
                     self.filter,
                     self.projection,
                     self.limit
-                )
+                )?;
+                if let Some(ref summary) = self.pruning_summary {
+                    write!(f, ", pruning=[{}]", summary)?;
+                }
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -131,14 +146,17 @@ impl ExecutionPlan for HyperStreamExec {
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HyperStreamExec::new(
-            self.table.clone(),
-            self.partitions.clone(),
-            self.projection.clone(),
-            self.filter.clone(),
-            self.limit,
-            self.base_schema.clone(), // Use base schema for reprojection
-        )?))
+        Ok(Arc::new(
+            HyperStreamExec::new(
+                self.table.clone(),
+                self.partitions.clone(),
+                self.projection.clone(),
+                self.filter.clone(),
+                self.limit,
+                self.base_schema.clone(), // Use base schema for reprojection
+            )?
+            .with_pruning_summary(self.pruning_summary.clone()),
+        ))
     }
 
     fn execute(

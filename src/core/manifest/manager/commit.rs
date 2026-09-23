@@ -95,9 +95,18 @@ impl ManifestManager {
 
                 let writer = crate::core::iceberg::IcebergWriter::new();
                 let default_schema = crate::core::manifest::Schema::default();
-                let table_schema = current_manifest
-                    .schemas
-                    .last()
+                // Prefer the schema being written in this commit. On the very
+                // first commit `current_manifest.schemas` is still empty, so
+                // falling back to it would hand the manifest writer an empty
+                // schema — `bounds_avro_values` then finds no field ids, writes
+                // no lower/upper bounds, and the reader reconstructs empty
+                // `column_stats` for the first segment (making stats pruning
+                // silently miss it).
+                let table_schema = metadata
+                    .updated_schemas
+                    .as_ref()
+                    .and_then(|s| s.last())
+                    .or_else(|| current_manifest.schemas.last())
                     .unwrap_or(&default_schema)
                     .clone();
                 let table_spec = current_manifest.partition_spec.clone();

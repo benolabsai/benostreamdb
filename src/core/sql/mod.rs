@@ -284,6 +284,10 @@ impl TableProvider for HyperStreamTableProvider {
             .await
             .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
 
+        // Keep the pre-pruning segment list so we can report the partition /
+        // statistics pruning breakdown in the DataFusion plan (EXPLAIN).
+        let all_segments = segments.clone();
+
         // Row-value IN-list pushdown over the primary key (A1.7).
         //
         // When the pushed-down predicate is a tuple set like
@@ -544,14 +548,57 @@ impl TableProvider for HyperStreamTableProvider {
 
             Ok(Arc::new(merge_exec))
         } else {
-            Ok(Arc::new(HyperStreamExec::new(
-                self.table.clone(),
-                partitions,
-                projection.cloned(),
-                best_filter,
-                limit,
-                self.schema(),
-            )?))
+            // Surface the same partition/statistics pruning breakdown that the
+            // engine's own `explain()` prints, so a single DataFusion EXPLAIN
+            // shows everything. Metrics are suppressed: planning must not
+            // inflate the operational pruning counters.
+            let pruning_summary = {
+                let planner = crate::core::planner::QueryPlanner::new();
+                let mut sub_filters: Vec<crate::core::planner::QueryFilter> = Vec::new();
+                for f in filters {
+                    let fe = crate::core::planner::FilterExpr::DataFusion(f.clone());
+                    sub_filters.extend(fe.extract_and_conditions());
+                }
+                if sub_filters.is_empty() {
+                    None
+                } else {
+                    let mut reasons: std::collections::HashMap<&'static str, usize> =
+                        std::collections::HashMap::new();
+                    for entry in &all_segments {
+                        if let Some(reason) = sub_filters
+                            .iter()
+                            .find_map(|f| planner.classify_condition(entry, f, false))
+                        {
+                            *reasons.entry(reason.label()).or_insert(0) += 1;
+                        }
+                    }
+                    if reasons.is_empty() {
+                        None
+                    } else {
+                        let mut pairs: Vec<(&'static str, usize)> = reasons.into_iter().collect();
+                        pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+                        Some(
+                            pairs
+                                .into_iter()
+                                .map(|(label, count)| format!("{}={}", label, count))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                    }
+                }
+            };
+
+            Ok(Arc::new(
+                HyperStreamExec::new(
+                    self.table.clone(),
+                    partitions,
+                    projection.cloned(),
+                    best_filter,
+                    limit,
+                    self.schema(),
+                )?
+                .with_pruning_summary(pruning_summary),
+            ))
         }
     }
 
@@ -664,6 +711,59 @@ mod tests {
             display.contains("HyperStreamExec: partitions=3")
                 || display.contains("VectorMergeExec: k=100"),
             "Plan did not match expected structure. Plan was: {}",
+            display
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_plan_surfaces_pruning_breakdown() -> datafusion::error::Result<()> {
+        let uri = format!(
+            "file://{}",
+            std::env::temp_dir()
+                .join("test_scan_pruning_summary")
+                .to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(uri.strip_prefix("file://").unwrap());
+
+        let table = Table::new_async(uri.clone()).await.unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // Three single-row segments with ids 1, 2, 3.
+        for v in [1, 2, 3] {
+            let batch =
+                RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![v]))])
+                    .unwrap();
+            table.write_async(vec![batch]).await.unwrap();
+            table.commit_async().await.unwrap();
+        }
+
+        let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(table)));
+        let ctx = SessionContext::new();
+        ctx.register_table("t", provider).unwrap();
+
+        // `id >= 100` cannot match any segment (max id is 3), so all three
+        // should be pruned by statistics and the reason surfaced in the plan.
+        let df = ctx.sql("SELECT * FROM t WHERE id >= 100").await?;
+        let physical_plan = ctx.state().create_physical_plan(df.logical_plan()).await?;
+        let display = format!(
+            "{}",
+            datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true)
+        );
+        println!("Plan: {}", display);
+
+        assert!(
+            display.contains("pruning=["),
+            "expected pruning breakdown in plan, got: {}",
+            display
+        );
+        // All three segments must be pruned. This also pins the first-commit
+        // stats fix: before it, the first segment's manifest entry carried no
+        // bounds, so its `column_stats` came back empty and it was not pruned.
+        assert!(
+            display.contains("column max < filter min=3"),
+            "expected all 3 segments pruned by stats, got: {}",
             display
         );
 
