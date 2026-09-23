@@ -35,6 +35,9 @@ pub struct IngestOptions {
     pub index_all: bool,
     /// Skip work units already recorded as complete in the resume sidecar.
     pub resume: bool,
+    /// Run `rewrite_data_files` after the ingest so segment/manifest counts stay
+    /// bounded at TB scale (chunked loads create many small segments by design).
+    pub compact_after: bool,
 }
 
 impl Default for IngestOptions {
@@ -44,6 +47,7 @@ impl Default for IngestOptions {
             parallelism: 4,
             index_all: false,
             resume: true,
+            compact_after: false,
         }
     }
 }
@@ -135,6 +139,37 @@ impl Table {
         options: IngestOptions,
     ) -> Result<IngestReport> {
         let planned = self.plan_ingest(paths, options.chunk_rows)?;
+        let report = self.ingest_units_async(planned, &options).await?;
+        if options.compact_after {
+            self.rewrite_data_files_async(None).await?;
+        }
+        Ok(report)
+    }
+
+    /// Ingest a single explicit row range — the serverless thin-runner entry
+    /// point (`hdb ingest --range …`). Each runner commits independently via CAS.
+    pub async fn ingest_range_async(
+        &self,
+        path: &str,
+        row_start: usize,
+        row_end: usize,
+        options: IngestOptions,
+    ) -> Result<IngestReport> {
+        let report = self
+            .ingest_units_async(vec![(path.to_string(), row_start, row_end)], &options)
+            .await?;
+        if options.compact_after {
+            self.rewrite_data_files_async(None).await?;
+        }
+        Ok(report)
+    }
+
+    /// Core: execute a pre-planned list of work units.
+    async fn ingest_units_async(
+        &self,
+        planned: Vec<(String, usize, usize)>,
+        options: &IngestOptions,
+    ) -> Result<IngestReport> {
         let mut report = IngestReport {
             units_total: planned.len(),
             ..Default::default()
@@ -343,8 +378,7 @@ mod tests {
                 IngestOptions {
                     chunk_rows: 1000,
                     parallelism: 2,
-                    index_all: false,
-                    resume: true,
+                    ..Default::default()
                 },
             )
             .await?;
@@ -360,8 +394,7 @@ mod tests {
                 IngestOptions {
                     chunk_rows: 1000,
                     parallelism: 2,
-                    index_all: false,
-                    resume: true,
+                    ..Default::default()
                 },
             )
             .await?;
