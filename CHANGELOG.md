@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **Out-of-core HNSW-IVF build is now parallel and skips a full file re-scan.**
+  Two changes to `HnswIvfIndex::build_from_file`:
+  1. The per-bucket HNSW graphs (Pass 3) were built in a **sequential** loop —
+     the dominant cost of a large index build. Buckets are independent and
+     bounded in size, so they now build with `rayon` (`into_par_iter`), using
+     all cores.
+  2. The temp vector file written by `build_vector_index` now carries a
+     self-describing header (`magic` + `dim`); the builder derives the vector
+     count from the file length instead of re-reading the whole file just to
+     count vectors (a multi-GB read per segment). Legacy header-less files still
+     work via the old full-scan path.
+  Tuning knobs (no rebuild): `HDB_HNSW_N_LISTS`, `HDB_HNSW_M`,
+  `HDB_HNSW_EF_CONSTRUCTION`.
+
 ## [0.9.0] - 2026-09-23
 
 ### Fixed
