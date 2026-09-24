@@ -1,0 +1,243 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+//! Heap memory discipline for long-lived processes that rebuild indexes
+//! in-process (the A4 ingest orchestrator, the compaction daemon).
+//!
+//! ## The problem
+//! glibc gives each thread its own malloc arena and keeps freed memory in the
+//! arena that released it. Heavy small-allocation churn — the HNSW/TQ builders
+//! do millions of tiny allocations per segment — therefore ratchets RSS toward
+//! the sum of every arena's high-water mark. Measured on the whole-site
+//! Wikipedia node load: **82 GB RSS vs 18 GB live**. Capping arenas
+//! (`M_ARENA_MAX=2`, see `tame_glibc_arenas` in `lib.rs`) bounds the *number* of
+//! arenas but does not return the freed pages to the kernel.
+//!
+//! ## The fix
+//! `malloc_trim(0)` walks the arenas and releases free pages back to the OS. We
+//! call it at work-unit boundaries in the ingest loop, gated by a memory budget
+//! so the (arena-walking) cost is only paid when RSS has actually grown.
+//!
+//! ## Allocator evaluation (A4)
+//! - **jemalloc** (chosen): better fragmentation behaviour and returns memory to the OS
+//!   naturally. With `tikv-jemallocator` without the `unprefixed` feature, it correctly
+//!   only routes Rust allocations to jemalloc and avoids corrupting the Python runtime's
+//!   own malloc state.
+//! - **glibc + `malloc_trim`**: caused OS/driver deadlocks when the NVIDIA GPU driver
+//!   was active concurrently with heap trimming. Removed.
+//! - **mimalloc**: rejected — static-TLS failure under pyo3.
+//! - **slab-allocating the HNSW/TQ builders**: the real fix (freed memory
+//!   becomes reusable), but a large refactor of the index builders. Deferred.
+//!
+//! The demo's *external* strategy (a fresh process per chunk) resets the
+//! allocator high-water mark entirely; `malloc_trim` is the in-process
+//! equivalent for the library's `ingest_async` path.
+
+/// Return freed heap pages to the OS.
+pub fn trim_heap() -> bool {
+    // No-op because jemalloc automatically returns memory to the OS
+    // via background threads.
+    false
+}
+
+/// Resident set size in bytes, if the platform exposes it.
+///
+/// This is the single RSS source for the process: the ingest back-pressure
+/// high-water mark and the heap-trim policy both read it, so they agree on what
+/// "over budget" means.
+#[cfg(target_os = "linux")]
+pub fn rss_bytes() -> Option<u64> {
+    // `VmRSS` is reported in kB, so no page-size assumption is needed.
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+/// macOS has no `/proc`; ask the Mach kernel for the task's resident size.
+#[cfg(target_os = "macos")]
+pub fn rss_bytes() -> Option<u64> {
+    unsafe {
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        let res = libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            &mut info as *mut _ as libc::task_info_t,
+            &mut count,
+        );
+        if res == libc::KERN_SUCCESS {
+            Some(info.resident_size)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn rss_bytes() -> Option<u64> {
+    None
+}
+
+/// Default RSS budget for opportunistic trimming, in GiB.
+///
+/// Retained for callers that want a fixed budget; the derived default is
+/// [`crate::core::resources::default_memory_budget_bytes`].
+pub const DEFAULT_MEMORY_BUDGET_GB: f64 = 8.0;
+
+/// Resolve the RSS trim budget in bytes.
+///
+/// A positive `BSDB_INGEST_MEMORY_BUDGET_GB` overrides `default_gb`; otherwise
+/// `default_gb` applies. The budget is always active.
+pub fn memory_budget_bytes(default_gb: f64) -> u64 {
+    let gb = std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|g| *g > 0.0)
+        .unwrap_or(default_gb);
+    (gb * 1024.0 * 1024.0 * 1024.0) as u64
+}
+
+/// Trim the heap if RSS is over budget.
+///
+/// Convenience wrapper for one-shot trim sites (flush boundaries, the end of a
+/// background index build) that don't keep a [`HeapTrimPolicy`]. Reading RSS is
+/// a `/proc` read, so the under-budget path is cheap.
+pub fn trim_if_over_budget(default_gb: f64) -> bool {
+    if rss_bytes()
+        .map(|r| r > memory_budget_bytes(default_gb))
+        .unwrap_or(false)
+    {
+        trim_heap()
+    } else {
+        false
+    }
+}
+
+/// Budget-gated heap trimming for a long-running loop.
+///
+/// Call [`HeapTrimPolicy::maybe_trim`] at work-unit boundaries. It only invokes
+/// [`trim_heap`] when RSS exceeds the budget, so the trim cost is paid only when
+/// memory has actually grown.
+#[derive(Debug, Clone)]
+pub struct HeapTrimPolicy {
+    budget_bytes: u64,
+    trims: u64,
+    released_bytes: u64,
+}
+
+impl HeapTrimPolicy {
+    /// Create a policy that trims whenever RSS exceeds `budget_bytes`.
+    pub fn new(budget_bytes: u64) -> Self {
+        Self {
+            budget_bytes,
+            trims: 0,
+            released_bytes: 0,
+        }
+    }
+
+    /// Resolve a policy from an explicit budget or the
+    /// `BSDB_INGEST_MEMORY_BUDGET_GB` environment variable, falling back to the
+    /// memory-derived default. Trimming is always active.
+    pub fn from_budget_or_env(budget_bytes: Option<u64>) -> Self {
+        if let Some(b) = budget_bytes {
+            return Self::new(b);
+        }
+        if let Some(gb) = std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|g| *g > 0.0)
+        {
+            return Self::new((gb * 1024.0 * 1024.0 * 1024.0) as u64);
+        }
+        Self::new(crate::core::resources::default_memory_budget_bytes())
+    }
+
+    /// Trim if RSS exceeds the budget. Returns `true` when a trim ran.
+    pub fn maybe_trim(&mut self) -> bool {
+        let Some(rss) = rss_bytes() else {
+            return false;
+        };
+        if rss <= self.budget_bytes {
+            return false;
+        }
+        let trimmed = trim_heap();
+        self.trims += 1;
+        if let Some(after) = rss_bytes() {
+            self.released_bytes += rss.saturating_sub(after);
+        }
+        trimmed
+    }
+
+    /// Number of trims performed.
+    pub fn trims(&self) -> u64 {
+        self.trims
+    }
+
+    /// Total bytes observed released across all trims.
+    pub fn released_bytes(&self) -> u64 {
+        self.released_bytes
+    }
+
+    /// The configured budget in bytes.
+    pub fn budget_bytes(&self) -> u64 {
+        self.budget_bytes
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_heap_is_callable_and_idempotent() {
+        // Must not panic on any platform. On glibc the return value is whether
+        // anything was released (false is valid when the heap is already tight).
+        let _ = trim_heap();
+        let _ = trim_heap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rss_bytes_reports_a_plausible_value() {
+        let rss = rss_bytes().expect("VmRSS should be readable on linux");
+        assert!(rss > 0, "rss should be positive, got {rss}");
+    }
+
+    #[test]
+    fn policy_only_trims_over_budget() {
+        // A huge budget means "never over" -> no trim, no counter movement.
+        let mut q = HeapTrimPolicy::new(u64::MAX);
+        assert!(!q.maybe_trim());
+        assert_eq!(q.trims(), 0);
+        assert_eq!(q.released_bytes(), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn policy_trims_when_over_budget() {
+        // Budget of 0 means "always over" -> a trim runs and is counted.
+        let mut p = HeapTrimPolicy::new(0);
+        p.maybe_trim();
+        assert_eq!(p.trims(), 1);
+    }
+
+    #[test]
+    fn policy_from_explicit_budget() {
+        let p = HeapTrimPolicy::from_budget_or_env(Some(1024));
+        assert_eq!(p.budget_bytes(), 1024);
+    }
+
+    #[test]
+    fn policy_from_env_or_default_is_always_active() {
+        // No explicit budget and (in the test env) no override: the policy must
+        // still carry a positive, memory-derived budget rather than disabling.
+        if std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB").is_err() {
+            let p = HeapTrimPolicy::from_budget_or_env(None);
+            assert!(p.budget_bytes() > 0);
+        }
+    }
+}

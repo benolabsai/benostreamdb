@@ -1,0 +1,282 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+use std::any::Any;
+use std::sync::Arc;
+pub mod index_join;
+pub mod vector_merge;
+pub mod vector_scan;
+use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::Partitioning;
+use datafusion::physical_plan::{
+    DisplayAs, ExecutionPlan, PlanProperties, SendableRecordBatchStream,
+};
+
+use crate::core::manifest::ManifestEntry;
+use crate::core::table::Table;
+
+#[derive(Debug)]
+pub struct BenoStreamExec {
+    pub table: Arc<Table>,
+    // Partitions: Each partition is a list of segments to read
+    pub partitions: Vec<Vec<ManifestEntry>>,
+    projection: Option<Vec<usize>>,
+    filter: Option<String>,
+    limit: Option<usize>,
+    base_schema: SchemaRef, // Original table schema for projection
+    schema: SchemaRef,      // Projected schema
+    properties: PlanProperties,
+    /// Human-readable breakdown of why segments were pruned by partition /
+    /// statistics rules, surfaced in `EXPLAIN` output.
+    pruning_summary: Option<String>,
+}
+
+impl BenoStreamExec {
+    pub fn new(
+        table: Arc<Table>,
+        partitions: Vec<Vec<ManifestEntry>>,
+        projection: Option<Vec<usize>>,
+        filter: Option<String>,
+        limit: Option<usize>,
+        base_schema: SchemaRef,
+    ) -> Result<Self> {
+        // Calculate projected schema
+        let projected_schema = if let Some(ref proj) = projection {
+            // Validate projection indices
+            if proj.iter().any(|&i| i >= base_schema.fields().len()) {
+                // If projection is invalid, use base schema
+                base_schema.clone()
+            } else {
+                Arc::new(base_schema.project(proj).map_err(DataFusionError::from)?)
+            }
+        } else {
+            base_schema.clone()
+        };
+
+        let partition_count = partitions.len().max(1);
+
+        let properties = PlanProperties::new(
+            EquivalenceProperties::new(projected_schema.clone()),
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        );
+
+        Ok(Self {
+            table,
+            partitions,
+            projection,
+            filter,
+            limit,
+            base_schema,
+            schema: projected_schema,
+            properties,
+            pruning_summary: None,
+        })
+    }
+
+    /// Attach a pruning-reason breakdown to be shown in `EXPLAIN` output.
+    pub fn with_pruning_summary(mut self, summary: Option<String>) -> Self {
+        self.pruning_summary = summary;
+        self
+    }
+
+    pub fn projection(&self) -> Option<&Vec<usize>> {
+        self.projection.as_ref()
+    }
+
+    pub fn filter_str(&self) -> Option<&str> {
+        self.filter.as_deref()
+    }
+}
+
+impl DisplayAs for BenoStreamExec {
+    fn fmt_as(
+        &self,
+        t: datafusion::physical_plan::DisplayFormatType,
+        f: &mut std::fmt::Formatter,
+    ) -> std::fmt::Result {
+        match t {
+            datafusion::physical_plan::DisplayFormatType::Default
+            | datafusion::physical_plan::DisplayFormatType::Verbose => {
+                write!(
+                    f,
+                    "BenoStreamExec: partitions={}, filter={:?}, projection={:?}, limit={:?}",
+                    self.partitions.len(),
+                    self.filter,
+                    self.projection,
+                    self.limit
+                )?;
+                if let Some(ref summary) = self.pruning_summary {
+                    write!(f, ", pruning=[{}]", summary)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+impl ExecutionPlan for BenoStreamExec {
+    fn name(&self) -> &str {
+        "BenoStreamExec"
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(
+            BenoStreamExec::new(
+                self.table.clone(),
+                self.partitions.clone(),
+                self.projection.clone(),
+                self.filter.clone(),
+                self.limit,
+                self.base_schema.clone(), // Use base schema for reprojection
+            )?
+            .with_pruning_summary(self.pruning_summary.clone()),
+        ))
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        if partition >= self.partitions.len() && !self.partitions.is_empty() {
+            return Err(DataFusionError::Internal(format!(
+                "BenoStreamExec invalid partition {} (count {})",
+                partition,
+                self.partitions.len()
+            )));
+        }
+
+        let table = self.table.clone();
+        let filter = self.filter.clone();
+
+        // If no partitions (empty table), return empty stream
+        let entries = if self.partitions.is_empty() {
+            Vec::new()
+        } else {
+            self.partitions[partition].clone()
+        };
+
+        // Resolve usage of projection to column names
+        let original_schema = table.arrow_schema();
+        let column_names = if let Some(ref proj) = self.projection {
+            let names: Vec<String> = proj
+                .iter()
+                .map(|i| original_schema.field(*i).name().clone())
+                .collect();
+            Some(names)
+        } else {
+            None
+        };
+
+        // Pre-convert column names to &str slice
+        let col_names_owned = column_names;
+
+        let expected_schema = self.schema.clone();
+        let expected_schema_inner = expected_schema.clone();
+        use crate::core::planner::QueryFilter;
+
+        let stream = async_stream::stream! {
+            // For each segment in this partition
+            for entry in entries {
+                let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+                let col_slice = col_refs.as_deref();
+
+                // Apply filter parsing inside the loop or pre-parse?
+                // read_segment handles parsing if we pass QueryFilter.
+                // But here we have string filter.
+                // Better to parse once?
+                // Standard scan
+                let version = 1;
+                let query_filter = if let Some(ref f) = filter {
+                     QueryFilter::parse_multi(f).into_iter().next()
+                } else {
+                     None
+                };
+
+                let stream = table.stream_segment(&entry, query_filter.as_ref(), version, col_slice).await;
+                match stream {
+                    Ok(mut st) => {
+                        use futures::StreamExt;
+                        while let Some(batch) = st.next().await {
+                            match batch {
+                                Ok(b) => yield Ok(b),
+                                Err(e) => {
+                                    tracing::error!("Error reading segment: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open segment stream: {}", e);
+                    }
+                }
+            }
+
+            // If this is partition 0, also include in-memory write buffer data
+            if partition == 0 {
+                let col_refs: Option<Vec<&str>> = col_names_owned.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+                let col_slice = col_refs.as_deref();
+
+                let query_filter = if let Some(ref f) = filter {
+                    use crate::core::planner::QueryFilter;
+                    QueryFilter::parse(f)
+                } else {
+                    None
+                };
+
+                match table.read_write_buffer(query_filter.as_ref(), col_slice) {
+                    Ok(batches) => {
+                        for batch in batches {
+                            let mut schemas_match = batch.schema().fields().len() == expected_schema_inner.fields().len();
+                            if schemas_match {
+                                for (f1, f2) in batch.schema().fields().iter().zip(expected_schema_inner.fields().iter()) {
+                                    if f1.name() != f2.name() || f1.data_type() != f2.data_type() {
+                                        schemas_match = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !schemas_match {
+                                yield Err(DataFusionError::Execution(format!("Write buffer schema mismatch: expected {:?}, got {:?}", expected_schema_inner, batch.schema())));
+                                return;
+                            }
+                            yield Ok(batch);
+                        }
+                    },
+                    Err(e) => yield Err(DataFusionError::Execution(e.to_string())),
+                }
+            }
+        };
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            expected_schema,
+            Box::pin(stream),
+        )))
+    }
+}

@@ -1,0 +1,182 @@
+"""
+Unit tests for GPU Context API
+
+Tests Requirements: 2.1, 2.2, 2.3, 2.6
+"""
+import pytest
+import benostreamdb as bsdb
+
+
+def test_auto_detect():
+    """Test that auto_detect returns a valid ComputeContext"""
+    ctx = bsdb.ComputeContext.auto_detect()
+    assert ctx is not None
+    assert isinstance(ctx.backend, str)
+    assert ctx.backend in ['cpu', 'cuda', 'rocm', 'mps', 'intel']
+    assert isinstance(ctx.device_id, int)
+    print(f"Auto-detected backend: {ctx.backend}, device_id: {ctx.device_id}")
+
+
+def test_cpu_backend_creation():
+    """Test creating a CPU backend context"""
+    ctx = bsdb.ComputeContext('cpu')
+    assert ctx.backend == 'cpu'
+    assert ctx.device_id == -1  # Default CPU index
+
+
+def test_cpu_backend_with_device_id():
+    """Test creating a CPU backend with custom device_id"""
+    ctx = bsdb.ComputeContext('cpu', index=-1)
+    assert ctx.backend == 'cpu'
+    assert ctx.device_id == -1
+
+
+def test_backend_property():
+    """Test that backend property returns the correct backend name"""
+    ctx = bsdb.ComputeContext('cpu')
+    assert ctx.backend == 'cpu'
+    
+    # Test with auto_detect
+    ctx2 = bsdb.ComputeContext.auto_detect()
+    backend = ctx2.backend
+    assert backend in ['cpu', 'cuda', 'rocm', 'mps', 'intel']
+
+
+def test_device_id_property():
+    """Test that device_id property returns the correct device ID"""
+    ctx = bsdb.ComputeContext('cpu', index=5)
+    assert ctx.device_id == 5
+
+
+def test_list_available_backends():
+    """Test that list_available_backends returns a list of backend names"""
+    backends = bsdb.ComputeContext.list_available_backends()
+    assert isinstance(backends, list)
+    assert len(backends) > 0
+    assert 'cpu' in backends  # CPU should always be available
+    
+    # All backends should be valid strings
+    for backend in backends:
+        assert isinstance(backend, str)
+        assert backend in ['cpu', 'cuda', 'rocm', 'mps', 'intel']
+    
+    print(f"Available backends: {backends}")
+
+
+def test_unavailable_backend_error():
+    """Test that requesting an unavailable backend raises RuntimeError"""
+    backends = bsdb.ComputeContext.list_available_backends()
+    
+    # Try to create a context with a backend that's not available
+    # ROCM and Intel use WGPU which does not always error on immediate creation but during execution
+    all_backends = ['cuda', 'mps']
+    unavailable = [b for b in all_backends if b not in backends]
+    
+    for backend in unavailable:
+        with pytest.raises(RuntimeError) as exc_info:
+            bsdb.ComputeContext(backend)
+        
+        # Check that error message mentions available backends
+        error_msg = str(exc_info.value)
+        assert 'available' in error_msg.lower()
+        print(f"Correctly raised error for unavailable backend '{backend}': {error_msg}")
+
+
+def test_invalid_backend_error():
+    """Test that requesting an invalid backend raises ValueError"""
+    with pytest.raises(ValueError) as exc_info:
+        bsdb.ComputeContext('invalid_backend')
+    
+    error_msg = str(exc_info.value)
+    assert 'unknown device type' in error_msg.lower()
+    print(f"Correctly raised error for invalid backend: {error_msg}")
+
+
+def test_get_stats():
+    """Test that get_stats returns a dictionary with performance metrics"""
+    ctx = bsdb.ComputeContext.auto_detect()
+    stats = ctx.get_stats()
+    
+    assert isinstance(stats, dict)
+    assert 'total_kernel_launches' in stats
+    assert 'total_gpu_time_ms' in stats
+    assert 'total_cpu_time_ms' in stats
+    assert 'total_vectors_processed' in stats
+    assert 'memory_transfers_mb' in stats
+    
+    # All values should be numeric
+    assert isinstance(stats['total_kernel_launches'], int)
+    assert isinstance(stats['total_gpu_time_ms'], float)
+    assert isinstance(stats['total_cpu_time_ms'], float)
+    assert isinstance(stats['total_vectors_processed'], int)
+    assert isinstance(stats['memory_transfers_mb'], float)
+    
+    # Initial values should be zero
+    assert stats['total_kernel_launches'] == 0
+    assert stats['total_gpu_time_ms'] == 0.0
+    assert stats['total_cpu_time_ms'] == 0.0
+    assert stats['total_vectors_processed'] == 0
+    assert stats['memory_transfers_mb'] == 0.0
+    
+    print(f"Stats: {stats}")
+
+
+def test_reset_stats():
+    """Test that reset_stats clears all performance counters"""
+    ctx = bsdb.ComputeContext.auto_detect()
+    
+    # Get initial stats
+    stats1 = ctx.get_stats()
+    assert stats1['total_kernel_launches'] == 0
+    
+    # Reset stats
+    ctx.reset_stats()
+    
+    # Get stats again
+    stats2 = ctx.get_stats()
+    assert stats2['total_kernel_launches'] == 0
+    assert stats2['total_gpu_time_ms'] == 0.0
+    
+    print("reset_stats() works correctly")
+
+
+def test_repr():
+    """Test that __repr__ returns a useful string representation"""
+    ctx = bsdb.ComputeContext('cpu', index=-1)
+    repr_str = repr(ctx)
+    
+    assert isinstance(repr_str, str)
+    assert 'Device' in repr_str
+    assert 'cpu' in repr_str
+    assert '-1' in repr_str
+    
+    print(f"repr: {repr_str}")
+
+
+def test_case_insensitive_backend():
+    """Test that backend names are case-insensitive"""
+    ctx1 = bsdb.ComputeContext('CPU')
+    assert ctx1.backend == 'cpu'
+    
+    ctx2 = bsdb.ComputeContext('Cpu')
+    assert ctx2.backend == 'cpu'
+    
+    ctx3 = bsdb.ComputeContext('cpu')
+    assert ctx3.backend == 'cpu'
+
+
+if __name__ == "__main__":
+    # Run tests
+    test_auto_detect()
+    test_cpu_backend_creation()
+    test_cpu_backend_with_device_id()
+    test_backend_property()
+    test_device_id_property()
+    test_list_available_backends()
+    test_unavailable_backend_error()
+    test_invalid_backend_error()
+    test_get_stats()
+    test_reset_stats()
+    test_repr()
+    test_case_insensitive_backend()
+    print("\nAll tests passed!")

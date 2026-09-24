@@ -1,0 +1,237 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Limit parallel compilation/linking jobs to avoid running out of memory/disk space on the runner
+  CARGO_BUILD_JOBS: 2
+  # Reduce disk usage by disabling incremental compilation and heavy debug info
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  # Opt into Node.js 24 for actions to avoid deprecation warnings (required by June 2026)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  #########################
+  # Lint and format checks
+  #########################
+  lint:
+    name: Rust Lint & Format
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "lint"
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets
+
+      - name: Run Cargo Check
+        run: cargo check --all-targets
+
+      # Binary targets are not linted reliably by clippy (it re-lints the
+      # same-package lib), but they must at least *build*: this is what catches
+      # things like a bin declaring a global allocator that conflicts with the
+      # library's.
+      - name: Check binary targets
+        run: |
+          cargo check --bins
+          cargo check -p benostreamdb-search --bin bsdb-search
+
+  #########################
+  # Rust unit/integration tests
+  #########################
+  test:
+    name: Rust Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        with:
+          cuda: "12.1.0"
+
+      - name: Prep CUDA Stubs
+        run: |
+          sudo ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1
+          echo "/usr/local/cuda/lib64/stubs" | sudo tee /etc/ld.so.conf.d/cuda-stubs.conf
+          sudo ldconfig
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test"
+
+      - name: Run Cargo Tests (CPU only)
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+          LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
+        run: cargo test --lib --tests
+
+      - name: Run Cargo Tests (with python feature)
+        timeout-minutes: 20
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+          LD_LIBRARY_PATH: /usr/local/cuda/lib64/stubs:${{ env.LD_LIBRARY_PATH }}
+        run: cargo test --features python --lib --tests -- --skip gpu_execution --nocapture
+
+  #########################
+  # macOS / Metal correctness
+  #########################
+  # GitHub's macos-14 runners are Apple Silicon, so the native Metal backend is
+  # testable for free. The cross-backend harness uses CPU as the gold source and
+  # validates whatever backend is present (here: Metal).
+  metal:
+    name: Metal Correctness (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "metal"
+
+      - name: Cross-backend correctness harness (CPU gold vs Metal)
+        run: cargo test --lib cross_backend -- --nocapture
+
+  #########################
+  # Python tests
+  #########################
+  pytest:
+    name: Python Tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "pytest"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Vulkan
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+
+      - name: Install maturin and build
+        run: |
+          pip install maturin
+          maturin build --features python
+          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
+
+      - name: Run Python Tests (pytest)
+        run: |
+          pytest -v tests/ \
+            --ignore=tests/performance \
+            --ignore=tests/benchmarks \
+            --ignore=tests/integration/test_catalog.py \
+            --ignore=tests/python/test_prefilter.py
+
+  #########################
+  # Dependency security audit
+  #########################
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0258 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0221 --ignore RUSTSEC-2026-0204
+
+  #########################
+  # No-panic ratchet for production code paths
+  #########################
+  # Fails if `unwrap()`/`expect()`/`panic!` sites in production (non-test) code
+  # grow relative to scripts/no_panic_baseline.txt. See NO_PANIC_POLICY.md.
+  no-panic:
+    name: No-Panic Ratchet
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "no-panic"
+
+      - name: Run no-panic ratchet + hard gate
+        run: bash scripts/no_panic_check.sh

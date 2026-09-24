@@ -1,0 +1,4 @@
+catalog_type = "nessie"
+
+[config]
+url = "http://localhost:19120"

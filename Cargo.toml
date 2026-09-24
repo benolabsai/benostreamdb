@@ -1,0 +1,247 @@
+[package]
+name = "benostreamdb"
+version = "0.10.0"
+edition = "2021"
+license = "MIT AND Apache-2.0"
+description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
+repository = "https://github.com/benolabsai/benostreamdb"
+homepage = "https://github.com/benolabsai/benostreamdb"
+readme = "README.md"
+keywords = ["database", "vector-search", "iceberg", "parquet", "indexing"]
+categories = ["database-implementations", "data-structures", "concurrency"]
+exclude = [
+    ".venv",
+    "venv",
+    "target",
+    ".git",
+    ".github",
+    "*.db",
+    "test_*",
+    "rag_db",
+    "news_db",
+    "demo",
+    "docker",
+    "benchmarks",
+    "examples"
+]
+
+[lib]
+name = "benostreamdb"
+crate-type = ["cdylib", "rlib"]
+
+[workspace]
+members = [
+    ".", "benostreamdb-flight",
+    "benostreamdb-search",
+]
+
+
+
+[[test]]
+name = "test_connector_ffi"
+required-features = ["java"]
+
+[features]
+default = []
+# Turns the production-path no-panic restriction lints into hard errors (see
+# NO_PANIC_POLICY.md). Off during Phase 1 remediation; CI enables it once the
+# `scripts/no_panic_check.sh` baseline reaches the documented invariant set.
+no-panic = []
+enterprise = []
+python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
+java = ["dep:jni"]
+proptest = []
+observability = ["dep:metrics-exporter-prometheus"]
+
+# GPU Acceleration Features
+wgpu = ["dep:wgpu"]
+pollster = ["dep:pollster"]
+cuda = ["dep:cudarc", "dep:libloading"]
+metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
+
+
+[dependencies]
+libc = "0.2"
+# core columnar memory format
+arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }
+lazy_static = "1.4"
+arrow-array = "57.2.0"
+arrow-schema = "57.2.0"
+arrow-json = "57.2.0"
+# serialization
+parquet = { version = "57.2.0", features = ["async", "object_store"] }
+bytes = "1.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+apache-avro = "0.17"
+zstd = "0.13"
+bzip2 = "0.4.4"
+quick-xml = { version = "0.31", features = ["serialize"] }
+hex = "0.4"
+ed25519-dalek = "2.1"
+bytemuck = "1.16"
+
+# async runtime
+tokio = { version = "1.36", features = ["full"] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+
+# rest api (user requested)
+axum = "0.7"
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace"] }
+
+# s3 / storage abstraction
+object_store = { version = "0.12.4", features = ["aws", "azure", "gcp", "http"] }
+
+# AWS SDK for Glue Catalog
+aws-config = { version = "1.0", features = ["behavior-version-latest"] }
+aws-sdk-glue = "1.0"
+
+# Thrift for Hive Metastore
+volo-thrift = "0.10"
+
+# Hardware Acceleration (moved to bottom of file)
+# indexing
+roaring = "0.10.2" # For scalar bitmaps
+dashmap = "6.0"      # Concurrent HashMaps
+# hnsw_rs removed and internalized to src/core/index/hnsw_rs
+# bincode 2 with `config::legacy()` is byte-compatible with bincode 1.3, so
+# existing HNSW index dumps still load. bincode 1.3 is unmaintained
+# (RUSTSEC-2025-0141).
+bincode = { version = "2", features = ["serde"] }
+cpu-time = "1.0"
+env_logger = "0.10"
+log = "0.4"
+hashbrown = "0.14"
+num_cpus = "1.16"
+parking_lot = "0.12"
+# lance removed due to missing protoc
+
+# error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+metrics = "0.23"
+url = "2.5"
+uuid = { version = "1.10", features = ["v4", "fast-rng", "macro-diagnostics"] }
+chrono = "0.4"
+rayon = "1.8"
+moka = { version = "0.12", features = ["future"] }
+once_cell = "1.19"
+async-trait = "0.1.89"
+datafusion = "52.0.0"
+datafusion-expr-common = "52.0.0"
+datafusion-functions = "52.0.0"
+datafusion-functions-aggregate = "52.0.0"
+datafusion-functions-aggregate-common = "52.0.0"
+async-stream = "0.3.6"
+rand = "0.8"
+clap = { version = "4.5.54", features = ["derive"] }
+rustyline = "17.0.2"
+hive_metastore = "0.2.0"
+faststr = "0.2.32"
+ahash = "0.8.12"
+dirs = "5.0"
+prometheus = "0.13"
+opentelemetry = { version = "0.22" }
+opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
+tracing-opentelemetry = "0.23"
+base64 = "0.22.1"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "any"] }
+murmur3 = "0.5.2"
+regex = "1.10"
+
+sha2 = "0.10"
+wgpu = { version = "0.20.0", optional = true }
+pollster = { version = "0.4.0", optional = true }
+metrics-exporter-prometheus = { version = "0.18.3", optional = true }
+dhat = "0.3"
+memmap2 = "0.9.11"
+arrow-ipc = "=57.3.1"
+tempfile = "3.10"
+tikv-jemallocator = { version = "0.7.0", features = ["background_threads", "disable_initial_exec_tls"] }
+tikv-jemalloc-ctl = "0.7.0"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
+# Version-agnostic libnvrtc discovery (see src/core/index/nvrtc.rs). Already in
+# the tree transitively via cudarc; declared directly so we can dlopen nvrtc
+# ourselves instead of relying on cudarc's hardcoded candidate list.
+libloading = { version = "0.7", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.27.0" } # MPS 
+
+[target.'cfg(target_env = "gnu")'.dependencies]
+tikv-jemalloc-ctl = "0.7.0"
+
+[dependencies.jni]
+version = "0.21"
+optional = true
+features = ["invocation"]
+
+[dependencies.pyo3]
+version = "0.26.0"
+optional = true
+features = ["extension-module", "abi3-py310"]
+
+[dependencies.numpy]
+version = "0.26.0"
+optional = true
+
+[dependencies.pythonize]
+version = "0.26.0"
+optional = true
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+rand = "0.8"
+rand_distr = "0.4"
+# hnsw_rs removed and internalized
+tempfile = "3.10"
+proptest = "1.4"
+# Unused: only src/core/index/hnsw_rs/test.rs references it and that file is not
+# declared as a module. Pinned forward to clear RUSTSEC-2026-0300 (use-after-free
+# in skiplist < 1.1.1).
+skiplist = "1"
+
+[[bin]]
+name = "generate_iceberg_manifests"
+path = "tests/bin/generate_iceberg_manifests.rs"
+
+[[bin]]
+name = "verify_iceberg_read_check"
+path = "tests/bin/verify_iceberg_read_check.rs"
+
+[[bench]]
+name = "performance"
+harness = false
+
+[[bench]]
+name = "bench_table"
+harness = false
+
+[profile.dev]
+debug = 0
+
+# ─── Release profiles ──────────────────────────────────────────────────────
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16          # Balance compile speed vs runtime perf (1 = fastest binary, 256 = fastest compile)
+debug = 0
+strip = "symbols"         # Keep symbols for crash backtraces, strip DWARF from binary size
+
+[profile.release-lto]
+inherits = "release"
+lto = "fat"                 # Cross-crate LTO for max performance (slower builds)
+codegen-units = 1           # Single unit for LTO effectiveness
+[profile.test]
+debug = 0

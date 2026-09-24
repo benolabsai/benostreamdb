@@ -1,0 +1,5 @@
+catalog_type = "hive"
+
+[config]
+url = "thrift://localhost:9083"
+warehouse = "s3://my-bucket/warehouse"

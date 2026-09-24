@@ -1,0 +1,89 @@
+name: Soak
+
+# Long-running soak: saturate memory, CPU, and disk I/O and assert the engine
+# degrades gracefully (blocks/throttles/errors) instead of dying. See
+# tests/stress/README.md. Runs on push (and manual dispatch).
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: "Wall-clock budget per soak"
+        required: false
+        default: "120"
+
+permissions:
+  contents: read
+
+env:
+  BSDB_STRESS: "1"
+  BSDB_SOAK_SECONDS: ${{ github.event.inputs.soak_seconds || '120' }}
+  # Keep the assertions honest on a small runner.
+  BSDB_STRESS_RSS_CEILING_GB: "12"
+
+jobs:
+  python-soak:
+    name: Python soak/stress suite
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "pytest"
+
+      - name: Install Vulkan
+        run: |
+          sudo apt-get update && sudo apt-get install -y libvulkan1 libvulkan-dev
+
+      - name: Install maturin and build
+        run: |
+          pip install maturin
+          maturin build --features python
+          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
+
+      - name: Run soak/stress suite
+        run: pytest tests/stress -v
+
+  rust-soak:
+    name: Rust soak harness
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test"
+
+      - name: Run the ignored soak test
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+        run: cargo test --test soak -- --ignored --nocapture

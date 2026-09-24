@@ -1,0 +1,17 @@
+BenoStreamDB
+Copyright (c) 2026 Richard Albright. All rights reserved.
+
+This product includes software developed at The Apache Software Foundation (http://www.apache.org/).
+- Portions derived from Apache Arrow DataFusion and Apache Iceberg
+  Copyright (c) The Apache Software Foundation.
+  Licensed under the Apache License, Version 2.0.
+
+This product includes software developed by Jean-Pierre Both and hnsw_rs contributors:
+- Portions vendored and adapted from hnsw_rs (https://github.com/jean-pierreBoth/hnsw_rs)
+  Copyright (c) Jean-Pierre Both and hnsw_rs contributors.
+  Licensed under the MIT License and Apache License, Version 2.0.
+
+This product includes software developed by fal-ai:
+- Portions adapted from dbt-datafusion (https://github.com/fal-ai/dbt-datafusion)
+  Copyright (c) 2022 fal-ai.
+  Licensed under the MIT License.

@@ -1,0 +1,16 @@
+target/
+.git/
+.github/
+.venv/
+venv/
+*.db
+*.parquet
+*.log
+test_*
+rag_db/
+news_db/
+demo/
+benchmarks/
+__pycache__/
+*.pyc
+!target/release/bsdb-search

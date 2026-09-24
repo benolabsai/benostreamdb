@@ -1,0 +1,5 @@
+catalog_type = "unity"
+
+[config]
+url = "https://<databricks-instance>.cloud.databricks.com"
+token = "dapi..."

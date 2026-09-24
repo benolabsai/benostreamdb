@@ -1,0 +1,14 @@
+[
+  {
+    "name": "point_lookup",
+    "throughput": null,
+    "latency_p50_ms": 27.141690254211426,
+    "latency_p95_ms": 29.615867137908936,
+    "latency_p99_ms": 29.66642141342163,
+    "latency_mean_ms": 27.302861213684082,
+    "latency_min_ms": 23.934364318847656,
+    "latency_max_ms": 29.679059982299805,
+    "elapsed_sec": 0.27391862869262695,
+    "memory_delta_mb": 21.25390625
+  }
+]

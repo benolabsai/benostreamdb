@@ -1,0 +1,14 @@
+[
+  {
+    "name": "range_query",
+    "throughput": null,
+    "latency_p50_ms": 66.23458862304688,
+    "latency_p95_ms": 80.60328960418701,
+    "latency_p99_ms": 81.88050746917725,
+    "latency_mean_ms": 70.77391942342122,
+    "latency_min_ms": 63.88735771179199,
+    "latency_max_ms": 82.1998119354248,
+    "elapsed_sec": 0.21257758140563965,
+    "memory_delta_mb": -37.578125
+  }
+]

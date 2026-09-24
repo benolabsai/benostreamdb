@@ -1,0 +1,14 @@
+[
+  {
+    "name": "multi_filter_vector",
+    "throughput": null,
+    "latency_p50_ms": 14.95814323425293,
+    "latency_p95_ms": 16.638493537902832,
+    "latency_p99_ms": 16.78785800933838,
+    "latency_mean_ms": 15.15650749206543,
+    "latency_min_ms": 13.686180114746094,
+    "latency_max_ms": 16.825199127197266,
+    "elapsed_sec": 0.04588127136230469,
+    "memory_delta_mb": 0.06640625
+  }
+]

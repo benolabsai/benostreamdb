@@ -1,0 +1,58 @@
+[package]
+name = "benostreamdb-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# NOTE: this crate is its own workspace root (see `[workspace]` below) so that
+# `libfuzzer-sys` and the nightly-only `fuzzing` cfg never leak into the main
+# workspace build. Run with `cargo fuzz` from this directory.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.benostreamdb]
+path = ".."
+
+[dependencies.benostreamdb-search]
+path = "../benostreamdb-search"
+
+[[bin]]
+name = "parse_dense"
+path = "fuzz_targets/parse_dense.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_sparse"
+path = "fuzz_targets/parse_sparse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_binary"
+path = "fuzz_targets/parse_binary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_rewriters"
+path = "fuzz_targets/sql_rewriters.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "qdrant_request_body"
+path = "fuzz_targets/qdrant_request_body.rs"
+test = false
+doc = false
+bench = false

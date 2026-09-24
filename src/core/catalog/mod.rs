@@ -1,0 +1,203 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+pub mod config;
+pub mod glue;
+pub mod hive;
+pub mod jdbc;
+pub mod nessie;
+pub mod rest;
+pub mod unity;
+
+use anyhow::Result;
+use async_trait::async_trait;
+
+use arrow::datatypes::SchemaRef;
+pub use config::CatalogConfig;
+
+/// Abstract Catalog Interface (Iceberg Compatible)
+///
+/// This trait isolates the application from specific catalog implementations (Nessie, REST, Glue, etc.)
+#[async_trait]
+pub trait Catalog: Send + Sync {
+    /// Create a new table in the catalog
+    async fn create_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        schema: SchemaRef,
+        location: Option<&str>,
+    ) -> Result<()>;
+
+    /// Load table metadata
+    async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata>;
+
+    /// Create a new branch (Git-like semantics)
+    async fn create_branch(&self, branch_name: &str, source_ref: Option<&str>) -> Result<()>;
+
+    /// Check if a table exists
+    async fn table_exists(&self, namespace: &str, table_name: &str) -> Result<bool>;
+
+    /// Commit table updates (Iceberg atomic swap)
+    async fn commit_table(
+        &self,
+        namespace: &str,
+        table_name: &str,
+        updates: Vec<serde_json::Value>,
+    ) -> Result<()>;
+}
+
+use crate::core::metadata::TableMetadata;
+
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+
+/// Catalog type enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CatalogType {
+    Nessie,
+    Rest,
+    Glue,
+    Hive,
+    Unity,
+    Jdbc,
+}
+
+impl FromStr for CatalogType {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "nessie" => Ok(CatalogType::Nessie),
+            "rest" => Ok(CatalogType::Rest),
+            "glue" => Ok(CatalogType::Glue),
+            "hive" => Ok(CatalogType::Hive),
+            "unity" => Ok(CatalogType::Unity),
+            "jdbc" => Ok(CatalogType::Jdbc),
+            _ => Err(anyhow::anyhow!("Unknown catalog type: {}", s)),
+        }
+    }
+}
+
+/// Create a catalog instance based on type and configuration
+pub async fn create_catalog_async(
+    catalog_type: CatalogType,
+    config: std::collections::HashMap<String, String>,
+) -> Result<Box<dyn Catalog>> {
+    match catalog_type {
+        CatalogType::Nessie => {
+            let url = config
+                .get("url")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Nessie catalog"))?;
+            Ok(Box::new(nessie::NessieClient::new(url.clone())))
+        }
+        CatalogType::Rest => {
+            let url = config
+                .get("url")
+                .or_else(|| config.get("uri"))
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' or 'uri' config for REST catalog"))?;
+            let prefix = config.get("prefix").cloned();
+
+            let auth = if let Some(token) = config.get("token").cloned() {
+                Some(rest::RestCatalogAuth::BearerToken(token))
+            } else if let Some(credential) = config.get("credential") {
+                let parts: Vec<&str> = credential.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    let client_id = parts[0].to_string();
+                    let client_secret = parts[1].to_string();
+                    let oauth2_url = config
+                        .get("oauth2-server-uri")
+                        .or_else(|| config.get("oauth2_server_uri"))
+                        .cloned();
+                    let scope = config.get("scope").cloned();
+                    let token_endpoint = oauth2_url.unwrap_or_else(|| {
+                        format!("{}/v1/oauth/tokens", url.trim_end_matches('/'))
+                    });
+                    Some(rest::RestCatalogAuth::OAuth2 {
+                        token_endpoint,
+                        client_id,
+                        client_secret,
+                        scope,
+                    })
+                } else {
+                    anyhow::bail!(
+                        "Invalid 'credential' format. Expected <client_id>:<client_secret>"
+                    );
+                }
+            } else if let (Some(client_id), Some(client_secret)) = (
+                config.get("client_id").or_else(|| config.get("client-id")),
+                config
+                    .get("client_secret")
+                    .or_else(|| config.get("client-secret")),
+            ) {
+                let oauth2_url = config
+                    .get("oauth2-server-uri")
+                    .or_else(|| config.get("oauth2_server_uri"))
+                    .cloned();
+                let scope = config.get("scope").cloned();
+                let token_endpoint = oauth2_url
+                    .unwrap_or_else(|| format!("{}/v1/oauth/tokens", url.trim_end_matches('/')));
+                Some(rest::RestCatalogAuth::OAuth2 {
+                    token_endpoint,
+                    client_id: client_id.clone(),
+                    client_secret: client_secret.clone(),
+                    scope,
+                })
+            } else {
+                None
+            };
+
+            Ok(Box::new(rest::RestCatalogClient::with_auth(
+                url.clone(),
+                prefix,
+                auth,
+            )))
+        }
+        CatalogType::Glue => {
+            let catalog_id = config.get("catalog_id").cloned();
+            let client = glue::GlueCatalogClient::new(catalog_id).await?;
+            Ok(Box::new(client))
+        }
+        CatalogType::Hive => {
+            let url = config
+                .get("url")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Hive Metastore"))?;
+            Ok(Box::new(hive::HiveMetastoreClient::new(url.clone())?))
+        }
+        CatalogType::Unity => {
+            let url = config
+                .get("url")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'url' config for Unity Catalog"))?;
+            let token = config
+                .get("token")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'token' config for Unity Catalog"))?;
+            Ok(Box::new(unity::UnityCatalogClient::new(
+                url.clone(),
+                token.clone(),
+            )))
+        }
+        CatalogType::Jdbc => {
+            let uri = config
+                .get("uri")
+                .ok_or_else(|| anyhow::anyhow!("Missing 'uri' config for JDBC catalog"))?;
+            let warehouse = config.get("warehouse").cloned();
+            let catalog_name = config
+                .get("catalog_name")
+                .unwrap_or(&"default".to_string())
+                .clone();
+            let client = jdbc::JdbcCatalogClient::new(uri.clone(), warehouse, catalog_name).await?;
+            Ok(Box::new(client))
+        }
+    }
+}
+
+/// Synchronous catalog factory (for non-async contexts)
+/// Note: Glue requires async initialization, so this will block
+pub fn create_catalog(
+    catalog_type: CatalogType,
+    config: std::collections::HashMap<String, String>,
+) -> Result<Box<dyn Catalog>> {
+    tokio::runtime::Runtime::new()
+        .map_err(|e| anyhow::anyhow!("Failed to create tokio runtime for catalog: {}", e))?
+        .block_on(create_catalog_async(catalog_type, config))
+}

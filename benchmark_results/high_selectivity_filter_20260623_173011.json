@@ -1,0 +1,14 @@
+[
+  {
+    "name": "high_selectivity_filter",
+    "throughput": null,
+    "latency_p50_ms": 81.5739631652832,
+    "latency_p95_ms": 100.47364234924316,
+    "latency_p99_ms": 102.29916572570801,
+    "latency_mean_ms": 86.23137474060059,
+    "latency_min_ms": 74.96094703674316,
+    "latency_max_ms": 102.75554656982422,
+    "elapsed_sec": 0.43134427070617676,
+    "memory_delta_mb": 21.15625
+  }
+]
