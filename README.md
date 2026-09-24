@@ -423,55 +423,24 @@ results = session.sql("""
 table.compact()
 ```
 
-## 📊 Production Benchmarks & Verification
+## 📊 Performance
 
-BenoStreamDB performance has been validated across large-scale synthetic, real-world datasets, and head-to-head competitive benchmarks against industry-standard engines like **OpenSearch 2.11**:
+The only benchmark we stand behind is the **full-site English-Wikipedia Graph-RAG
+demo** — end-to-end, reproducible, and measured on documented hardware. The
+earlier OpenSearch / Elasticsearch / LanceDB comparisons, the NYC-Taxi micro-runs,
+and the Criterion `benches/` targets have been **removed as stale**; if a number is
+not below, treat it as unverified.
 
-### 🚀 Competitive Benchmarks: BenoStreamDB vs. OpenSearch 2.11 (4 CPUs, 4GB RAM)
+| Stage (whole enwiki: 51.8M live pages / 383M edges) | Wall time | Peak memory |
+| :--- | :--- | :--- |
+| embed (all-MiniLM-L6-v2, 384-d, RTX 3090) | 2.1 h | 8.3 GB RSS, 5.9 GB VRAM |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | 41 min | 14.6–18.0 GB per chunk |
+| load — edges (383M + CSR) | 271 s | ~6 GB |
 
-Conducted under identical, strictly constrained container environments (4 CPU cores, 4GB RAM, 64-dimensional float32 vectors, Wikipedia text payloads):
-
-| Benchmark Scale | Metric / Operation | BenoStreamDB (p50) | BenoStreamDB (p99) | OpenSearch 2.11 (p50) | OpenSearch 2.11 (p99) | Advantage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **100K Documents** | `knn` HNSW Vector Search | **1.94 ms** | **4.26 ms** | 4.29 ms | 62.58 ms | **14.7x faster p99** |
-| **100K Documents** | Total Storage Required | **~26.0 MB** | — | ~185.4 MB | — | **7.1x less disk space** |
-| **100K Documents** | `match` BM25 Search | 3.96 ms | 4.75 ms | **2.91 ms** | **4.33 ms** | Competitive (<5ms) |
-| **1M Documents** | `knn` HNSW Vector Search | **1.91 ms** | **3.74 ms** | 8.26 ms | 478.77 ms | **128x faster p99 (zero tail spikes)** |
-| **1M Documents** | Total Storage Required | **~280 MB** | — | ~1,852 MB (1.85 GB) | — | **6.6x less disk space** |
-| **1M Documents** | Ingestion Rate | 4,613 docs/s | — | **9,221 docs/s** | — | OpenSearch defers merges |
-
-> **Key Architectural Takeaways:**
-> - **Ironclad Vector Latency Stability**: At 1M vectors, OpenSearch tail latency collapses to **478.77 ms** due to JVM garbage collection pauses and Lucene segment merging. BenoStreamDB query latency stays completely flat (**1.91 ms p50 / 3.74 ms p99**) thanks to its Hot Row Cache bypassing disk I/O on scattered row lookups.
-> - **Zero Data Duplication (6.6x–7x Storage Savings)**: OpenSearch requires maintaining a separate primary data lake *plus* duplicating all vectors into amplified Lucene index files (~1.85 GB total). BenoStreamDB **is** the data lake, writing compressed Parquet files with compact `.hnsw` sidecar files (~280 MB total).
-> - **Instant Stateless Cold Starts**: BenoStreamDB eliminates the JVM boot, translog replay, and Lucene warmup delays of clustered search engines—memory mapping Parquet and `.hnsw` sidecars directly from the OS page cache for immediate query readiness.
->
-> 📖 *For complete test methodology, memory safety metrics, and replication scripts, see the [Benchmarking Guide](docs/BENCHMARKING.md).*
-
-### Workload & Engine Baselines
-
-| Dataset / Workload | Metric | Performance | Notes |
-| :--- | :--- | :--- | :--- |
-| **NYC Taxi (3M rows)** | Ingest Throughput | **753,782 rows/sec** | Single-node Parquet write & manifest commit |
-| **NYC Taxi (3M rows)** | Query Latency (p99) | **85ms** | Selective ID filter via Inverted Index |
-| **NYC Taxi (3M rows)** | Compaction | **4.91s** | 3M rows compacted across segments |
-| **Wikipedia (100K docs)** | Scalar Projected Filter | **14ms** | 142x speedup by skipping embedding columns |
-| **Vectors (100K 768-dim)** | Parallel Vector Search | **5.0s** | 10 segments, 16 auto-detected parallel readers |
-| **Vectors (100K 768-dim)** | Index Build Time | **62s** | HNSW graph generation |
-| **Vectors (100K 768-dim)** | Recall@10 | **100%** | Exact match vs. exhaustive scan |
-
-To run the integration and benchmark suite:
-```bash
-# Criterion micro-benchmarks
-cargo bench
-
-# Competitive 100k/1M OpenSearch benchmarks
-./run_comparison.sh
-./run_1m_comparison.sh
-
-# Integration benchmarks
-python tests/integration/test_nyc_taxi.py
-python tests/benchmarks/benchmark_vs_iceberg.py
-```
+Run it with `python scripts/prepare_demo.py`. Full per-stage timings, the
+per-chunk node-load table, and reproduction commands live in
+[`examples/web_ui/README.md`](examples/web_ui/README.md); methodology is in
+[`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
 
 ## 🏗️ Architecture
 
@@ -715,8 +684,8 @@ This will automatically generate the configuration file and start the service. S
 
 **Not supported (v1):** per-document delete (501, append-only), aggregations, aliases,
 reindex, ILM, snapshots, auth, multi-node. See
-[OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) for the full matrix and
-[GETTING_STARTED.md](GETTING_STARTED.md) for a complete quickstart.
+[docs/OPENSEARCH_COMPATIBILITY.md](docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
+[docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete quickstart.
 
 ## 📈 Roadmap
 
@@ -740,7 +709,7 @@ reindex, ILM, snapshots, auth, multi-node. See
 - [ ] **Client Ecosystem & Packaged Distribution**: LangChain & LlamaIndex integrations.
 - [ ] **Enterprise Features [Paid]**: Row-Level Security (RLS), Dynamic Column Masking, Customer-Managed Encryption Keys (CMEK), SIEM Export, Fused SIMD Kernels.
 
-*For a detailed breakdown of all phases, see [ROADMAP.md](ROADMAP.md).*
+*For a detailed breakdown of all phases, see [docs/ROADMAP.md](docs/ROADMAP.md).*
 
 ## 🤝 Contributing
 

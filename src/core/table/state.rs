@@ -83,11 +83,17 @@ impl Table {
     }
 
     pub fn set_autocommit(&self, enabled: bool) {
+        // `Relaxed` is intentional: `autocommit` is a user-facing mode toggle,
+        // not a synchronization primitive. It guards no other memory, and the
+        // write path reads it once per operation, so plain atomicity is all
+        // that is required — no acquire/release ordering.
         self.autocommit
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn get_autocommit(&self) -> bool {
+        // See `set_autocommit`: `Relaxed` is sufficient — a best-effort mode
+        // switch, not a happens-before edge.
         self.autocommit.load(std::sync::atomic::Ordering::Relaxed)
     }
 

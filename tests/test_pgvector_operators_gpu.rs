@@ -1,10 +1,5 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use datafusion::arrow::array::{FixedSizeListArray, Float32Array};
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::Expr;
-use datafusion::prelude::*;
 /// Integration test for pgvector operators with GPU acceleration
 ///
 /// This test verifies that pgvector distance operators (<->, <=> , <#>)
@@ -15,6 +10,11 @@ use benostreamdb::core::index::gpu::{
     get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
 use benostreamdb::core::sql::vector_udf::all_vector_udfs;
+use datafusion::arrow::array::{FixedSizeListArray, Float32Array};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::execution::FunctionRegistry;
+use datafusion::logical_expr::Expr;
+use datafusion::prelude::*;
 use std::sync::Arc;
 
 lazy_static::lazy_static! {

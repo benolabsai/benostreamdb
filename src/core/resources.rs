@@ -157,10 +157,26 @@ pub fn total_memory_bytes() -> Option<u64> {
         .or_else(host_memory_bytes)
 }
 
-/// Effective memory budget in bytes: the detected limit, or
+/// Memory actually usable by this process, in bytes.
+///
+/// Prefers the host's *available* memory over its total. On a shared machine
+/// (a desktop also running a browser, another build, etc.) `MemTotal` overstates
+/// what this process can allocate, so guards sized from it never trip before the
+/// OS OOM-killer does — the demo load was killed at ~74 GB RSS on a 121 GiB host
+/// because the derived high-water mark was ~102 GB. A cgroup limit or
+/// `RLIMIT_AS` ceiling is a hard cap and is used as-is; only the host-RAM
+/// fallback switches to available memory.
+pub fn usable_memory_bytes() -> Option<u64> {
+    cgroup_memory_limit_bytes()
+        .or_else(rlimit_address_space_bytes)
+        .or_else(host_available_memory_bytes)
+        .or_else(host_memory_bytes)
+}
+
+/// Effective memory budget in bytes: the usable limit, or
 /// [`FALLBACK_MEMORY_BYTES`] when nothing can be detected.
 pub fn effective_memory_bytes() -> u64 {
-    total_memory_bytes().unwrap_or(FALLBACK_MEMORY_BYTES)
+    usable_memory_bytes().unwrap_or(FALLBACK_MEMORY_BYTES)
 }
 
 /// Ingest RAM high-water mark in GB for a given memory budget.
@@ -194,6 +210,28 @@ fn host_memory_bytes() -> Option<u64> {
             return Some(kb * 1024);
         }
     }
+    None
+}
+
+/// Host memory currently available for new allocations, in bytes.
+///
+/// Linux exposes this directly as `MemAvailable` — the kernel's estimate of how
+/// much can be allocated without swapping. macOS has no equivalent, so callers
+/// fall back to [`host_memory_bytes`].
+#[cfg(target_os = "linux")]
+fn host_available_memory_bytes() -> Option<u64> {
+    let contents = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in contents.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_available_memory_bytes() -> Option<u64> {
     None
 }
 
@@ -351,15 +389,35 @@ mod tests {
         assert!(total_memory_bytes().is_some());
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn usable_memory_is_positive_and_no_more_than_total() {
+        // Guards are sized from usable memory, so it must be a real, positive
+        // value that never exceeds the machine's total.
+        let usable = usable_memory_bytes().expect("usable memory should be detectable");
+        assert!(usable > 0, "usable memory must be positive, got {usable}");
+        if let Some(total) = total_memory_bytes() {
+            assert!(
+                usable <= total,
+                "usable ({usable}) must not exceed total ({total})"
+            );
+        }
+    }
+
     #[test]
     fn derived_defaults_scale_with_effective_memory() {
-        let bytes = effective_memory_bytes();
+        // The derivation is pure; assert it against a fixed budget so the test
+        // is not sensitive to `MemAvailable` fluctuating between calls.
+        let bytes = 16 * 1024 * 1024 * 1024;
         let expected_gb = (bytes as f64 * MEMORY_BUDGET_FRACTION) / 1_000_000_000.0;
-        assert!((default_max_ingest_ram_gb() - expected_gb).abs() < 1e-6);
+        assert!((max_ingest_ram_gb_for(bytes) - expected_gb).abs() < 1e-6);
         assert_eq!(
-            default_memory_budget_bytes(),
+            memory_budget_bytes_for(bytes),
             (bytes as f64 * MEMORY_BUDGET_FRACTION) as u64
         );
+        // The live defaults must still be positive and mutually consistent.
+        assert!(default_max_ingest_ram_gb() > 0.0);
+        assert!(default_memory_budget_bytes() > 0);
     }
 
     #[test]

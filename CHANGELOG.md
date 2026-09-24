@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   52.x; it is a compile-time proc-macro with no runtime surface and is
   documented in `deny.toml`.
 - **`cargo fmt --all` applied** across the workspace.
+- **Memory guards now size from *available* memory, not total.** The value that
+  derives `BSDB_MAX_INGEST_RAM_GB`, `BSDB_INGEST_MEMORY_BUDGET_GB`, and
+  `BSDB_INDEX_BUILD_CONCURRENCY` previously used the host's `MemTotal`, so on a
+  shared machine the guards were sized for RAM the process could not actually
+  get — the demo load was OOM-killed at ~74 GB RSS on a 121 GiB host because the
+  derived high-water mark was ~102 GB. `effective_memory_bytes()` now prefers
+  `MemAvailable` (Linux) for the host-RAM fallback; a cgroup limit or
+  `RLIMIT_AS` ceiling is still used as-is. New `usable_memory_bytes()` exposes
+  the value.
 
 ### Added
 - **Disk-headroom admission limit + a single resource-limits reference.** New
@@ -145,6 +154,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   semaphore (`Table::index_build_gate`, default 2, `BSDB_INDEX_BUILD_CONCURRENCY`)
   that back-pressures the writer; the bounded working set also removes the
   page-cache eviction that made the unbounded case slow, not just fatal.
+- **`add_index` re-indexed every prior segment on each call (O(n²) demo-load
+  OOM).** `add_index` on a non-empty table unconditionally triggered
+  `backfill_indexes_async`, which rebuilt the indexes of *every* manifest entry
+  via an unbounded `futures::future::join_all` — with no "already indexed" skip
+  and no per-segment build gate (the single permit gated the whole task, not the
+  fan-out). The demo's chunked load calls `add_index` in every fresh process, so
+  each chunk re-indexed all previously loaded data: per-chunk time grew
+  293s → 885s → 2071s and peak RSS climbed until the process was killed. Backfill
+  now skips segments that already carry the required `(column, index_type)` pair
+  and bounds in-flight builds with `buffer_unordered(index_build_concurrency)`,
+  taking the shared build gate per segment. `prepare_demo.py` also sets the
+  default device once and only applies `add_index` for columns not already
+  configured (the config is restored from the manifest on open). A full
+  51.8M-row node load now completes in **~45 min** (est.) at a flat **~46–56 s
+  per M rows (~20k rows/s)**, versus the escalating 293s → 885s → 2071s that
+  preceded the kill — see `examples/web_ui/README.md`.
 - **Heap not returned to the OS at flush/build boundaries.** glibc keeps freed
   memory in per-thread arenas, so the HNSW/TQ builders' millions of small
   allocations ratcheted RSS toward the sum of every arena's high-water mark. Both

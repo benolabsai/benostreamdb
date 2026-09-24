@@ -1,31 +1,45 @@
-# Rust
+# ── Rust ────────────────────────────────────────────────────────────────────
 target/
 **/*.rs.bk
 
-# Python
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 .venv/
 .venv_iceberg/
+.venv-cuda-shims/
 venv/
 venv_verify/
+venv_demo/
 test_venv/
 !venv/requirements.txt
 !venv/.gitkeep
 *.egg-info/
 
-# IDE
+# Compiled Python extension (built by `maturin develop`)
+python/**/*.so
+python/**/*.pyd
+python/**/*.dylib
+
+# ── IDE / editor / tooling ──────────────────────────────────────────────────
 .vscode/
 .idea/
 .metals/
 .continue/
+.qwen/
+.agents/
 
-# Compiled Python extension (built by maturin develop)
-python/**/*.so
-python/**/*.pyd
+# ── Compiled native binaries / debug symbols ────────────────────────────────
+*.dylib
+*.dSYM/
+*.so
+*.dll
+*.exe
+test_pgvector_sql_integration
+scratch_mem_test
 
-# BenoStream Data
+# ── BenoStream data artifacts ───────────────────────────────────────────────
 *.parquet
 *.idx
 *.hnsw.graph
@@ -33,116 +47,60 @@ python/**/*.pyd
 *.del
 _manifest/
 _metadata/
+test_admin_table/
+test_explain_db/
+test_ingestion_db/
+test_ingestion_perf_db/
+test_lancedb_ingestion_perf_db/
 
-# Local toolchain downloads (Maven/JDK downloaded by build-connectors.sh)
+# ── Local toolchain downloads (Maven/JDK fetched by build-connectors.sh) ────
 .java/
 .maven/
 
-# Compiled native binaries
-test_pgvector_sql_integration
-
-# Test database directories
-test_ingestion_perf_db/
-test_lancedb_ingestion_perf_db/
+# ── Local vector DBs, scratch data & generated artifacts ────────────────────
+rag_db/
+news_db/
+data/
+docker/data/
+benchmarks/competitive/data/
+hsdbg_bench_data/
 connector-artifacts/
 dist/
+benchmark_results/
+trino-benostream/src/main/resources/libbenostreamdb.so
+spark-benostream/src/main/resources/libbenostreamdb.so
 
-# Build and test logs
+# ── Build / test logs & scratch ─────────────────────────────────────────────
+# Run logs are written here (see docs/BENCHMARKING.md), never committed.
+logs/
 *.log
+*.pid
+*.patch
+dhat-heap.json
 build_errors*.txt
 check_output.txt
 rust_test_output*.log
 python_test_output*.log
 python_feature_test_output*.log
 test_output*.txt
-lancedb_verification.log
-verification.log
-compliance_run.log
-benchmark_output.log
-build_output.log
-benchmarks/competitive/venv/
-trino-benostream/src/main/resources/libbenostreamdb.so
-spark-benostream/src/main/resources/libbenostreamdb.so
-
-# Internal markdown docs (not for public release)
-COMPETITIVE*.md
-COMPETITOR*.md
-COMPLIANCE*.md
-ICEBERG_COMPLIANCE_TASK.md
-IMPLEMENT_FAST_FILTERING.md
-MARKET_REALITY_CHECK.md
-PERFORMANCE_GAP_ANALYSIS.md
-PERFORMANCE_OPTIMIZATION_RAG.md
-PLATFORM_TESTING_SUMMARY.md
-RAG_KILLER_FEATURE.md
-ROADMAP.md
-VISION.md
-GETTING_STARTED.md
-design_*.md
-docs/MONETIZATION_ARCHITECTURE.md
-docs/IN_MEMORY_COMPONENT_ANALYSIS.md
-docs/SUMMARY.md
-docs/DORIS_OPTIMIZATION_PATTERNS.md
-docs/task_status.md
-benchmarks/competitive/*.md
-benchmarks/competitive/benchmark_results/*.md
-
-# Compiled binaries and debug symbols
-*.dylib
-*.dSYM/
-*.so
-*.dll
-*.exe
-python/benostreamdb/*.so
-python/benostreamdb/*.pyd
-python/benostreamdb/*.dylib
-python/benostreamdb/*.dSYM/
-groq_api_key.txt
-
-# Local Vector DBs
-rag_db/
-news_db/
-
-.hypothesis/
-venv_demo/
-.env
-
-COMMERCIALIZATION_STRATEGY.md
-business_plan*
-business_plan/
-
-# Benchmark scratch & local test artifacts
-benchmarks/competitive/data/
-docker/data/
-hsdbg_bench_data/
-measure_disk.py
-parse_dhat.py
-populate.py
-run_*.sh
-test_bench.sh
-bench_*.py
-run_benchmark.py
-*.pid
-*.patch
-dhat-heap.json
-test_bm25*
 *_output.txt
 mem_report.txt
 benchmark_raw.json
-docs/roo_task_*.md
+benchmarks/competitive/venv/
 
-# Local secrets — never commit
+# ── Test caches ─────────────────────────────────────────────────────────────
+.hypothesis/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ── Local secrets — never commit ────────────────────────────────────────────
 .streamlit/secrets.toml
 .streamlit/config.toml
 .env
 .env.local
+groq_api_key.txt
 
-# Local data, scratch & generated artifacts — never commit
-data/
-.venv-cuda-shims/
-.agents/
-benchmark_results/
-test_ingestion_db/
+# ── Ad-hoc local scripts & scratch (not part of the repo) ───────────────────
 scratch*.rs
 /test
 test.rs
@@ -159,3 +117,10 @@ analyze_comments.py
 all_comments.txt
 interesting_comments.txt
 user_msg.txt
+measure_disk.py
+parse_dhat.py
+populate.py
+run_*.sh
+test_bench.sh
+bench_*.py
+run_benchmark.py

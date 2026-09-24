@@ -225,7 +225,11 @@ pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
     );
 
     Cache::builder()
-        .weigher(|_key, value: &Arc<Vec<u8>>| -> u32 { (value.len() / 1024) as u32 })
+        // moka's weigher is u32 and the value is in KB, so clamp to avoid a
+        // wrap for a value above 4 TiB (u32::MAX KB).
+        .weigher(|_key, value: &Arc<Vec<u8>>| -> u32 {
+            (value.len() / 1024).min(u32::MAX as usize) as u32
+        })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 30)) // 30 mins
         .build()
@@ -254,7 +258,9 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
     tracing::info!("Initializing HNSW-IVF Cache with {} GB limit", cache_gb);
 
     Cache::builder()
-        .weigher(|_key, value: &Arc<HnswIvfIndex>| -> u32 { (value.size_in_bytes() / 1024) as u32 })
+        .weigher(|_key, value: &Arc<HnswIvfIndex>| -> u32 {
+            (value.size_in_bytes() / 1024).min(u32::MAX as usize) as u32
+        })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 15)) // 15 mins idle
         .build()
@@ -278,7 +284,7 @@ pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = La
     Cache::builder()
         .weigher(|_key, value: &Arc<Vec<RecordBatch>>| -> u32 {
             let bytes: usize = value.iter().map(|b| b.get_array_memory_size()).sum();
-            (bytes / 1024) as u32
+            (bytes / 1024).min(u32::MAX as usize) as u32
         })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 15))
@@ -324,8 +330,10 @@ pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
     tracing::info!("Initializing Block Cache with {} GB limit", cache_gb);
 
     Cache::builder()
+        // moka's weigher is u32 and the value is in KB; clamp so a batch larger
+        // than 4 TiB cannot wrap the weight to a tiny value.
         .weigher(|_key, value: &Arc<RecordBatch>| -> u32 {
-            (value.get_array_memory_size() / 1024) as u32
+            (value.get_array_memory_size() / 1024).min(u32::MAX as usize) as u32
         })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 15))

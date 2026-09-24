@@ -12,9 +12,9 @@ use ax_lib::{
     routing::{get, post},
     Json, Router,
 };
-use futures::StreamExt;
 use benostreamdb::core::manifest::ManifestManager;
 use benostreamdb::core::metadata::TableMetadata;
+use futures::StreamExt;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -34,8 +34,13 @@ async fn main() {
     }));
 
     // Task 3: Use proper telemetry init
-    let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("iceberg_rest")
-        .expect("Failed to initialize tracing");
+    let _telemetry_guard = match benostreamdb::telemetry::tracing::init_tracing("iceberg_rest") {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Task 6: Track start time for uptime
     let start_time = SystemTime::now();
@@ -126,18 +131,30 @@ async fn metrics_handler() -> impl IntoResponse {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to install SIGTERM handler");
+                    return;
+                }
+            };
         sigterm.recv().await;
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("failed to install SIGINT handler");
+        let mut sigint =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to install SIGINT handler");
+                    return;
+                }
+            };
         sigint.recv().await;
     };
 
@@ -167,10 +184,21 @@ async fn list_namespaces(
     ax_lib::extract::Path(prefix): ax_lib::extract::Path<String>,
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}", prefix);
-    let uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = benostreamdb::core::storage::create_object_store(&uri)
-        .expect("Failed to create object store");
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = match benostreamdb::core::storage::create_object_store(&uri) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, %uri, "failed to create object store");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {"message": format!("Failed to create object store: {e}"),
+                              "type": "InternalServerError", "code": 500}
+                })),
+            )
+                .into_response();
+        }
+    };
 
     // Discover namespaces by listing top-level directories
     let mut namespaces = std::collections::HashSet::new();
@@ -193,17 +221,28 @@ async fn list_namespaces(
     let response = serde_json::json!({
         "namespaces": namespaces.into_iter().collect::<Vec<_>>()
     });
-    Json(response)
+    Json(response).into_response()
 }
 
 async fn list_tables(
     ax_lib::extract::Path((prefix, namespace)): ax_lib::extract::Path<(String, String)>,
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}, namespace: {}", prefix, namespace);
-    let uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = benostreamdb::core::storage::create_object_store(&uri)
-        .expect("Failed to create object store");
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = match benostreamdb::core::storage::create_object_store(&uri) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, %uri, "failed to create object store");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {"message": format!("Failed to create object store: {e}"),
+                              "type": "InternalServerError", "code": 500}
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let mut tables = Vec::new();
     let prefix_path = object_store::path::Path::from(namespace.as_str());
@@ -232,7 +271,7 @@ async fn list_tables(
     let response = serde_json::json!({
         "identifiers": tables
     });
-    Json(response)
+    Json(response).into_response()
 }
 
 // Replaced by benostreamdb::core::metadata::TableMetadata
@@ -244,8 +283,7 @@ async fn get_table(
         String,
     )>,
 ) -> impl IntoResponse {
-    let uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     println!(
         "Prefix: {}, Getting metadata for {}.{} (Storage: {})",
         prefix, namespace, table, uri
@@ -254,8 +292,20 @@ async fn get_table(
     let table_path = format!("{}/{}", namespace, table);
     let table_full_uri = format!("{}/{}", uri.trim_end_matches('/'), table_path);
 
-    let store = benostreamdb::core::storage::create_object_store(&table_full_uri)
-        .expect("Failed to create object store");
+    let store = match benostreamdb::core::storage::create_object_store(&table_full_uri) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, %table_full_uri, "failed to create object store");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {"message": format!("Failed to create object store: {e}"),
+                              "type": "InternalServerError", "code": 500}
+                })),
+            )
+                .into_response();
+        }
+    };
     let manager = ManifestManager::new(store.clone(), "", &table_full_uri);
 
     // Try to load official TableMetadata first
@@ -376,8 +426,20 @@ async fn create_table(
     match benostreamdb::Table::create_async(location.clone(), arrow_schema.clone()).await {
         Ok(_) => {
             // Load the newly created metadata
-            let store = benostreamdb::core::storage::create_object_store(&location)
-                .expect("Failed to create object store");
+            let store = match benostreamdb::core::storage::create_object_store(&location) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, %location, "failed to create object store");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": {"message": format!("Failed to create object store: {e}"),
+                                      "type": "InternalServerError", "code": 500}
+                        })),
+                    )
+                        .into_response();
+                }
+            };
             let metadata = TableMetadata::load_latest(store.as_ref())
                 .await
                 .unwrap_or_else(|_| {
@@ -504,10 +566,21 @@ async fn update_table(
         payload.updates.len()
     );
 
-    let uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = benostreamdb::core::storage::create_object_store(&uri)
-        .expect("Failed to create object store");
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = match benostreamdb::core::storage::create_object_store(&uri) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, %uri, "failed to create object store");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": {"message": format!("Failed to create object store: {e}"),
+                              "type": "InternalServerError", "code": 500}
+                })),
+            )
+                .into_response();
+        }
+    };
 
     // Support complex namespaces with '/' (URL decoded from '%2F')
     let decoded_namespace = namespace.replace("%2F", "/").replace("%2f", "/");
@@ -645,9 +718,7 @@ async fn update_table(
                                         println!("Read manifest file: {}", clean_path);
                                         let m_bytes = m_res.bytes().await.unwrap_or_default();
                                         if let Ok(m_entries) =
-                                            benostreamdb::core::iceberg::read_manifest(
-                                                &m_bytes[..],
-                                            )
+                                            benostreamdb::core::iceberg::read_manifest(&m_bytes[..])
                                         {
                                             println!(
                                                 "Manifest contains {} entries",

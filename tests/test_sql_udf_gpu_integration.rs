@@ -1,9 +1,5 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use datafusion::arrow::array::{FixedSizeListArray, Float32Array};
-use datafusion::arrow::datatypes::{DataType, Field};
-use datafusion::execution::FunctionRegistry;
-use datafusion::prelude::*;
 /// Integration test for SQL UDF GPU context support
 ///
 /// This test verifies that SQL distance UDFs can use GPU acceleration
@@ -12,6 +8,10 @@ use benostreamdb::core::index::gpu::{
     get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
 use benostreamdb::core::sql::vector_udf::all_vector_udfs;
+use datafusion::arrow::array::{FixedSizeListArray, Float32Array};
+use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::execution::FunctionRegistry;
+use datafusion::prelude::*;
 use std::sync::Arc;
 
 #[tokio::test]

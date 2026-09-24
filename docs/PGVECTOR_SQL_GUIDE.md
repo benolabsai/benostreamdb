@@ -731,7 +731,7 @@ LIMIT 10;
 - [BenoStreamDB Architecture](architecture.md)
 - [DataFusion SQL Reference](https://arrow.apache.org/datafusion/user-guide/sql/index.html)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
-- [Vector Search Best Practices](COMPREHENSIVE_GUIDE.md)
+- [Vector Search Best Practices](architecture.md)
 
 ---
 

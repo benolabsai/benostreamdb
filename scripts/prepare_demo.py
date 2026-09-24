@@ -61,6 +61,23 @@ def _avail_ram_gb() -> float:
         return 8.0  # conservative default
 
 
+def _proc_gb(key: str) -> float:
+    """A process stat from /proc/self/status (kB) as GB.
+
+    ``VmRSS`` is the current resident set; ``VmHWM`` is the peak since process
+    start. Each load chunk runs in a fresh process, so its end-of-run ``VmHWM``
+    is exactly that chunk's peak RSS — the number the docs want per chunk.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith(key):
+                    return int(line.split()[1]) / 1048576
+    except OSError:
+        pass
+    return 0.0
+
+
 def _auto_chunk_rows(gb: float | None = None) -> int:
     """Size the fresh-process load chunk from available RAM.
 
@@ -226,6 +243,8 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     model_obj = SentenceTransformer(model, device=device)
     if fp16:
         model_obj = model_obj.half()
+    if device == "cuda":
+        torch.cuda.reset_peak_memory_stats()
 
     # Truncate (MRL) + renormalize if a smaller dim is requested.
     def enc(texts):
@@ -283,12 +302,19 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
         if done % 1_000_000 < 200_000:
             rate = done / (time.time() - t0)
             eta = (n_rows - done) / rate / 3600 if rate else 0
-            log(f"  embed {done:,}/{n_rows:,} ({rate:.0f} sent/s, ETA {eta:.1f} h)")
+            gpu = (f", VRAM {torch.cuda.max_memory_reserved() / 1e9:.1f} GB"
+                   if device == "cuda" else "")
+            log(f"  embed {done:,}/{n_rows:,} ({rate:.0f} sent/s, ETA {eta:.1f} h, "
+                f"RSS {_proc_gb('VmRSS'):.1f} GB{gpu})")
     if writer is not None:
         writer.close()
         os.replace(cur_tmp, cur_final)
         log(f"embed: {os.path.basename(cur_final)} ({rows_in_shard:,} x {dim}d)")
     log(f"embed: {done:,} vectors across {shard + 1} shard(s)")
+    if device == "cuda":
+        log(f"embed: peak GPU {torch.cuda.max_memory_allocated() / 1e9:.1f} GB allocated, "
+            f"{torch.cuda.max_memory_reserved() / 1e9:.1f} GB reserved")
+    log(f"embed: peak RSS {_proc_gb('VmHWM'):.1f} GB")
 
 
 # ── 5. load into persistent BenoStreamDB tables ────────────────────────────
@@ -348,18 +374,26 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
     else:
         shutil.rmtree(nodes_dir, ignore_errors=True)   # clear crashed-run shell
         t = bsdb.Table.create(f"file://{nodes_dir}", schema)
-    # Index config must be applied in EVERY process: a freshly opened table does
-    # not inherit it, and segments written without it are silently unindexed
-    # (queries then flat-scan them — measured 197 GB read for one search).
-    if has_vec:
-        # Force CPU index builds: the chunked design keeps memory bounded and CPU
-        # builds are fast enough at this scale, so the demo stays deterministic
-        # across machines. (The old nvrtc probe panic that wedged a load is fixed
-        # — see core::index::nvrtc — so GPU is now viable; pass device="cuda" to
-        # opt in.)
+
+    # Force CPU index builds: the chunked design keeps memory bounded and CPU
+    # builds are fast enough at this scale, so the demo stays deterministic
+    # across machines. Set as the table default so it also applies to configs
+    # restored from the manifest on reopen. (The old nvrtc probe panic that
+    # wedged a load is fixed — see core::index::nvrtc — so GPU is now viable;
+    # pass device="cuda" to opt in.)
+    t.set_default_device("cpu")
+
+    # Index config is restored from the manifest on open, so only apply it when a
+    # column is not already configured. Re-applying it on every chunk used to
+    # trigger a full backfill of every prior segment (O(n^2) work and memory —
+    # the demo-load OOM); the engine now also skips already-indexed segments, but
+    # not re-applying is the cheaper belt-and-braces.
+    existing = set(t.index_columns)
+    if has_vec and "embedding" not in existing:
         t.add_index("embedding", {"type": f"hnsw_{quant}" if quant != "none" else "hnsw",
                                   "device": "cpu"})
-    t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
+    if "title" not in existing:
+        t.add_index("title", "inverted")  # BM25 -> hybrid_search (keyword+vector RRF)
 
     def ranged_batches(path, s, e, batch=250_000, columns=None):
         """Batches from `path` clipped to the row range [s, e)."""
@@ -401,14 +435,16 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
             t.write(pa.Table.from_batches([out]))
             n += batch.num_rows
             if n % 2_000_000 < 250_000:
-                log(f"load nodes: {row_start + n:,}/{total_rows:,} ({time.time()-t0:.0f}s)")
+                log(f"load nodes: {row_start + n:,}/{total_rows:,} ({time.time()-t0:.0f}s, "
+                    f"RSS {_proc_gb('VmRSS'):.1f} GB)")
     else:
         log("load nodes: no embeddings — text only (semantic search off)")
         for batch in ranged_batches(nodes_path, row_start, row_end):
             t.write(pa.Table.from_batches([batch]))
             n += batch.num_rows
     t.commit(); t.wait_for_background_tasks()
-    log(f"load nodes: wrote {n:,} rows [{row_start:,}, {row_end:,}) in {time.time()-t0:.0f}s")
+    log(f"load nodes: wrote {n:,} rows [{row_start:,}, {row_end:,}) in {time.time()-t0:.0f}s "
+        f"(peak RSS {_proc_gb('VmHWM'):.1f} GB)")
     if has_vec and delete_shards and row_start == 0 and row_end == total_rows:
         _delete_shards()
 

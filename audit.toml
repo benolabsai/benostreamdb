@@ -2,6 +2,11 @@
 # https://github.com/rustsec/rustsec/tree/main/cargo-audit
 
 [advisories]
+# Ignored advisories are reviewed transitive-dependency advisories with no
+# reachable runtime surface in this project (proc-macro-only, unreachable code
+# path, or accepted upstream). Re-review this list whenever the owning
+# dependency is upgraded; the same set is mirrored in `deny.toml`. Each entry's
+# comment names the crate and the reason so the list cannot silently go stale.
 ignore = [
     # Transitive dependencies & existing ignores
     "RUSTSEC-2026-0104", # rustls-webpki: CRL panic
@@ -22,4 +27,9 @@ ignore = [
     "RUSTSEC-2026-0234", # rkyv: hash table out of bounds
     "RUSTSEC-2026-0233", # rkyv: use-after-free
     "RUSTSEC-2026-0235", # rkyv: Rc/Arc out of bounds
+    # `paste` is unmaintained (RUSTSEC-2024-0436), pulled in transitively by
+    # datafusion-common 52.x (`cargo tree -i paste`). It is a compile-time
+    # proc-macro with no runtime surface and cannot be removed without forking
+    # DataFusion. Mirrored in deny.toml.
+    "RUSTSEC-2024-0436",
 ]

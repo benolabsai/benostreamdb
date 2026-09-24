@@ -84,14 +84,13 @@ impl Table {
             index_cols.sort();
         }
 
-        // Trigger backfill for updated columns
+        // Trigger backfill for updated columns. The backfill bounds its own
+        // per-segment concurrency through the index-build gate (see
+        // `backfill_indexes_async`), so no outer permit is held here — holding
+        // one would starve the inner per-segment permits when the gate is 1.
         let cols_to_backfill: Vec<String> = column_indexes.keys().cloned().collect();
         let table_clone = self.clone();
-        // Backfill rebuilds every segment's index, so it shares the build gate
-        // (see `Table::index_build_gate`) with the write path.
-        let permit = self.acquire_index_build_permit().await?;
         let handle = tokio::spawn(async move {
-            let _permit = permit;
             if let Err(e) = table_clone.backfill_indexes_async(cols_to_backfill).await {
                 tracing::error!("Failed to backfill indexes: {}", e);
             }
@@ -377,15 +376,76 @@ impl Table {
             return Ok(());
         }
 
+        // Idempotency: only rebuild segments that are actually missing a
+        // required index. Without this, every `add_index` on a non-empty table
+        // re-indexed every prior segment — O(n^2) work and memory, which is what
+        // OOM-killed the demo load (per-chunk time grew 293s -> 885s -> 2071s).
+        let required = self.required_index_types(&target_columns);
+        let total = all_entries.len();
+        let to_build: Vec<crate::core::manifest::ManifestEntry> = if required.is_empty() {
+            // No configured algorithms to compare against (e.g. `index_all`):
+            // fall back to rebuilding everything.
+            all_entries
+        } else {
+            all_entries
+                .into_iter()
+                .filter(|e| {
+                    required
+                        .iter()
+                        .any(|(col, ty)| !entry_has_index(e, col, ty))
+                })
+                .collect()
+        };
+        let skipped = total - to_build.len();
+        if skipped > 0 {
+            tracing::info!(
+                total,
+                skipped,
+                to_build = to_build.len(),
+                "backfill: skipping segments that already carry the required indexes"
+            );
+        }
+        if to_build.is_empty() {
+            return Ok(());
+        }
+
+        // Bound the fan-out. Each build holds its segment's vectors plus the
+        // HNSW/IVF/quantizer structures (several GB at a 1 GB flush size); an
+        // unbounded `join_all` over every segment is what OOM-killed the
+        // Wikipedia load. `buffer_unordered` caps in-flight builds, and each
+        // build also takes the shared index-build gate so a backfill cannot
+        // exceed the memory budget alongside concurrent writes.
+        let concurrency = super::index_build_concurrency().max(1);
+        let table_uri = self.uri.clone();
+        let store = self.store.clone();
+        let data_store = self
+            .data_store
+            .clone()
+            .unwrap_or_else(|| self.store.clone());
+        let index_columns = self.indexing.index_columns.read().clone();
+        let index_configs = self.indexing.index_configs.read().clone();
+        let index_all = self.indexing.index_all;
+        let primary_key = self.primary_key.read().clone();
+        let gate = self.index_build_gate.clone();
+
         let entries_results: Vec<Result<crate::core::manifest::ManifestEntry>> =
-            futures::future::join_all(all_entries.iter().map(|entry| {
-                let entry = entry.clone();
-                let table_uri = self.uri.clone();
-                let store = self.store.clone();
-                let data_store = self.data_store.clone().unwrap_or(self.store.clone());
+            futures::stream::iter(to_build.into_iter().map(|entry| {
+                let table_uri = table_uri.clone();
+                let store = store.clone();
+                let data_store = data_store.clone();
                 let target_cols = target_columns.clone();
+                let index_columns = index_columns.clone();
+                let index_configs = index_configs.clone();
+                let primary_key = primary_key.clone();
+                let gate = gate.clone();
 
                 async move {
+                    // Share the write path's build gate (see `Table::index_build_gate`).
+                    let _permit = gate
+                        .acquire_owned()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("index build gate closed: {e}"))?;
+
                     let mut current_entry = entry.clone();
                     let file_path_str = current_entry.file_path.clone();
                     let segment_id = file_path_str
@@ -407,7 +467,7 @@ impl Table {
                         format!("{}/{}", base, rel_parent)
                     };
 
-                    let mut cols_to_index = self.indexing.index_columns.read().clone();
+                    let mut cols_to_index = index_columns.clone();
                     for col in target_cols {
                         if !cols_to_index.contains(&col) {
                             cols_to_index.push(col);
@@ -417,15 +477,15 @@ impl Table {
                     let config = SegmentConfig::new(&full_base_uri, segment_id)
                         .with_parquet_path(current_entry.file_path.clone())
                         .with_data_store(data_store)
-                        .with_index_all(self.indexing.index_all)
+                        .with_index_all(index_all)
                         .with_columns_to_index(cols_to_index);
 
                     let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
                     let mut writer = HybridSegmentWriter::new(config)
-                        .with_index_configs(self.indexing.index_configs.read().clone())
+                        .with_index_configs(index_configs)
                         .with_record_count(current_entry.record_count as usize)
                         .with_existing_stats(current_entry.column_stats.clone());
-                    writer.primary_key = self.primary_key.read().clone();
+                    writer.primary_key = primary_key;
                     writer.set_store(store.clone());
 
                     let stream = reader.stream_row_groups(None, None).await?;
@@ -465,6 +525,8 @@ impl Table {
                     Ok(current_entry)
                 }
             }))
+            .buffer_unordered(concurrency)
+            .collect()
             .await;
 
         let mut updated_entries = Vec::new();
@@ -477,6 +539,29 @@ impl Table {
         }
 
         Ok(())
+    }
+
+    /// Physical index types required for `target_columns` (or every configured
+    /// column when `target_columns` is empty), as `(column, index_type)` pairs.
+    ///
+    /// Used by [`Self::backfill_indexes_async`] to skip segments that already
+    /// carry the required indexes.
+    fn required_index_types(&self, target_columns: &[String]) -> Vec<(String, &'static str)> {
+        let configs = self.indexing.index_configs.read();
+        let cols: Vec<String> = if target_columns.is_empty() {
+            configs.keys().cloned().collect()
+        } else {
+            target_columns.to_vec()
+        };
+        let mut out = Vec::new();
+        for col in cols {
+            if let Some(cfg) = configs.get(&col) {
+                for alg in &cfg.algorithms {
+                    out.push((col.clone(), physical_index_type(alg)));
+                }
+            }
+        }
+        out
     }
 
     // -----------------------------------------------------------------------
@@ -550,5 +635,120 @@ impl Table {
         }
 
         Ok(())
+    }
+}
+
+/// Physical `index_type` string a configured algorithm produces in the manifest.
+///
+/// Mirrors the values written by the segment writer (`"vector"`, `"inverted"`,
+/// `"scalar"`, `"graph"`, `"bloom"`) so backfill can tell whether a segment
+/// already carries the index a column needs.
+fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
+    match alg {
+        IndexAlgorithm::Hnsw { .. }
+        | IndexAlgorithm::HnswPq { .. }
+        | IndexAlgorithm::HnswTq4 { .. }
+        | IndexAlgorithm::HnswTq8 { .. } => "vector",
+        IndexAlgorithm::Bm25 { .. } => "inverted",
+        IndexAlgorithm::Bloom { .. } => "bloom",
+        IndexAlgorithm::Bitmap | IndexAlgorithm::CompositeBitmap { .. } => "scalar",
+        IndexAlgorithm::CsrGraph { .. } => "graph",
+    }
+}
+
+/// Whether a manifest entry already carries an index of `ty` on `col`.
+fn entry_has_index(entry: &crate::core::manifest::ManifestEntry, col: &str, ty: &str) -> bool {
+    entry
+        .index_files
+        .iter()
+        .any(|f| f.column_name.as_deref() == Some(col) && f.index_type == ty)
+}
+
+#[cfg(test)]
+mod backfill_tests {
+    use super::*;
+    use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry};
+
+    fn tq8() -> IndexAlgorithm {
+        IndexAlgorithm::HnswTq8 {
+            metric: "l2".to_string(),
+            complexity: 16,
+            quality: 200,
+        }
+    }
+
+    #[test]
+    fn physical_index_type_maps_vector_family_to_vector() {
+        // The manifest records the vector family as "vector", regardless of the
+        // concrete quantization (hnsw / tq4 / tq8), so the skip check must too.
+        assert_eq!(physical_index_type(&tq8()), "vector");
+        assert_eq!(physical_index_type(&IndexAlgorithm::Bitmap), "scalar");
+        assert_eq!(
+            physical_index_type(&IndexAlgorithm::Bm25 {
+                k1: 1.5,
+                b: 0.75,
+                tokenizer: "default".to_string(),
+            }),
+            "inverted"
+        );
+    }
+
+    #[test]
+    fn entry_has_index_matches_column_and_type() {
+        let entry = ManifestEntry {
+            index_files: vec![
+                IndexFile {
+                    file_path: "seg.title.inv.parquet".to_string(),
+                    index_type: "inverted".to_string(),
+                    column_name: Some("title".to_string()),
+                    ..Default::default()
+                },
+                IndexFile {
+                    file_path: "seg.embedding.tq8.centroids.parquet".to_string(),
+                    index_type: "vector".to_string(),
+                    column_name: Some("embedding".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(entry_has_index(&entry, "title", "inverted"));
+        assert!(entry_has_index(&entry, "embedding", "vector"));
+        // Wrong column, wrong type, or an unknown column must not match — an
+        // over-eager match would silently skip a needed rebuild.
+        assert!(!entry_has_index(&entry, "title", "vector"));
+        assert!(!entry_has_index(&entry, "embedding", "inverted"));
+        assert!(!entry_has_index(&entry, "missing", "inverted"));
+    }
+
+    #[test]
+    fn an_indexed_segment_is_reported_complete() {
+        // A segment carrying every required (column, type) pair is complete, so
+        // `backfill_indexes_async` skips it instead of rebuilding it.
+        let entry = ManifestEntry {
+            index_files: vec![
+                IndexFile {
+                    file_path: "seg.title.inv.parquet".to_string(),
+                    index_type: "inverted".to_string(),
+                    column_name: Some("title".to_string()),
+                    ..Default::default()
+                },
+                IndexFile {
+                    file_path: "seg.embedding.tq8.centroids.parquet".to_string(),
+                    index_type: "vector".to_string(),
+                    column_name: Some("embedding".to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let required = [
+            ("embedding".to_string(), "vector"),
+            ("title".to_string(), "inverted"),
+        ];
+        let needs_build = required
+            .iter()
+            .any(|(col, ty)| !entry_has_index(&entry, col, ty));
+        assert!(!needs_build, "fully-indexed segment must be skipped");
     }
 }

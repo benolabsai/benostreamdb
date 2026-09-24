@@ -4,7 +4,7 @@ Thank you for your interest in contributing! BenoStreamDB is a serverless index-
 
 ## Project Principles
 
-Before contributing, please read [STEERING.md](STEERING.md) for our development philosophy. It covers our approach to code quality, design, and release readiness based on *The Pragmatic Programmer*.
+Before contributing, please read [.instructions.md](.instructions.md) for our development philosophy. It covers our approach to code quality, design, and release readiness based on *The Pragmatic Programmer*.
 
 ---
 

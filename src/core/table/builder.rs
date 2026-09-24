@@ -334,7 +334,10 @@ impl TableBuilder {
         } else {
             let safe_uri = uri.replace("://", "_").replace("/", "_");
             let dir = std::env::temp_dir().join("benostream_wal").join(safe_uri);
-            tracing::info!(
+            // `warn!`, not `info!`: falling back to a temp-dir WAL means the
+            // writes are not durable across a machine loss, which operators
+            // must see in production logs.
+            tracing::warn!(
                 "Table initialized with remote URI '{}' using default WAL directory '{}'. \
                 For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or BENOSTREAM_WAL_DIR.",
                 uri,

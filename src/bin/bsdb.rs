@@ -7,9 +7,9 @@
 )]
 
 use arrow::util::pretty::print_batches;
-use clap::{Parser, Subcommand};
 use benostreamdb::core::sql::session::BenoStreamSession;
 use benostreamdb::core::table::Table;
+use clap::{Parser, Subcommand};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::sync::Arc;

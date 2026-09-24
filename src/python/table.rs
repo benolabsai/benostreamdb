@@ -1287,10 +1287,9 @@ impl PyTable {
                 let ctx = SessionContext::new();
 
                 // Register table as 't'
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
@@ -1331,10 +1330,9 @@ impl PyTable {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
 
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
@@ -1375,10 +1373,9 @@ impl PyTable {
             .block_on(async {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
                 let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
@@ -1429,10 +1426,9 @@ impl PyTable {
             .block_on(async {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
                 let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
@@ -1532,10 +1528,9 @@ impl PyTable {
                 let ctx = SessionContext::new();
 
                 // Register table as 't'
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
@@ -1712,10 +1707,9 @@ impl PyTable {
                 use datafusion::prelude::SessionContext;
 
                 let ctx = SessionContext::new();
-                let provider =
-                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                        std::sync::Arc::new(self.table.clone()),
-                    ));
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(self.table.clone()),
+                ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
