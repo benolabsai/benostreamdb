@@ -1,6 +1,6 @@
 # Performance Benchmarks
 
-This directory contains comprehensive performance benchmarks for HyperStreamDB.
+This directory contains comprehensive performance benchmarks for BenoStreamDB.
 
 ## Test Structure
 

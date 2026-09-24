@@ -1,6 +1,6 @@
 # Architecture: The Indexed Lakehouse
 
-HyperStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer.
+BenoStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer.
 
 ```text
                Iceberg Table
@@ -16,9 +16,9 @@ Authoritative Storage        Advisory Index Overlay
 
 **"Your Data is Standard. Your Index is Custom."**
 
-HyperStreamDB attaches persistent, reconstructible sidecar index files *alongside* standard Parquet files:
+BenoStreamDB attaches persistent, reconstructible sidecar index files *alongside* standard Parquet files:
 *   **100% Format Compatibility**: Standard data engines (Spark, Trino, DuckDB, Pandas) read the underlying Parquet and Iceberg tables directly at native speed.
-*   **O(log N) Accelerated Retrieval**: HyperStreamDB-aware query engines and REST search gateways leverage inverted bitmap and vector indexes for low-latency queries directly on object storage.
+*   **O(log N) Accelerated Retrieval**: BenoStreamDB-aware query engines and REST search gateways leverage inverted bitmap and vector indexes for low-latency queries directly on object storage.
 *   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results.
 
 ---
@@ -43,7 +43,7 @@ Data is stored in immutable **Segments**, structured as:
 
 ## Ingestion Pipeline: Non-Blocking Indexing & Async WAL
 
-HyperStreamDB achieves high ingestion throughput while maintaining real-time queryability:
+BenoStreamDB achieves high ingestion throughput while maintaining real-time queryability:
 
 1.  **Memtable & Async WAL**: Incoming records write to an in-memory batch buffer with adaptive or immediate WAL fsync durability.
 2.  **Parquet Flushes**: Records flush to compressed Parquet files for immediate durability.
@@ -54,7 +54,7 @@ HyperStreamDB achieves high ingestion throughput while maintaining real-time que
 
 ## The Read Path & Hot Row Cache
 
-HyperStreamDB combines scalar pre-filtering, vector search, and in-memory caching for ultra-low latencies:
+BenoStreamDB combines scalar pre-filtering, vector search, and in-memory caching for ultra-low latencies:
 
 1.  **Scalar Pruning**: Query planner evaluates inverted index sidecars, producing a candidate row bitmap.
 2.  **Vector / Keyword Scoring**:
@@ -67,9 +67,9 @@ HyperStreamDB combines scalar pre-filtering, vector search, and in-memory cachin
 
 ---
 
-## Multi-Protocol Search Gateway (`hypersearch`)
+## Multi-Protocol Search Gateway (`bsdb-search`)
 
-HyperStreamDB exposes its columnar storage and index overlays via standard REST protocols:
+BenoStreamDB exposes its columnar storage and index overlays via standard REST protocols:
 *   **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for `_search`, `_bulk`, `_mapping`, and `_cat/indices`.
 *   **Qdrant Vector API (Port 6333)**: Compatibility for point upserts and vector similarity search.
 *   **Arrow Flight SQL (Port 50051)**: Low-latency zero-copy gRPC queries for analytical tools.

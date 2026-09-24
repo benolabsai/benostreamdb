@@ -1,10 +1,10 @@
 """
-Concurrency and thread-safety tests for HyperStreamDB.
+Concurrency and thread-safety tests for BenoStreamDB.
 
 Tests concurrent readers, writers, and read-write scenarios.
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pytest
 import os
@@ -23,7 +23,7 @@ except RuntimeError:
 def compact_worker(table_uri):
     """Worker function for compaction."""
     try:
-        table = hdb.open_table(table_uri)
+        table = bsdb.open_table(table_uri)
         table.compact()
         return "Compaction completed"
     except Exception as e:
@@ -33,7 +33,7 @@ def compact_worker(table_uri):
 def mixed_worker(table_uri, worker_id, schema_fields):
     """Worker function for mixed read/write operations."""
     try:
-        table = hdb.open_table(table_uri)
+        table = bsdb.open_table(table_uri)
         schema = pa.schema(schema_fields)
         
         # Alternate between reads and writes
@@ -64,7 +64,7 @@ def test_table_path(tmp_path):
 def write_worker(table_uri, worker_id, num_rows):
     """Worker function that writes data to the table."""
     try:
-        table = hdb.open_table(table_uri)
+        table = bsdb.open_table(table_uri)
         
         # Create data specific to this worker
         schema = pa.schema([
@@ -90,7 +90,7 @@ def write_worker(table_uri, worker_id, num_rows):
 def read_worker(table_uri, worker_id):
     """Worker function that reads data from the table."""
     try:
-        table = hdb.open_table(table_uri)
+        table = bsdb.open_table(table_uri)
         df = table.to_pandas()
         return f"Worker {worker_id} read {len(df)} rows"
     except Exception as e:
@@ -102,7 +102,7 @@ def test_concurrent_writers(test_table_path):
     import concurrent.futures
 
     # Create initial table
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     # Initial write to establish schema
     schema = pa.schema([
@@ -144,7 +144,7 @@ def test_concurrent_writers(test_table_path):
         assert "failed" not in output.lower(), f"Worker failed: {output}"
     
     # Verify total row count
-    table2 = hdb.open_table(test_table_path)
+    table2 = bsdb.open_table(test_table_path)
     df = table2.to_pandas()
     
     # Should have initial row + (num_workers * rows_per_worker)
@@ -158,7 +158,7 @@ def test_concurrent_writers(test_table_path):
 def test_concurrent_readers(test_table_path):
     """Test multiple processes reading from the same table concurrently."""
     # Create table with data
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -193,7 +193,7 @@ def test_concurrent_readers(test_table_path):
 def test_read_write_concurrency(test_table_path):
     """Test concurrent readers and writers operating simultaneously."""
     # Create initial table
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('worker_id', pa.int32()),
@@ -241,7 +241,7 @@ def test_read_write_concurrency(test_table_path):
 def test_concurrent_compaction(test_table_path):
     """Test that compaction works correctly with concurrent operations."""
     # Create table with multiple small segments
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -284,7 +284,7 @@ def test_concurrent_compaction(test_table_path):
 def test_lock_contention(test_table_path):
     """Test behavior under high lock contention."""
     # Create table
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),

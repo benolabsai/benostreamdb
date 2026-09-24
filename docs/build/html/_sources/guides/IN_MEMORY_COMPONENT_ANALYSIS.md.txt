@@ -7,7 +7,7 @@
 
 ## What Is the In-Memory Component?
 
-HyperStreamDB has **two types of in-memory components**:
+BenoStreamDB has **two types of in-memory components**:
 
 ### 1. **Write Buffer + InMemoryVectorIndex** (Temporary)
 - **Purpose**: Buffer writes before flush to disk
@@ -98,7 +98,7 @@ impl InMemoryVectorIndex {
 **Benchmarking:**
 - **Write-then-query latency**: Measure time from write to query result
 - **Buffered query performance**: Query performance on buffered data
-- **Comparison**: Qdrant has this too (always in-memory), but HyperStreamDB has it as a buffer
+- **Comparison**: Qdrant has this too (always in-memory), but BenoStreamDB has it as a buffer
 
 **Key Message:**
 > "Query data immediately after write (before commit) - same responsiveness as in-memory databases"
@@ -109,7 +109,7 @@ impl InMemoryVectorIndex {
 
 **Impact:**
 - **Not the same as Qdrant**: Qdrant keeps everything in memory permanently
-- **Different model**: HyperStreamDB uses memory as a temporary buffer, S3 for persistence
+- **Different model**: BenoStreamDB uses memory as a temporary buffer, S3 for persistence
 - **Best of both worlds**: Responsiveness of in-memory + durability of object storage
 
 **Benchmarking:**
@@ -142,7 +142,7 @@ impl InMemoryVectorIndex {
 
 ### Qdrant (In-Memory Database)
 
-| Aspect | Qdrant | HyperStreamDB |
+| Aspect | Qdrant | BenoStreamDB |
 |--------|--------|---------------|
 | **Primary Storage** | RAM (in-memory) | S3 (object storage) |
 | **Memory Usage** | All data in memory | Buffer only (temporary) |
@@ -153,13 +153,13 @@ impl InMemoryVectorIndex {
 
 **Key Difference:**
 - **Qdrant**: Everything in memory (primary storage)
-- **HyperStreamDB**: Memory as buffer, S3 as primary storage
+- **BenoStreamDB**: Memory as buffer, S3 as primary storage
 
 ---
 
 ### Deep Lake / LanceDB (Data Lakes)
 
-| Aspect | Deep Lake/LanceDB | HyperStreamDB |
+| Aspect | Deep Lake/LanceDB | BenoStreamDB |
 |--------|-------------------|---------------|
 | **Memory Component** | Cache only | Write buffer + cache |
 | **Buffered Queries** | No | Yes (immediate query after write) |
@@ -168,7 +168,7 @@ impl InMemoryVectorIndex {
 
 **Key Difference:**
 - **Deep Lake/LanceDB**: No in-memory query capability
-- **HyperStreamDB**: Can query buffered data immediately
+- **BenoStreamDB**: Can query buffered data immediately
 
 ---
 
@@ -179,7 +179,7 @@ impl InMemoryVectorIndex {
 #### Option 1: **"Hybrid Architecture"** (Recommended)
 
 **Message:**
-> "HyperStreamDB combines the responsiveness of in-memory databases with the durability and scale of object storage.
+> "BenoStreamDB combines the responsiveness of in-memory databases with the durability and scale of object storage.
 > 
 > - **In-memory buffer**: Query data immediately after write (before commit)
 > - **Persistent indexes**: Durable, scalable indexes on S3
@@ -197,7 +197,7 @@ impl InMemoryVectorIndex {
 **Message:**
 > "Query data immediately after write - no need to wait for commit.
 > 
-> HyperStreamDB maintains an in-memory index for buffered writes, allowing instant queries on recently written data while maintaining S3 durability for persisted data."
+> BenoStreamDB maintains an in-memory index for buffered writes, allowing instant queries on recently written data while maintaining S3 durability for persisted data."
 
 **Benefits:**
 - Highlights user experience benefit
@@ -251,7 +251,7 @@ impl InMemoryVectorIndex {
    - Could be misleading if over-emphasized
 
 2. **In-Memory vs In-Memory Comparison**
-   - Don't compare HyperStreamDB's buffer to Qdrant's primary storage
+   - Don't compare BenoStreamDB's buffer to Qdrant's primary storage
    - Different architectures (buffer vs primary storage)
    - Unfair comparison
 
@@ -280,7 +280,7 @@ impl InMemoryVectorIndex {
 
 **Important Distinction:**
 - **Qdrant**: Memory is primary storage (all data in RAM)
-- **HyperStreamDB**: Memory is a buffer (temporary, cleared after flush)
+- **BenoStreamDB**: Memory is a buffer (temporary, cleared after flush)
 - **Different architectures**: Don't compare directly
 
 **Positioning:**
@@ -299,7 +299,7 @@ impl InMemoryVectorIndex {
 
 **Competitive Advantage:**
 - Deep Lake/LanceDB: Must wait for flush
-- HyperStreamDB: Immediate query capability
+- BenoStreamDB: Immediate query capability
 - Qdrant: Always in-memory (but different model)
 
 ---

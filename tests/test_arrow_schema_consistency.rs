@@ -3,8 +3,8 @@
 use arrow::array::{FixedSizeListArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::index::VectorValue;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::index::VectorValue;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 

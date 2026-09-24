@@ -1,4 +1,4 @@
-import hyperstreamdb as hs
+import benostreamdb as hs
 import numpy as np
 import pandas as pd
 import shutil
@@ -52,7 +52,7 @@ def test_hybrid_search():
     print("\nExecuting Hybrid Search...")
     query_vector = [1.0] * 128
     
-    # In HyperStreamDB Python API, hybrid search is triggered by providing
+    # In BenoStreamDB Python API, hybrid search is triggered by providing
     # a SQL-style filter string to the 'search' method.
     # The Smart Trigger detects the column name and dispatches to BM25.
     results_df = table.search(

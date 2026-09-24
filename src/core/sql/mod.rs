@@ -30,7 +30,7 @@ use datafusion::datasource::TableType;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::core::sql::physical_plan::HyperStreamExec;
+use crate::core::sql::physical_plan::BenoStreamExec;
 use crate::core::table::Table;
 
 /// A range bound on a single column, used for OR-over-ranges pruning.
@@ -207,11 +207,11 @@ fn extract_or_ranges(expr: &Expr) -> Option<(String, Vec<RangeBound>)> {
 }
 
 #[derive(Debug)]
-pub struct HyperStreamTableProvider {
+pub struct BenoStreamTableProvider {
     pub table: Arc<Table>,
 }
 
-impl HyperStreamTableProvider {
+impl BenoStreamTableProvider {
     pub fn new(table: Arc<Table>) -> Self {
         Self { table }
     }
@@ -257,7 +257,7 @@ fn strip_metadata(schema: SchemaRef) -> SchemaRef {
 }
 
 #[async_trait]
-impl TableProvider for HyperStreamTableProvider {
+impl TableProvider for BenoStreamTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -407,7 +407,7 @@ impl TableProvider for HyperStreamTableProvider {
         // fetch index columns to prioritize filters
         let _index_cols = self.table.get_index_columns(); // This returns Vec<String>
 
-        // Convert DataFusion filters to HyperStream SQL-like filter string
+        // Convert DataFusion filters to BenoStream SQL-like filter string
         // Returns Option<(ColumnName, SQLString)>
         fn expr_to_sql(expr: &Expr) -> Option<(String, String)> {
             match expr {
@@ -588,7 +588,7 @@ impl TableProvider for HyperStreamTableProvider {
             };
 
             Ok(Arc::new(
-                HyperStreamExec::new(
+                BenoStreamExec::new(
                     self.table.clone(),
                     partitions,
                     projection.cloned(),
@@ -676,7 +676,7 @@ mod tests {
         table.commit_async().await.unwrap();
 
         // Create Provider
-        let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(table)));
+        let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(table)));
 
         // Create DataFusion context and plan a scan
         let ctx = SessionContext::new();
@@ -686,14 +686,14 @@ mod tests {
         let logical_plan = df.logical_plan();
         let physical_plan = ctx.state().create_physical_plan(logical_plan).await?;
 
-        // Verify Physical Plan is HyperStreamExec and has partitions
+        // Verify Physical Plan is BenoStreamExec and has partitions
         let display = format!(
             "{}",
             datafusion::physical_plan::displayable(physical_plan.as_ref()).indent(true)
         );
         println!("Plan: {}", display);
 
-        // We expect HyperStreamExec to be present.
+        // We expect BenoStreamExec to be present.
         // And since we didn't set max_readers, default is 4.
         // We have 3 segments.
         // 3 segments < 4 partitions => Should result in 3 partitions (logic: i % 4, so 0, 1, 2).
@@ -707,7 +707,7 @@ mod tests {
 
         // Assert string contains "partitions=3" (based on DisplayAs impl)
         assert!(
-            display.contains("HyperStreamExec: partitions=3")
+            display.contains("BenoStreamExec: partitions=3")
                 || display.contains("VectorMergeExec: k=100"),
             "Plan did not match expected structure. Plan was: {}",
             display
@@ -738,7 +738,7 @@ mod tests {
             table.commit_async().await.unwrap();
         }
 
-        let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(table)));
+        let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(table)));
         let ctx = SessionContext::new();
         ctx.register_table("t", provider).unwrap();
 

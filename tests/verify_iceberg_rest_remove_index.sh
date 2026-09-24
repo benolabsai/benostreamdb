@@ -31,7 +31,7 @@ CREATE_PAYLOAD='{
     "fields": [ { "id": 1, "name": "val", "type": "int", "required": true } ]
   }
 }'
-curl -s -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables \
+curl -s -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables \
   -H "Content-Type: application/json" \
   -d "$CREATE_PAYLOAD" > /dev/null
 
@@ -99,7 +99,7 @@ ADD_INDEX_PAYLOAD='{
 }'
 
 echo "Sending AddSidecarIndex request..."
-curl -v -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables/test_index_table \
+curl -v -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables/test_index_table \
   -H "Content-Type: application/json" \
   -d "$ADD_INDEX_PAYLOAD" 2>&1 | tee /tmp/add_index_response.txt
 
@@ -121,7 +121,7 @@ UPDATE_PAYLOAD='{
 }'
 
 echo "Sending RemoveSidecarIndex request..."
-RESPONSE=$(curl -v -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables/test_index_table \
+RESPONSE=$(curl -v -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables/test_index_table \
   -H "Content-Type: application/json" \
   -d "$UPDATE_PAYLOAD" 2>&1)
 

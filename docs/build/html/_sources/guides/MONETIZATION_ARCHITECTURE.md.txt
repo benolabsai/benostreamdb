@@ -35,7 +35,7 @@
 ### Directory Layout
 
 ```
-hyperstreamdb/
+benostreamdb/
 ├── src/
 │   ├── core/              # Open source core (Apache 2.0)
 │   │   ├── table.rs
@@ -68,13 +68,13 @@ hyperstreamdb/
 
 ```toml
 [package]
-name = "hyperstreamdb"
+name = "benostreamdb"
 version = "0.1.0"
 edition = "2021"
 
 [features]
 default = []
-enterprise = ["hyperstreamdb-enterprise"]  # Enable premium features
+enterprise = ["benostreamdb-enterprise"]  # Enable premium features
 
 [dependencies]
 # Core dependencies (always included)
@@ -83,7 +83,7 @@ parquet = "57.2.0"
 # ... other core deps
 
 # Enterprise features (optional dependency)
-hyperstreamdb-enterprise = { path = "../hyperstreamdb-enterprise", optional = true }
+benostreamdb-enterprise = { path = "../benostreamdb-enterprise", optional = true }
 
 [dev-dependencies]
 # ... test dependencies
@@ -174,7 +174,7 @@ impl ContinuousIndexBuilder {
         if self.license_key.is_none() {
             anyhow::bail!(
                 "Continuous indexing requires a commercial license. \
-                Visit https://hyperstreamdb.com/pricing for more information."
+                Visit https://benostreamdb.org/pricing for more information."
             );
         }
         Ok(())
@@ -320,14 +320,14 @@ impl PyTable {
 
 **Python Usage**:
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Free version (basic indexing)
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 table.write_arrow(data)  # Indexes rebuilt on flush (free)
 
 # Enterprise version (continuous indexing)
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 table.enable_enterprise("HSDB-ENT-...")  # Requires license
 table.enable_continuous_indexing()       # Premium feature
 table.write_arrow(data)  # Incremental index updates (premium)
@@ -400,16 +400,16 @@ impl ContinuousIndexBuilder {
 
 For even cleaner separation, create a separate crate:
 
-**`hyperstreamdb-enterprise/Cargo.toml`**:
+**`benostreamdb-enterprise/Cargo.toml`**:
 ```toml
 [package]
-name = "hyperstreamdb-enterprise"
+name = "benostreamdb-enterprise"
 version = "0.1.0"
 edition = "2021"
 license = "COMMERCIAL"  # Not open source
 
 [dependencies]
-hyperstreamdb = { path = "../hyperstreamdb", default-features = false }
+benostreamdb = { path = "../benostreamdb", default-features = false }
 # Enterprise-specific dependencies
 ```
 
@@ -479,7 +479,7 @@ hyperstreamdb = { path = "../hyperstreamdb", default-features = false }
 
 2. **Competitive Necessity**: 
    - All major ML/data tools offer free GPU support
-   - Charging would put HyperStreamDB at a disadvantage
+   - Charging would put BenoStreamDB at a disadvantage
    - Users expect GPU support to be free (industry standard)
 
 3. **User Expectations**:
@@ -526,7 +526,7 @@ pub mod gpu {
 **Example:**
 ```python
 # Free: Use your own GPU
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 table.enable_gpu()  # Uses local GPU (free)
 
 # Premium: Managed GPU infrastructure
@@ -540,7 +540,7 @@ table.enable_managed_gpu(cluster_id="gpu-cluster-1")  # Cloud GPUs (paid)
 | **PyTorch** | ✅ Free | Open source |
 | **FAISS** | ✅ Free | Open source |
 | **Milvus** | ✅ Free (OSS) | Free in open source, paid in cloud |
-| **HyperStreamDB** | ✅ **Free (Recommended)** | Open source, premium for managed |
+| **BenoStreamDB** | ✅ **Free (Recommended)** | Open source, premium for managed |
 
 ### Final Recommendation
 

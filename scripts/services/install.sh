@@ -2,7 +2,7 @@
 set -e
 
 echo "=================================================="
-echo "  HyperStreamDB Search Background Service Installer"
+echo "  BenoStreamDB Search Background Service Installer"
 echo "=================================================="
 
 # Detect OS
@@ -12,11 +12,11 @@ if [ "$OS" != "Linux" ] && [ "$OS" != "Darwin" ]; then
     exit 1
 fi
 
-# Ensure hyperstream-search is built or available in target/release
-BINARY_SRC="../../target/release/hyperstream-search"
+# Ensure benostream-search is built or available in target/release
+BINARY_SRC="../../target/release/benostream-search"
 if [ ! -f "$BINARY_SRC" ]; then
     echo "Warning: $BINARY_SRC not found."
-    echo "Make sure you build the project first with: cargo build --release -p hyperstreamdb-search"
+    echo "Make sure you build the project first with: cargo build --release -p benostreamdb-search"
     # We won't exit here, just warn them, in case they already have it installed
 fi
 
@@ -24,50 +24,50 @@ fi
 echo "Requesting administrative privileges for installation..."
 sudo -v
 
-echo "Installing hyperstream-search binary to /usr/local/bin..."
+echo "Installing benostream-search binary to /usr/local/bin..."
 if [ -f "$BINARY_SRC" ]; then
-    sudo cp "$BINARY_SRC" /usr/local/bin/hyperstream-search
+    sudo cp "$BINARY_SRC" /usr/local/bin/benostream-search
 fi
-sudo chmod +x /usr/local/bin/hyperstream-search
+sudo chmod +x /usr/local/bin/benostream-search
 
 # Install configuration file
 if [ "$OS" = "Linux" ]; then
-    CONF_DIR="/etc/hyperstreamdb"
+    CONF_DIR="/etc/benostreamdb"
 else
     # macOS
-    CONF_DIR="/usr/local/etc/hyperstreamdb"
+    CONF_DIR="/usr/local/etc/benostreamdb"
 fi
 
 echo "Creating configuration directory at $CONF_DIR..."
 sudo mkdir -p "$CONF_DIR"
 
-echo "Installing hyperstream-search.conf..."
-sudo cp hyperstream-search.conf "$CONF_DIR/"
-echo "You can configure your settings by editing: $CONF_DIR/hyperstream-search.conf"
+echo "Installing benostream-search.conf..."
+sudo cp benostream-search.conf "$CONF_DIR/"
+echo "You can configure your settings by editing: $CONF_DIR/benostream-search.conf"
 
 # Install Services
 if [ "$OS" = "Linux" ]; then
     echo "Installing systemd service (Linux)..."
-    sudo cp hyperstream-search.service /etc/systemd/system/
+    sudo cp benostream-search.service /etc/systemd/system/
     sudo systemctl daemon-reload
-    sudo systemctl enable hyperstream-search.service
-    sudo systemctl start hyperstream-search.service
-    echo "Service installed and started! Check logs with: sudo journalctl -u hyperstream-search.service -f"
+    sudo systemctl enable benostream-search.service
+    sudo systemctl start benostream-search.service
+    echo "Service installed and started! Check logs with: sudo journalctl -u benostream-search.service -f"
     
 elif [ "$OS" = "Darwin" ]; then
     echo "Installing launchd service (macOS)..."
-    sudo cp hyperstream-search-runner.sh /usr/local/bin/
-    sudo chmod +x /usr/local/bin/hyperstream-search-runner.sh
+    sudo cp benostream-search-runner.sh /usr/local/bin/
+    sudo chmod +x /usr/local/bin/benostream-search-runner.sh
     
-    PLIST_DEST="/Library/LaunchDaemons/com.hyperstreamdb.search.plist"
-    sudo cp com.hyperstreamdb.search.plist "$PLIST_DEST"
+    PLIST_DEST="/Library/LaunchDaemons/com.benostreamdb.search.plist"
+    sudo cp com.benostreamdb.search.plist "$PLIST_DEST"
     sudo chown root:wheel "$PLIST_DEST"
     
     # Reload if it was already loaded
     sudo launchctl unload -w "$PLIST_DEST" 2>/dev/null || true
     sudo launchctl load -w "$PLIST_DEST"
     
-    echo "Service installed and started! Check logs with: tail -f /tmp/hyperstream-search.log"
+    echo "Service installed and started! Check logs with: tail -f /tmp/benostream-search.log"
 fi
 
 echo "=================================================="

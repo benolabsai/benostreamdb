@@ -272,31 +272,59 @@ impl Accumulator for PersonalizedPageRankAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected ListArray for sources".to_string(),
+                )
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected ListArray for targets".to_string(),
+                )
+            })?;
         let seeds_list = states[2]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected ListArray for seeds".to_string(),
+                )
+            })?;
         let damping_arr = states[3]
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected Float64Array for damping".to_string(),
+                )
+            })?;
         let iterations_arr = states[4]
             .as_any()
             .downcast_ref::<arrow::array::UInt32Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected UInt32Array for iterations".to_string(),
+                )
+            })?;
         let directed_arr = states[5]
             .as_any()
             .downcast_ref::<arrow::array::BooleanArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected BooleanArray for directed".to_string(),
+                )
+            })?;
         let seed_weights_list = states[6]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "personalized_pagerank: expected ListArray for seed weights".to_string(),
+                )
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {

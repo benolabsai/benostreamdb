@@ -5,7 +5,7 @@ set -e
 API_URL="http://localhost:8181"
 NAMESPACE="default"
 TABLE="puffin_test"
-STORAGE_DIR="/tmp/hyperstream_puffin_test"
+STORAGE_DIR="/tmp/benostream_puffin_test"
 
 # 1. Cleanup and Reset
 rm -rf $STORAGE_DIR

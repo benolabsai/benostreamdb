@@ -1,12 +1,12 @@
 #!/bin/bash
 # ---------------------------------------------------------------------------
-# HyperStreamDB Quickstart Entrypoint
+# BenoStreamDB Quickstart Entrypoint
 # Launches both Search (ES 7.10 + Qdrant) and Flight SQL services
 # ---------------------------------------------------------------------------
 set -e
 
 echo "============================================="
-echo "  HyperStreamDB Quickstart"
+echo "  BenoStreamDB Quickstart"
 echo "  ES 7.10 API:     http://0.0.0.0:9200"
 echo "  Qdrant API:      http://0.0.0.0:6333"
 echo "  Flight SQL gRPC: grpc://0.0.0.0:50051"
@@ -14,7 +14,7 @@ echo "============================================="
 
 # Launch Flight SQL server in background
 echo "[quickstart] Starting Flight SQL server on :50051..."
-hyperstreamdb-flight &
+benostreamdb-flight &
 FLIGHT_PID=$!
 
 # Launch Search server in foreground (captures signals for graceful shutdown)
@@ -29,7 +29,7 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT
 
-hypersearch &
+bsdb-search &
 SEARCH_PID=$!
 
 # Wait for either process to exit

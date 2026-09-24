@@ -11,12 +11,12 @@ use anyhow::Result;
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::manifest::{CommitMetadata, ManifestEntry, ManifestManager};
-use hyperstreamdb::core::storage::create_object_store;
-use hyperstreamdb::core::table::builder::TableBuilder;
-use hyperstreamdb::core::table::WalDurability;
-use hyperstreamdb::core::wal::{extract_wal_tx, tag_batch_with_wal_tx, WriteAheadLog};
-use hyperstreamdb::Table;
+use benostreamdb::core::manifest::{CommitMetadata, ManifestEntry, ManifestManager};
+use benostreamdb::core::storage::create_object_store;
+use benostreamdb::core::table::builder::TableBuilder;
+use benostreamdb::core::table::WalDurability;
+use benostreamdb::core::wal::{extract_wal_tx, tag_batch_with_wal_tx, WriteAheadLog};
+use benostreamdb::Table;
 use std::sync::Arc;
 
 async fn create_test_batch(start_id: i32, num_rows: usize) -> RecordBatch {

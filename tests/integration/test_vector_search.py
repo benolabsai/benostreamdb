@@ -2,7 +2,7 @@ import sys
 import os
 import time
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow.parquet as pq
 from pathlib import Path
 
@@ -26,15 +26,15 @@ def test_vector_search_flow():
         generate_embeddings(num_vectors=num_vectors, batch_size=10_000)
     
     # 2. Ingest
-    table_uri = "file:///tmp/hyperstream_test/embeddings"
+    table_uri = "file:///tmp/benostream_test/embeddings"
     # Ensure clean state
-    # shutil.rmtree("/tmp/hyperstream_test/embeddings", ignore_errors=True) 
+    # shutil.rmtree("/tmp/benostream_test/embeddings", ignore_errors=True) 
     
     try:
-        table = hdb.Table(table_uri)
+        table = bsdb.Table(table_uri)
     except AttributeError:
         print("AttributeError: Table not found. Checking exposed classes...")
-        print(dir(hdb))
+        print(dir(bsdb))
         sys.exit(1)
 
     # Enable indexing for vector search

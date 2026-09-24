@@ -150,8 +150,8 @@ fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<DataTy
     }
 }
 
-/// Convert Iceberg partition spec to HyperStream PartitionSpec
-pub fn iceberg_partition_spec_to_hyperstream(
+/// Convert Iceberg partition spec to BenoStream PartitionSpec
+pub fn iceberg_partition_spec_to_benostream(
     spec_json: &serde_json::Value,
 ) -> Result<crate::core::manifest::PartitionSpec> {
     use crate::core::manifest::{PartitionField, PartitionSpec};

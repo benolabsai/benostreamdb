@@ -10,7 +10,7 @@ docker run -p 8181:8181 apache/polaris:latest
 ```
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pytest
 import json
 
@@ -21,7 +21,7 @@ def test_rest_catalog_basic():
     """Test basic REST Catalog operations"""
     
     # Create REST catalog client
-    catalog = hdb.PyRestCatalog(REST_CATALOG_URL)
+    catalog = bsdb.PyRestCatalog(REST_CATALOG_URL)
     
     # Define Iceberg schema
     schema = {
@@ -62,7 +62,7 @@ def test_rest_catalog_with_prefix():
     """Test REST Catalog with prefix"""
     
     # Create catalog with prefix
-    catalog = hdb.PyRestCatalog(REST_CATALOG_URL, prefix="warehouse")
+    catalog = bsdb.PyRestCatalog(REST_CATALOG_URL, prefix="warehouse")
     
     # Should work the same way
     assert catalog is not None

@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>In-Memory Component Analysis: Does It Matter for Benchmarking? - HyperStreamDB 0.5.5 documentation</title>
+        <title>In-Memory Component Analysis: Does It Matter for Benchmarking? - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -270,7 +270,7 @@
 <hr class="docutils" />
 <section id="what-is-the-in-memory-component">
 <h2>What Is the In-Memory Component?<a class="headerlink" href="#what-is-the-in-memory-component" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB has <strong>two types of in-memory components</strong>:</p>
+<p>BenoStreamDB has <strong>two types of in-memory components</strong>:</p>
 <section id="write-buffer-inmemoryvectorindex-temporary">
 <h3>1. <strong>Write Buffer + InMemoryVectorIndex</strong> (Temporary)<a class="headerlink" href="#write-buffer-inmemoryvectorindex-temporary" title="Link to this heading">¶</a></h3>
 <ul class="simple">
@@ -372,7 +372,7 @@
 <ul class="simple">
 <li><p><strong>Write-then-query latency</strong>: Measure time from write to query result</p></li>
 <li><p><strong>Buffered query performance</strong>: Query performance on buffered data</p></li>
-<li><p><strong>Comparison</strong>: Qdrant has this too (always in-memory), but HyperStreamDB has it as a buffer</p></li>
+<li><p><strong>Comparison</strong>: Qdrant has this too (always in-memory), but BenoStreamDB has it as a buffer</p></li>
 </ul>
 <p><strong>Key Message:</strong></p>
 <blockquote>
@@ -385,7 +385,7 @@
 <p><strong>Impact:</strong></p>
 <ul class="simple">
 <li><p><strong>Not the same as Qdrant</strong>: Qdrant keeps everything in memory permanently</p></li>
-<li><p><strong>Different model</strong>: HyperStreamDB uses memory as a temporary buffer, S3 for persistence</p></li>
+<li><p><strong>Different model</strong>: BenoStreamDB uses memory as a temporary buffer, S3 for persistence</p></li>
 <li><p><strong>Best of both worlds</strong>: Responsiveness of in-memory + durability of object storage</p></li>
 </ul>
 <p><strong>Benchmarking:</strong></p>
@@ -430,7 +430,7 @@
 <thead>
 <tr class="row-odd"><th class="head"><p>Aspect</p></th>
 <th class="head"><p>Qdrant</p></th>
-<th class="head"><p>HyperStreamDB</p></th>
+<th class="head"><p>BenoStreamDB</p></th>
 </tr>
 </thead>
 <tbody>
@@ -464,7 +464,7 @@
 <p><strong>Key Difference:</strong></p>
 <ul class="simple">
 <li><p><strong>Qdrant</strong>: Everything in memory (primary storage)</p></li>
-<li><p><strong>HyperStreamDB</strong>: Memory as buffer, S3 as primary storage</p></li>
+<li><p><strong>BenoStreamDB</strong>: Memory as buffer, S3 as primary storage</p></li>
 </ul>
 </section>
 <hr class="docutils" />
@@ -475,7 +475,7 @@
 <thead>
 <tr class="row-odd"><th class="head"><p>Aspect</p></th>
 <th class="head"><p>Deep Lake/LanceDB</p></th>
-<th class="head"><p>HyperStreamDB</p></th>
+<th class="head"><p>BenoStreamDB</p></th>
 </tr>
 </thead>
 <tbody>
@@ -501,7 +501,7 @@
 <p><strong>Key Difference:</strong></p>
 <ul class="simple">
 <li><p><strong>Deep Lake/LanceDB</strong>: No in-memory query capability</p></li>
-<li><p><strong>HyperStreamDB</strong>: Can query buffered data immediately</p></li>
+<li><p><strong>BenoStreamDB</strong>: Can query buffered data immediately</p></li>
 </ul>
 </section>
 </section>
@@ -514,7 +514,7 @@
 <h4>Option 1: <strong>“Hybrid Architecture”</strong> (Recommended)<a class="headerlink" href="#option-1-hybrid-architecture-recommended" title="Link to this heading">¶</a></h4>
 <p><strong>Message:</strong></p>
 <blockquote>
-<div><p>“HyperStreamDB combines the responsiveness of in-memory databases with the durability and scale of object storage.</p>
+<div><p>“BenoStreamDB combines the responsiveness of in-memory databases with the durability and scale of object storage.</p>
 <ul class="simple">
 <li><p><strong>In-memory buffer</strong>: Query data immediately after write (before commit)</p></li>
 <li><p><strong>Persistent indexes</strong>: Durable, scalable indexes on S3</p></li>
@@ -534,7 +534,7 @@
 <p><strong>Message:</strong></p>
 <blockquote>
 <div><p>“Query data immediately after write - no need to wait for commit.</p>
-<p>HyperStreamDB maintains an in-memory index for buffered writes, allowing instant queries on recently written data while maintaining S3 durability for persisted data.”</p>
+<p>BenoStreamDB maintains an in-memory index for buffered writes, allowing instant queries on recently written data while maintaining S3 durability for persisted data.”</p>
 </div></blockquote>
 <p><strong>Benefits:</strong></p>
 <ul class="simple">
@@ -604,7 +604,7 @@
 </li>
 <li><p><strong>In-Memory vs In-Memory Comparison</strong></p>
 <ul class="simple">
-<li><p>Don’t compare HyperStreamDB’s buffer to Qdrant’s primary storage</p></li>
+<li><p>Don’t compare BenoStreamDB’s buffer to Qdrant’s primary storage</p></li>
 <li><p>Different architectures (buffer vs primary storage)</p></li>
 <li><p>Unfair comparison</p></li>
 </ul>
@@ -644,7 +644,7 @@
 <p><strong>Important Distinction:</strong></p>
 <ul class="simple">
 <li><p><strong>Qdrant</strong>: Memory is primary storage (all data in RAM)</p></li>
-<li><p><strong>HyperStreamDB</strong>: Memory is a buffer (temporary, cleared after flush)</p></li>
+<li><p><strong>BenoStreamDB</strong>: Memory is a buffer (temporary, cleared after flush)</p></li>
 <li><p><strong>Different architectures</strong>: Don’t compare directly</p></li>
 </ul>
 <p><strong>Positioning:</strong></p>
@@ -666,7 +666,7 @@
 <p><strong>Competitive Advantage:</strong></p>
 <ul class="simple">
 <li><p>Deep Lake/LanceDB: Must wait for flush</p></li>
-<li><p>HyperStreamDB: Immediate query capability</p></li>
+<li><p>BenoStreamDB: Immediate query capability</p></li>
 <li><p>Qdrant: Always in-memory (but different model)</p></li>
 </ul>
 </section>
@@ -797,7 +797,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -806,7 +806,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Concurrency and Atomic Commits - HyperStreamDB 0.5.5 documentation</title>
+        <title>Concurrency and Atomic Commits - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -265,10 +265,10 @@
         <article role="main" id="furo-main-content">
           <section id="concurrency-and-atomic-commits">
 <h1>Concurrency and Atomic Commits<a class="headerlink" href="#concurrency-and-atomic-commits" title="Link to this heading">¶</a></h1>
-<p>HyperStreamDB is designed for high-concurrency environments where multiple clients may be reading from and writing to the same table simultaneously.</p>
+<p>BenoStreamDB is designed for high-concurrency environments where multiple clients may be reading from and writing to the same table simultaneously.</p>
 <section id="optimistic-concurrency-control-occ">
 <h2>Optimistic Concurrency Control (OCC)<a class="headerlink" href="#optimistic-concurrency-control-occ" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB employs <strong>Optimistic Concurrency Control</strong> to ensure ACID compliance without the need for heavyweight central locks in most cases.</p>
+<p>BenoStreamDB employs <strong>Optimistic Concurrency Control</strong> to ensure ACID compliance without the need for heavyweight central locks in most cases.</p>
 <section id="snapshot-versioning">
 <h3>Snapshot Versioning<a class="headerlink" href="#snapshot-versioning" title="Link to this heading">¶</a></h3>
 <p>Every table state is represented by a specific version of the manifest file (e.g., <code class="docutils literal notranslate"><span class="pre">_manifest/v100.json</span></code>). These files are immutable once written.</p>
@@ -287,7 +287,7 @@
 <p>If another client successfully committed <code class="docutils literal notranslate"><span class="pre">v101.json</span></code> while the first client was preparing its changes:</p>
 <ul class="simple">
 <li><p>The first client’s write operation will fail with an <code class="docutils literal notranslate"><span class="pre">AlreadyExists</span></code> or conflict error.</p></li>
-<li><p>HyperStreamDB automatically <strong>retries</strong> the commit (up to 100 times).</p></li>
+<li><p>BenoStreamDB automatically <strong>retries</strong> the commit (up to 100 times).</p></li>
 <li><p>In each retry, the client re-reads the <em>new</em> latest version, merges its changes again, and attempts to commit the <em>next</em> version (e.g., <code class="docutils literal notranslate"><span class="pre">v102</span></code>).</p></li>
 <li><p>A randomized <strong>exponential backoff</strong> is used between retries to reduce contention.</p></li>
 </ul>
@@ -296,7 +296,7 @@
 <section id="catalog-level-locking">
 <h2>Catalog-Level Locking<a class="headerlink" href="#catalog-level-locking" title="Link to this heading">¶</a></h2>
 <p>While OCC works perfectly on local file systems and some cloud storage providers (like Azure Blob or Google Cloud Storage with certain settings), some providers like <strong>AWS S3</strong> do not natively support atomic “create-if-not-exists” with strong consistency for all operations.</p>
-<p>In these cases, HyperStreamDB leverages <strong>Iceberg-compatible catalogs</strong> to provide the necessary atomicity:</p>
+<p>In these cases, BenoStreamDB leverages <strong>Iceberg-compatible catalogs</strong> to provide the necessary atomicity:</p>
 <ul class="simple">
 <li><p><strong>AWS Glue</strong>: Uses the Glue Catalog’s built-in versioning and optimistic locking.</p></li>
 <li><p><strong>Nessie</strong>: Provides Git-like branching and merging with cross-table atomic commits.</p></li>
@@ -306,7 +306,7 @@
 </section>
 <section id="read-isolation">
 <h2>Read Isolation<a class="headerlink" href="#read-isolation" title="Link to this heading">¶</a></h2>
-<p>Readers in HyperStreamDB always see a <strong>consistent snapshot</strong> of the table. Once a reader loads a particular version (e.g., <code class="docutils literal notranslate"><span class="pre">v100</span></code>), it will continue to see that state even if newer versions are committed by other clients. This provides <strong>Snapshot Isolation</strong>, which is ideal for long-running analytical queries.</p>
+<p>Readers in BenoStreamDB always see a <strong>consistent snapshot</strong> of the table. Once a reader loads a particular version (e.g., <code class="docutils literal notranslate"><span class="pre">v100</span></code>), it will continue to see that state even if newer versions are committed by other clients. This provides <strong>Snapshot Isolation</strong>, which is ideal for long-running analytical queries.</p>
 </section>
 </section>
 
@@ -339,7 +339,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -348,7 +348,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

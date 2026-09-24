@@ -1,5 +1,5 @@
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import shutil
 import os
@@ -12,7 +12,7 @@ def test_merge_pruning():
     os.makedirs(base_dir)
     
     uri = f"file://{base_dir}"
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.add_index_columns(["id", "val"])
     
     # 1. Write Segment A (IDs 0-9)
@@ -78,7 +78,7 @@ def test_merge_pruning():
     
     # B. Read Data
     # Used pandas to verify content
-    # hdb.Table.to_pandas()
+    # bsdb.Table.to_pandas()
     result_df = table.to_pandas(None)
     print("Result Data:")
     print(result_df.sort_values("id"))

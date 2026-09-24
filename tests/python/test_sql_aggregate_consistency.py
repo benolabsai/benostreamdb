@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 @pytest.fixture
 def aggregate_data():
@@ -54,7 +54,7 @@ def test_standard_aggregates(aggregate_data, tmpdir):
         ("embedding", pa.list_(pa.float32(), 4))
     ])
     
-    table = hdb.Table.create(uri, schema)
+    table = bsdb.Table.create(uri, schema)
     table.write(df)
     table.commit()
     
@@ -118,7 +118,7 @@ def test_group_by_aggregates(aggregate_data, tmpdir):
         ("embedding", pa.list_(pa.float32(), 4))
     ])
     
-    table = hdb.Table.create(uri, schema)
+    table = bsdb.Table.create(uri, schema)
     table.write(df)
     table.commit()
     
@@ -163,11 +163,11 @@ def test_vector_avg(aggregate_data, tmpdir):
         ("embedding", pa.list_(pa.float32(), 4))
     ])
     
-    table = hdb.Table.create(uri, schema)
+    table = bsdb.Table.create(uri, schema)
     table.write(df)
     table.commit()
     
-    # In HyperStreamDB, we need to register the UDFs to the session.
+    # In BenoStreamDB, we need to register the UDFs to the session.
     # Usually execute_sql does this automatically if Table method is used, but for specific vector_avg
     # it might need session. Wait, the existing test_sql_agg_order.py has logic for this.
     

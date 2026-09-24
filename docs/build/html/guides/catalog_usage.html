@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Multi-Catalog Usage Guide - HyperStreamDB 0.5.5 documentation</title>
+        <title>Multi-Catalog Usage Guide - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -265,7 +265,7 @@
         <article role="main" id="furo-main-content">
           <section id="multi-catalog-usage-guide">
 <h1>Multi-Catalog Usage Guide<a class="headerlink" href="#multi-catalog-usage-guide" title="Link to this heading">¶</a></h1>
-<p>HyperStreamDB supports enterprise-grade data catalogs to provide table discovery, atomic commits, and snapshot isolation across your data lake.</p>
+<p>BenoStreamDB supports enterprise-grade data catalogs to provide table discovery, atomic commits, and snapshot isolation across your data lake.</p>
 <section id="supported-catalogs">
 <h2>Supported Catalogs<a class="headerlink" href="#supported-catalogs" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -307,10 +307,10 @@
 <p>The Hive Metastore (HMS) is the industry standard for metadata management in Hadoop-compatible environments.</p>
 <section id="connection">
 <h3>Connection<a class="headerlink" href="#connection" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Connect to HMS via Thrift (no auth example)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_hive</span><span class="p">(</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_hive</span><span class="p">(</span>
     <span class="n">address</span><span class="o">=</span><span class="s2">&quot;thrift://metastore-host:9083&quot;</span><span class="p">,</span>
     <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span>
     <span class="n">table</span><span class="o">=</span><span class="s2">&quot;events_analytics&quot;</span>
@@ -320,7 +320,7 @@
 </section>
 <section id="how-it-works">
 <h3>How it Works<a class="headerlink" href="#how-it-works" title="Link to this heading">¶</a></h3>
-<p>When you load a table from Hive, HyperStreamDB:</p>
+<p>When you load a table from Hive, BenoStreamDB:</p>
 <ol class="arabic simple">
 <li><p>Queries the HMS for the <code class="docutils literal notranslate"><span class="pre">metadata_location</span></code> parameter in the table properties.</p></li>
 <li><p>Loads the corresponding Iceberg manifest from storage (S3/GCS/FS).</p></li>
@@ -342,13 +342,13 @@
 <section id="python-api">
 <h3>Python API<a class="headerlink" href="#python-api" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Connect to Nessie</span>
-<span class="n">catalog</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">NessieCatalog</span><span class="p">(</span><span class="s2">&quot;http://localhost:19120&quot;</span><span class="p">)</span>
+<span class="n">catalog</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">NessieCatalog</span><span class="p">(</span><span class="s2">&quot;http://localhost:19120&quot;</span><span class="p">)</span>
 
 <span class="c1"># Create a branch for experimentation</span>
 <span class="n">catalog</span><span class="o">.</span><span class="n">create_branch</span><span class="p">(</span><span class="s2">&quot;etl-job-v2&quot;</span><span class="p">,</span> <span class="n">source_ref</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
 
 <span class="c1"># Load table from the specific branch</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_nessie</span><span class="p">(</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_nessie</span><span class="p">(</span>
     <span class="s2">&quot;http://localhost:19120&quot;</span><span class="p">,</span> 
     <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;prod&quot;</span><span class="p">,</span> 
     <span class="n">table</span><span class="o">=</span><span class="s2">&quot;users&quot;</span><span class="p">,</span>
@@ -364,8 +364,8 @@
 <p>For AWS users, the Glue Data Catalog provides a managed, serverless metadata store.</p>
 <section id="usage">
 <h3>Usage<a class="headerlink" href="#usage" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># HyperStreamDB uses your local AWS credentials (IAM/Env)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_glue</span><span class="p">(</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># BenoStreamDB uses your local AWS credentials (IAM/Env)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_glue</span><span class="p">(</span>
     <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;production_db&quot;</span><span class="p">,</span> 
     <span class="n">table</span><span class="o">=</span><span class="s2">&quot;clickstream_data&quot;</span>
 <span class="p">)</span>
@@ -376,10 +376,10 @@
 <hr class="docutils" />
 <section id="iceberg-rest-catalog">
 <h2>4. Iceberg REST Catalog<a class="headerlink" href="#iceberg-rest-catalog" title="Link to this heading">¶</a></h2>
-<p>The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, HyperStreamDB).</p>
+<p>The vendor-neutral REST catalog is the most interoperable way to manage Iceberg tables across different engines (Trino, Spark, BenoStreamDB).</p>
 <section id="id1">
 <h3>Usage<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_rest</span><span class="p">(</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_rest</span><span class="p">(</span>
     <span class="n">url</span><span class="o">=</span><span class="s2">&quot;https://api.tabular.io/v1/&quot;</span><span class="p">,</span>
     <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;marketing&quot;</span><span class="p">,</span>
     <span class="n">table</span><span class="o">=</span><span class="s2">&quot;campaign_results&quot;</span><span class="p">,</span>
@@ -407,7 +407,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -416,7 +416,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

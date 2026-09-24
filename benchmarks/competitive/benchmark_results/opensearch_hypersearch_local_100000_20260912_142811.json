@@ -16,12 +16,12 @@
       "OpenSearch skipped (--skip-es)"
     ],
     "rss_mb": {
-      "HyperStreamDB_after_ingest": 877.5,
-      "HyperStreamDB_after_search": 13573.7,
-      "HyperStreamDB": 13573.7
+      "BenoStreamDB_after_ingest": 877.5,
+      "BenoStreamDB_after_search": 13573.7,
+      "BenoStreamDB": 13573.7
     },
     "storage_breakdown": {
-      "HyperStreamDB": {
+      "BenoStreamDB": {
         "parquet_mb": 182.43,
         "indexes_mb": 217.33,
         "metadata_mb": 0.02,
@@ -35,7 +35,7 @@
   },
   "results": [
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "ingest",
       "dataset_size": 100000,
       "latency_ms": 7768.9,
@@ -56,7 +56,7 @@
       }
     },
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "refresh",
       "dataset_size": 100000,
       "latency_ms": 2979.6,
@@ -70,7 +70,7 @@
       }
     },
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "match_bm25",
       "dataset_size": 100000,
       "latency_ms": 4.632,
@@ -91,7 +91,7 @@
       }
     },
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "filtered",
       "dataset_size": 100000,
       "latency_ms": 5.257,
@@ -112,7 +112,7 @@
       }
     },
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "knn",
       "dataset_size": 100000,
       "latency_ms": 299.323,
@@ -134,7 +134,7 @@
       }
     },
     {
-      "system": "HyperStreamDB",
+      "system": "BenoStreamDB",
       "operation": "hybrid_rrf",
       "dataset_size": 100000,
       "latency_ms": 294.283,

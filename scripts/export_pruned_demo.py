@@ -1,20 +1,20 @@
 import os
 import argparse
 import pandas as pd
-import hyperstreamdb
+import benostreamdb
 import shutil
 
 # Dumps (full wiki parquets) live on the 14 TB HDD by default; override with
-# --dumps-dir or HYPERSTREAM_DATA.
+# --dumps-dir or BENOSTREAM_DATA.
 DEFAULT_DUMPS = os.environ.get(
-    "HYPERSTREAM_DATA",
-    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+    "BENOSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "benostreamdb"),
 )
 
 def main():
     parser = argparse.ArgumentParser(description="Prune the wiki graph and export for GitHub releases")
     parser.add_argument("--dumps-dir", type=str, default=DEFAULT_DUMPS,
-                        help="directory holding the wiki parquets (default: $HOME/data/hyperstreamdb)")
+                        help="directory holding the wiki parquets (default: $HOME/data/benostreamdb)")
     parser.add_argument("--nodes", type=str, default=None, help="default: <dumps-dir>/nodes_with_embeddings.parquet")
     parser.add_argument("--edges", type=str, default=None, help="default: <dumps-dir>/edges.parquet")
     parser.add_argument("--out_nodes", type=str, default=None, help="default: <dumps-dir>/demo_nodes.parquet")
@@ -36,13 +36,13 @@ def main():
     edges_df['source'] = edges_df['source'].astype(str)
     edges_df['target'] = edges_df['target'].astype(str)
 
-    # Initialize a temporary HyperStreamDB to run connected components
-    tmp_uri = "file:///tmp/hyperstreamdb_export_tmp"
-    if os.path.exists("/tmp/hyperstreamdb_export_tmp"):
-        shutil.rmtree("/tmp/hyperstreamdb_export_tmp")
+    # Initialize a temporary BenoStreamDB to run connected components
+    tmp_uri = "file:///tmp/benostreamdb_export_tmp"
+    if os.path.exists("/tmp/benostreamdb_export_tmp"):
+        shutil.rmtree("/tmp/benostreamdb_export_tmp")
 
-    print("Loading into HyperStreamDB for graph algorithms...")
-    table = hyperstreamdb.Table(tmp_uri)
+    print("Loading into BenoStreamDB for graph algorithms...")
+    table = benostreamdb.Table(tmp_uri)
     table.add_index("source", {"type": "graph", "src_column": "source", "dst_column": "target"})
     table.insert(edges_df.to_dict('records'))
     table.commit()
@@ -73,7 +73,7 @@ def main():
     pruned_edges_df.to_parquet(args.out_edges)
 
     # Clean up
-    shutil.rmtree("/tmp/hyperstreamdb_export_tmp")
+    shutil.rmtree("/tmp/benostreamdb_export_tmp")
     print("Done! Datasets are ready for GitHub Releases.")
 
 if __name__ == "__main__":

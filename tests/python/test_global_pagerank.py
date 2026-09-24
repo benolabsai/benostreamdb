@@ -2,11 +2,11 @@ import os
 import shutil
 import pytest
 import pyarrow as pa
-from hyperstreamdb import Table
+from benostreamdb import Table
 
 @pytest.fixture
 def table_fixture(tmpdir):
-    cat_path = str(tmpdir.join("hyperstreamdb_test_pagerank"))
+    cat_path = str(tmpdir.join("benostreamdb_test_pagerank"))
     schema = pa.schema([
         ("src", pa.uint64()),
         ("dst", pa.uint64())

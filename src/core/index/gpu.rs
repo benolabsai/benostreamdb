@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use super::VectorMetric;
-/// Hardware Acceleration Module for HyperStreamDB
+/// Hardware Acceleration Module for BenoStreamDB
 ///
 /// This module provides support for various GPU backends:
 /// - NVIDIA CUDA
@@ -221,7 +221,10 @@ impl GpuBackend for CudaBackend {
         let d_q = self.device.htod_copy(query.to_vec())?;
         let d_v = self.device.htod_copy(vectors.to_vec())?;
         let mut d_d = self.device.alloc_zeros::<f32>(n_vectors)?;
-        let func = self.device.get_func(mod_name, kernel_name).unwrap();
+        let func = self
+            .device
+            .get_func(mod_name, kernel_name)
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
         // The kernels use one block per row with a shared-memory reduction, so
         // the grid must be `n_vectors` blocks (not `for_num_elems`, which packs
         // rows into 1024-thread blocks) and the shared memory must be sized for
@@ -249,7 +252,10 @@ impl GpuBackend for CudaBackend {
         let d_v = self.device.htod_copy(vectors.to_vec())?;
         let d_c = self.device.htod_copy(centroids.to_vec())?;
         let mut d_l = self.device.alloc_zeros::<u32>(n_vectors)?;
-        let func = self.device.get_func("kmeans", "kmeans_assignment").unwrap();
+        let func = self
+            .device
+            .get_func("kmeans", "kmeans_assignment")
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel kmeans::kmeans_assignment not found"))?;
         let config = LaunchConfig::for_num_elems(n_vectors as u32);
         unsafe {
             func.launch(
@@ -275,7 +281,10 @@ impl GpuBackend for CudaBackend {
         let d_q = self.device.htod_copy(query.to_vec())?;
         let d_v = self.device.htod_copy(vectors.to_vec())?;
         let mut d_d = self.device.alloc_zeros::<f32>(n_vectors)?;
-        let func = self.device.get_func(mod_name, kernel_name).unwrap();
+        let func = self
+            .device
+            .get_func(mod_name, kernel_name)
+            .ok_or_else(|| anyhow::anyhow!("CUDA kernel {mod_name}::{kernel_name} not found"))?;
         // Same shape as the dense kernels: one block per row, shared-memory
         // reduction (2x slots for Jaccard's interleaved intersection/union).
         const BLOCK: u32 = 256;
@@ -690,7 +699,11 @@ impl GpuBackend for WgpuBackend {
 
         let buffer_slice = staging_buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+        // The receiver lives for the duration of this call, so `send` succeeds;
+        // ignoring the result avoids panicking inside a wgpu callback.
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = sender.send(v);
+        });
 
         self.device.poll(wgpu::Maintain::Wait);
 
@@ -844,7 +857,9 @@ impl GpuBackend for WgpuBackend {
 
         let buffer_slice = staging_buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+        buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = sender.send(v);
+        });
         self.device.poll(wgpu::Maintain::Wait);
 
         if let Ok(Ok(())) = receiver.recv() {
@@ -1014,8 +1029,7 @@ impl ComputeContext {
             _ if trimmed.starts_with("cuda:") => {
                 let id = trimmed
                     .strip_prefix("cuda:")
-                    .unwrap()
-                    .parse::<usize>()
+                    .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
                 Self::from_backend_with_device(ComputeBackend::Cuda, id)
             }
@@ -1025,8 +1039,7 @@ impl ComputeContext {
             _ if trimmed.starts_with("rocm:") => {
                 let id = trimmed
                     .strip_prefix("rocm:")
-                    .unwrap()
-                    .parse::<usize>()
+                    .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
                 Self::from_backend_with_device(ComputeBackend::Rocm, id)
             }
@@ -1034,8 +1047,7 @@ impl ComputeContext {
             _ if trimmed.starts_with("intel:") => {
                 let id = trimmed
                     .strip_prefix("intel:")
-                    .unwrap()
-                    .parse::<usize>()
+                    .and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(0);
                 Self::from_backend_with_device(ComputeBackend::Intel, id)
             }
@@ -1350,7 +1362,7 @@ mod tests {
         // dev). Skip cleanly if neither is available.
         if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
             if let Some(p) = crate::core::index::nvrtc::dev_repo_venv_nvrtc() {
-                std::env::set_var("HDB_NVRTC_PATH", &p);
+                std::env::set_var("BSDB_NVRTC_PATH", &p);
             }
         }
         if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
@@ -1402,7 +1414,7 @@ mod tests {
             // so point the resolver at a repo-local venv if one exists.
             if crate::core::index::nvrtc::resolve_nvrtc().is_none() {
                 if let Some(p) = crate::core::index::nvrtc::dev_repo_venv_nvrtc() {
-                    std::env::set_var("HDB_NVRTC_PATH", &p);
+                    std::env::set_var("BSDB_NVRTC_PATH", &p);
                 }
             }
             if let Ok(b) = CudaBackend::new(0) {

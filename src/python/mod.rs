@@ -22,8 +22,8 @@ pub use table::*;
 
 use pyo3::prelude::*;
 
-/// Register all HyperStreamDB Python bindings into the given module.
-pub fn migrate_hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+/// Register all BenoStreamDB Python bindings into the given module.
+pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Helper functions
     m.add_function(wrap_pyfunction!(helpers::init_logging, m)?)?;
 

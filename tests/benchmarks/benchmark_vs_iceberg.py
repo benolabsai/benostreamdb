@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Benchmark: HyperStreamDB vs Apache Iceberg
+Benchmark: BenoStreamDB vs Apache Iceberg
 
 Compares performance on:
 1. NYC Taxi Dataset - Scalar filtering
@@ -8,7 +8,7 @@ Compares performance on:
 3. Wikipedia - Hybrid queries
 
 Requirements:
-    pip install pyiceberg[pyarrow,sql-sqlite] hyperstreamdb pyarrow pandas numpy
+    pip install pyiceberg[pyarrow,sql-sqlite] benostreamdb pyarrow pandas numpy
 
 Note: Iceberg doesn't have native vector search, so we compare:
 - Ingest throughput
@@ -34,7 +34,7 @@ from typing import Optional
 class BenchmarkResult:
     operation: str
     dataset: str
-    hyperstream_ms: float
+    benostream_ms: float
     iceberg_ms: float
     rows: int
     
@@ -42,7 +42,7 @@ class BenchmarkResult:
     def speedup(self) -> float:
         if self.iceberg_ms == 0:
             return 0
-        return self.iceberg_ms / self.hyperstream_ms
+        return self.iceberg_ms / self.benostream_ms
 
 RESULTS: list[BenchmarkResult] = []
 
@@ -79,7 +79,7 @@ def benchmark_nyc_taxi():
     print("BENCHMARK 1: NYC Taxi Dataset")
     print("="*60)
     
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
     
     # Load data
     data_path = Path("tests/data/nyc_taxi/yellow_tripdata_2023-01.parquet")
@@ -92,12 +92,12 @@ def benchmark_nyc_taxi():
     num_rows = len(arrow_table)
     print(f"Loaded {num_rows:,} rows")
     
-    # === HyperStreamDB ===
-    print("\n--- HyperStreamDB ---")
-    hs_uri = "file:///tmp/hyperstream_bench/nyc_taxi"
-    shutil.rmtree("/tmp/hyperstream_bench/nyc_taxi", ignore_errors=True)
+    # === BenoStreamDB ===
+    print("\n--- BenoStreamDB ---")
+    hs_uri = "file:///tmp/benostream_bench/nyc_taxi"
+    shutil.rmtree("/tmp/benostream_bench/nyc_taxi", ignore_errors=True)
     
-    hs_table = hdb.PyTable(hs_uri)
+    hs_table = bsdb.PyTable(hs_uri)
     
     # Ingest
     start = time.time()
@@ -162,7 +162,7 @@ def benchmark_vector_embeddings():
     print("BENCHMARK 2: Synthetic Vector Embeddings (100K x 768D)")
     print("="*60)
     
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
     
     # Generate data if needed
     data_dir = Path("tests/data/embeddings")
@@ -175,12 +175,12 @@ def benchmark_vector_embeddings():
     parquet_files = sorted(data_dir.glob("*.parquet"))
     print(f"Found {len(parquet_files)} parquet files")
     
-    # === HyperStreamDB ===
-    print("\n--- HyperStreamDB ---")
-    hs_uri = "file:///tmp/hyperstream_bench/embeddings"
-    shutil.rmtree("/tmp/hyperstream_bench/embeddings", ignore_errors=True)
+    # === BenoStreamDB ===
+    print("\n--- BenoStreamDB ---")
+    hs_uri = "file:///tmp/benostream_bench/embeddings"
+    shutil.rmtree("/tmp/benostream_bench/embeddings", ignore_errors=True)
     
-    hs_table = hdb.PyTable(hs_uri)
+    hs_table = bsdb.PyTable(hs_uri)
     
     # Ingest
     start = time.time()
@@ -192,7 +192,7 @@ def benchmark_vector_embeddings():
     hs_ingest_ms = (time.time() - start) * 1000
     print(f"Ingest: {hs_ingest_ms:.0f}ms ({total_rows / (hs_ingest_ms/1000):.0f} rows/sec)")
     
-    # Vector search (HyperStreamDB only - Iceberg doesn't support this)
+    # Vector search (BenoStreamDB only - Iceberg doesn't support this)
     query_vec = np.random.randn(768).astype(np.float32)
     query_vec = query_vec / np.linalg.norm(query_vec)
     
@@ -254,7 +254,7 @@ def benchmark_wikipedia():
     print("BENCHMARK 3: Wikipedia + Embeddings (Hybrid Queries)")
     print("="*60)
     
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
     
     # Generate data if needed
     data_dir = Path("tests/data/wikipedia")
@@ -267,12 +267,12 @@ def benchmark_wikipedia():
     parquet_files = sorted(data_dir.glob("*.parquet"))
     print(f"Found {len(parquet_files)} parquet files")
     
-    # === HyperStreamDB ===
-    print("\n--- HyperStreamDB ---")
-    hs_uri = "file:///tmp/hyperstream_bench/wikipedia"
-    shutil.rmtree("/tmp/hyperstream_bench/wikipedia", ignore_errors=True)
+    # === BenoStreamDB ===
+    print("\n--- BenoStreamDB ---")
+    hs_uri = "file:///tmp/benostream_bench/wikipedia"
+    shutil.rmtree("/tmp/benostream_bench/wikipedia", ignore_errors=True)
     
-    hs_table = hdb.PyTable(hs_uri)
+    hs_table = bsdb.PyTable(hs_uri)
     
     # Ingest
     start = time.time()
@@ -344,10 +344,10 @@ def benchmark_wikipedia():
 def print_results():
     """Print benchmark results summary"""
     print("\n" + "="*80)
-    print("BENCHMARK RESULTS: HyperStreamDB vs Parquet/DuckDB Baseline")
+    print("BENCHMARK RESULTS: BenoStreamDB vs Parquet/DuckDB Baseline")
     print("="*80)
     
-    print(f"\n{'Operation':<30} {'Dataset':<15} {'HyperStream':<12} {'Baseline':<12} {'Notes':<20}")
+    print(f"\n{'Operation':<30} {'Dataset':<15} {'BenoStream':<12} {'Baseline':<12} {'Notes':<20}")
     print("-"*80)
     
     for r in RESULTS:
@@ -361,14 +361,14 @@ def print_results():
         else:
             notes = ""
             
-        print(f"{r.operation:<30} {r.dataset:<15} {r.hyperstream_ms:.0f}ms{'':<5} {ice_str:<12} {notes:<20}")
+        print(f"{r.operation:<30} {r.dataset:<15} {r.benostream_ms:.0f}ms{'':<5} {ice_str:<12} {notes:<20}")
     
     print("\n" + "="*80)
     print("ANALYSIS:")
     print("="*80)
     print("""
 📊 INGEST COMPARISON:
-   HyperStreamDB ingest is slower because it builds:
+   BenoStreamDB ingest is slower because it builds:
    - HNSW vector indexes (for similarity search)
    - Inverted indexes (for fast scalar filtering)
    - Column statistics (for query pruning)
@@ -379,16 +379,16 @@ def print_results():
 
 📊 QUERY COMPARISON:
    - Scalar queries: DuckDB is highly optimized (C++, vectorized)
-   - HyperStreamDB is competitive with Rust + indexes
+   - BenoStreamDB is competitive with Rust + indexes
    - For high-selectivity queries (<1% of data), indexes provide bigger wins
 
-📊 VECTOR SEARCH - HyperStreamDB EXCLUSIVE:
+📊 VECTOR SEARCH - BenoStreamDB EXCLUSIVE:
    - 4.8s for k=10 nearest neighbors in 100K vectors
    - Parquet/Iceberg: IMPOSSIBLE without full scan + compute
    - Full scan would take: 100K vectors × 768 dims × distance calc
    - Estimated without index: 30+ seconds
    
-✅ HyperStreamDB Value Proposition:
+✅ BenoStreamDB Value Proposition:
    1. ONLY solution with native vector search on data lakes
    2. Automatic index building (no manual Spark jobs)
    3. Serverless - works from Python, no cluster needed
@@ -404,7 +404,7 @@ def print_results():
 
 def main():
     print("="*60)
-    print("HyperStreamDB vs Apache Iceberg Benchmark Suite")
+    print("BenoStreamDB vs Apache Iceberg Benchmark Suite")
     print("="*60)
     
     # Check for PyIceberg
@@ -414,7 +414,7 @@ def main():
     except ImportError:
         print("⚠️  PyIceberg not installed. Run:")
         print("   pip install 'pyiceberg[pyarrow,sql-sqlite]'")
-        print("\nContinuing with HyperStreamDB-only benchmarks...")
+        print("\nContinuing with BenoStreamDB-only benchmarks...")
     
     # Run benchmarks
     benchmark_nyc_taxi()

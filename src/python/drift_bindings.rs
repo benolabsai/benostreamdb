@@ -14,15 +14,20 @@ impl crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
         top_communities: &[u64],
     ) -> Vec<(String, f64, Vec<u64>)> {
         #[allow(deprecated)]
-        Python::with_gil(|py| {
+        let attempted = Python::with_gil(|py| -> PyResult<Vec<(String, f64, Vec<u64>)>> {
             let kwargs = PyDict::new(py);
-            kwargs.set_item("query", query).unwrap();
-            kwargs.set_item("top_communities", top_communities).unwrap();
-            kwargs.set_item("phase", "primer").unwrap();
+            kwargs.set_item("query", query)?;
+            kwargs.set_item("top_communities", top_communities)?;
+            kwargs.set_item("phase", "primer")?;
 
-            let result = self.callback.bind(py).call((), Some(&kwargs)).unwrap();
-            let list: Vec<(String, f64, Vec<u64>)> = result.extract().unwrap_or_default();
-            list
+            let result = self.callback.bind(py).call((), Some(&kwargs))?;
+            Ok(result.extract().unwrap_or_default())
+        });
+        // The trait returns a plain Vec, so a callback failure degrades to "no
+        // suggestions" with a log rather than panicking the search.
+        attempted.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "drift primer callback failed; continuing without suggestions");
+            Vec::new()
         })
     }
 
@@ -33,18 +38,19 @@ impl crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
         round_num: u32,
     ) -> Vec<(String, f64, Vec<u64>)> {
         #[allow(deprecated)]
-        Python::with_gil(|py| {
+        let attempted = Python::with_gil(|py| -> PyResult<Vec<(String, f64, Vec<u64>)>> {
             let kwargs = PyDict::new(py);
-            kwargs.set_item("query", query).unwrap();
-            kwargs
-                .set_item("discovered_nodes", discovered_nodes)
-                .unwrap();
-            kwargs.set_item("round_num", round_num).unwrap();
-            kwargs.set_item("phase", "follow_up").unwrap();
+            kwargs.set_item("query", query)?;
+            kwargs.set_item("discovered_nodes", discovered_nodes)?;
+            kwargs.set_item("round_num", round_num)?;
+            kwargs.set_item("phase", "follow_up")?;
 
-            let result = self.callback.bind(py).call((), Some(&kwargs)).unwrap();
-            let list: Vec<(String, f64, Vec<u64>)> = result.extract().unwrap_or_default();
-            list
+            let result = self.callback.bind(py).call((), Some(&kwargs))?;
+            Ok(result.extract().unwrap_or_default())
+        });
+        attempted.unwrap_or_else(|e| {
+            tracing::error!(error = %e, "drift follow-up callback failed; continuing without suggestions");
+            Vec::new()
         })
     }
 }

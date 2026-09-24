@@ -1,8 +1,8 @@
 # pgvector SQL Support Guide
 
-**HyperStreamDB pgvector-Compatible SQL Interface**
+**BenoStreamDB pgvector-Compatible SQL Interface**
 
-HyperStreamDB provides full pgvector-compatible SQL syntax through Apache DataFusion integration, allowing you to use familiar PostgreSQL vector operations for similarity search, aggregations, and type conversions.
+BenoStreamDB provides full pgvector-compatible SQL syntax through Apache DataFusion integration, allowing you to use familiar PostgreSQL vector operations for similarity search, aggregations, and type conversions.
 
 ## Table of Contents
 
@@ -20,7 +20,7 @@ HyperStreamDB provides full pgvector-compatible SQL syntax through Apache DataFu
 
 ## Distance Operators
 
-HyperStreamDB supports all six pgvector distance operators for computing vector similarity:
+BenoStreamDB supports all six pgvector distance operators for computing vector similarity:
 
 | Operator | Distance Metric | Description | Use Case |
 |----------|----------------|-------------|----------|
@@ -116,7 +116,7 @@ FROM documents;
 
 ## KNN Queries
 
-K-Nearest Neighbors (KNN) queries find the k most similar vectors to a query vector. HyperStreamDB automatically optimizes these queries to use vector indexes.
+K-Nearest Neighbors (KNN) queries find the k most similar vectors to a query vector. BenoStreamDB automatically optimizes these queries to use vector indexes.
 
 ### Basic KNN
 
@@ -225,9 +225,9 @@ SET vector.use_index = false;
 ### Python API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-session = hdb.Session()
+session = bsdb.Session()
 
 # Set configuration parameters
 session.set_config("hnsw.ef_search", 128)
@@ -645,7 +645,7 @@ SELECT vector_avg(embedding) FROM mixed_dimension_table;
 
 ### pgvector Compatibility
 
-HyperStreamDB implements the pgvector SQL interface with the following compatibility:
+BenoStreamDB implements the pgvector SQL interface with the following compatibility:
 
 ✅ **Fully Compatible**:
 - All six distance operators (`<->`, `<=>`, `<#>`, `<+>`, `<~>`, `<%>`)
@@ -667,7 +667,7 @@ SELECT * FROM items
 ORDER BY embedding <-> '[0.1, 0.2, 0.3]'
 LIMIT 10;
 
--- HyperStreamDB (identical syntax)
+-- BenoStreamDB (identical syntax)
 SELECT * FROM items
 ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector
 LIMIT 10;
@@ -677,7 +677,7 @@ LIMIT 10;
 
 ## Additional Resources
 
-- [HyperStreamDB Architecture](architecture.md)
+- [BenoStreamDB Architecture](architecture.md)
 - [DataFusion SQL Reference](https://arrow.apache.org/datafusion/user-guide/sql/index.html)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
 - [Vector Search Best Practices](COMPREHENSIVE_GUIDE.md)

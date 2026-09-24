@@ -27,6 +27,28 @@ fn index_build_gate_is_bounded_and_releases_permits() {
 }
 
 #[tokio::test]
+async fn memory_reclaimed_notification_wakes_blocked_writer() {
+    // The ingest RAM back-pressure wait (`write_with_durability_async`) is woken
+    // by `notify_memory_reclaimed`. A missing notification would hang a writer
+    // forever once RSS is over the limit, so guard the wiring: register a
+    // waiter, notify, and confirm it completes.
+    let dir = tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri).await.expect("table");
+
+    let mut waiter = std::pin::pin!(table.memory_reclaimed.notified());
+    // Poll once so the waiter registers before the notification is sent.
+    assert!(
+        futures::FutureExt::now_or_never(waiter.as_mut()).is_none(),
+        "waiter should be pending before the notification"
+    );
+    table.notify_memory_reclaimed();
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("notify_memory_reclaimed should wake a registered waiter");
+}
+
+#[tokio::test]
 async fn test_table_lifecycle() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().to_str().unwrap().to_string();

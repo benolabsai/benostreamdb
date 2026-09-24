@@ -59,7 +59,7 @@ pub const VECTOR_OPERATORS: &[VectorOperatorMapping] = &[
 /// # Example
 /// ```no_run
 /// use datafusion::prelude::SessionContext;
-/// use hyperstreamdb::core::sql::vector_operators::register_vector_operators;
+/// use benostreamdb::core::sql::vector_operators::register_vector_operators;
 ///
 /// let mut ctx = SessionContext::new();
 /// register_vector_operators(&mut ctx).unwrap();

@@ -1,6 +1,6 @@
 import sys
 import os
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pytest
 import time
 import requests
@@ -14,13 +14,13 @@ def test_catalog_flow():
     
     # 1. Initialize Catalog
     try:
-        catalog = hdb.PyNessieCatalog(NESSIE_URL)
+        catalog = bsdb.PyNessieCatalog(NESSIE_URL)
     except AttributeError:
         # Fallback if class name differs or not exposed
         # The rust generic name is PyNessieCatalog, exposed as?
         # In lib.rs: m.add_class::<python_binding::PyNessieCatalog>()?;
-        # So it should be hdb.PyNessieCatalog or hdb.NessieCatalog if renamed.
-        # It's hdb.PyNessieCatalog.
+        # So it should be bsdb.PyNessieCatalog or bsdb.NessieCatalog if renamed.
+        # It's bsdb.PyNessieCatalog.
         print("AttributeError: PyNessieCatalog not found in module.")
         sys.exit(1)
 

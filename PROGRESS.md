@@ -1,12 +1,12 @@
 # Progress
 
-Milestone log for HyperStreamDB. Newest entries first.
+Milestone log for BenoStreamDB. Newest entries first.
 
 ---
 
 ## 2026-09-10 — v0.7.0 Release & Production Hardening
 
-HyperStreamDB v0.7.0 brings multi-vector search with RRF scoring coordination, composite scalar roaring bitmap indexes, Apache Polaris / Lakekeeper REST catalog OAuth2 authentication, and community TurboQuant™ scalar quantization. Additionally, following in-depth architectural and code review, significant correctness and production-hardening passes were executed across the engine.
+BenoStreamDB v0.7.0 brings multi-vector search with RRF scoring coordination, composite scalar roaring bitmap indexes, Apache Polaris / Lakekeeper REST catalog OAuth2 authentication, and community TurboQuant™ scalar quantization. Additionally, following in-depth architectural and code review, significant correctness and production-hardening passes were executed across the engine.
 
 ### Shipped
 - **Multi-Vector Search & Reciprocal Rank Fusion (RRF)**:
@@ -32,18 +32,18 @@ HyperStreamDB v0.7.0 brings multi-vector search with RRF scoring coordination, c
   - **Table Architectural Modularization**: Decomposed monolithic `src/core/table/mod.rs` (3,575 lines down to 350 lines) into focused domain submodules (`catalog.rs`, `maintenance.rs`, `merge.rs`, `state.rs`, `primary_key.rs`, `index_config.rs`, `stats.rs`, `tests.rs`) preserving 100% public API compatibility.
   - **Production Unwrap Hardening**: Audited and replaced production `.unwrap()` occurrences across locking, clustering, centroids, table builder, writes, and DataFusion vector UDF downcasts with graceful error handling and fallbacks.
   - **Elimination of `#![allow(unused)]`**: Completely removed `#![allow(unused)]` directives across the codebase and cleaned all unused imports to strictly enforce `#![deny(warnings)]`.
-  - **Iceberg Architecture Positioning**: Refined README and compliance tool to accurately position HyperStreamDB as an indexed lakehouse storage engine with an advisory/reconstructible index overlay.
+  - **Iceberg Architecture Positioning**: Refined README and compliance tool to accurately position BenoStreamDB as an indexed lakehouse storage engine with an advisory/reconstructible index overlay.
 
 ---
 
 ## 2026-09-07 — OpenSearch / Elasticsearch 7.10-compatible Search API (M0–M3 complete)
 
-The `hypersearch` add-on (`hyperstreamdb-search`) now implements the full v1
+The `bsdb-search` add-on (`benostreamdb-search`) now implements the full v1
 Elasticsearch/OpenSearch 7.10-compatible REST surface, plus a Qdrant-compatible API,
-on top of the HyperStreamDB engine.
+on top of the BenoStreamDB engine.
 
 ### Shipped
-- **Workspace** — `hyperstreamdb-search` added as a Cargo workspace member (single
+- **Workspace** — `benostreamdb-search` added as a Cargo workspace member (single
   lockfile, no version drift).
 - **Cluster & metadata** — `GET /`, `GET /_health`, `GET /_cluster/health`,
   `GET /_cluster/stats`, `GET /_cat/indices`, `GET /metrics` (Prometheus).
@@ -58,7 +58,7 @@ on top of the HyperStreamDB engine.
 - **Search** — `POST /{index}/_search` and `GET /{index}/_search?q=`:
   - `match` (BM25 Okapi over inverted indexes; multi-field OR-merge)
   - `knn` (HNSW; `k`, `num_candidates` → `ef_search`, `filter`)
-  - hybrid `match` + `knn` (RRF fusion; `rrf_k` per-request or `HYPERSEARCH_RRF_K`)
+  - hybrid `match` + `knn` (RRF fusion; `rrf_k` per-request or `BENOSEARCH_RRF_K`)
   - `match_all`, `filter`/`bool` (`term`, `terms`, `range`, `exists`, `must_not`)
   - `_source` includes/excludes, `from`/`size`
 - **Count & refresh** — `POST /{index}/_count` (filtered via planner / unfiltered via
@@ -68,16 +68,16 @@ on top of the HyperStreamDB engine.
   keyword search path and hybrid RRF coordinator.
 - **Qdrant API** — 8-endpoint Qdrant-compatible surface (collections + points) on a
   secondary listener (default port 6333), sharing the same `AppState`.
-- **Telemetry** — `hypersearch_query_seconds{op}`, `hypersearch_bulk_items_total{status}`,
-  `hypersearch_refresh_seconds`, request counters, per-route latency, cache hit/miss,
+- **Telemetry** — `bsdb-search_query_seconds{op}`, `bsdb-search_bulk_items_total{status}`,
+  `bsdb-search_refresh_seconds`, request counters, per-route latency, cache hit/miss,
   and in-flight gauges.
-- **Env config** — `HYPERSEARCH_STORAGE_URI`, `HYPERSEARCH_BIND`/`PORT`,
-  `HYPERSEARCH_AUTO_REFRESH_SECS` (periodic flush), `HYPERSEARCH_RRF_K`,
-  `HYPERSEARCH_INDEX_CACHE_GB`, `QDRANT_BIND`/`PORT`.
-- **On-demand index-file cache** — [`hyperstreamdb-search/src/index_cache.rs`](hyperstreamdb-search/src/index_cache.rs):
+- **Env config** — `BENOSEARCH_STORAGE_URI`, `BENOSEARCH_BIND`/`PORT`,
+  `BENOSEARCH_AUTO_REFRESH_SECS` (periodic flush), `BENOSEARCH_RRF_K`,
+  `BENOSEARCH_INDEX_CACHE_GB`, `QDRANT_BIND`/`PORT`.
+- **On-demand index-file cache** — [`benostreamdb-search/src/index_cache.rs`](benostreamdb-search/src/index_cache.rs):
   an LRU, size-capped (default 2 GiB) cache of index files keyed by
   `(index, segment_id, column, file, manifest_version)`, with `fetch_index_file`
-  fetch-through and `hypersearch_index_fetch_bytes_total{kind}`. 9 unit tests
+  fetch-through and `bsdb-search_index_fetch_bytes_total{kind}`. 9 unit tests
   cover eviction, LRU ordering, and invalidation (by index + by manifest version).
 - **Benchmark (quick)** — `benchmark_es710.py --quick` validates the ES 7.10.2
   comparison pipeline end-to-end. Hypersearch search latency (86–120 ms p95) is
@@ -85,13 +85,13 @@ on top of the HyperStreamDB engine.
   design. See [BENCHMARK_FINDINGS.md](BENCHMARK_FINDINGS.md).
 
 ### Verification
-- `cargo test -p hyperstreamdb-search --lib` — 45 unit tests pass.
-- `pytest hyperstreamdb-search/tests/test_search_api.py` — 26 integration tests pass
+- `cargo test -p benostreamdb-search --lib` — 45 unit tests pass.
+- `pytest benostreamdb-search/tests/test_search_api.py` — 26 integration tests pass
   (cluster, health, metrics, doc writes, dups, schema evolution, match/knn/hybrid,
   filters, pagination, index CRUD, mapping, bulk, count, cat/stats, delete 501,
   global refresh, terms/must_not, `_source`, `q=`).
-- `cargo clippy -p hyperstreamdb-search --all-targets` — clean (zero warnings).
-- `cargo fmt -p hyperstreamdb-search --check` — clean.
+- `cargo clippy -p benostreamdb-search --all-targets` — clean (zero warnings).
+- `cargo fmt -p benostreamdb-search --check` — clean.
 
 ### Documentation
 - [GETTING_STARTED.md](GETTING_STARTED.md) — server + Python client quickstart.

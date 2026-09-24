@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstream::{Table, RecordBatch};
-use hyperstream::manifest::ManifestEntry;
+use benostreamdb::{Table, RecordBatch};
+use benostreamdb::manifest::ManifestEntry;
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;

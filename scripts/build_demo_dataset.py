@@ -2,7 +2,7 @@
 """Consume the full Wikipedia dump parquets and prune them into a compact,
 interactive demo dataset for the Streamlit web UI.
 
-All expensive graph work runs INSIDE HyperStreamDB so the build doubles as a
+All expensive graph work runs INSIDE BenoStreamDB so the build doubles as a
 scale test of the engine:
 
   1. Stream data/nodes.parquet to identify redirect stubs (no real content)
@@ -10,7 +10,7 @@ scale test of the engine:
   2. Stream data/edges.parquet, resolving mixed curid/title endpoints to
      int64 curids (the CSR graph index and graph UDFs require integer ids),
      dropping self-loops and edges touching redirects.
-  3. Load the edges into a temporary HyperStreamDB table and run
+  3. Load the edges into a temporary BenoStreamDB table and run
      connected_components() (pointer jumping + edge contraction).
   4. Rank nodes with degree_centrality(), then extract a dense interactive
      subgraph with the subgraph() UDF (multi-hop induced subgraph from the
@@ -36,10 +36,10 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 # Dumps (full wiki parquets) live on the 14 TB HDD by default; override with
-# --dumps-dir or HYPERSTREAM_DATA.
+# --dumps-dir or BENOSTREAM_DATA.
 DEFAULT_DUMPS = os.environ.get(
-    "HYPERSTREAM_DATA",
-    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+    "BENOSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "benostreamdb"),
 )
 
 
@@ -183,29 +183,29 @@ def stream_int64_edges(edges_path: str, out_path: str, drop: np.ndarray,
 
 
 def load_into_hdb(tmp_uri: str, edges_int: str):
-    """Load the int64 edge table into a temporary HyperStreamDB instance."""
-    import hyperstreamdb
+    """Load the int64 edge table into a temporary BenoStreamDB instance."""
+    import benostreamdb
 
     tmp_dir = tmp_uri.removeprefix("file://")
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
 
-    table = hyperstreamdb.Table(tmp_uri)
+    table = benostreamdb.Table(tmp_uri)
     pf = pq.ParquetFile(edges_int)
     t0 = time.time()
     for rg in range(pf.metadata.num_row_groups):
         table.write(pf.read_row_group(rg))
         if (rg + 1) % 32 == 0:
-            log(f"  hdb ingest: {rg + 1}/{pf.metadata.num_row_groups} row groups")
+            log(f"  bsdb ingest: {rg + 1}/{pf.metadata.num_row_groups} row groups")
     table.commit()
     table.wait_for_background_tasks()
-    log(f"  hdb ingest + commit in {time.time() - t0:.1f}s")
+    log(f"  bsdb ingest + commit in {time.time() - t0:.1f}s")
     return table
 
 
 def largest_component(table) -> np.ndarray:
-    """Node ids of the largest weakly connected component (computed in hdb)."""
-    log("  running connected_components() in HyperStreamDB...")
+    """Node ids of the largest weakly connected component (computed in bsdb)."""
+    log("  running connected_components() in BenoStreamDB...")
     t0 = time.time()
     cc = table.connected_components()
     log(f"  connected_components() finished in {time.time() - t0:.1f}s")
@@ -218,7 +218,7 @@ def largest_component(table) -> np.ndarray:
 
 
 def hub_subgraph(table, cc_nodes: np.ndarray, max_nodes: int):
-    """Extract the demo subgraph INSIDE HyperStreamDB: rank nodes by degree
+    """Extract the demo subgraph INSIDE BenoStreamDB: rank nodes by degree
     (degree_centrality), then expand a multi-hop induced subgraph (subgraph
     UDF) from the highest-degree hubs of the largest component.
 
@@ -281,7 +281,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dumps-dir", default=DEFAULT_DUMPS,
                         help="directory holding the full wiki parquets "
-                             "(default: $HOME/data/hyperstreamdb)")
+                             "(default: $HOME/data/benostreamdb)")
     parser.add_argument("--nodes", default=None,
                         help="default: <dumps-dir>/nodes.parquet")
     parser.add_argument("--edges", default=None,
@@ -320,11 +320,11 @@ def main() -> None:
     n, unresolved = stream_int64_edges(args.edges, edges_int, bad, title_map, args.workers)
     log(f"  {n:,} clean int64 edges ({unresolved:,} endpoints unresolved and dropped)")
 
-    log("step 3/5: connected components in HyperStreamDB")
+    log("step 3/5: connected components in BenoStreamDB")
     table = load_into_hdb(args.tmp_uri, edges_int)
     cc_nodes = largest_component(table)
 
-    log("step 4/5: hub degree + induced subgraph extraction in HyperStreamDB")
+    log("step 4/5: hub degree + induced subgraph extraction in BenoStreamDB")
     if args.max_nodes and len(cc_nodes) > args.max_nodes:
         keep, edges_demo = hub_subgraph(table, cc_nodes, args.max_nodes)
     else:

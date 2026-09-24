@@ -1,10 +1,10 @@
-# GPU Setup Guide for HyperStreamDB
+# GPU Setup Guide for BenoStreamDB
 
-This guide provides detailed instructions for setting up GPU acceleration for vector operations in HyperStreamDB.
+This guide provides detailed instructions for setting up GPU acceleration for vector operations in BenoStreamDB.
 
 ## Overview
 
-HyperStreamDB supports GPU acceleration for vector distance computations across multiple hardware backends:
+BenoStreamDB supports GPU acceleration for vector distance computations across multiple hardware backends:
 
 - **NVIDIA CUDA** - For NVIDIA GPUs (GeForce, Quadro, Tesla)
 - **AMD ROCm** - For AMD Radeon GPUs
@@ -17,10 +17,10 @@ GPU acceleration provides 10x+ speedup for batch distance operations on large ve
 
 ### Unified Binary (PyPI)
 
-HyperStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between "standard" and "CUDA" builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.
+BenoStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between "standard" and "CUDA" builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.
 
 ```bash
-pip install hyperstreamdb
+pip install benostreamdb
 ```
 
 > **Hardware Requirements:** 
@@ -30,21 +30,21 @@ pip install hyperstreamdb
 > - **Apple**: Requires macOS 12.3+ (Built-in).
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Auto-detect and use best available GPU backend
-device = hdb.Device("auto")
+device = bsdb.Device("auto")
 print(f"Using backend: {device.backend}")
 
 # Pick a specific backend (Torch-aligned strings)
-device = hdb.Device("cuda")    # NVIDIA or AMD ROCm (Torch standard)
-device = hdb.Device("xpu")     # Intel XPU (Torch standard)
-device = hdb.Device("mps")     # Apple Silicon
-device = hdb.Device("cpu")     # CPU fallback (always available)
+device = bsdb.Device("cuda")    # NVIDIA or AMD ROCm (Torch standard)
+device = bsdb.Device("xpu")     # Intel XPU (Torch standard)
+device = bsdb.Device("mps")     # Apple Silicon
+device = bsdb.Device("cpu")     # CPU fallback (always available)
 
 # Check availability
-print(hdb.Device.is_available("cuda"))  # True if NVIDIA or AMD ROCm present
-print(hdb.Device.is_available("xpu"))   # True if Intel hardware present
+print(bsdb.Device.is_available("cuda"))  # True if NVIDIA or AMD ROCm present
+print(bsdb.Device.is_available("xpu"))   # True if Intel hardware present
 ```
 ```
 
@@ -58,7 +58,7 @@ print(hdb.Device.is_available("xpu"))   # True if Intel hardware present
 - **Driver**: NVIDIA driver 450.80.02 or later
 - **CUDA Runtime**: `libcuda.so` (provided by NVIDIA driver — no Toolkit/nvcc required)
 
-> **Note:** HyperStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
+> **Note:** BenoStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
 
 ### Supported GPUs
 
@@ -102,7 +102,7 @@ Without `--features cuda`, the CUDA backend will be unavailable at runtime (othe
 
 ### Installation on Windows (via WSL2)
 
-Windows users should use **WSL2** (Windows Subsystem for Linux) to run HyperStreamDB with GPU support.
+Windows users should use **WSL2** (Windows Subsystem for Linux) to run BenoStreamDB with GPU support.
 
 1. Install WSL2 and Ubuntu (e.g., `wsl --install -d Ubuntu-22.04`)
 2. Install NVIDIA Windows Driver (this provides the necessary kernel-mode interface for WSL2)
@@ -115,17 +115,17 @@ Windows users should use **WSL2** (Windows Subsystem for Linux) to run HyperStre
 ### Verification
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Create CUDA context
-ctx = hdb.GPUContext("cuda")
+ctx = bsdb.GPUContext("cuda")
 print(f"CUDA backend initialized: {ctx.backend}")
 
 # Test GPU computation
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 print(f"Computed {len(distances)} distances on GPU")
 
 # Check performance stats
@@ -139,11 +139,11 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 
 - **GPU**: AMD Radeon RX 5000 series or newer (RDNA 1, 2, 3), or Instinct MI series.
 - **OS**: Linux (Primary support for compute workloads).
-- **Backend**: HyperStreamDB uses **WGPU/Vulkan** for AMD compute, ensuring compatibility across a wide range of Linux distributions.
+- **Backend**: BenoStreamDB uses **WGPU/Vulkan** for AMD compute, ensuring compatibility across a wide range of Linux distributions.
 
 ### Installation on Linux (Ubuntu/Debian)
 
-While HyperStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.
+While BenoStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.
 
 ```bash
 # Download and install AMD GPU driver installer
@@ -216,17 +216,17 @@ sudo reboot
 ### Verification
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create ROCm context
-ctx = hdb.GPUContext("rocm")
+ctx = bsdb.GPUContext("rocm")
 print(f"ROCm backend initialized: {ctx.backend}")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 print(f"Computed {len(distances)} distances on AMD GPU")
 ```
 
@@ -252,21 +252,21 @@ print(f"Computed {len(distances)} distances on AMD GPU")
 ### Verification
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Auto-detect should find Metal on Apple Silicon
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 print(f"Backend: {ctx.backend}")  # Should show "mps"
 
 # Or explicitly create Metal context
-ctx = hdb.GPUContext("mps")
+ctx = bsdb.GPUContext("mps")
 print(f"Metal backend initialized")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 print(f"Computed {len(distances)} distances on Apple GPU")
 ```
 
@@ -308,28 +308,28 @@ vulkaninfo | grep "vendorID = 0x8086"
 ```bash
 # Verify Vulkan/WGPU installation
 vulkaninfo | grep vendor
-# Or check adapter listing in HyperStreamDB
-python -c "import hyperstreamdb as hdb; print(hdb.Device.list_available_backends())"
+# Or check adapter listing in BenoStreamDB
+python -c "import benostreamdb as bsdb; print(bsdb.Device.list_available_backends())"
 ```
 
 ### Installation on Windows (via WSL2)
 
-Windows users should ensure they have the latest Intel Graphics drivers installed on the host. These provide Vulkan support to WSL2, enabling HyperStreamDB to detect and use the GPU via WGPU.
+Windows users should ensure they have the latest Intel Graphics drivers installed on the host. These provide Vulkan support to WSL2, enabling BenoStreamDB to detect and use the GPU via WGPU.
 
 ### Verification
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create XPU (Intel) context
-device = hdb.Device("xpu")
+device = bsdb.Device("xpu")
 print(f"Intel backend initialized: {device.backend}")
 
 # Test computation
 import numpy as np
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(10000, 768).astype(np.float32)
-distances = hdb.compute_distance(query, database, dim=768, metric="l2")
+distances = bsdb.compute_distance(query, database, dim=768, metric="l2")
 print(f"Success: Computed on {device.backend}")
 ```
 ```
@@ -339,15 +339,15 @@ print(f"Success: Computed on {device.backend}")
 For systems with multiple GPUs, specify the device ID:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # List available backends
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 print(f"Available backends: {ctx.list_available_backends()}")
 
 # Use specific GPU device
-ctx = hdb.GPUContext("cuda", device_id=0)  # First GPU
-ctx = hdb.GPUContext("cuda", device_id=1)  # Second GPU
+ctx = bsdb.GPUContext("cuda", device_id=0)  # First GPU
+ctx = bsdb.GPUContext("cuda", device_id=1)  # Second GPU
 
 # Check which device is being used
 print(f"Using device: {ctx.device_id}")
@@ -368,14 +368,14 @@ print(f"Using device: {ctx.device_id}")
 
 2. Check backend availability:
    ```python
-   ctx = hdb.GPUContext.auto_detect()
+   ctx = bsdb.GPUContext.auto_detect()
    print(ctx.list_available_backends())
    ```
 
 3. Try creating backend explicitly:
    ```python
    try:
-       ctx = hdb.GPUContext("cuda")
+       ctx = bsdb.GPUContext("cuda")
    except RuntimeError as e:
        print(f"CUDA not available: {e}")
    ```
@@ -391,7 +391,7 @@ print(f"Using device: {ctx.device_id}")
    all_distances = []
    for i in range(0, len(database), chunk_size):
        chunk = database[i:i+chunk_size]
-       distances = hdb.l2_distance_batch(query, chunk, context=ctx)
+       distances = bsdb.l2_distance_batch(query, chunk, context=ctx)
        all_distances.append(distances)
    all_distances = np.concatenate(all_distances)
    ```

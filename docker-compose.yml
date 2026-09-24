@@ -21,7 +21,7 @@ services:
       - ./docker/data/minio:/data
     command: server /data --console-address ":9001"
     networks:
-      - hyperstream_net
+      - benostream_net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -33,7 +33,7 @@ services:
     image: minio/mc:latest
     container_name: minio-init
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -41,9 +41,9 @@ services:
       /bin/sh -c "
       mc alias set minio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
       mc mb minio/warehouse --ignore-existing;
-      mc mb minio/hyperstream --ignore-existing;
+      mc mb minio/benostream --ignore-existing;
       mc policy set public minio/warehouse;
-      mc policy set public minio/hyperstream;
+      mc policy set public minio/benostream;
       exit 0;
       "
 
@@ -72,7 +72,7 @@ services:
       - nessie.catalog.s3.path-style-access=true
       - nessie.server.authentication.enabled=false
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -94,7 +94,7 @@ services:
     volumes:
       - ./docker/data/postgres:/var/lib/postgresql/data
     networks:
-      - hyperstream_net
+      - benostream_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nessie -d nessie"]
       interval: 10s
@@ -113,11 +113,11 @@ services:
       # Use the local checked trino-config, but we will augment it
       - ./trino-config:/etc/trino
       # Mount our built plugin
-      # - ./trino-hyperstream/target/trino-hyperstream-0.1.0:/usr/lib/trino/plugin/hyperstream
+      # - ./trino-benostream/target/trino-benostream-0.1.0:/usr/lib/trino/plugin/benostream
     environment:
       - TRINO_ENV=dev
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -134,7 +134,7 @@ services:
       - "10000:10000"
     command: azurite-blob --blobHost 0.0.0.0 --blobPort 10000
     networks:
-      - hyperstream_net
+      - benostream_net
 
   # ---------------------
   # 5. Fake GCS
@@ -146,8 +146,8 @@ services:
       - "4443:4443"
     command: -scheme http
     networks:
-      - hyperstream_net
+      - benostream_net
 
 networks:
-  hyperstream_net:
+  benostream_net:
     driver: bridge

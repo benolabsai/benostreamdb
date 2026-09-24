@@ -7,16 +7,16 @@ import os
 import time
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault("HYPERSTREAM_CACHE_GB", "40")  # same default as app.py
-import hyperstreamdb as hdb
+os.environ.setdefault("BENOSTREAM_CACHE_GB", "40")  # same default as app.py
+import benostreamdb as bsdb
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Tables live on the SSD in the repo's original location.
 DB = f"file://{os.path.join(REPO, 'data', 'wiki_graph_db')}"
 
 t0 = time.time()
-nodes = hdb.Table(f"{DB}/nodes")
-edges = hdb.Table(f"{DB}/edges")
+nodes = bsdb.Table(f"{DB}/nodes")
+edges = bsdb.Table(f"{DB}/edges")
 print(f"[open tables] {time.time()-t0:.1f}s")
 
 t0 = time.time()
@@ -29,7 +29,7 @@ print(f"[count edges] {ec:,} in {time.time()-t0:.1f}s")
 from sentence_transformers import SentenceTransformer
 
 # CPU embedder by default: leaves the GPU free for vLLM while the demo serves.
-dev = "cuda" if os.environ.get("HDB_SMOKE_GPU") == "1" else "cpu"
+dev = "cuda" if os.environ.get("BSDB_SMOKE_GPU") == "1" else "cpu"
 m = SentenceTransformer("all-MiniLM-L6-v2", device=dev)
 vec = m.encode(["how do neural networks relate to the Turing test?"]).tolist()[0]
 

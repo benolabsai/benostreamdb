@@ -2,7 +2,7 @@ use arrow::array::{FixedSizeListArray, Float32Array, Float64Array, Int32Array, I
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use hyperstreamdb::{Table, VectorSearchParams};
+use benostreamdb::{Table, VectorSearchParams};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
@@ -142,7 +142,7 @@ fn bench_vector_search_in_memory(c: &mut Criterion) {
 
     let vs_params = VectorSearchParams::new(
         "embedding",
-        hyperstreamdb::core::index::VectorValue::Float32(
+        benostreamdb::core::index::VectorValue::Float32(
             (0..dim).map(|i| i as f32 / 100.0).collect(),
         ),
         10,

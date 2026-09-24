@@ -81,10 +81,10 @@ if [ -n "$CARGO_FEATURES" ]; then
 else
     cargo build --release
 fi
-LIB_PATH="target/release/libhyperstreamdb.so"
+LIB_PATH="target/release/libbenostreamdb.so"
 if [ ! -f "$LIB_PATH" ]; then
     # Fallback for macOS or potential naming
-    LIB_PATH="target/release/libhyperstreamdb.dylib"
+    LIB_PATH="target/release/libbenostreamdb.dylib"
 fi
 
 # Function to prepare resources
@@ -96,28 +96,28 @@ prepare_resources() {
 
 # --- Spark Connector Matrix ---
 echo "--- Building Spark Connectors ---"
-prepare_resources "spark-hyperstream"
+prepare_resources "spark-benostream"
 for java_version in "17" "21"; do
     java_home_var="JAVA_${java_version}_HOME"
     java_home="${!java_home_var}"
     
     for spark_version in "3.5" "4.0"; do
-        build_with_java "$java_home" "spark-$spark_version,java-$java_version" "" "spark-hyperstream"
-        cp spark-hyperstream/target/spark-hyperstream-*.jar "connector-artifacts/spark-hyperstream-spark-${spark_version}-java-${java_version}${ARTIFACT_SUFFIX}.jar"
+        build_with_java "$java_home" "spark-$spark_version,java-$java_version" "" "spark-benostream"
+        cp spark-benostream/target/spark-benostream-*.jar "connector-artifacts/spark-benostream-spark-${spark_version}-java-${java_version}${ARTIFACT_SUFFIX}.jar"
     done
 done
 
 # --- Trino Connector Matrix ---
 echo "--- Building Trino Connectors ---"
-prepare_resources "trino-hyperstream"
+prepare_resources "trino-benostream"
 for java_version in "17" "21"; do
     java_home_var="JAVA_${java_version}_HOME"
     java_home="${!java_home_var}"
     
-    build_with_java "$java_home" "java-$java_version" "" "trino-hyperstream"
+    build_with_java "$java_home" "java-$java_version" "" "trino-benostream"
     # For Trino, the main JAR is in target/ but the ZIP contains all deps
-    cp trino-hyperstream/target/trino-hyperstream-0.1.0-SNAPSHOT.jar "connector-artifacts/trino-hyperstream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
-    cp trino-hyperstream/target/trino-hyperstream-0.1.0-SNAPSHOT.zip "connector-artifacts/trino-hyperstream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
+    cp trino-benostream/target/trino-benostream-0.1.0-SNAPSHOT.jar "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
+    cp trino-benostream/target/trino-benostream-0.1.0-SNAPSHOT.zip "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
 done
 
 echo "Build complete. Artifacts are in connector-artifacts/"

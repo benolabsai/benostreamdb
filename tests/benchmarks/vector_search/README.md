@@ -1,6 +1,6 @@
 # Vector Search Benchmarks
 
-Benchmarks comparing HyperStreamDB against Qdrant-style vector database workloads.
+Benchmarks comparing BenoStreamDB against Qdrant-style vector database workloads.
 
 ## Dataset
 
@@ -54,7 +54,7 @@ pytest tests/benchmarks/vector_search/test_vs_qdrant.py::TestVectorSearchBenchma
 
 ## Verified Results (2026-01-25)
 
-| Metric | HyperStreamDB | Qdrant (In-Memory) | Speedup | Notes |
+| Metric | BenoStreamDB | Qdrant (In-Memory) | Speedup | Notes |
 |--------|---------------|--------|---------|-------|
 | Ingestion | ~52K/sec | ~775/sec | **67x** | Qdrant client overhead? |
 | Unfiltered search (p50) | ~10ms | ~73ms | **7x** | Local MinIO vs In-Memory |

@@ -11,6 +11,6 @@ pub fn should_skip_gpu_tests() -> bool {
     }
 
     // Probe for a working CUDA device at runtime
-    use hyperstreamdb::core::index::gpu::{ComputeBackend, ComputeContext};
+    use benostreamdb::core::index::gpu::{ComputeBackend, ComputeContext};
     ComputeContext::from_backend(ComputeBackend::Cuda).is_err()
 }

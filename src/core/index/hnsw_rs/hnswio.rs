@@ -290,7 +290,11 @@ fn dump_point<T: Serialize + Clone + Sized + Send + Sync, W: Write>(
     let origin_u64 = point.get_origin_id() as u64;
     dataout.write_all(&origin_u64.to_ne_bytes()).unwrap();
     //
-    let serialized: Vec<u8> = bincode::serialize(point.get_v()).unwrap();
+    // `config::legacy()` is byte-compatible with bincode 1.3, so dumps written
+    // by earlier versions still load.
+    let serialized: Vec<u8> =
+        bincode::serde::encode_to_vec(point.get_v(), bincode::config::legacy())
+            .map_err(|e| format!("bincode encode failed: {e}"))?;
     //    log::debug!("serializing len {:?}", serialized.len());
     let len_64 = serialized.len() as u64;
     dataout.write_all(&len_64.to_ne_bytes()).unwrap();
@@ -399,13 +403,14 @@ fn load_point<T: 'static + DeserializeOwned + Clone + Sized + Send + Sync>(
     //    log::debug!("serialized len to reload {:?}", serialized_len);
     let mut v_serialized = vec![0u8; serialized_len as usize];
     data_in.read_exact(&mut v_serialized)?;
-    let v: Vec<T>;
-    if std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>() {
-        v = bincode::deserialize(&v_serialized)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let v: Vec<T> = if std::any::TypeId::of::<T>() != std::any::TypeId::of::<NoData>() {
+        let (decoded, _): (Vec<T>, usize) =
+            bincode::serde::decode_from_slice(&v_serialized, bincode::config::legacy())
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        decoded
     } else {
-        v = Vec::<T>::new();
-    }
+        Vec::<T>::new()
+    };
     let point = Point::<T>::new(&v, origin_id, p_id);
     log::trace!(
         "load_point  origin {:?} allocated size {:?}, dim {:?}",

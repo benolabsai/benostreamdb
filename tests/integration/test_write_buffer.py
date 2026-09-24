@@ -1,5 +1,5 @@
 import pytest
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import uuid
 import os
@@ -7,15 +7,15 @@ import shutil
 
 def test_write_buffer_and_index():
     # Setup
-    uri = f"/tmp/test_hyperstream_{uuid.uuid4()}"
+    uri = f"/tmp/test_benostream_{uuid.uuid4()}"
     if os.path.exists(uri):
         shutil.rmtree(uri)
     
     # Set Cache Limit to something small to test triggering (or we trigger manually)
     # Even better, we test the buffering behavior specifically.
-    os.environ["HYPERSTREAM_CACHE_GB"] = "1" 
+    os.environ["BENOSTREAM_CACHE_GB"] = "1" 
     
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.index_all_columns() # Enable indexing
     
     # 1. Create Data (Vector + Scalar)

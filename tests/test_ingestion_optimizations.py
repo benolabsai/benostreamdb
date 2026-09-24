@@ -1,4 +1,4 @@
-import hyperstreamdb as hs
+import benostreamdb as hs
 import numpy as np
 import time
 import os
@@ -8,7 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 def test_ingestion_optimizations():
-    print("--- HyperStreamDB Ingestion Optimization Benchmark ---")
+    print("--- BenoStreamDB Ingestion Optimization Benchmark ---")
     
     # Setup
     db_dir = os.path.abspath("./test_ingestion_db")

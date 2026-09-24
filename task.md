@@ -1,7 +1,7 @@
 - [x] **1. Explain Plan Metrics for Pruning**
-  - [x] Add `hyperstreamdb.kept.negated_condition` in `src/core/planner.rs`.
-  - [x] Add `hyperstreamdb.kept.missing_stats` in `src/core/planner.rs`.
-  - [x] Add `hyperstreamdb.kept.in_range` in `src/core/planner.rs`.
+  - [x] Add `benostreamdb.kept.negated_condition` in `src/core/planner.rs`.
+  - [x] Add `benostreamdb.kept.missing_stats` in `src/core/planner.rs`.
+  - [x] Add `benostreamdb.kept.in_range` in `src/core/planner.rs`.
 - [x] **2. Early Pruning for L2 Distance Scans**
   - [x] Break early if `total_diff_sq > r.powi(2)` in `src/core/planner.rs`.
 - [x] **3. Graph Construction Profiling Hooks**

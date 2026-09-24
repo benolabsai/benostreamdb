@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Iceberg Specification Feature & Semantic Conformance Checker for HyperStreamDB
+Iceberg Specification Feature & Semantic Conformance Checker for BenoStreamDB
 
-This script inspects HyperStreamDB's implementation against the official Apache Iceberg
+This script inspects BenoStreamDB's implementation against the official Apache Iceberg
 table specification (v1, v2, and v3) to verify feature completeness and semantic support.
 
 Workflow:
@@ -473,7 +473,7 @@ def run_compliance_checks() -> ComplianceReport:
     report = ComplianceReport()
     
     print("=" * 80)
-    print("ICEBERG SPEC COMPLIANCE CHECK - HyperStreamDB")
+    print("ICEBERG SPEC COMPLIANCE CHECK - BenoStreamDB")
     print("=" * 80)
     print()
     

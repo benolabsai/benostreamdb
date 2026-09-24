@@ -55,7 +55,7 @@ impl ManifestManager {
                         );
                     }
                     if metadata.skip_missing_remove_paths {
-                        metrics::counter!("hyperstreamdb_manifest_commit_skipped_removals_total")
+                        metrics::counter!("benostreamdb_manifest_commit_skipped_removals_total")
                             .increment(1);
                         tracing::debug!(
                             "MVCC rebase: '{}' already removed in snapshot v{}, skipping",
@@ -69,7 +69,7 @@ impl ManifestManager {
 
             // Add new entries to state (overwrites if path exists, but preserves indexes if we are adding unindexed version)
             for entry in add_entries {
-                // HyperStream Optimization: If the existing entry already has indexes,
+                // BenoStream Optimization: If the existing entry already has indexes,
                 // and the new one doesn't (or has fewer), PRESERVE the indexes!
                 // This prevents 'flush_async' main thread from overwriting background indexing results.
                 if let Some(existing) = active_map.get(&entry.file_path) {
@@ -85,7 +85,7 @@ impl ManifestManager {
             let new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
 
             // 2. Decide if we need a ManifestList (Scalability)
-            // HyperStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
+            // BenoStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
             // chunked by 8MB to ensure 100% Iceberg Spec compatibility.
             let (final_entries, manifest_list_path) = if !new_entries.is_empty() {
                 let mut manifest_files = Vec::new();
@@ -264,8 +264,8 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    metrics::counter!("hyperstreamdb_manifest_commit_retries_total").increment(1);
-                    metrics::counter!("hyperstreamdb_manifest_commit_rebases_total").increment(1);
+                    metrics::counter!("benostreamdb_manifest_commit_retries_total").increment(1);
+                    metrics::counter!("benostreamdb_manifest_commit_rebases_total").increment(1);
                     if attempt % 10 == 0 || attempt > 90 {
                         tracing::debug!(
                             "Conflict committing Manifest v{} (attempt {}), retrying...",

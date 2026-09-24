@@ -1,7 +1,7 @@
 """
-Example: Choosing Vector Index Types and Quantization in HyperStreamDB
+Example: Choosing Vector Index Types and Quantization in BenoStreamDB
 
-HyperStreamDB provides native vector index strategies in the free community core:
+BenoStreamDB provides native vector index strategies in the free community core:
 1. HNSW (Uncompressed) - Exact float32 vectors, highest precision.
 2. HNSW + TurboQuant 8-bit (hnsw_tq8) - 4x compression via Fast Walsh-Hadamard Transform (FWHT), >99% recall retention.
 3. HNSW + TurboQuant 4-bit (hnsw_tq4) - 8x compression for massive datasets, maximum memory efficiency.
@@ -10,7 +10,7 @@ HyperStreamDB provides native vector index strategies in the free community core
 
 import numpy as np
 import pandas as pd
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Prepare sample 128-dimensional embedding data
 np.random.seed(42)
@@ -25,7 +25,7 @@ df = pd.DataFrame({
 # -------------------------------------------------------------
 print("=" * 60)
 print("Example 1: Uncompressed HNSW Index")
-table_hnsw = hdb.Table("file:///tmp/test_hnsw")
+table_hnsw = bsdb.Table("file:///tmp/test_hnsw")
 table_hnsw.write_pandas(df)
 table_hnsw.add_index("embedding", "hnsw")
 table_hnsw.commit()
@@ -36,7 +36,7 @@ print("✓ Written with standard uncompressed HNSW index")
 # -------------------------------------------------------------
 print("\n" + "=" * 60)
 print("Example 2: TurboQuant 8-bit (4x Compression, >99% Recall)")
-table_tq8 = hdb.Table("file:///tmp/test_tq8")
+table_tq8 = bsdb.Table("file:///tmp/test_tq8")
 table_tq8.write_pandas(df)
 # Add HNSW index with TQ8 quantization
 table_tq8.add_index("embedding", "hnsw_tq8")
@@ -51,7 +51,7 @@ print(f"✓ Written and searched with HNSW-TQ8 (returned {len(results)} results)
 # -------------------------------------------------------------
 print("\n" + "=" * 60)
 print("Example 3: TurboQuant 4-bit (8x Compression)")
-table_tq4 = hdb.Table("file:///tmp/test_tq4")
+table_tq4 = bsdb.Table("file:///tmp/test_tq4")
 table_tq4.write_pandas(df)
 table_tq4.add_index("embedding", "hnsw_tq4")
 table_tq4.commit()
@@ -64,7 +64,7 @@ print(f"✓ Written and searched with HNSW-TQ4 (returned {len(results_tq4)} resu
 # -------------------------------------------------------------
 print("\n" + "=" * 60)
 print("Example 4: Explicit table.quantize() Configuration")
-table_custom = hdb.Table("file:///tmp/test_custom_tq")
+table_custom = bsdb.Table("file:///tmp/test_custom_tq")
 table_custom.write_pandas(df)
 table_custom.quantize(
     column="embedding",

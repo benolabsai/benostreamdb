@@ -37,7 +37,7 @@ ABS_GEN_URI="file://$GEN_DIR"
 ./target/debug/generate_iceberg_manifests "$GEN_DIR" "$ABS_GEN_URI"
 
 echo "Starting Iceberg REST Server..."
-export HYPERSTREAM_STORAGE_URI="file://$DATA_DIR"
+export BENOSTREAM_STORAGE_URI="file://$DATA_DIR"
 # Assuming iceberg_rest runs on 8181 by default as per other script
 ./target/debug/iceberg_rest > /tmp/iceberg_rest_py.log 2>&1 &
 SERVER_PID=$!
@@ -63,7 +63,7 @@ CREATE_PAYLOAD='{
   }
 }'
 
-curl -s -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables \
+curl -s -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables \
   -H "Content-Type: application/json" \
   -d "$CREATE_PAYLOAD" > /dev/null
 
@@ -82,7 +82,7 @@ UPDATE_PAYLOAD=$(jq -n --arg ml "$RELATIVE_MANIFEST_LIST" '{
   ]
 }')
 
-curl -s -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables/test_delete_table \
+curl -s -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables/test_delete_table \
   -H "Content-Type: application/json" \
   -d "$UPDATE_PAYLOAD" > /dev/null
 

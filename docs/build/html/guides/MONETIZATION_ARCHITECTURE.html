@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Monetization Architecture Guide - HyperStreamDB 0.5.5 documentation</title>
+        <title>Monetization Architecture Guide - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -310,7 +310,7 @@
 <h2>Recommended Structure<a class="headerlink" href="#recommended-structure" title="Link to this heading">¶</a></h2>
 <section id="directory-layout">
 <h3>Directory Layout<a class="headerlink" href="#directory-layout" title="Link to this heading">¶</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>hyperstreamdb/
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>benostreamdb/
 ├── src/
 │   ├── core/              # Open source core (Apache 2.0)
 │   │   ├── table.rs
@@ -343,13 +343,13 @@
 <section id="cargo-toml-configuration">
 <h3>1. Cargo.toml Configuration<a class="headerlink" href="#cargo-toml-configuration" title="Link to this heading">¶</a></h3>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[package]</span>
-<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;hyperstreamdb&quot;</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;benostreamdb&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
 <span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2021&quot;</span>
 
 <span class="k">[features]</span>
 <span class="n">default</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[]</span>
-<span class="n">enterprise</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;hyperstreamdb-enterprise&quot;</span><span class="p">]</span><span class="w">  </span><span class="c1"># Enable premium features</span>
+<span class="n">enterprise</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;benostreamdb-enterprise&quot;</span><span class="p">]</span><span class="w">  </span><span class="c1"># Enable premium features</span>
 
 <span class="k">[dependencies]</span>
 <span class="c1"># Core dependencies (always included)</span>
@@ -358,7 +358,7 @@
 <span class="c1"># ... other core deps</span>
 
 <span class="c1"># Enterprise features (optional dependency)</span>
-<span class="n">hyperstreamdb-enterprise</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../hyperstreamdb-enterprise&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">optional</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
+<span class="n">benostreamdb-enterprise</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../benostreamdb-enterprise&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">optional</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="p">}</span>
 
 <span class="k">[dev-dependencies]</span>
 <span class="c1"># ... test dependencies</span>
@@ -447,7 +447,7 @@
 <span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="bp">self</span><span class="p">.</span><span class="n">license_key</span><span class="p">.</span><span class="n">is_none</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
 <span class="w">            </span><span class="n">anyhow</span><span class="p">::</span><span class="n">bail</span><span class="o">!</span><span class="p">(</span>
 <span class="w">                </span><span class="s">&quot;Continuous indexing requires a commercial license. \</span>
-<span class="s">                Visit https://hyperstreamdb.com/pricing for more information.&quot;</span>
+<span class="s">                Visit https://benostreamdb.org/pricing for more information.&quot;</span>
 <span class="w">            </span><span class="p">);</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">        </span><span class="nb">Ok</span><span class="p">(())</span>
@@ -592,14 +592,14 @@
 </pre></div>
 </div>
 <p><strong>Python Usage</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Free version (basic indexing)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="n">table</span><span class="o">.</span><span class="n">write_arrow</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>  <span class="c1"># Indexes rebuilt on flush (free)</span>
 
 <span class="c1"># Enterprise version (continuous indexing)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="n">table</span><span class="o">.</span><span class="n">enable_enterprise</span><span class="p">(</span><span class="s2">&quot;HSDB-ENT-...&quot;</span><span class="p">)</span>  <span class="c1"># Requires license</span>
 <span class="n">table</span><span class="o">.</span><span class="n">enable_continuous_indexing</span><span class="p">()</span>       <span class="c1"># Premium feature</span>
 <span class="n">table</span><span class="o">.</span><span class="n">write_arrow</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>  <span class="c1"># Incremental index updates (premium)</span>
@@ -674,15 +674,15 @@
 <section id="alternative-separate-enterprise-crate">
 <h2>Alternative: Separate Enterprise Crate<a class="headerlink" href="#alternative-separate-enterprise-crate" title="Link to this heading">¶</a></h2>
 <p>For even cleaner separation, create a separate crate:</p>
-<p><strong><code class="docutils literal notranslate"><span class="pre">hyperstreamdb-enterprise/Cargo.toml</span></code></strong>:</p>
+<p><strong><code class="docutils literal notranslate"><span class="pre">benostreamdb-enterprise/Cargo.toml</span></code></strong>:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="k">[package]</span>
-<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;hyperstreamdb-enterprise&quot;</span>
+<span class="n">name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;benostreamdb-enterprise&quot;</span>
 <span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;0.1.0&quot;</span>
 <span class="n">edition</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;2021&quot;</span>
 <span class="n">license</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;COMMERCIAL&quot;</span><span class="w">  </span><span class="c1"># Not open source</span>
 
 <span class="k">[dependencies]</span>
-<span class="n">hyperstreamdb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../hyperstreamdb&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">default-features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
+<span class="n">benostreamdb</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;../benostreamdb&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">default-features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="w"> </span><span class="p">}</span>
 <span class="c1"># Enterprise-specific dependencies</span>
 </pre></div>
 </div>
@@ -809,7 +809,7 @@
 <li><p><strong>Competitive Necessity</strong>:</p>
 <ul class="simple">
 <li><p>All major ML/data tools offer free GPU support</p></li>
-<li><p>Charging would put HyperStreamDB at a disadvantage</p></li>
+<li><p>Charging would put BenoStreamDB at a disadvantage</p></li>
 <li><p>Users expect GPU support to be free (industry standard)</p></li>
 </ul>
 </li>
@@ -864,7 +864,7 @@
 </ol>
 <p><strong>Example:</strong></p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Free: Use your own GPU</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="n">table</span><span class="o">.</span><span class="n">enable_gpu</span><span class="p">()</span>  <span class="c1"># Uses local GPU (free)</span>
 
 <span class="c1"># Premium: Managed GPU infrastructure</span>
@@ -895,7 +895,7 @@
 <td><p>✅ Free (OSS)</p></td>
 <td><p>Free in open source, paid in cloud</p></td>
 </tr>
-<tr class="row-odd"><td><p><strong>HyperStreamDB</strong></p></td>
+<tr class="row-odd"><td><p><strong>BenoStreamDB</strong></p></td>
 <td><p>✅ <strong>Free (Recommended)</strong></p></td>
 <td><p>Open source, premium for managed</p></td>
 </tr>
@@ -986,7 +986,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -995,7 +995,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Competitive Benchmark Suite for HyperStreamDB
+Competitive Benchmark Suite for BenoStreamDB
 
-Compares HyperStreamDB against:
+Compares BenoStreamDB against:
 - Milvus (open-source vector DB)
 - Weaviate (open-source vector DB)
 - LanceDB (vector + data lake)
@@ -29,11 +29,11 @@ import platform
 import subprocess
 
 try:
-    import hyperstreamdb as hdb
-    HAS_HYPERSTREAMDB = True
+    import benostreamdb as bsdb
+    HAS_BENOSTREAMDB = True
 except ImportError:
-    HAS_HYPERSTREAMDB = False
-    print("Warning: hyperstreamdb not installed")
+    HAS_BENOSTREAMDB = False
+    print("Warning: benostreamdb not installed")
 
 try:
     from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType, utility
@@ -90,7 +90,7 @@ class BenchmarkResult:
 
 class CompetitiveBenchmark:
     """
-    Comprehensive benchmark suite comparing HyperStreamDB to competitors
+    Comprehensive benchmark suite comparing BenoStreamDB to competitors
     """
     
     def __init__(self, output_dir: str = "benchmark_results", device: str = "cpu"):
@@ -142,15 +142,15 @@ class CompetitiveBenchmark:
         return vectors, metadata
     
     # ========================================================================
-    # HyperStreamDB Benchmarks
+    # BenoStreamDB Benchmarks
     # ========================================================================
     
-    def benchmark_hyperstreamdb_ingest(self, n_rows: int, dim: int = 768) -> BenchmarkResult:
-        """Benchmark HyperStreamDB ingest performance"""
-        if not HAS_HYPERSTREAMDB:
+    def benchmark_benostreamdb_ingest(self, n_rows: int, dim: int = 768) -> BenchmarkResult:
+        """Benchmark BenoStreamDB ingest performance"""
+        if not HAS_BENOSTREAMDB:
             return None
             
-        print(f"\n[HyperStreamDB] Benchmarking ingest ({n_rows:,} rows)...")
+        print(f"\n[BenoStreamDB] Benchmarking ingest ({n_rows:,} rows)...")
         
         vectors, metadata = self.generate_test_data(n_rows, dim)
         
@@ -158,7 +158,7 @@ class CompetitiveBenchmark:
             uri = f"file://{tmpdir}/test_table"
             
             # Table creation (not counted in timing)
-            table = hdb.Table(uri)
+            table = bsdb.Table(uri)
             
             # Flush with specific device
             try:
@@ -187,7 +187,7 @@ class CompetitiveBenchmark:
             storage_mb = sum(f.stat().st_size for f in Path(tmpdir).rglob('*') if f.is_file()) / 1024 / 1024
             
         result = BenchmarkResult(
-            system="HyperStreamDB",
+            system="BenoStreamDB",
             operation="ingest",
             dataset_size=n_rows,
             latency_ms=elapsed * 1000,
@@ -201,19 +201,19 @@ class CompetitiveBenchmark:
         print(f"  ✓ {throughput:,.0f} rows/sec, {storage_mb:.1f} MB storage")
         return result
     
-    def benchmark_hyperstreamdb_vector_search(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
-        """Benchmark HyperStreamDB vector search"""
-        if not HAS_HYPERSTREAMDB:
+    def benchmark_benostreamdb_vector_search(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
+        """Benchmark BenoStreamDB vector search"""
+        if not HAS_BENOSTREAMDB:
             return None
             
-        print(f"\n[HyperStreamDB] Benchmarking vector search ({n_rows:,} rows, k={k})...")
+        print(f"\n[BenoStreamDB] Benchmarking vector search ({n_rows:,} rows, k={k})...")
         
         vectors, metadata = self.generate_test_data(n_rows, dim)
         query_vector = vectors[0]
         
         with tempfile.TemporaryDirectory() as tmpdir:
             uri = f"file://{tmpdir}/test_table"
-            table = hdb.Table(uri)
+            table = bsdb.Table(uri)
             
             # Explicitly configure vector index since index_all=False by default now
             table.add_index("embedding", "hnsw")
@@ -250,7 +250,7 @@ class CompetitiveBenchmark:
             p99_latency = np.percentile(latencies, 99)
             
         result = BenchmarkResult(
-            system="HyperStreamDB",
+            system="BenoStreamDB",
             operation=f"vector_search_k{k}",
             dataset_size=n_rows,
             latency_ms=avg_latency,
@@ -262,19 +262,19 @@ class CompetitiveBenchmark:
         print(f"  ✓ {avg_latency:.1f}ms avg, {p99_latency:.1f}ms p99")
         return result
     
-    def benchmark_hyperstreamdb_vector_search_pq(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
-        """Benchmark HyperStreamDB vector search with Product Quantization (PQ)"""
-        if not HAS_HYPERSTREAMDB:
+    def benchmark_benostreamdb_vector_search_pq(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
+        """Benchmark BenoStreamDB vector search with Product Quantization (PQ)"""
+        if not HAS_BENOSTREAMDB:
             return None
             
-        print(f"\n[HyperStreamDB] Benchmarking PQ vector search ({n_rows:,} rows, k={k})...")
+        print(f"\n[BenoStreamDB] Benchmarking PQ vector search ({n_rows:,} rows, k={k})...")
         
         vectors, metadata = self.generate_test_data(n_rows, dim)
         query_vector = vectors[0]
         
         with tempfile.TemporaryDirectory() as tmpdir:
             uri = f"file://{tmpdir}/test_table"
-            table = hdb.Table(uri)
+            table = bsdb.Table(uri)
             
             # Use 8x compression (m = dim / 8)
             table.add_pq_index("embedding", compression=8)
@@ -307,7 +307,7 @@ class CompetitiveBenchmark:
             p99_latency = np.percentile(latencies, 99)
             
         result = BenchmarkResult(
-            system="HyperStreamDB (PQ-8x)",
+            system="BenoStreamDB (PQ-8x)",
             operation=f"vector_search_k{k}",
             dataset_size=n_rows,
             latency_ms=avg_latency,
@@ -319,19 +319,19 @@ class CompetitiveBenchmark:
         print(f"  ✓ {avg_latency:.1f}ms avg, {p99_latency:.1f}ms p99")
         return result
     
-    def benchmark_hyperstreamdb_hybrid_query(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
-        """Benchmark HyperStreamDB hybrid query (scalar + vector)"""
-        if not HAS_HYPERSTREAMDB:
+    def benchmark_benostreamdb_hybrid_query(self, n_rows: int, k: int = 10, dim: int = 768) -> BenchmarkResult:
+        """Benchmark BenoStreamDB hybrid query (scalar + vector)"""
+        if not HAS_BENOSTREAMDB:
             return None
             
-        print(f"\n[HyperStreamDB] Benchmarking hybrid query ({n_rows:,} rows)...")
+        print(f"\n[BenoStreamDB] Benchmarking hybrid query ({n_rows:,} rows)...")
         
         vectors, metadata = self.generate_test_data(n_rows, dim)
         query_vector = vectors[0]
         
         with tempfile.TemporaryDirectory() as tmpdir:
             uri = f"file://{tmpdir}/test_table"
-            table = hdb.Table(uri)
+            table = bsdb.Table(uri)
             
             # Explicitly configure vector index
             table.add_index("embedding", "hnsw")
@@ -358,7 +358,7 @@ class CompetitiveBenchmark:
                 return None
             
         result = BenchmarkResult(
-            system="HyperStreamDB",
+            system="BenoStreamDB",
             operation="hybrid_query",
             dataset_size=n_rows,
             latency_ms=elapsed,
@@ -555,7 +555,7 @@ class CompetitiveBenchmark:
     def run_full_suite(self, dataset_sizes: List[int] = [10000, 100000]):
         """Run complete benchmark suite"""
         print("=" * 80)
-        print("COMPETITIVE BENCHMARK SUITE - HyperStreamDB")
+        print("COMPETITIVE BENCHMARK SUITE - BenoStreamDB")
         print("=" * 80)
         
         for size in dataset_sizes:
@@ -564,18 +564,18 @@ class CompetitiveBenchmark:
             print(f"{'=' * 80}")
             
             # Ingest benchmarks
-            self.benchmark_hyperstreamdb_ingest(size)
+            self.benchmark_benostreamdb_ingest(size)
             self.benchmark_duckdb_ingest(size)
             self.benchmark_lancedb_ingest(size)
             
             # Vector search benchmarks
             for k in [10, 100]:
-                self.benchmark_hyperstreamdb_vector_search(size, k=k)
-                self.benchmark_hyperstreamdb_vector_search_pq(size, k=k)
+                self.benchmark_benostreamdb_vector_search(size, k=k)
+                self.benchmark_benostreamdb_vector_search_pq(size, k=k)
                 self.benchmark_lancedb_vector_search(size, k=k)
             
             # Hybrid query benchmarks
-            self.benchmark_hyperstreamdb_hybrid_query(size)
+            self.benchmark_benostreamdb_hybrid_query(size)
             
             # Scalar query benchmarks
             self.benchmark_duckdb_scalar_query(size)
@@ -635,7 +635,7 @@ class CompetitiveBenchmark:
         report_path = self.output_dir / 'BENCHMARK_REPORT.md'
         
         with open(report_path, 'w') as f:
-            f.write("# Competitive Benchmark Report - HyperStreamDB\n\n")
+            f.write("# Competitive Benchmark Report - BenoStreamDB\n\n")
             f.write(f"**Generated:** {pd.Timestamp.now()}\n\n")
             
             # Ingest comparison
@@ -656,12 +656,12 @@ class CompetitiveBenchmark:
             if not hybrid_df.empty:
                 f.write(hybrid_df.to_markdown(index=False))
                 f.write("\n\n")
-                f.write("**Note:** Hybrid queries (scalar + vector) are unique to HyperStreamDB.\n")
+                f.write("**Note:** Hybrid queries (scalar + vector) are unique to BenoStreamDB.\n")
                 f.write("Competitors require 2 separate systems (e.g., Postgres + Pinecone).\n\n")
             
             # Key findings
             f.write("## Key Findings\n\n")
-            f.write("### HyperStreamDB Advantages\n\n")
+            f.write("### BenoStreamDB Advantages\n\n")
             f.write("1. **Native Hybrid Queries**: Only system with scalar + vector in single query\n")
             f.write("2. **Iceberg Compatibility**: Standard data lake format\n")
             f.write("3. **Multi-Catalog Support**: Hive, Glue, Unity, REST, Nessie\n")
@@ -670,8 +670,8 @@ class CompetitiveBenchmark:
             f.write("### Competitive Position\n\n")
             
             # Calculate relative performance
-            if 'HyperStreamDB' in df['System'].values and 'LanceDB' in df['System'].values:
-                hsdb_search = df[(df['System'] == 'HyperStreamDB') & (df['Operation'] == 'vector_search_k10')]['Latency (ms)'].mean()
+            if 'BenoStreamDB' in df['System'].values and 'LanceDB' in df['System'].values:
+                hsdb_search = df[(df['System'] == 'BenoStreamDB') & (df['Operation'] == 'vector_search_k10')]['Latency (ms)'].mean()
                 lance_search = df[(df['System'] == 'LanceDB') & (df['Operation'] == 'vector_search_k10')]['Latency (ms)'].mean()
                 
                 if hsdb_search and lance_search:
@@ -729,14 +729,14 @@ class CompetitiveBenchmark:
             ax.legend()
             ax.grid(True, alpha=0.3)
         
-        # 4. Hybrid query (HyperStreamDB only)
+        # 4. Hybrid query (BenoStreamDB only)
         hybrid_df = df[df['Operation'] == 'hybrid_query']
         if not hybrid_df.empty:
             ax = axes[1, 1]
             ax.bar(hybrid_df['Dataset Size'].astype(str), hybrid_df['Latency (ms)'])
             ax.set_xlabel('Dataset Size')
             ax.set_ylabel('Latency (ms)')
-            ax.set_title('Hybrid Query Performance (HyperStreamDB Only)')
+            ax.set_title('Hybrid Query Performance (BenoStreamDB Only)')
             ax.grid(True, alpha=0.3, axis='y')
         
         plt.tight_layout()
@@ -749,7 +749,7 @@ def main():
     """Run benchmark suite"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='HyperStreamDB Competitive Benchmark Suite')
+    parser = argparse.ArgumentParser(description='BenoStreamDB Competitive Benchmark Suite')
     parser.add_argument('--sizes', nargs='+', type=int, default=[10000, 100000],
                         help='Dataset sizes to benchmark (default: 10000 100000)')
     parser.add_argument('--output', default='benchmark_results',
@@ -757,7 +757,7 @@ def main():
     parser.add_argument('--quick', action='store_true',
                         help='Quick test with small dataset')
     parser.add_argument('--device', default='cpu',
-                        help='Device for HyperStreamDB (cpu, cuda:0, mps)')
+                        help='Device for BenoStreamDB (cpu, cuda:0, mps)')
     
     args = parser.parse_args()
     

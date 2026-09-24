@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 
 from utils import generate_openai_embeddings
 from minio_setup import setup_minio_for_benchmarks
-from hyperstreamdb import Table
+from benostreamdb import Table
 
 @pytest.fixture(scope="module")
 def minio_setup():
@@ -35,7 +35,7 @@ class TestColdReadLatency:
         2. Cold Search Latency (First Query - includes downloading/parsing indices)
         3. Warm Search Latency (Subsequent Queries - cached primitives)
         """
-        bucket_uri = f"s3://hyperstreamdb-benchmarks/latency_test_{int(time.time())}"
+        bucket_uri = f"s3://benostreamdb-benchmarks/latency_test_{int(time.time())}"
         
         # 1. Setup Data: 5 Segments of 10k vectors (50k total) to simulate segmentation
         n_segments = 5

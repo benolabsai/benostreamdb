@@ -1,17 +1,17 @@
 """
 Cross-Engine Compatibility Tests for Iceberg V2/V3 Features
 
-Tests that HyperStreamDB-written tables can be read by:
+Tests that BenoStreamDB-written tables can be read by:
 - Apache Spark
 - Trino
 - Other Iceberg-compatible engines
 
 Prerequisites:
 - Docker (for Spark/Trino containers)
-- hyperstreamdb installed
+- benostreamdb installed
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import pytest
 from pathlib import Path
@@ -19,16 +19,16 @@ import subprocess
 import json
 
 # Test data directory
-TEST_DIR = Path("/tmp/hyperstream_compat_tests")
+TEST_DIR = Path("/tmp/benostream_compat_tests")
 TEST_DIR.mkdir(exist_ok=True)
 
 class TestSparkCompatibility:
-    """Test HyperStreamDB → Spark compatibility"""
+    """Test BenoStreamDB → Spark compatibility"""
     
     def setup_method(self):
         """Create test table with V2/V3 features"""
         self.table_path = str(TEST_DIR / "spark_test_table")
-        self.table = hdb.Table(self.table_path)
+        self.table = bsdb.Table(self.table_path)
         
         # Write test data with V2 features
         df = pd.DataFrame({
@@ -44,12 +44,12 @@ class TestSparkCompatibility:
     
     @pytest.mark.skip(reason="Requires Spark installation")
     def test_spark_read_basic(self):
-        """Test Spark can read HyperStreamDB table"""
+        """Test Spark can read BenoStreamDB table"""
         spark_script = f"""
         from pyspark.sql import SparkSession
         
         spark = SparkSession.builder \\
-            .appName("HyperStreamDB Compat Test") \\
+            .appName("BenoStreamDB Compat Test") \\
             .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \\
             .config("spark.sql.catalog.local.type", "hadoop") \\
             .config("spark.sql.catalog.local.warehouse", "{self.table_path}") \\
@@ -77,12 +77,12 @@ class TestSparkCompatibility:
 
 
 class TestTrinoCompatibility:
-    """Test HyperStreamDB → Trino compatibility"""
+    """Test BenoStreamDB → Trino compatibility"""
     
     def setup_method(self):
         """Create test table"""
         self.table_path = str(TEST_DIR / "trino_test_table")
-        self.table = hdb.Table(self.table_path)
+        self.table = bsdb.Table(self.table_path)
         
         df = pd.DataFrame({
             "user_id": range(500),
@@ -94,7 +94,7 @@ class TestTrinoCompatibility:
     
     @pytest.mark.skip(reason="Requires Trino installation")
     def test_trino_read_basic(self):
-        """Test Trino can read HyperStreamDB table"""
+        """Test Trino can read BenoStreamDB table"""
         # This would use Trino CLI or Python client
         # to query the table and verify results
         pass
@@ -106,7 +106,7 @@ class TestV2Features:
     def test_sort_order_metadata(self):
         """Verify sort order is written to metadata"""
         table_path = str(TEST_DIR / "sort_order_test")
-        table = hdb.Table(table_path)
+        table = bsdb.Table(table_path)
         
         df = pd.DataFrame({"a": [3, 1, 2], "b": [6, 4, 5]})
         table.set_sort_order(["a"], ascending=[True])
@@ -148,7 +148,7 @@ class TestV2Features:
         """Verify partition spec evolution is tracked"""
         import uuid
         table_path = str(TEST_DIR / f"partition_evolution_test_{uuid.uuid4().hex}")
-        table = hdb.Table(table_path)
+        table = bsdb.Table(table_path)
         
         import pyarrow as pa
         import datetime
@@ -167,7 +167,7 @@ class TestV2Features:
     def test_ndv_statistics(self):
         """Verify NDV statistics are computed"""
         table_path = str(TEST_DIR / "ndv_test")
-        table = hdb.Table(table_path)
+        table = bsdb.Table(table_path)
         
         # Create data with known cardinality
         df = pd.DataFrame({
@@ -187,7 +187,7 @@ class TestV3Features:
     def test_row_lineage_columns(self):
         """Verify V3 metadata columns are added"""
         table_path = str(TEST_DIR / "v3_lineage_test")
-        table = hdb.Table(table_path)
+        table = bsdb.Table(table_path)
         
         df = pd.DataFrame({"value": [1, 2, 3]})
         table.write_pandas(df)
@@ -210,7 +210,7 @@ class TestV3Features:
 def create_sample_table_for_spark():
     """Create a sample table for manual Spark testing"""
     table_path = str(TEST_DIR / "manual_spark_test")
-    table = hdb.Table(table_path)
+    table = bsdb.Table(table_path)
     
     df = pd.DataFrame({
         "id": range(10000),
@@ -232,7 +232,7 @@ def create_sample_table_for_spark():
 def create_sample_table_for_trino():
     """Create a sample table for manual Trino testing"""
     table_path = str(TEST_DIR / "manual_trino_test")
-    table = hdb.Table(table_path)
+    table = bsdb.Table(table_path)
     
     df = pd.DataFrame({
         "user_id": range(5000),

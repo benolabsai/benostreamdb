@@ -1,6 +1,6 @@
 import sys
 import time
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow.parquet as pq
 import pyarrow as pa
 from pathlib import Path
@@ -29,11 +29,11 @@ def test_profiling():
     pq.write_table(arrow_table, data_dir / "file1.parquet")
     
     # 2. Ingest
-    db_path = "/tmp/hyperstream_test/profiling_micro"
+    db_path = "/tmp/benostream_test/profiling_micro"
     if Path(db_path).exists():
         shutil.rmtree(db_path)
         
-    table = hdb.Table(f"file://{db_path}")
+    table = bsdb.Table(f"file://{db_path}")
     # Scalar index only
     table.add_index_columns(["category"])
     

@@ -138,6 +138,13 @@ impl Table {
         &self.query_config
     }
 
+    /// The Tokio runtime backing this table's synchronous APIs.
+    ///
+    /// `rt` is set by every public constructor; the `expect` below is the one
+    /// documented structural invariant kept in NO_PANIC_POLICY.md. Returning
+    /// `Option`/`Result` here would ripple through every synchronous caller to
+    /// express "this cannot happen", so the invariant is asserted instead.
+    #[allow(clippy::expect_used)]
     pub fn runtime(&self) -> Arc<Runtime> {
         self.rt
             .as_ref()

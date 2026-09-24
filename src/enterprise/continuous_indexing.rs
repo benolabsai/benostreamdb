@@ -2,7 +2,7 @@
 
 use crate::core::license::verify_license as validate_license;
 use crate::core::table::Table;
-/// Incremental index update support for HyperStreamDB
+/// Incremental index update support for BenoStreamDB
 ///
 /// This module provides continuous indexing capabilities:
 /// when new data is appended to the write buffer, only the new rows

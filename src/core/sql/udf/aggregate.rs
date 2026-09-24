@@ -104,7 +104,11 @@ impl Accumulator for VectorSumAccumulator {
                 let row = value_array
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "vector aggregate: expected Float32Array values".to_string(),
+                        )
+                    })?
                     .values();
 
                 // Dimension validation
@@ -129,7 +133,11 @@ impl Accumulator for VectorSumAccumulator {
                 let row = value_array
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "vector aggregate: expected Float32Array values".to_string(),
+                        )
+                    })?
                     .values();
 
                 // Dimension validation
@@ -321,7 +329,11 @@ impl Accumulator for VectorAvgAccumulator {
                 let row = value_array
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "vector aggregate: expected Float32Array values".to_string(),
+                        )
+                    })?
                     .values();
 
                 // Dimension validation
@@ -347,7 +359,11 @@ impl Accumulator for VectorAvgAccumulator {
                 let row = value_array
                     .as_any()
                     .downcast_ref::<Float32Array>()
-                    .unwrap()
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "vector aggregate: expected Float32Array values".to_string(),
+                        )
+                    })?
                     .values();
 
                 // Dimension validation

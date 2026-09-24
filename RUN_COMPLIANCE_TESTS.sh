@@ -1,11 +1,11 @@
 #!/bin/bash
-# HyperStreamDB Iceberg Compliance Test Runner
+# BenoStreamDB Iceberg Compliance Test Runner
 # This script runs the full compliance check, regression tests, and performance benchmarks
 
 set -e  # Exit on error
 
 echo "================================================================================"
-echo "HyperStreamDB Iceberg Spec Compliance Test Suite"
+echo "BenoStreamDB Iceberg Spec Compliance Test Suite"
 echo "================================================================================"
 echo ""
 

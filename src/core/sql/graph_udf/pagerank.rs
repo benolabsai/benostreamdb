@@ -150,19 +150,27 @@ impl Accumulator for PageRankAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for sources".to_string())
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for targets".to_string())
+            })?;
         let damping_arr = states[2]
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected Float64Array for damping".to_string())
+            })?;
         let iterations_arr = states[3]
             .as_any()
             .downcast_ref::<arrow::array::UInt32Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt32Array for iterations".to_string())
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {

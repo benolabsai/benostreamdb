@@ -19,54 +19,11 @@ use tracing;
 
 use super::Table;
 
-#[cfg(target_os = "linux")]
-fn get_total_system_memory_bytes() -> Option<usize> {
-    if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
-        for line in contents.lines() {
-            if line.starts_with("MemTotal:") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(kb) = parts[1].parse::<usize>() {
-                        return Some(kb * 1024);
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn get_total_system_memory_bytes() -> Option<usize> {
-    unsafe {
-        let mut memsize: u64 = 0;
-        let mut size = std::mem::size_of_val(&memsize);
-        let name = std::ffi::CString::new("hw.memsize").ok()?;
-        if libc::sysctlbyname(
-            name.as_ptr(),
-            &mut memsize as *mut _ as *mut libc::c_void,
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        ) == 0
-        {
-            Some(memsize as usize)
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn get_total_system_memory_bytes() -> Option<usize> {
-    None
-}
-
 /// Remove internal WAL tracking metadata from schema
 fn clean_wal_metadata(schema: &Schema) -> Schema {
     let mut meta = schema.metadata().clone();
-    meta.remove("hyperstream:tx_id");
-    meta.remove("hyperstream:seq");
+    meta.remove("benostream:tx_id");
+    meta.remove("benostream:seq");
     schema.clone().with_metadata(meta)
 }
 
@@ -247,8 +204,8 @@ impl TableBuilder {
             data_store: None,
             label_pattern: crate::core::table::LabelPattern::default(),
             wal_dir: None,
-            durability: std::env::var("HYPERSTREAM_WAL_DURABILITY")
-                .or_else(|_| std::env::var("HYPERSEARCH_WAL_DURABILITY"))
+            durability: std::env::var("BENOSTREAM_WAL_DURABILITY")
+                .or_else(|_| std::env::var("BENOSEARCH_WAL_DURABILITY"))
                 .ok()
                 .as_deref()
                 .map(|v| match v.to_ascii_lowercase().as_str() {
@@ -256,19 +213,20 @@ impl TableBuilder {
                     _ => crate::core::table::WalDurability::Sync,
                 })
                 .unwrap_or_default(),
-            streaming_flush_interval: std::env::var("HYPERSTREAM_STREAMING_FLUSH_INTERVAL_SECS")
+            streaming_flush_interval: std::env::var("BENOSTREAM_STREAMING_FLUSH_INTERVAL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map(std::time::Duration::from_secs),
-            max_ingest_ram_gb: std::env::var("HDB_MAX_INGEST_RAM_GB")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .or_else(|| {
-                    // Default to 80% of total system RAM, or fallback to 16GB
-                    get_total_system_memory_bytes()
-                        .map(|bytes| (bytes as f64 * 0.8) / 1_000_000_000.0)
-                        .or(Some(16.0))
-                }),
+            // Always active: an explicit `BSDB_MAX_INGEST_RAM_GB` wins, otherwise
+            // the high-water mark is 80% of the memory actually available to the
+            // process (the container's cgroup limit when set, else host RAM).
+            max_ingest_ram_gb: Some(
+                std::env::var("BSDB_MAX_INGEST_RAM_GB")
+                    .ok()
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .filter(|gb| *gb > 0.0)
+                    .unwrap_or_else(crate::core::resources::default_max_ingest_ram_gb),
+            ),
         }
     }
 
@@ -368,17 +326,17 @@ impl TableBuilder {
         // Initialize WAL
         let wal_dir = if let Some(dir) = self.wal_dir {
             dir
-        } else if let Ok(env_dir) = std::env::var("HYPERSTREAM_WAL_DIR") {
+        } else if let Ok(env_dir) = std::env::var("BENOSTREAM_WAL_DIR") {
             std::path::PathBuf::from(env_dir)
         } else if uri.starts_with("file://") {
             let path = uri.strip_prefix("file://").unwrap_or(&uri);
             std::path::PathBuf::from(path).join("_wal")
         } else {
             let safe_uri = uri.replace("://", "_").replace("/", "_");
-            let dir = std::env::temp_dir().join("hyperstream_wal").join(safe_uri);
+            let dir = std::env::temp_dir().join("benostream_wal").join(safe_uri);
             tracing::info!(
                 "Table initialized with remote URI '{}' using default WAL directory '{}'. \
-                For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or HYPERSTREAM_WAL_DIR.",
+                For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or BENOSTREAM_WAL_DIR.",
                 uri,
                 dir.display()
             );
@@ -473,6 +431,7 @@ impl TableBuilder {
             label_pattern: self.label_pattern,
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
+            memory_reclaimed: Arc::new(tokio::sync::Notify::new()),
         };
 
         table.sync_primary_key_from_schema_async().await.ok();

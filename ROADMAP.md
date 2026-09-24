@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the step-by-step plan to take HyperStreamDB from PoC to production-ready.
+This document outlines the step-by-step plan to take BenoStreamDB from PoC to production-ready.
 
 **Timeline:** ~8 weeks  
 **Current Phase:** Phases 1–10 COMPLETE ✅ | Active: Core Product (Native Ingest Orchestrator) + Client Ecosystem
@@ -134,7 +134,7 @@ impl NessieClient {
 
 #### 2. Python API
 ```python
-catalog = hdb.NessieCatalog("http://localhost:19120")
+catalog = bsdb.NessieCatalog("http://localhost:19120")
 table = catalog.create_table("db.table1", schema=schema)
 catalog.create_branch("dev", from_ref="main")
 ```
@@ -202,21 +202,21 @@ catalog.create_branch("dev", from_ref="main")
 ### Objectives
 - Enable full SQL queries (`SELECT`, `GROUP BY`, `ORDER BY`, `LIMIT`, `JOIN`)
 - Leverage DataFusion's query optimizer
-- Push down scalar filters to HyperStream indexes
+- Push down scalar filters to BenoStream indexes
 - Optimize joins with Index Nested Loop Join
 
 ### Implementation
 - **Dependency**: `datafusion`
 - **Wrappers**:
-    - `HyperStreamTableProvider` (implements `TableProvider`)
-    - `HyperStreamExecutionPlan` (implements `ExecutionPlan`)
+    - `BenoStreamTableProvider` (implements `TableProvider`)
+    - `BenoStreamExecutionPlan` (implements `ExecutionPlan`)
     - `IndexNestedLoopJoinExec` (custom physical plan for index-accelerated joins)
 - **Python API**: `table.sql("SELECT ...")` and `session.sql("SELECT ...")`
 
 ### Tasks
 - [x] Add `datafusion` dependency
-- [x] Implement `HyperStreamTableProvider`
-- [x] Implement `HyperStreamExecutionPlan` (Filter Pushdown)
+- [x] Implement `BenoStreamTableProvider`
+- [x] Implement `BenoStreamExecutionPlan` (Filter Pushdown)
 - [x] Bind `SessionContext` to Python (`PySession`)
 - [x] Verify SQL queries in integration tests (Select, Limits, Joins)
 - [x] Implement **Index Nested Loop Join** (O(1) index lookups for join inner table)
@@ -315,9 +315,9 @@ pub struct TableStatistics {
 - [x] Benchmark parallelism improvements (parallel segment reads verified in Phase 1 & Criterion benchmarks)
 
 ### Connector Development (Post-API)
-- [x] Spark DataSource V2 connector (Java/Scala - `spark-hyperstream`)
-- [x] Trino Connector SPI implementation (Java - `trino-hyperstream`)
-- [x] dbt adapter (`dbt-hyperstreamdb` - native Arrow Flight SQL adapter with vector search macros & partition-looping incremental materialization)
+- [x] Spark DataSource V2 connector (Java/Scala - `spark-benostream`)
+- [x] Trino Connector SPI implementation (Java - `trino-benostream`)
+- [x] dbt adapter (`dbt-benostreamdb` - native Arrow Flight SQL adapter with vector search macros & partition-looping incremental materialization)
 
 ---
 
@@ -332,10 +332,10 @@ pub struct TableStatistics {
 
 #### 1. CLI
 ```bash
-hdb compact s3://bucket/table
-hdb vacuum s3://bucket/table --older-than-days 7
-hdb stats s3://bucket/table
-hdb repair s3://bucket/table
+bsdb compact s3://bucket/table
+bsdb vacuum s3://bucket/table --older-than-days 7
+bsdb stats s3://bucket/table
+bsdb repair s3://bucket/table
 ```
 
 #### 2. Metrics (Prometheus)
@@ -349,7 +349,7 @@ hdb repair s3://bucket/table
 - Query execution breakdown
 
 ### Tasks
-- [x] Implement CLI tool (hdb binary with REPL & SQL support)
+- [x] Implement CLI tool (bsdb binary with REPL & SQL support)
 - [x] Add Prometheus metrics (`/metrics` endpoint and Prometheus exporter)
 - [x] Add tracing spans (`tracing-opentelemetry` & subscriber infrastructure)
 - [x] Create Grafana dashboards & metrics documentation
@@ -366,17 +366,17 @@ hdb repair s3://bucket/table
 - Arrow Flight SQL Gateway for zero-copy SQL analytics and dbt integration
 
 ### Implementations
-1. **`hyperstreamdb-search` (Search REST Gateway)**:
+1. **`benostreamdb-search` (Search REST Gateway)**:
    - Dual-protocol server: Port 9200 (OpenSearch/ES 7.10) & Port 6333 (Qdrant)
    - Okapi BM25 text search with doc-length sidecars
    - HNSW vector search with metadata filtering
    - Reciprocal Rank Fusion (RRF) hybrid search
    - Full Prometheus metrics (`/metrics`)
-2. **`hyperstreamdb-flight` (Arrow Flight SQL Gateway)**:
+2. **`benostreamdb-flight` (Arrow Flight SQL Gateway)**:
    - Arrow Flight SQL gRPC service on Port 50051
    - Zero-copy Arrow record batch streaming with DataFusion execution engine
    - Supports ADBC, JDBC, and ODBC clients
-3. **`dbt-hyperstreamdb` (Official dbt Adapter)**:
+3. **`dbt-benostreamdb` (Official dbt Adapter)**:
    - Vector search macros (`vector_distance`, `knn_search`, `vector_avg`, `type_vector`, `type_sparsevec`)
    - Custom materializations (`table`, `incremental` with partition-looping `insert_overwrite`)
    - DDL with Iceberg `PARTITIONED BY` syntax
@@ -464,7 +464,7 @@ hdb repair s3://bucket/table
 - [x] **Early Pruning for L2 Distance Scans** — **DONE**. Added `l2_distance_squared_early_exit(a, b, threshold)` (returns `None` the moment the running sum exceeds the threshold) and rewrote `vector_search_flat` to keep a streaming bounded top-k instead of full-scan-then-sort. The current k-th best distance is the early-exit threshold, so candidates that cannot enter the top-k are abandoned mid-accumulation. Ties preserve insertion order, matching the previous stable-sort-then-truncate. Pinned by 4 Rust tests incl. a streaming-vs-full-sort equivalence test. ✅
 - [x] **Graph Construction Profiling Hooks** — **DONE**. Added lock-free `HnswProfile` counters (inserts, insert time, searches, search time, `search_layer` calls, distance evals) to `Hnsw`, updated from the parallel build/search paths with `Relaxed` atomics. Exposed via `Hnsw::profile()` / `profile_snapshot()` (with `avg_insert_micros` / `avg_search_micros`). Pinned by `test_profile_hooks_record_build_and_search`. ✅
 - [x] **Configuration from SQL** — **DONE**. `VectorSearchConfig::extract_sql_hints` pulls the body of a `/*+ ... */` comment; `from_sql_hints` accepts both the bare `key=value` list and the `INDEX_HINT(...)` wrapper, handles all seven config keys, ignores unknown keys, and errors on malformed known values. `Table::sql` now applies parsed hints to the DataFusion session config so the vector-search optimizer rule can read them. Pinned by 7 Rust tests. ✅
-- [x] **Surface the pruning breakdown in the DataFusion plan** — **DONE**. `HyperStreamExec` now carries an optional `pruning_summary` (built in `TableProvider::scan` from `QueryPlanner::classify_condition` over the pre-pruning segment list, metrics suppressed) and prints it as `pruning=[reason=count, ...]` in `DisplayAs`. `with_new_children` preserves it. One DataFusion `EXPLAIN` now shows the same reason breakdown as the engine's own `explain()`. Pinned by `test_scan_plan_surfaces_pruning_breakdown`. ✅
+- [x] **Surface the pruning breakdown in the DataFusion plan** — **DONE**. `BenoStreamExec` now carries an optional `pruning_summary` (built in `TableProvider::scan` from `QueryPlanner::classify_condition` over the pre-pruning segment list, metrics suppressed) and prints it as `pruning=[reason=count, ...]` in `DisplayAs`. `with_new_children` preserves it. One DataFusion `EXPLAIN` now shows the same reason breakdown as the engine's own `explain()`. Pinned by `test_scan_plan_surfaces_pruning_breakdown`. ✅
 - [x] **First-commit segment had empty `column_stats`** — **FIXED** (found while building the above). On the very first commit `current_manifest.schemas` is still empty, so the manifest writer was handed an empty schema; `bounds_avro_values` then found no field ids, wrote no lower/upper bounds, and the reader reconstructed empty `column_stats` for that one segment — so stats pruning silently missed it. The writer now prefers `metadata.updated_schemas` (the schema being written) before falling back to the manifest's. Verified: all three segments in the test now carry stats and prune. ✅
 
 **Next Steps**
@@ -475,7 +475,7 @@ hdb repair s3://bucket/table
 **Completed**
 - [x] **Out-of-Core Index Ingestion**: HNSW and inverted index building use out-of-core (on-disk) processing and incremental batching. ✅ (v0.7.0)
 - [x] **HNSW Hot Cache Optimization**: `IndexFileCache` stores fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes; kNN latency ~3-5ms. ✅ (v0.7.0)
-- [x] **Trino Connector Sidecar Pushdown**: `trino-hyperstream` SPI evaluates filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits. ✅
+- [x] **Trino Connector Sidecar Pushdown**: `trino-benostream` SPI evaluates filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits. ✅
 - [x] **Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis. ✅ (v0.8.0)
 
 **Next Steps**
@@ -494,7 +494,7 @@ hdb repair s3://bucket/table
 - [ ] (none outstanding)
 
 #### A4. Native Ingest Orchestrator (tokio) — cluster-free bulk ingest
-*A1 dependencies (MVCC commits, cross-partition compaction) are now complete — this is unblocked.* Spark stays for pre-write transforms and existing lake pipelines, but ingestion must not *depend* on it: a first-class `Table::ingest` / `hdb ingest` that plans, executes, and commits a bulk load entirely inside the engine.
+*A1 dependencies (MVCC commits, cross-partition compaction) are now complete — this is unblocked.* Spark stays for pre-write transforms and existing lake pipelines, but ingestion must not *depend* on it: a first-class `Table::ingest` / `bsdb ingest` that plans, executes, and commits a bulk load entirely inside the engine.
 
 **Completed**
 - [x] **Working prototype**: whole-site Wikipedia demo fresh-process chunking (`scripts/prepare_demo.py`: 2M-row chunks, 118 s @ ~10 GB, per-chunk OCC commits).
@@ -504,11 +504,11 @@ hdb repair s3://bucket/table
 - [x] **Resume & idempotency**: completed work-unit keys are recorded in a `_ingest_state.json` sidecar; a re-run skips them and resumes at the unit boundary. ✅
 - [x] **Python surface**: `table.ingest(paths, chunk_rows=None, parallelism=None, index_all=False, resume=True, compact_after=False)` returns a report dict (`units_total/skipped/committed`, `rows_ingested`, `segments`). ✅
 - [x] **Multi-format inputs**: the planner detects `.parquet` (row-range units) vs `.csv`/`.json`/`.ndjson`/`.arrow`/`.ipc` (one unit per file, streamed whole-file); `read_range` dispatches to the matching Arrow reader with schema inference. ✅
-- [x] **CLI surface**: `hdb table ingest --uri … --input … [--plan] [--chunk-rows N] [--parallelism N] [--index-all] [--compact]`; `--row-start/--row-end` is the serverless thin-runner mode (`Table::ingest_range_async`), each runner committing independently via CAS. ✅
+- [x] **CLI surface**: `bsdb table ingest --uri … --input … [--plan] [--chunk-rows N] [--parallelism N] [--index-all] [--compact]`; `--row-start/--row-end` is the serverless thin-runner mode (`Table::ingest_range_async`), each runner committing independently via CAS. ✅
 - [x] **Scheduled compaction**: `IngestOptions::compact_after` drives `rewrite_data_files` at the end of an ingest so segment/manifest counts stay bounded at TB scale. ✅
-- [x] **Memory discipline**: budget-gated `malloc_trim` at work-unit boundaries (`core::memory::HeapTrimPolicy`), wired into `ingest_async` via `IngestOptions::memory_budget_bytes` / `HDB_INGEST_MEMORY_BUDGET_GB` / `hdb table ingest --memory-budget-gb`. Returns freed arena pages to the OS once RSS exceeds the budget, so long-lived in-process loads no longer ratchet toward the sum of every arena's high-water mark. ✅
+- [x] **Memory discipline**: budget-gated `malloc_trim` at work-unit boundaries (`core::memory::HeapTrimPolicy`), wired into `ingest_async` via `IngestOptions::memory_budget_bytes` / `BSDB_INGEST_MEMORY_BUDGET_GB` / `bsdb table ingest --memory-budget-gb`. Returns freed arena pages to the OS once RSS exceeds the budget, so long-lived in-process loads no longer ratchet toward the sum of every arena's high-water mark. ✅
 - [x] **Allocator evaluation**: glibc + `malloc_trim` chosen (zero new deps, pyo3-safe, explicit and observable); jemalloc deferred (a global-allocator swap affects CPython's own allocations and needs a feature flag + platform matrix); mimalloc rejected (static-TLS failure under pyo3); slab-allocating the HNSW/TQ builders deferred (large refactor of the index builders). Rationale documented in `core::memory`. ✅
-- [x] **Multi-machine mode**: `WorkCoordinator` trait + `ObjectStoreCoordinator` backend (`core::table::coordinator`) — lease-based work stealing over the object store, reusing `FileBasedLock` (CAS claim + heartbeat + expiry-steal). `Table::ingest_coordinated_async` claims units dynamically (build in parallel, commit serially via OCC CAS, release-on-failure so another node retries); `hdb table ingest --coordinate [--lease-ttl-secs N]` and `table.ingest(..., coordinate=True)`. No broker, no etcd, no Raft cluster — the same "custom coordination" the incumbents build, minus the cluster. ✅
+- [x] **Multi-machine mode**: `WorkCoordinator` trait + `ObjectStoreCoordinator` backend (`core::table::coordinator`) — lease-based work stealing over the object store, reusing `FileBasedLock` (CAS claim + heartbeat + expiry-steal). `Table::ingest_coordinated_async` claims units dynamically (build in parallel, commit serially via OCC CAS, release-on-failure so another node retries); `bsdb table ingest --coordinate [--lease-ttl-secs N]` and `table.ingest(..., coordinate=True)`. No broker, no etcd, no Raft cluster — the same "custom coordination" the incumbents build, minus the cluster. ✅
 
 **Next Steps**
 - [ ] **Broker adapters (optional integration surface)**: Kafka/RabbitMQ/NATS backends behind the `WorkCoordinator` trait, for customers who want to trigger ingest from an existing event bus. 
@@ -520,7 +520,7 @@ hdb repair s3://bucket/table
 - [x] **Universal GPU PyPI Wheel**: Single universal Python wheel leveraging `cudarc` runtime dynamic loading (`libcuda.so`) and WGPU across Linux and macOS. ✅ (v0.7.0)
 - [x] **GitHub Actions CUDA CI**: Automated CUDA build and test pipeline with `nvidia/cuda` Docker containers. ✅ (v0.7.0)
 
-- [x] **Find nvrtc/cudart from installed wheels**: `core::index::nvrtc` resolves *whatever* `libnvrtc.so*` is installed — version-agnostic, any layout (`HDB_NVRTC_PATH`, the interpreter's `site-packages` reported at module init or located via `dladdr`, `CUDA_HOME`/`CUDA_PATH`/`CUDA_ROOT`, `PYTHONPATH`, `VIRTUAL_ENV`/`CONDA_PREFIX`, `LD_LIBRARY_PATH`, system multiarch) — preloads the `libnvrtc-builtins` companion with `RTLD_GLOBAL`, and compiles the embedded `.cu` sources itself, handing the PTX to cudarc's `load_ptx`. No re-exec, no env-var prefix; `scripts/create_cuda_shims.sh` deleted. Verified on an RTX 3090 / CUDA 13.2. ✅
+- [x] **Find nvrtc/cudart from installed wheels**: `core::index::nvrtc` resolves *whatever* `libnvrtc.so*` is installed — version-agnostic, any layout (`BSDB_NVRTC_PATH`, the interpreter's `site-packages` reported at module init or located via `dladdr`, `CUDA_HOME`/`CUDA_PATH`/`CUDA_ROOT`, `PYTHONPATH`, `VIRTUAL_ENV`/`CONDA_PREFIX`, `LD_LIBRARY_PATH`, system multiarch) — preloads the `libnvrtc-builtins` companion with `RTLD_GLOBAL`, and compiles the embedded `.cu` sources itself, handing the PTX to cudarc's `load_ptx`. No re-exec, no env-var prefix; `scripts/create_cuda_shims.sh` deleted. Verified on an RTX 3090 / CUDA 13.2. ✅
 - [x] **Cross-backend correctness harness**: `cross_backend_matches_cpu_all_metrics` runs the same vectors through every *available* backend and asserts agreement with the **CPU reference (the gold source)** within tolerance. Backends absent from the machine are skipped, so the same test runs everywhere. Verified on an RTX 3090 with `["cpu", "cuda", "wgpu"]` across L2/Cosine/IP/L1/Hamming/Jaccard. It immediately caught a real CUDA bug: `LaunchConfig::for_num_elems` set `shared_mem_bytes: 0` and the wrong grid shape for kernels that use one block per row with a shared-memory reduction (illegal memory access). ✅
   Run: `cargo test --lib --features cuda,wgpu,pollster cross_backend -- --nocapture` (drop features you don't have — the harness skips absent backends).
 
@@ -529,9 +529,9 @@ hdb repair s3://bucket/table
 
 **Next Steps**
 - [ ] **A5.4 — GPU acceleration for sparse & binary vectors** *(partially done; mark complete once Metal is in)*:
-  - [x] **Packed-binary kernels for CUDA + WGPU**: `GpuBackend::compute_binary_distance` + `hamming_packed.cu`/`jaccard_packed.cu` and `wgpu_binary_kernel.wgsl` (AMD/Intel via Vulkan). Batched Python API `hdb.hamming_distance_batch` / `hdb.jaccard_distance_batch`. Verified by the cross-backend harness on an RTX 3090 (`["cpu", "cuda", "wgpu"]`, including a non-word-aligned 13-byte case). ✅
+  - [x] **Packed-binary kernels for CUDA + WGPU**: `GpuBackend::compute_binary_distance` + `hamming_packed.cu`/`jaccard_packed.cu` and `wgpu_binary_kernel.wgsl` (AMD/Intel via Vulkan). Batched Python API `bsdb.hamming_distance_batch` / `bsdb.jaccard_distance_batch`. Verified by the cross-backend harness on an RTX 3090 (`["cpu", "cuda", "wgpu"]`, including a non-word-aligned 13-byte case). ✅
   - [x] **Metal packed kernels**: `mps/hamming_packed.metal` + `mps/jaccard_packed.metal` (popcount, `n_vectors` guard) and the `compute_binary_distance` impl. Verified by the `metal` CI job on `macos-14` (Apple Silicon) — the gate was removed once that job went green. ✅
-  - [x] **Sparse GPU via dense-conversion**: batched `hdb.sparse_l2_batch` / `sparse_cosine_batch` / `sparse_inner_product_batch` convert a sparse query + N sparse vectors to dense and reuse the dense kernels. Backend-agnostic; pays off once the batch clears `GPU_DISPATCH_THRESHOLD`. Equivalence with the sparse CPU reference is covered by `sparse_dense_equivalence_tests`. ✅
+  - [x] **Sparse GPU via dense-conversion**: batched `bsdb.sparse_l2_batch` / `sparse_cosine_batch` / `sparse_inner_product_batch` convert a sparse query + N sparse vectors to dense and reuse the dense kernels. Backend-agnostic; pays off once the batch clears `GPU_DISPATCH_THRESHOLD`. Equivalence with the sparse CPU reference is covered by `sparse_dense_equivalence_tests`. ✅
 
 > **Long-term / research work moved to [A11](#a11-gpu-native-index-construction-research--long-term).** A5 ships the bounded GPU work; A11 tracks the open-ended work of moving index *construction* onto the GPU.
 
@@ -560,7 +560,7 @@ Native graph analytics on Iceberg edge tables with sidecar index acceleration. R
 
 #### A8. Correctness & Benchmarking Suite [Free]
 
-Ensure that all HyperStreamDB features maintain mathematical correctness and benchmark speed against established industry standards. This prevents regressions and builds trust in the database.
+Ensure that all BenoStreamDB features maintain mathematical correctness and benchmark speed against established industry standards. This prevents regressions and builds trust in the database.
 
 **Completed**
 - [x] **Graph Algorithms Suite (6a)**: accuracy validation vs NetworkX/petgraph; speed profiling (10x-50x vs NetworkX). ✅ (v0.8.0)
@@ -575,13 +575,13 @@ Ensure that all HyperStreamDB features maintain mathematical correctness and ben
 **Completed**
 - [x] **100k Competitive Benchmarks vs. OpenSearch**: long-running benchmark runs on local SSD using docker-constrained environments (4 CPUs / 4GB RAM). ✅ (v0.7.0)
   - *Key Takeaways from 100K-doc benchmark*:
-    - **Vector search is world-class and strictly faster**: HyperStreamDB query latencies are incredibly stable (P50: 1.94ms, P99: 4.26ms). It completely eliminates tail-latency spikes that plague OpenSearch (P99: 62.58ms), running up to 14.7x faster at the 99th percentile under tight memory constraints.
+    - **Vector search is world-class and strictly faster**: BenoStreamDB query latencies are incredibly stable (P50: 1.94ms, P99: 4.26ms). It completely eliminates tail-latency spikes that plague OpenSearch (P99: 62.58ms), running up to 14.7x faster at the 99th percentile under tight memory constraints.
     - **Memory safety proven**: The engine safely loaded 100k HNSW vectors within the 4GB hard container limit without OOM crashing.
     - **Storage footprint**: 7.1x lower disk requirement (~26MB vs ~185MB) due to zero data lake duplication.
     - **Ingestion throughput**: OpenSearch handles bulk indexing faster (7,510 docs/s vs 4,419 docs/s) by deferring HNSW graph operations to background merges.
 - [x] **1M Competitive Benchmarks vs. OpenSearch**: 1,000,000 document scaling benchmark under identical 4 CPU / 4GB RAM limits. ✅ (v0.7.0)
   - *Key Takeaways from 1M-doc benchmark*:
-    - **Zero tail latency degradation**: HyperStreamDB latency remains completely flat from 100k to 1M (P50: 1.91ms, P99: 3.74ms).
+    - **Zero tail latency degradation**: BenoStreamDB latency remains completely flat from 100k to 1M (P50: 1.91ms, P99: 3.74ms).
     - **Catastrophic tail collapse eliminated**: OpenSearch suffers severe memory thrashing under 4GB RAM, causing P99 latency to spike to **478.77ms** (128x slower).
     - **Zero data duplication**: Requires only ~280MB storage vs OpenSearch's ~1,852MB (6.6x disk savings).
     - Documented comprehensively in [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
@@ -619,25 +619,25 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 *Depends on a stable core API (Part A). Thin, dependency-light adapters over the existing Python API (`vector_search`, `hybrid_search`, `graph_rag_search`, `drift_search`) — no engine changes required.*
 
 **Completed**
-- [x] Cross-platform binary wheels on PyPI (`pip install hyperstreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
+- [x] Cross-platform binary wheels on PyPI (`pip install benostreamdb`) for Linux (x86_64, aarch64) and macOS (Apple Silicon / Metal).
 
 **Next Steps**
-- [ ] **LangChain (`langchain-hyperstreamdb`)**:
-  - `HyperStreamVectorStore`: Standard `VectorStore` interface (add / similarity search / MMR) mapping onto HNSW + TurboQuant sidecars, with metadata filters pushed down as RoaringBitmap predicates (`id IN (...)`).
-  - `HyperStreamGraphRetriever`: `BaseRetriever` wrapping `table.graph_rag_search(...)` — local/global modes, PPR grounding, and prompt-ready `format_context()` injection.
+- [ ] **LangChain (`langchain-benostreamdb`)**:
+  - `BenoStreamVectorStore`: Standard `VectorStore` interface (add / similarity search / MMR) mapping onto HNSW + TurboQuant sidecars, with metadata filters pushed down as RoaringBitmap predicates (`id IN (...)`).
+  - `BenoStreamGraphRetriever`: `BaseRetriever` wrapping `table.graph_rag_search(...)` — local/global modes, PPR grounding, and prompt-ready `format_context()` injection.
   - Edge-table loader: Ingest documents/triplets into Iceberg doc + edge tables following the [`docs/graph_rag_edge_tables.md`](docs/graph_rag_edge_tables.md) schema convention.
-- [ ] **LlamaIndex (`llama-index-vector-stores-hyperstreamdb`, `llama-index-graph-stores-hyperstreamdb`)**:
-  - `HyperStreamVectorStore`: `BaseVectorStore` implementation with add/query mapped to the sidecar HNSW indexes and scalar-filter pushdown.
+- [ ] **LlamaIndex (`llama-index-vector-stores-benostreamdb`, `llama-index-graph-stores-benostreamdb`)**:
+  - `BenoStreamVectorStore`: `BaseVectorStore` implementation with add/query mapped to the sidecar HNSW indexes and scalar-filter pushdown.
   - Property-graph store: `GraphStore` over edge tables (`subgraph`, `connecting_paths`, `graph_neighbors` UDAFs) enabling `PropertyGraphIndex` / HippoRAG-style retrievers on lakehouse data.
   - Two-level Graph-RAG retriever: Composite retriever mirroring the full-site Wikipedia demo pattern — 384-d seed index → CSR expansion → bitmap-filtered rerank.
-- [ ] **Haystack (`hyperstream-haystack`)**:
-  - `HyperStreamDocumentStore`: implement deepset's `DocumentStore` contract (`write_documents`, `filter_documents`, `delete_documents`, embedding retrieval) over HyperStreamDB tables, with metadata filters pushed down as RoaringBitmap predicates and embeddings served by the TQ HNSW indexes.
-  - `HyperStreamEmbeddingRetriever`: dense/sparse (BM25) and hybrid (RRF) retrieval components usable in a Haystack pipeline.
+- [ ] **Haystack (`benostream-haystack`)**:
+  - `BenoStreamDocumentStore`: implement deepset's `DocumentStore` contract (`write_documents`, `filter_documents`, `delete_documents`, embedding retrieval) over BenoStreamDB tables, with metadata filters pushed down as RoaringBitmap predicates and embeddings served by the TQ HNSW indexes.
+  - `BenoStreamEmbeddingRetriever`: dense/sparse (BM25) and hybrid (RRF) retrieval components usable in a Haystack pipeline.
   - Graph-RAG retriever component: wraps `graph_rag_search` (seed index → CSR expansion → bitmap-filtered rerank) for Haystack pipelines.
-- [ ] **LangGraph & agent tooling** (orchestration layer — expose HyperStreamDB retrievers as graph nodes/tools):
-  - Retrieval tools: `HyperStreamRetrieverTool`, `HyperStreamGraphRagTool`, `HyperStreamDriftTool` (typed tool wrappers with provenance: seed pages, PPR scores, hop paths).
+- [ ] **LangGraph & agent tooling** (orchestration layer — expose BenoStreamDB retrievers as graph nodes/tools):
+  - Retrieval tools: `BenoStreamRetrieverTool`, `BenoStreamGraphRagTool`, `BenoStreamDriftTool` (typed tool wrappers with provenance: seed pages, PPR scores, hop paths).
   - Reference agent graph: `examples/langgraph_agentic_rag.py` — planner → hybrid retrieve → graph expand/rerank → synthesize, demonstrating agentic Graph RAG over the whole-site Wikipedia tables.
-- [ ] **Pydantic AI (`hyperstream-pydantic-ai`)** — *up-and-comer track*: type-safe agent framework from the Pydantic team (the validation layer already under OpenAI SDK / LangChain). Thin adapter exposing HyperStreamDB retrievers as typed tools (`HyperStreamRetriever`, `HyperStreamGraphRagTool`) with Pydantic result models; low integration cost, high mindshare leverage with the Pydantic ecosystem.
+- [ ] **Pydantic AI (`benostream-pydantic-ai`)** — *up-and-comer track*: type-safe agent framework from the Pydantic team (the validation layer already under OpenAI SDK / LangChain). Thin adapter exposing BenoStreamDB retrievers as typed tools (`BenoStreamRetriever`, `BenoStreamGraphRagTool`) with Pydantic result models; low integration cost, high mindshare leverage with the Pydantic ecosystem.
 - [ ] **Examples & Docs**: `examples/langchain_rag.py`, `examples/llamaindex_graph_rag.py`, `examples/haystack_pipeline.py`, `examples/pydantic_ai_rag.py` and the LangGraph agent above, with integration docs.
 
 > **Framework prioritization (avoid sprawl):** cover the **most popular** first — LangChain + LlamaIndex are the must-haves, Haystack for enterprise RAG, LangGraph for orchestration — then add **one up-and-comer** (Pydantic AI) to leapfrog incumbents via the Pydantic ecosystem. All are thin adapters over the existing Python API, so each is cheap; cap the list here and add further frameworks only on demonstrated user demand.
@@ -649,7 +649,7 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 - [ ] (none outstanding)
 
 **Next Steps**
-- [ ] **MCP Server Implementation (`hyperstream-mcp`)**:
+- [ ] **MCP Server Implementation (`benostream-mcp`)**:
   - Protocol Support: Standard Model Context Protocol (JSON-RPC over stdio and SSE). (v0.9.0)
   - Tool: `code_search`: Hybrid BM25 (exact symbols/keywords) + HNSW vector search over codebase chunks. (v0.9.0)
   - Tool: `find_symbol`: Sub-millisecond exact definition and reference lookups powered by String Inverted Index. (v0.9.0)
@@ -657,9 +657,9 @@ Move the distance computation that dominates HNSW graph construction onto the GP
   - Tool: `code_graph`: Query imports, calls, and dependency relationships via sidecar graph tables. (v0.9.0)
   - Language Parsers: Tree-sitter integration for AST-aware semantic chunking (Rust, Python, TS/JS, Go, Java, C++). (v0.9.0)
 - [ ] **Git-Diff Incremental CI Indexer**:
-  - CLI Subcommand `hyperstream index`: `--repo <path>`, `--diff-since <ref>`, `--target <uri>`. (v0.9.0)
+  - CLI Subcommand `benostream index`: `--repo <path>`, `--diff-since <ref>`, `--target <uri>`. (v0.9.0)
   - Incremental Parquet & Overlay Appends: Write new code chunks and vector embeddings directly as an append delta; tombstone deleted chunks via Roaring Bitmaps. (v0.9.0)
-  - Official GitHub Action (`hyperstreamdb/index-action@v1`): Ready-to-use GitHub Action for PR and merge workflows. (v0.9.0)
+  - Official GitHub Action (`benostreamdb/index-action@v1`): Ready-to-use GitHub Action for PR and merge workflows. (v0.9.0)
   - GitLab CI & Jenkins Examples: Provide standard CI pipeline configurations. (v0.9.0)
 - [ ] **Feature Tiering: Local vs. Remote Lakehouse**:
   - [Free] Local Storage Backends: Direct support for local filesystem (`file://`) and developer MinIO instances. (v0.9.0)
@@ -693,7 +693,7 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 - [ ] **[Paid] SIEM Telemetry Export**: Native connector export to Splunk, Datadog, and AWS CloudWatch.
 - [ ] **[Paid] Cross-Catalog Governance Propagation**: Unified RLS policies and audit synchronization across Polaris, Unity, and Glue catalogs.
 
-#### B5. HyperStream Accelerator & Lifecycle Automation [Paid]
+#### B5. BenoStream Accelerator & Lifecycle Automation [Paid]
 *Depends on core maturity (Part A).*
 
 **Completed**
@@ -722,7 +722,7 @@ Move the distance computation that dominates HNSW graph construction onto the GP
   - Demo screen-captures (Browse / Semantic / Graph RAG / DRIFT tabs).
 - **Medium** (long-form, 1–2/month):
   - "Running the entire English Wikipedia link graph on a laptop" — architecture + measured timings.
-  - "Why tail latency is the real vector-search benchmark" — HyperStreamDB vs OpenSearch at 1M docs.
+  - "Why tail latency is the real vector-search benchmark" — BenoStreamDB vs OpenSearch at 1M docs.
   - "Graph RAG on the lakehouse: seed index → CSR expansion → bitmap-filtered rerank."
   - "Iceberg-native vector search without a separate vector database."
 - **Secondary**: Hacker News (Show HN), r/dataengineering, DuckDB / Iceberg communities, X/Twitter threads.
@@ -730,11 +730,11 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 ### Content Assets to Produce
 - [ ] Benchmark chart pack (P50/P99 latency, disk footprint, ingest throughput) from [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
 - [ ] 2–3 min demo video of the full-site Wikipedia Graph RAG UI ([`examples/web_ui/app.py`](examples/web_ui/app.py)).
-- [ ] Reproducible "one-command" quickstart gist (`pip install hyperstreamdb` + 3 lines).
+- [ ] Reproducible "one-command" quickstart gist (`pip install benostreamdb` + 3 lines).
 - [ ] Comparison one-pager vs OpenSearch / LanceDB / pgvector.
 
 ### Guardrails
-- Keep `hyperstreamdb` a pristine, domain-agnostic Apache 2.0 engine; vertical/domain-specific work stays in separate downstream repos.
+- Keep `benostreamdb` a pristine, domain-agnostic Apache 2.0 engine; vertical/domain-specific work stays in separate downstream repos.
 - Market the horizontal engine on measured, reproducible benchmarks only.
 
 ---
@@ -747,9 +747,9 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 - Formalize HNSW-aware hierarchical LRU caching (pinning upper layers $L > 0$ and RoaringBitmap metadata; evicting layer-0 raw vector chunks).
 
 ### Tasks
-- [x] Reproducible Docker benchmark harness comparing HyperStreamDB (TQ8/TQ4) vs OpenSearch 2.x/3.x and LanceDB.
+- [x] Reproducible Docker benchmark harness comparing BenoStreamDB (TQ8/TQ4) vs OpenSearch 2.x/3.x and LanceDB.
 - [x] Automated measurement of RSS memory ceilings, ingest throughput (vectors/sec), and p95/p99 query latency.
-- [x] Formal LRU cache budget configuration guide (`HYPERSTREAM_CACHE_CAP_BYTES`) ensuring predictable memory bounds on edge/container hosts.
+- [x] Formal LRU cache budget configuration guide (`BENOSTREAM_CACHE_CAP_BYTES`) ensuring predictable memory bounds on edge/container hosts.
 
 ---
 
@@ -780,12 +780,15 @@ Move the distance computation that dominates HNSW graph construction onto the GP
 ### Reliability
 - ✅ Zero data loss (ACID writes via manifest versioning)
 - ✅ Atomic commits (manifest-based transactions)
+- ✅ No-panic policy on production paths, enforced by a CI ratchet with a staged hard lint gate (`NO_PANIC_POLICY.md`, `scripts/no_panic_check.sh`)
+- ✅ Graceful degradation under resource pressure — event-driven ingest back-pressure plus a bounded index-build gate, asserted by `tests/stress/`
+- ✅ Malformed input cannot crash the parser surfaces — coverage-guided fuzzing of the SQL literal parsers, rewriters, and request bodies (`fuzz/`, on push)
 - ⬜ 99.9% uptime (requires production deployment)
 
 ### Usability
 - ✅ <5 min to first query (single pip install + 3 lines of code)
 - ✅ Pandas-compatible API (`table.to_pandas()`)
-- ✅ Iceberg-compatible connectors (`spark-hyperstream` & `trino-hyperstream`)
+- ✅ Iceberg-compatible connectors (`spark-benostream` & `trino-benostream`)
 
 ---
 
@@ -797,8 +800,8 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Phase 3 & 3.5: Performance & Native DataFusion SQL Engine** — MoR/CoW deletion vectors, partition pruning, Index Nested Loop Joins, pgvector operators (`<->`, `<=>`, `<#>`).
 - **Phase 4.5: Multi-Catalog Abstraction** — REST, AWS Glue, Hive Metastore, Unity Catalogs.
 - **Phase 5: Connectors & Distributed Analytics** — Spark DataSource V2, Trino SPI connector, and split-level byte-range parallelism.
-- **Phase 6: Operational Tooling & Observability** — `hdb` CLI REPL, `tracing-opentelemetry`, Prometheus metrics exporter (`/metrics`).
-- **Phase 6.5: Ecosystem Gateways** — Dual-protocol search server (`hyperstreamdb-search` on ports 9200 & 6333), Arrow Flight SQL gateway (`hyperstreamdb-flight` on port 50051), and official dbt adapter (`dbt-hyperstreamdb`).
+- **Phase 6: Operational Tooling & Observability** — `bsdb` CLI REPL, `tracing-opentelemetry`, Prometheus metrics exporter (`/metrics`).
+- **Phase 6.5: Ecosystem Gateways** — Dual-protocol search server (`benostreamdb-search` on ports 9200 & 6333), Arrow Flight SQL gateway (`benostreamdb-flight` on port 50051), and official dbt adapter (`dbt-benostreamdb`).
 - **Phase 7: Cloud-Agnostic Concurrency & Durability** — `FileBasedLock` (`src/core/lock.rs`) using object storage CAS (`PutMode::Create`), OCC snapshot swaps with retries (`src/core/manifest/manager/commit.rs`), chaos testing (`tests/test_chaos.rs`).
 - **Phase 8: Documentation Suite** — Complete Sphinx / ReadTheDocs setup in `docs/` with developer guides for SQL, Python, Iceberg V2/V3, GPU, and Concurrency.
 - **Phase 9: 4 GB RAM Matrix** — Docker-constrained vector benchmarking vs OpenSearch/LanceDB.
@@ -820,8 +823,8 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 - **Pruning:** Partition pruning + column-statistics pruning (min/max persisted through the Avro manifest as Iceberg `lower_bounds`/`upper_bounds`/`null_value_counts`), with per-reason reporting in `explain()`
 - **Vector Index:** Standardized on HNSW-IVF with GPU acceleration (`cudarc` for CUDA, native Metal for macOS, WGPU for Vulkan/ROCm/Intel)
 - **GPU Scope Split:** A5 holds the bounded GPU work (nvrtc discovery, sparse/binary kernels, cross-backend correctness harness); A11 holds the research-grade work of moving index *construction* onto the GPU. Native Metal is retained deliberately (Mac-developer appeal, Apache 2.0 community tier), so new kernels are written for CUDA + Metal + WGPU.
-- **SQL & Analytics:** DataFusion native integration + Arrow Flight SQL gateway + dbt adapter (`dbt-hyperstreamdb`)
-- **REST APIs:** OpenSearch / Elasticsearch 7.10 + Qdrant compatibility via `hyperstreamdb-search`
+- **SQL & Analytics:** DataFusion native integration + Arrow Flight SQL gateway + dbt adapter (`dbt-benostreamdb`)
+- **REST APIs:** OpenSearch / Elasticsearch 7.10 + Qdrant compatibility via `benostreamdb-search`
 
 ### 🤔 Open
 - Distributed compaction strategy (Spark job vs local async daemon)?

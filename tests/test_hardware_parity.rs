@@ -2,7 +2,7 @@
 
 mod gpu_test_helpers;
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{
+use benostreamdb::core::index::gpu::{
     compute_distance, set_thread_gpu_context, ComputeBackend, ComputeContext,
 };
 use rand::Rng;
@@ -20,7 +20,7 @@ fn assert_parity(
     backend_a: ComputeBackend,
     backend_b: ComputeBackend,
 ) -> Result<()> {
-    use hyperstreamdb::core::index::VectorMetric;
+    use benostreamdb::core::index::VectorMetric;
 
     // Compute with backend A
     let ctx_a = ComputeContext::from_backend(backend_a)?;

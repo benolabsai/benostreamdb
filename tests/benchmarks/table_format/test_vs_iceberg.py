@@ -1,5 +1,5 @@
 """
-Table format benchmarks comparing HyperStreamDB against Iceberg.
+Table format benchmarks comparing BenoStreamDB against Iceberg.
 
 Tests filtered query performance to demonstrate index advantage.
 """
@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 
 from utils import BenchmarkMetrics, generate_tpch_lineitem, save_results
 from minio_setup import setup_minio_for_benchmarks
-from hyperstreamdb import Table
+from benostreamdb import Table
 import tempfile
 import shutil
 
@@ -41,7 +41,7 @@ class TestTableFormatBenchmarks:
         """
         Benchmark: Point lookup (SELECT WHERE id = X).
         
-        HyperStreamDB: <10ms (index lookup)
+        BenoStreamDB: <10ms (index lookup)
         Iceberg: 10-60s (full scan)
         
         Expected speedup: 1000x
@@ -83,7 +83,7 @@ class TestTableFormatBenchmarks:
         metrics.print_summary()
         stats = metrics.get_stats()
         
-        print(f"\n✓ HyperStreamDB: p99 = {stats['latency_p99_ms']:.2f}ms")
+        print(f"\n✓ BenoStreamDB: p99 = {stats['latency_p99_ms']:.2f}ms")
         print(f"✓ Iceberg (estimated): 10-60 seconds")
         print(f"✓ Speedup: ~{10000 / stats['latency_p99_ms']:.0f}x faster")
         
@@ -95,7 +95,7 @@ class TestTableFormatBenchmarks:
         """
         Benchmark: High selectivity filter (0.01% of data).
         
-        HyperStreamDB: <100ms (index)
+        BenoStreamDB: <100ms (index)
         Iceberg: 5-30s (scan)
         
         Expected speedup: 100x
@@ -130,7 +130,7 @@ class TestTableFormatBenchmarks:
         metrics.print_summary()
         stats = metrics.get_stats()
         
-        print(f"\n✓ HyperStreamDB: p99 = {stats['latency_p99_ms']:.2f}ms")
+        print(f"\n✓ BenoStreamDB: p99 = {stats['latency_p99_ms']:.2f}ms")
         print(f"✓ Iceberg (estimated): 5-30 seconds")
         print(f"✓ Speedup: ~{5000 / stats['latency_p99_ms']:.0f}x faster")
         
@@ -187,7 +187,7 @@ class TestTableFormatBenchmarks:
         """
         Benchmark: Full table scan (no index advantage).
         
-        This establishes baseline where HyperStreamDB and Iceberg
+        This establishes baseline where BenoStreamDB and Iceberg
         should have similar performance.
         """
         print("\n" + "="*60)

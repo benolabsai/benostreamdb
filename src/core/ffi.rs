@@ -16,7 +16,7 @@ lazy_static! {
     static ref RUNTIME: Runtime = Runtime::new().unwrap();
 }
 
-pub struct HyperStreamSession {
+pub struct BenoStreamSession {
     reader: Option<HybridReader>, // Used if no filter
     path: String,
     filter_str: Option<String>,
@@ -24,7 +24,7 @@ pub struct HyperStreamSession {
     current_idx: usize,
 }
 
-impl HyperStreamSession {
+impl BenoStreamSession {
     pub fn new(path: &str, row_selection: Option<String>) -> anyhow::Result<Self> {
         let filter_str = row_selection.filter(|s| !s.trim().is_empty());
         if filter_str.is_some() {
@@ -110,7 +110,7 @@ impl HyperStreamSession {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_openSession(
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBPageSource_openSession(
     mut env: JNIEnv,
     _class: JClass,
     path: JString,
@@ -145,7 +145,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_open
         row_selection_str
     );
 
-    match HyperStreamSession::new(&path_str, row_selection_str) {
+    match BenoStreamSession::new(&path_str, row_selection_str) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
             tracing::error!("FFI Error opening session: {}", e);
@@ -158,12 +158,12 @@ use arrow::ffi::{to_ffi, FFI_ArrowArray, FFI_ArrowSchema};
 
 use arrow::array::Array; // Fix E0599
 
-/// Native method implementation for `com.hyperstreamdb.trino.HyperStreamDBPageSource.readBatch`
+/// Native method implementation for `com.benostreamdb.trino.BenoStreamDBPageSource.readBatch`
 ///
 /// Expected Java Signature:
 /// long readBatch(long handle, long outArrayPtr, long outSchemaPtr)
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_readBatch(
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBPageSource_readBatch(
     _env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -176,7 +176,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
         return 0;
     }
 
-    let session = unsafe { &mut *(handle as *mut HyperStreamSession) };
+    let session = unsafe { &mut *(handle as *mut BenoStreamSession) };
 
     match session.next_batch() {
         Some(batch) => {
@@ -211,7 +211,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBPageSource_read
 
 /// Trino Integration: Split Generation
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_getSplits(
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBSplitManager_getSplits(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -280,7 +280,7 @@ pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBSplitManager_ge
 
 /// Spark Integration: List Data Files with Index Metadata
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listDataFiles(
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamScanBuilder_listDataFiles(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -327,7 +327,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_listD
 
 /// Spark Integration: Get Splits (Legacy/Fallback)
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamScanBuilder_getSplits(
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamScanBuilder_getSplits(
     env: JNIEnv,
     _class: JClass,
     _options: JObject,
@@ -359,7 +359,7 @@ fn open_session_helper(mut env: JNIEnv, path: JString) -> jlong {
         return 0;
     }
     tracing::info!("FFI(Spark): Opening Session to {}", path_str);
-    match HyperStreamSession::new(&path_str, None) {
+    match BenoStreamSession::new(&path_str, None) {
         Ok(session) => Box::into_raw(Box::new(session)) as jlong,
         Err(e) => {
             tracing::error!("FFI Error opening session: {}", e);
@@ -369,7 +369,7 @@ fn open_session_helper(mut env: JNIEnv, path: JString) -> jlong {
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_openSession(
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamPartitionReader_openSession(
     env: JNIEnv,
     _class: JClass,
     path: JString,
@@ -378,7 +378,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_o
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_readBatch(
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamPartitionReader_readBatch(
     _env: JNIEnv,
     _class: JClass,
     handle: jlong,
@@ -395,7 +395,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
         tracing::warn!("FFI(Spark): readBatch called with null handle or output pointers");
         return 0;
     }
-    let session = unsafe { &mut *(handle as *mut HyperStreamSession) };
+    let session = unsafe { &mut *(handle as *mut BenoStreamSession) };
 
     match session.next_batch() {
         Some(batch) => {
@@ -423,7 +423,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_HyperStreamPartitionReader_r
 // -----------------------------------------------------------------------------
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_queryIndexIn(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_queryIndexIn(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -461,7 +461,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_que
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_commitPositionDeletes(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_commitPositionDeletes(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -479,13 +479,13 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_com
     tracing::info!("FFI(Spark): commitPositionDeletes for table {}", uri);
 
     // Placeholder: This will take the list of Iceberg Position Delete files generated
-    // by Spark and commit them to the HyperStreamDB/Iceberg manifest.
+    // by Spark and commit them to the BenoStreamDB/Iceberg manifest.
 
     1 // true
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_addIndex(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIndex(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -516,7 +516,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_add
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_buildIndex(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_buildIndex(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -541,7 +541,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_bui
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_setPrimaryKey(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setPrimaryKey(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -566,7 +566,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_set
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_setGpuContext(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setGpuContext(
     mut env: JNIEnv,
     _class: JClass,
     device_type: JString,
@@ -616,7 +616,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_set
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_setGpuContext(
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_setGpuContext(
     mut env: JNIEnv,
     _class: JClass,
     device_type: JString,
@@ -673,7 +673,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use std::sync::Arc;
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_vectorSearch(
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_vectorSearch(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,
@@ -700,7 +700,7 @@ pub extern "system" fn Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_vec
 }
 
 #[no_mangle]
-pub extern "system" fn Java_com_hyperstreamdb_trino_HyperStreamDBJNIBridge_vectorSearch(
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_vectorSearch(
     mut env: JNIEnv,
     _class: JClass,
     table_uri: JString,

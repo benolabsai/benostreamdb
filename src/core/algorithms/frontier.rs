@@ -44,9 +44,11 @@ pub async fn bfs_visited(
     ) -> Result<String> {
         let df = ctx.sql(sql).await?;
         let path = temp_dir.join(format!("{name}.parquet"));
-        df.write_parquet(path.to_str().unwrap(), Default::default(), None)
-            .await?;
-        ctx.register_parquet(name, path.to_str().unwrap(), ParquetReadOptions::default())
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("frontier run dir path is not valid UTF-8"))?;
+        df.write_parquet(path_str, Default::default(), None).await?;
+        ctx.register_parquet(name, path_str, ParquetReadOptions::default())
             .await?;
         Ok(name.to_string())
     }

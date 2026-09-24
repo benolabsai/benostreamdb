@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import os
 import time
@@ -19,7 +19,7 @@ def test_wal_compaction():
     
     # 1. Write many small batches to trigger compaction
     print("\nPhase 1: Writing 200 small batches...")
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.autocommit = False
     
     for i in range(200):
@@ -55,7 +55,7 @@ def test_wal_compaction():
     print("\nPhase 3: Verifying recovery after compaction...")
     del table
     
-    table2 = hdb.Table(uri)
+    table2 = bsdb.Table(uri)
     result = table2.to_pandas()
     assert len(result) == 200, f"Expected 200 rows, got {len(result)}"
     print(f"✓ Recovered {len(result)} rows from compacted WAL")

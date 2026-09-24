@@ -1527,10 +1527,13 @@ impl HybridReader {
                 }
 
                 if !all_batches.is_empty() {
-                    let full_batch = if all_batches.len() == 1 {
-                        all_batches.into_iter().next().unwrap()
-                    } else {
-                        arrow::compute::concat_batches(&all_batches[0].schema(), &all_batches)?
+                    // The `is_empty()` guard plus the arm split makes `remove(0)`
+                    // index-safe; `_` here means len >= 2.
+                    let full_batch = match all_batches.len() {
+                        1 => all_batches.remove(0),
+                        _ => {
+                            arrow::compute::concat_batches(&all_batches[0].schema(), &all_batches)?
+                        }
                     };
                     let arc_batch = std::sync::Arc::new(full_batch);
                     crate::core::cache::BLOCK_CACHE

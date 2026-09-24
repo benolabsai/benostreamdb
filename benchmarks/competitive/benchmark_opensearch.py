@@ -1,38 +1,38 @@
 #!/usr/bin/env python3
 """
-OpenSearch 2.11 vs HyperStreamDB (hypersearch) — REST API benchmark.
+OpenSearch 2.11 vs BenoStreamDB (bsdb-search) — REST API benchmark.
 
 Spawns a local OpenSearch 2.11 (Docker, single-node, security disabled)
-and a local ``hypersearch`` binary, feeds both the same document stream
+and a local ``bsdb-search`` binary, feeds both the same document stream
 (one document per HTTP POST), and measures:
 
   * ingest throughput      (both; single-doc POST /{index}/_doc)
   * refresh latency        (both; time until the data is searchable)
   * BM25 ``match`` query   (both; p50/p95/p99 over N queries)
   * filtered query         (both; ``match`` + category ``term`` filter)
-  * HNSW ``knn``           (hypersearch only — ES 7.10 has no dense_vector)
-  * hybrid ``match``+``knn`` (hypersearch only; RRF fusion)
+  * HNSW ``knn``           (bsdb-search only — ES 7.10 has no dense_vector)
+  * hybrid ``match``+``knn`` (bsdb-search only; RRF fusion)
   * disk storage footprint (raw JSON, Parquet, secondary indexes vs Lucene)
-  * memory footprint       (HyperStreamDB RSS vs ES JVM heap & container RSS)
+  * memory footprint       (BenoStreamDB RSS vs ES JVM heap & container RSS)
 
 Fairness notes:
-  * Both systems receive one document per POST (no ``_bulk`` on hypersearch),
+  * Both systems receive one document per POST (no ``_bulk`` on bsdb-search),
     an explicit refresh before search, and run on the same host.
   * Both systems run in Docker containers with an **equal resource budget**:
     ``--mem-gb`` (default 4 GiB) and ``--cpus`` (default 4). ES gets a
-    50%-of-budget JVM heap; hypersearch's in-process caches
-    (``HYPERSTREAM_BLOCK_CACHE_GB`` / ``HYPERSTREAM_CACHE_GB``) are sized to
+    50%-of-budget JVM heap; bsdb-search's in-process caches
+    (``BENOSTREAM_BLOCK_CACHE_GB`` / ``BENOSTREAM_CACHE_GB``) are sized to
     the same budget.
   * ES runs single-node, 1 shard, 0 replicas, refresh disabled during ingest
     (the standard way to measure ES ingest).
   * The Wikipedia document stream is cached locally
     (``data/wiki_20231101_en.jsonl``) so both systems see identical docs
     without HuggingFace rate limits.
-  * The ``embedding`` field is part of the hypersearch payload only: ES 7.10
+  * The ``embedding`` field is part of the bsdb-search payload only: ES 7.10
     has no ``dense_vector`` type, so shipping 64 floats per document to a
     7.10 search cluster would not represent any real workload. Every other
     field is identical on both sides.
-  * hypersearch's first write also pays one-time index creation (manifest +
+  * bsdb-search's first write also pays one-time index creation (manifest +
     Iceberg init); ES's index is pre-created for mapping/settings. The
     one-time cost is amortized over the whole ingest stream.
   * Latencies include the localhost HTTP round trip, measured identically.
@@ -62,15 +62,15 @@ from typing import Callable, Dict, List, Optional
 import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BINARY_RELEASE = REPO_ROOT / "target" / "release" / "hypersearch"
-BINARY_DEBUG = REPO_ROOT / "target" / "debug" / "hypersearch"
+BINARY_RELEASE = REPO_ROOT / "target" / "release" / "bsdb-search"
+BINARY_DEBUG = REPO_ROOT / "target" / "debug" / "bsdb-search"
 BINARY = BINARY_RELEASE if BINARY_RELEASE.exists() else BINARY_DEBUG
 RESULTS_DIR = Path(__file__).resolve().parent / "benchmark_results"
 
 ES_IMAGE_DEFAULT = "opensearchproject/opensearch:2.11.1"
 ES_CONTAINER = "opensearch-bench"
 ES_STARTUP_DEADLINE_S = 180.0
-HYPERSEARCH_STARTUP_DEADLINE_S = 60.0
+BENOSEARCH_STARTUP_DEADLINE_S = 60.0
 HTTP_TIMEOUT_S = 300.0
 
 
@@ -208,15 +208,15 @@ def get_documents_from_hf(dataset_name, size, dim):
 # --------------------------------------------------------------------------
 
 class Hypersearch:
-    """``hypersearch`` on a free local port.
+    """``bsdb-search`` on a free local port.
 
     By default runs in a memory/CPU-capped Docker container (image
-    ``hypersearch-bench:latest``, built from ``docker/Dockerfile.search-bench``)
+    ``bsdb-search-bench:latest``, built from ``docker/Dockerfile.search-bench``)
     so it gets the same hardware budget as the OpenSearch container.
     ``containerized=False`` falls back to spawning the native binary.
     """
 
-    HS_CONTAINER = "hypersearch-bench"
+    HS_CONTAINER = "bsdb-search-bench"
 
     def __init__(self, port: int, storage_uri: str, is_cloud: bool = False,
                  mem_gb: int = 4, cpus: int = 4, containerized: bool = True):
@@ -227,12 +227,12 @@ class Hypersearch:
         self.cpus = cpus
         self.containerized = containerized
         env = {
-            "HYPERSEARCH_BIND": "127.0.0.1",
-            "HYPERSEARCH_PORT": str(port),
-            "HYPERSEARCH_STORAGE_URI": storage_uri,
+            "BENOSEARCH_BIND": "127.0.0.1",
+            "BENOSEARCH_PORT": str(port),
+            "BENOSEARCH_STORAGE_URI": storage_uri,
             # Equal-memory-budget: size in-process caches to the shared budget.
-            "HYPERSTREAM_BLOCK_CACHE_GB": str(max(1, mem_gb // 4)),
-            "HYPERSTREAM_CACHE_GB": str(max(1, mem_gb // 8)),
+            "BENOSTREAM_BLOCK_CACHE_GB": str(max(1, mem_gb // 4)),
+            "BENOSTREAM_CACHE_GB": str(max(1, mem_gb // 8)),
             "RUST_LOG": "info",
         }
         if is_cloud or storage_uri.startswith("s3://"):
@@ -252,7 +252,7 @@ class Hypersearch:
             mounts: List[str] = []
             if storage_uri.startswith("file://"):
                 host_dir = storage_uri[len("file://"):]
-                env["HYPERSEARCH_STORAGE_URI"] = "file:///data"
+                env["BENOSEARCH_STORAGE_URI"] = "file:///data"
                 mounts = ["-v", f"{host_dir}:/data"]
             env_args: List[str] = []
             for k, v in env.items():
@@ -267,7 +267,7 @@ class Hypersearch:
                     "--cpus", str(cpus),
                     *mounts,
                     *env_args,
-                    "hypersearch-bench:latest",
+                    "bsdb-search-bench:latest",
                 ],
                 capture_output=True,
                 text=True,
@@ -284,7 +284,7 @@ class Hypersearch:
             )
             self.pid = self.proc.pid
         self.session = requests.Session()
-        deadline = time.time() + HYPERSEARCH_STARTUP_DEADLINE_S
+        deadline = time.time() + BENOSEARCH_STARTUP_DEADLINE_S
         ready = False
         while time.time() < deadline:
             try:
@@ -303,7 +303,7 @@ class Hypersearch:
                     capture_output=True, text=True)
                 detail = f" container logs: {logs.stdout[-500:]}"
             raise RuntimeError(
-                f"hypersearch did not become ready within {HYPERSEARCH_STARTUP_DEADLINE_S:.0f}s{detail}")
+                f"bsdb-search did not become ready within {BENOSEARCH_STARTUP_DEADLINE_S:.0f}s{detail}")
         self.info = self.session.get(self.base + "/", timeout=5).json()
 
     def index_doc(self, index: str, doc: Dict) -> requests.Response:
@@ -667,8 +667,8 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
     outdir.mkdir(parents=True, exist_ok=True)
     storage_mode = meta.get("storage_mode", "local")
     doc_count = meta["docs"]
-    json_path = outdir / f"opensearch_hypersearch_{storage_mode}_{doc_count}_{timestamp}.json"
-    md_path = outdir / f"opensearch_hypersearch_{storage_mode}_{doc_count}_{timestamp}.md"
+    json_path = outdir / f"opensearch_bsdb-search_{storage_mode}_{doc_count}_{timestamp}.json"
+    md_path = outdir / f"opensearch_bsdb-search_{storage_mode}_{doc_count}_{timestamp}.md"
 
     with open(json_path, "w") as f:
         json.dump({"run": meta, "results": [asdict(r) for r in results]}, f, indent=2)
@@ -683,11 +683,11 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
     build_type = "release" if "release" in str(BINARY) else "debug"
 
     with open(md_path, "w") as f:
-        f.write("# OpenSearch 2.11 vs HyperStreamDB — REST API Benchmark\n\n")
+        f.write("# OpenSearch 2.11 vs BenoStreamDB — REST API Benchmark\n\n")
         f.write(f"**Generated:** {meta['generated']}  \n")
         f.write(f"**Host:** {meta['hardware']} ({platform.system()} {platform.release()})  \n")
         f.write(f"**ES:** {meta['es_version']} (build `{meta['es_build']}`, Docker, single-node, 1 shard, no replicas, 1 GiB JVM)  \n")
-        f.write(f"**hypersearch:** {meta['hs_version']} ({build_type} build, storage: `{storage_mode}`, in-process HNSW/BM25)  \n")
+        f.write(f"**bsdb-search:** {meta['hs_version']} ({build_type} build, storage: `{storage_mode}`, in-process HNSW/BM25)  \n")
         f.write(f"**Dataset:** {meta['docs']:,} docs × {meta['dim']}-dim embeddings, {meta['runs']} query runs, k=10\n\n")
 
         f.write("## Ingest (bulk POST)\n\n")
@@ -741,16 +741,16 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
         f.write("| System | Primary Data (Lake) | Secondary Indexes (Search) | Data Duplication? | Total True Footprint |\n")
         f.write("|---|---|---|---|---|\n")
 
-        hs_bd = meta.get("storage_breakdown", {}).get("HyperStreamDB", {})
+        hs_bd = meta.get("storage_breakdown", {}).get("BenoStreamDB", {})
         es_bd = meta.get("storage_breakdown", {}).get("OpenSearch 2.11", {})
         rss = meta.get("rss_mb", {})
 
         hs_parquet = hs_bd.get('parquet_mb', 0)
         hs_idx = hs_bd.get('indexes_mb', 0)
         hs_tot = hs_bd.get('total_mb', 0)
-        hs_mem_in = f"{rss.get('HyperStreamDB_after_ingest', 'n/a')} MB RSS"
-        hs_mem_srch = f"{rss.get('HyperStreamDB_after_search', 'n/a')} MB RSS"
-        f.write(f"| HyperStreamDB ({storage_mode}) | {hs_parquet} MB (Parquet) | {hs_idx} MB (HNSW+BM25) | No | **{hs_tot} MB** |\n")
+        hs_mem_in = f"{rss.get('BenoStreamDB_after_ingest', 'n/a')} MB RSS"
+        hs_mem_srch = f"{rss.get('BenoStreamDB_after_search', 'n/a')} MB RSS"
+        f.write(f"| BenoStreamDB ({storage_mode}) | {hs_parquet} MB (Parquet) | {hs_idx} MB (HNSW+BM25) | No | **{hs_tot} MB** |\n")
 
         if "OpenSearch 2.11" in by_op.get("ingest", {}):
             es_store = es_bd.get('lucene_store_mb', 0)
@@ -762,7 +762,7 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
         f.write("\n## Memory Usage\n\n")
         f.write("| System | Memory Ingest (RSS/Heap) | Memory Post-Search |\n")
         f.write("|---|---|---|\n")
-        f.write(f"| HyperStreamDB ({storage_mode}) | {hs_mem_in} | {hs_mem_srch} |\n")
+        f.write(f"| BenoStreamDB ({storage_mode}) | {hs_mem_in} | {hs_mem_srch} |\n")
         if "OpenSearch 2.11" in by_op.get("ingest", {}):
             es_heap_srch = f"JVM Heap: {rss.get('OpenSearch_jvm_heap_after_search', 'n/a')} MB"
             es_rss_srch = f"Container RSS: {rss.get('OpenSearch_container_rss_after_search', 'n/a')} MB"
@@ -772,17 +772,17 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
 
         f.write("## Fairness caveats\n\n")
         f.write(
-            "- Single-doc POST on **both** systems (hypersearch has no `_bulk` in this test); ES index pre-created "
-            "with refresh disabled, hypersearch creates the index on first write.\n"
-            "- The `embedding` field is sent to hypersearch only: ES 7.10 has no `dense_vector` type.\n"
-            "- `knn` and `hybrid_rrf` are hypersearch-only (no vector search in ES 7.10).\n"
-            "- ES refresh does little work (segments are indexed during ingest); hypersearch refresh "
+            "- Single-doc POST on **both** systems (bsdb-search has no `_bulk` in this test); ES index pre-created "
+            "with refresh disabled, bsdb-search creates the index on first write.\n"
+            "- The `embedding` field is sent to bsdb-search only: ES 7.10 has no `dense_vector` type.\n"
+            "- `knn` and `hybrid_rrf` are bsdb-search-only (no vector search in ES 7.10).\n"
+            "- ES refresh does little work (segments are indexed during ingest); bsdb-search refresh "
             "includes BM25/HNSW index build, so refresh times are not like-for-like.\n"
-            f"- hypersearch is a **{build_type}** build; ES uses the stock Docker image.\n"
+            f"- bsdb-search is a **{build_type}** build; ES uses the stock Docker image.\n"
             f"- Equal resource budget: **{meta.get('memory_budget_gb', 'n/a')} GiB RAM / "
             f"{meta.get('cpu_budget', 'n/a')} CPUs** for both systems "
             f"(ES: container cap + {meta.get('es_jvm_heap_gb', 'n/a')} GiB JVM heap; "
-            f"hypersearch: {'container cap + ' if meta.get('hs_containerized') else ''}"
+            f"bsdb-search: {'container cap + ' if meta.get('hs_containerized') else ''}"
             f"in-process caches sized to the same budget).\n\n"
         )
         if meta.get("notes"):
@@ -801,15 +801,15 @@ def write_reports(results: List[BenchmarkResult], meta: Dict, outdir: Path, time
 # --------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="OpenSearch 2.11 vs hypersearch REST benchmark")
+    parser = argparse.ArgumentParser(description="OpenSearch 2.11 vs bsdb-search REST benchmark")
     parser.add_argument("--dataset", choices=["wiki", "pmc"], default="wiki", help="HuggingFace dataset to use")
     parser.add_argument("--size", type=int, default=1000, help="document count (default 1000)")
     parser.add_argument("--quick", action="store_true", help="quick run: 200 docs, 20 runs, dim 32")
     parser.add_argument("--dim", type=int, default=64, help="embedding dimension (default 64)")
     parser.add_argument("--runs", type=int, default=100, help="query runs per operation (default 100)")
-    parser.add_argument("--storage", choices=["local", "cloud"], default="local", help="storage backend for HyperStreamDB (default: local)")
+    parser.add_argument("--storage", choices=["local", "cloud"], default="local", help="storage backend for BenoStreamDB (default: local)")
     parser.add_argument("--cloud-uri", default="s3://warehouse/benchmarks", help="S3 URI prefix when --storage=cloud (default: s3://warehouse/benchmarks)")
-    parser.add_argument("--skip-es", action="store_true", help="skip OpenSearch (hypersearch only)")
+    parser.add_argument("--skip-es", action="store_true", help="skip OpenSearch (bsdb-search only)")
     parser.add_argument("--es-port", type=int, default=None, help="host port for ES (default: auto)")
     parser.add_argument("--keep-es", action="store_true", help="do not remove the ES container at the end")
     parser.add_argument("--es-image", default=ES_IMAGE_DEFAULT, help="ES docker image")
@@ -818,7 +818,7 @@ def main() -> None:
     parser.add_argument("--cpus", type=int, default=4,
                         help="equal CPU budget for both systems (default 4)")
     parser.add_argument("--no-container", action="store_true",
-                        help="run hypersearch natively instead of in a capped container")
+                        help="run bsdb-search natively instead of in a capped container")
     parser.add_argument("--output-dir", default=str(RESULTS_DIR), help="results output directory")
     args = parser.parse_args()
 
@@ -829,20 +829,20 @@ def main() -> None:
 
     if args.no_container:
         if not BINARY.exists():
-            raise SystemExit(f"{BINARY} not found; run `cargo build -p hyperstreamdb-search --bin hypersearch` first")
+            raise SystemExit(f"{BINARY} not found; run `cargo build -p benostreamdb-search --bin bsdb-search` first")
     else:
-        img = subprocess.run(["docker", "image", "inspect", "hypersearch-bench:latest"], capture_output=True)
+        img = subprocess.run(["docker", "image", "inspect", "bsdb-search-bench:latest"], capture_output=True)
         if img.returncode != 0:
             raise SystemExit(
-                "hypersearch-bench:latest image not found; run "
-                "`docker build -f docker/Dockerfile.search-bench -t hypersearch-bench:latest .` first")
+                "bsdb-search-bench:latest image not found; run "
+                "`docker build -f docker/Dockerfile.search-bench -t bsdb-search-bench:latest .` first")
 
     print("=" * 72)
-    print("OpenSearch 2.11 vs HyperStreamDB — REST benchmark")
+    print("OpenSearch 2.11 vs BenoStreamDB — REST benchmark")
     print("=" * 72)
     print(f"size={size} dim={dim} runs={runs} storage={args.storage} skip_es={args.skip_es} "
           f"mem_budget={args.mem_gb}GiB cpus={args.cpus} "
-          f"hypersearch={'container' if not args.no_container else BINARY.name}")
+          f"bsdb-search={'container' if not args.no_container else BINARY.name}")
 
     hardware = get_hardware_info()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -879,8 +879,8 @@ def main() -> None:
         "es_jvm_heap_gb": max(1, args.mem_gb // 2),
     }
 
-    # ---------------- hypersearch ----------------
-    print(f"\n[HyperStreamDB hypersearch ({args.storage} storage)]")
+    # ---------------- bsdb-search ----------------
+    print(f"\n[BenoStreamDB bsdb-search ({args.storage} storage)]")
     if args.storage == "cloud":
         storage_uri = f"{args.cloud_uri.rstrip('/')}/hsbench-{uuid.uuid4().hex[:8]}"
         local_dir_to_clean = None
@@ -894,10 +894,10 @@ def main() -> None:
         hs = Hypersearch(free_port(), storage_uri, is_cloud=(args.storage == "cloud"),
                          mem_gb=args.mem_gb, cpus=args.cpus, containerized=not args.no_container)
         hs_index = "bench-hs-" + uuid.uuid4().hex[:8]
-        results += bench_ingest(hs, "HyperStreamDB", hs_index, docs, exclude_embedding=False, hardware=hardware)
+        results += bench_ingest(hs, "BenoStreamDB", hs_index, docs, exclude_embedding=False, hardware=hardware)
         meta["hs_version"] = hs.info["version"]["number"]
-        meta["rss_mb"]["HyperStreamDB_after_ingest"] = hs.rss_mb()
-        meta["storage_breakdown"]["HyperStreamDB"] = hs.storage_breakdown()
+        meta["rss_mb"]["BenoStreamDB_after_ingest"] = hs.rss_mb()
+        meta["storage_breakdown"]["BenoStreamDB"] = hs.storage_breakdown()
 
         def match_body(i):
             return {"query": {"match": {"body": words[i % len(words)]}}, "size": 10}
@@ -920,14 +920,14 @@ def main() -> None:
                 }
             }
 
-        results.append(bench_query(hs, "HyperStreamDB", hs_index, "match_bm25", match_body, runs, size, hardware))
-        results.append(bench_query(hs, "HyperStreamDB", hs_index, "filtered", filtered_body, runs, size, hardware))
-        results.append(bench_query(hs, "HyperStreamDB", hs_index, "knn", knn_body, runs, size, hardware,
+        results.append(bench_query(hs, "BenoStreamDB", hs_index, "match_bm25", match_body, runs, size, hardware))
+        results.append(bench_query(hs, "BenoStreamDB", hs_index, "filtered", filtered_body, runs, size, hardware))
+        results.append(bench_query(hs, "BenoStreamDB", hs_index, "knn", knn_body, runs, size, hardware,
                                    extra_meta={"dim": dim}))
-        results.append(bench_query(hs, "HyperStreamDB", hs_index, "hybrid_rrf", hybrid_body, runs, size, hardware,
+        results.append(bench_query(hs, "BenoStreamDB", hs_index, "hybrid_rrf", hybrid_body, runs, size, hardware,
                                    extra_meta={"dim": dim}))
-        meta["rss_mb"]["HyperStreamDB_after_search"] = hs.rss_mb()
-        meta["rss_mb"]["HyperStreamDB"] = hs.rss_mb()
+        meta["rss_mb"]["BenoStreamDB_after_search"] = hs.rss_mb()
+        meta["rss_mb"]["BenoStreamDB"] = hs.rss_mb()
     finally:
         if hs is not None:
             hs.stop()

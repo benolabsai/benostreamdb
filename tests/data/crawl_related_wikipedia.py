@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 
 def crawl_wikipedia(seed_titles, max_pages=500):
-    wiki_wiki = wikipediaapi.Wikipedia('HyperStreamDBTest/1.0', 'en')
+    wiki_wiki = wikipediaapi.Wikipedia('BenoStreamDBTest/1.0', 'en')
     
     visited = {}
     queue = list(seed_titles)

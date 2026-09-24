@@ -1,13 +1,13 @@
 # Spark Connector
 
-The HyperStreamDB Spark connector enables you to use Apache Spark for Batch Processing, ETL, and Structured Streaming.
+The BenoStreamDB Spark connector enables you to use Apache Spark for Batch Processing, ETL, and Structured Streaming.
 
 ## Building
 
-The connector is a Maven project located in `spark-hyperstream`.
+The connector is a Maven project located in `spark-benostream`.
 
 ```bash
-cd spark-hyperstream
+cd spark-benostream
 mvn clean install -DskipTests
 ```
 
@@ -17,7 +17,7 @@ mvn clean install -DskipTests
 
 ```scala
 val df = spark.read
-  .format("hyperstreamdb")
+  .format("benostreamdb")
   .load("s3://my-data/tables/user_logs")
 
 df.filter("user_id = 12345").show()
@@ -25,11 +25,11 @@ df.filter("user_id = 12345").show()
 
 ### Structured Streaming
 
-HyperStreamDB supports streaming reads, picking up new segments as they are committed to the manifest.
+BenoStreamDB supports streaming reads, picking up new segments as they are committed to the manifest.
 
 ```scala
 val stream = spark.readStream
-  .format("hyperstreamdb")
+  .format("benostreamdb")
   .load("s3://my-data/tables/logs")
 
 stream.writeStream

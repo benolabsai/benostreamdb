@@ -1,10 +1,10 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 import time
 
 def benchmark_kmeans_direct():
     print("="*50)
-    print("HYPERSTREAMDB GPU K-MEANS DIRECT BENCHMARK")
+    print("BENOSTREAMDB GPU K-MEANS DIRECT BENCHMARK")
     print("="*50)
 
     # 1. Setup Data
@@ -18,7 +18,7 @@ def benchmark_kmeans_direct():
     # 2. CPU Benchmark
     print(f"\n[2] Running K-Means (k={k}) on CPU...")
     # By default, without activating a context, it uses CPU
-    ctx_cpu = hdb.ComputeContext("cpu")
+    ctx_cpu = bsdb.ComputeContext("cpu")
     
     start_time = time.time()
     _, _ = ctx_cpu.kmeans(vectors, k, max_iters=5)
@@ -28,7 +28,7 @@ def benchmark_kmeans_direct():
     # 3. GPU Benchmark (MPS)
     print(f"\n[3] Running K-Means (k={k}) on GPU (MPS)...")
     try:
-        ctx_gpu = hdb.ComputeContext.auto_detect()
+        ctx_gpu = bsdb.ComputeContext.auto_detect()
         print(f"Detected backend: {ctx_gpu.backend}")
         
         # Warm up

@@ -3,12 +3,12 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Concurrency and Atomic Commits" href="CONCURRENCY.html"><link rel="prev" title="GPU Setup Guide for HyperStreamDB" href="GPU_SETUP_GUIDE.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Concurrency and Atomic Commits" href="CONCURRENCY.html"><link rel="prev" title="GPU Setup Guide for BenoStreamDB" href="GPU_SETUP_GUIDE.html">
         <link rel="prefetch" href="../_static/logo.png" as="image">
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Configuration Guide - HyperStreamDB 0.5.5 documentation</title>
+        <title>Configuration Guide - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -265,7 +265,7 @@
         <article role="main" id="furo-main-content">
           <section id="configuration-guide">
 <h1>Configuration Guide<a class="headerlink" href="#configuration-guide" title="Link to this heading">¶</a></h1>
-<p>HyperStreamDB is designed to be highly configurable through environment variables and a centralized configuration file.</p>
+<p>BenoStreamDB is designed to be highly configurable through environment variables and a centralized configuration file.</p>
 <section id="environment-variables">
 <h2>Environment Variables<a class="headerlink" href="#environment-variables" title="Link to this heading">¶</a></h2>
 <p>These variables control the core behavior of the system, including memory management, caching, and storage paths.</p>
@@ -278,24 +278,24 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_CACHE_GB</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BENOSTREAM_CACHE_GB</span></code></p></td>
 <td><p>Memory limit for the hybrid vector index (HNSW-IVF) in GB.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">2</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_BLOCK_CACHE_GB</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BENOSTREAM_BLOCK_CACHE_GB</span></code></p></td>
 <td><p>Memory limit for the decoded RecordBatch block cache in GB.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_DISK_CACHE_DIR</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BENOSTREAM_DISK_CACHE_DIR</span></code></p></td>
 <td><p>Directory used for caching segmented index files on local disk.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">/tmp/hdb_cache</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_WAL_DIR</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">BENOSTREAM_WAL_DIR</span></code></p></td>
 <td><p>Directory for the Write-Ahead Log (WAL) used for fault tolerance.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">{table_uri}/_wal</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_CONFIG</span></code></p></td>
-<td><p>Path to a centralized <code class="docutils literal notranslate"><span class="pre">hyperstream.toml</span></code> configuration file.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">BENOSTREAM_CONFIG</span></code></p></td>
+<td><p>Path to a centralized <code class="docutils literal notranslate"><span class="pre">benostream.toml</span></code> configuration file.</p></td>
 <td><p>None</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">JAEGER_ENABLED</span></code></p></td>
@@ -306,14 +306,14 @@
 </table>
 </div>
 </section>
-<section id="the-hyperstream-toml-file">
-<h2>The hyperstream.toml File<a class="headerlink" href="#the-hyperstream-toml-file" title="Link to this heading">¶</a></h2>
+<section id="the-benostream-toml-file">
+<h2>The benostream.toml File<a class="headerlink" href="#the-benostream-toml-file" title="Link to this heading">¶</a></h2>
 <p>You can use a TOML file to manage complex configurations, especially for catalogs and multi-cloud storage.</p>
-<p>HyperStreamDB looks for this file in the following order:</p>
+<p>BenoStreamDB looks for this file in the following order:</p>
 <ol class="arabic simple">
-<li><p>Environment variable <code class="docutils literal notranslate"><span class="pre">HYPERSTREAM_CONFIG</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">./hyperstream.toml</span></code> (current directory)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">~/.hyperstream/config.toml</span></code></p></li>
+<li><p>Environment variable <code class="docutils literal notranslate"><span class="pre">BENOSTREAM_CONFIG</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">./benostream.toml</span></code> (current directory)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">~/.benostream/config.toml</span></code></p></li>
 </ol>
 <section id="example-configuration">
 <h3>Example Configuration<a class="headerlink" href="#example-configuration" title="Link to this heading">¶</a></h3>
@@ -337,7 +337,7 @@
 </section>
 <section id="storage-credentials">
 <h2>Storage Credentials<a class="headerlink" href="#storage-credentials" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB uses the standard <code class="docutils literal notranslate"><span class="pre">object-store</span></code> crate, which automatically picks up credentials from:</p>
+<p>BenoStreamDB uses the standard <code class="docutils literal notranslate"><span class="pre">object-store</span></code> crate, which automatically picks up credentials from:</p>
 <ul class="simple">
 <li><p><strong>AWS</strong>: <code class="docutils literal notranslate"><span class="pre">AWS_ACCESS_KEY_ID</span></code>, <code class="docutils literal notranslate"><span class="pre">AWS_SECRET_ACCESS_KEY</span></code>, <code class="docutils literal notranslate"><span class="pre">AWS_REGION</span></code>, or IAM Roles.</p></li>
 <li><p><strong>GCP</strong>: <code class="docutils literal notranslate"><span class="pre">GOOGLE_APPLICATION_CREDENTIALS</span></code> (JSON key file path).</p></li>
@@ -373,9 +373,9 @@
 </div>
 <section id="python-example">
 <h3>Python Example<a class="headerlink" href="#python-example" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
 
 <span class="c1"># Apply query-level limits</span>
 <span class="n">results</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -388,7 +388,7 @@
 </section>
 <section id="rust-example">
 <h3>Rust Example<a class="headerlink" href="#rust-example" title="Link to this heading">¶</a></h3>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">hyperstreamdb</span><span class="p">::{</span><span class="n">Table</span><span class="p">,</span><span class="w"> </span><span class="n">QueryConfig</span><span class="p">};</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">benostreamdb</span><span class="p">::{</span><span class="n">Table</span><span class="p">,</span><span class="w"> </span><span class="n">QueryConfig</span><span class="p">};</span>
 
 <span class="kd">let</span><span class="w"> </span><span class="n">table</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Table</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">QueryConfig</span><span class="p">::</span><span class="n">default</span><span class="p">()</span>
@@ -426,7 +426,7 @@
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">GPU Setup Guide for HyperStreamDB</div>
+                <div class="title">GPU Setup Guide for BenoStreamDB</div>
                 
               </div>
             </a>
@@ -434,7 +434,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -443,7 +443,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>
@@ -469,7 +469,7 @@
             <ul>
 <li><a class="reference internal" href="#">Configuration Guide</a><ul>
 <li><a class="reference internal" href="#environment-variables">Environment Variables</a></li>
-<li><a class="reference internal" href="#the-hyperstream-toml-file">The hyperstream.toml File</a><ul>
+<li><a class="reference internal" href="#the-benostream-toml-file">The benostream.toml File</a><ul>
 <li><a class="reference internal" href="#example-configuration">Example Configuration</a></li>
 </ul>
 </li>

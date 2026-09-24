@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the FULL English-Wikipedia Graph-RAG demo dataset for HyperStreamDB.
+"""Prepare the FULL English-Wikipedia Graph-RAG demo dataset for BenoStreamDB.
 
 No pruning: the whole site goes in. Every stage is idempotent and resumable —
 rerun the script any time and it skips finished work.
@@ -11,7 +11,7 @@ Stages:
                  pages dropped -> data/wiki_{nodes,edges}.parquet (chunked, low RAM)
   4. embed     - sentence-transformers on GPU (RTX 3090) or CPU, streaming per
                  row-group, sharded + resumable -> data/embeddings/part-*.parquet
-  5. load      - persistent HyperStreamDB tables under data/wiki_graph_db/:
+  5. load      - persistent BenoStreamDB tables under data/wiki_graph_db/:
                  edges (source,target int64 + CSR graph index)
                  nodes (id,title,summary,embedding + HNSW-TQ vector index + BM25)
 
@@ -41,13 +41,13 @@ import pyarrow.parquet as pq
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Dumps (raw XML, parsed parquets, embedding shards) live on the 14 TB HDD by
 # default so they never fill the root disk. Override with --dumps-dir or
-# HYPERSTREAM_DATA.
+# BENOSTREAM_DATA.
 DATA = os.environ.get(
-    "HYPERSTREAM_DATA",
-    os.path.join(os.path.expanduser("~"), "data", "hyperstreamdb"),
+    "BENOSTREAM_DATA",
+    os.path.join(os.path.expanduser("~"), "data", "benostreamdb"),
 )
 EMB = os.path.join(DATA, "embeddings")
-# HyperStreamDB tables stay on the SSD in the repo's original location.
+# BenoStreamDB tables stay on the SSD in the repo's original location.
 DB = os.path.join(REPO, "data", "wiki_graph_db")
 
 log = lambda m: print(f"[prepare] {m}", flush=True)
@@ -238,7 +238,7 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
 
     # Rotate shards every SHARD_ROWS so the load stage can delete each shard
     # after ingesting it (bounds peak disk); tmp+rename keeps files atomic.
-    SHARD_ROWS = int(os.environ.get("HDB_EMBED_SHARD_ROWS", 5_000_000))
+    SHARD_ROWS = int(os.environ.get("BSDB_EMBED_SHARD_ROWS", 5_000_000))
     shard = len(done_shards)          # continue numbering after finished shards
     writer = None
     cur_tmp = cur_final = None
@@ -291,7 +291,7 @@ def stage_embed(model: str, dims: int, batch: int, lead_chars: int = 256):
     log(f"embed: {done:,} vectors across {shard + 1} shard(s)")
 
 
-# ── 5. load into persistent HyperStreamDB tables ────────────────────────────
+# ── 5. load into persistent BenoStreamDB tables ────────────────────────────
 def _table_loaded(d: str) -> bool:
     """Existence is not enough: a crashed run can leave an empty table shell
     (metadata/_wal/_manifest only) that would otherwise be 'skipped'."""
@@ -322,10 +322,10 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
 
     The library now bounds its own footprint too (see `core::table::mod` and
     `core::memory`): concurrent index builds are gated by
-    ``HDB_INDEX_BUILD_CONCURRENCY`` (default 2) and the heap is trimmed at flush
+    ``BSDB_INDEX_BUILD_CONCURRENCY`` (default 2) and the heap is trimmed at flush
     and build boundaries. Chunking remains the demo's belt-and-braces reset.
     """
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
 
     nodes_dir = os.path.join(DB, "nodes")
     nodes_path = os.path.join(DATA, "wiki_nodes.parquet")
@@ -344,10 +344,10 @@ def _load_nodes_child(quant, delete_shards, row_start, row_end):
         schema = schema.append(emb_field)
 
     if _table_loaded(nodes_dir):
-        t = hdb.Table(f"file://{nodes_dir}")           # later chunks: open existing
+        t = bsdb.Table(f"file://{nodes_dir}")           # later chunks: open existing
     else:
         shutil.rmtree(nodes_dir, ignore_errors=True)   # clear crashed-run shell
-        t = hdb.Table.create(f"file://{nodes_dir}", schema)
+        t = bsdb.Table.create(f"file://{nodes_dir}", schema)
     # Index config must be applied in EVERY process: a freshly opened table does
     # not inherit it, and segments written without it are silently unindexed
     # (queries then flat-scan them — measured 197 GB read for one search).
@@ -417,7 +417,7 @@ def _resume_offset(loaded: int, chunk_rows: int) -> int:
     """Row offset to resume a chunked load from.
 
     Writes are NOT chunk-atomic: the engine spills to a real commit whenever the
-    write buffer exceeds ``HYPERSTREAM_CACHE_GB`` (default 1 GB), so a killed
+    write buffer exceeds ``BENOSTREAM_CACHE_GB`` (default 1 GB), so a killed
     chunk leaves partial rows committed. Resuming from the exact committed count
     avoids re-writing (and duplicating) those rows. ``chunk_rows`` is accepted
     for call-site clarity but deliberately not used to round down.
@@ -427,9 +427,9 @@ def _resume_offset(loaded: int, chunk_rows: int) -> int:
 
 def stage_load(rebuild: bool, quant: str, delete_shards: bool,
                chunk_rows: int, row_start: int, row_end: int):
-    # hyperstreamdb self-tunes glibc arenas (mallopt M_ARENA_MAX=2) at import;
+    # benostreamdb self-tunes glibc arenas (mallopt M_ARENA_MAX=2) at import;
     # the chunked design below additionally resets allocator high-water marks.
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
 
     edges_dir = os.path.join(DB, "edges")
     nodes_dir = os.path.join(DB, "nodes")
@@ -441,7 +441,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
     # ── edges table + CSR graph index (single pass, cheap memory) ──
     if not _table_loaded(edges_dir):
         schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
-        t = hdb.Table.create(f"file://{edges_dir}", schema)
+        t = bsdb.Table.create(f"file://{edges_dir}", schema)
         t.add_index("source", {"type": "graph", "src_column": "source", "dst_column": "target"})
         t0 = time.time()
         n = 0
@@ -465,13 +465,13 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
 
     # Resume from the EXACT committed row count. Chunks are NOT atomic: the
     # write path spills to a real commit whenever the buffer exceeds
-    # HYPERSTREAM_CACHE_GB (default 1 GB), so a killed chunk leaves partial rows
+    # BENOSTREAM_CACHE_GB (default 1 GB), so a killed chunk leaves partial rows
     # committed. Rounding down to the chunk boundary would re-write those rows
     # and duplicate them, so continue from `loaded` itself.
     loaded = 0
     if _table_loaded(nodes_dir):
         try:
-            loaded = len(hdb.Table(f"file://{nodes_dir}"))
+            loaded = len(bsdb.Table(f"file://{nodes_dir}"))
         except Exception as e:  # noqa: BLE001
             log(f"load nodes: could not count existing rows ({e}); starting fresh")
             loaded = 0
@@ -519,7 +519,7 @@ def stage_compact(min_file_size_bytes: int = 2_000_000_000):
     their vector/inverted indexes (the engine carries the table's index config
     into the compactor; the config itself is restored from the manifest on open).
     """
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
 
     nodes_dir = os.path.join(DB, "nodes")
     if not _table_loaded(nodes_dir):
@@ -528,7 +528,7 @@ def stage_compact(min_file_size_bytes: int = 2_000_000_000):
     before = _count_segments(nodes_dir)
     log(f"compact: {before} segments -> target {min_file_size_bytes * 2 / 1e9:.1f} GB "
         f"(min {min_file_size_bytes / 1e9:.1f} GB)")
-    t = hdb.Table(f"file://{nodes_dir}")
+    t = bsdb.Table(f"file://{nodes_dir}")
     t0 = time.time()
     t.rewrite_data_files(min_file_size_bytes)
     after = _count_segments(nodes_dir)
@@ -542,7 +542,7 @@ def main():
     ap.add_argument("--stage", choices=["download", "parse", "resolve", "embed", "load", "compact", "all"], default="all")
     ap.add_argument("--dumps-dir", default=DATA,
                     help="directory holding the wiki dumps, parsed parquets and "
-                         "embedding shards (default: $HOME/data/hyperstreamdb). "
+                         "embedding shards (default: $HOME/data/benostreamdb). "
                          "Tables are always written to <repo>/data/wiki_graph_db.")
     ap.add_argument("--workers", type=int, default=3, help="download parallelism")
     ap.add_argument("--embed-model", default="all-MiniLM-L6-v2",
@@ -553,7 +553,7 @@ def main():
     ap.add_argument("--lead-chars", type=int, default=256, help="embed only the article lead (chars) for the centroid")
     ap.add_argument("--quant", choices=["tq4", "tq8", "none"], default="tq8")
     ap.add_argument("--keep-shards", action="store_true", help="don't delete embeddings after load")
-    ap.add_argument("--rebuild", action="store_true", help="force-rebuild hdb tables in stage load")
+    ap.add_argument("--rebuild", action="store_true", help="force-rebuild bsdb tables in stage load")
     ap.add_argument("--load-chunk-rows", type=int, default=None,
                     help="rows per fresh-process load chunk (resets allocator high-water marks; "
                          "index builds strand ~2.6-4.5 GB freed-but-unreturnable memory per "
@@ -582,10 +582,10 @@ def main():
         elif s == "embed":
             stage_embed(args.embed_model, args.embed_dims, args.embed_batch, args.lead_chars)
         elif s == "load":
-            # precedence: --load-chunk-rows flag > HDB_LOAD_CHUNK_ROWS env > RAM auto-size
+            # precedence: --load-chunk-rows flag > BSDB_LOAD_CHUNK_ROWS env > RAM auto-size
             chunk = args.load_chunk_rows
             if chunk is None:
-                env = os.environ.get("HDB_LOAD_CHUNK_ROWS", "").strip()
+                env = os.environ.get("BSDB_LOAD_CHUNK_ROWS", "").strip()
                 chunk = int(env) if env else _auto_chunk_rows()
             if not args.row_start:  # parent only (children pass explicit ranges)
                 inputs = os.path.getsize(os.path.join(DATA, "wiki_nodes.parquet"))

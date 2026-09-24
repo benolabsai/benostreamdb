@@ -138,7 +138,7 @@ impl Catalog for HiveMetastoreClient {
         let table = Table {
             table_name: Some(FastStr::new(table_name)),
             db_name: Some(FastStr::new(namespace)),
-            owner: Some(FastStr::from_static_str("hyperstream")),
+            owner: Some(FastStr::from_static_str("benostream")),
             create_time: Some(now),
             last_access_time: Some(now),
             retention: Some(0),

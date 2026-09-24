@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-//! Iceberg integration module for HyperStreamDB.
+//! Iceberg integration module for BenoStreamDB.
 //!
 //! Provides reading, writing, and conversion of Iceberg table metadata,
 //! manifests, schemas, delete files, and partition transforms.
@@ -30,7 +30,7 @@ pub use types::{
 pub use manifest::{convert_iceberg_to_object, read_manifest, read_manifest_list};
 
 // ── Schema ─────────────────────────────────────────────────────────────────
-pub use schema::{iceberg_json_to_arrow_schema, iceberg_partition_spec_to_hyperstream};
+pub use schema::{iceberg_json_to_arrow_schema, iceberg_partition_spec_to_benostream};
 
 // ── Delete readers ────────────────────────────────────────────────────────
 pub use delete::{EqualityDeleteReader, PositionDeleteReader};

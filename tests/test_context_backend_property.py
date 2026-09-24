@@ -11,7 +11,7 @@ the backend name that was used to create it.
 """
 import pytest
 from hypothesis import given, settings, strategies as st
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 # Strategy for valid backend names
@@ -33,12 +33,12 @@ def test_context_backend_property(backend, device_id):
     backend is available on the current system.
     """
     # Get list of available backends
-    available_backends = hdb.ComputeContext.list_available_backends()
+    available_backends = bsdb.ComputeContext.list_available_backends()
     
     # Property: backend property should match the backend used to create it
     if backend in available_backends:
         # Backend is available - should succeed
-        ctx = hdb.ComputeContext(backend, index=device_id)
+        ctx = bsdb.ComputeContext(backend, index=device_id)
         
         assert ctx.backend == backend.lower(), \
             f"Expected backend '{backend.lower()}', got '{ctx.backend}'"
@@ -48,7 +48,7 @@ def test_context_backend_property(backend, device_id):
         # Backend is not available - should raise RuntimeError on creation
         # We also test with an explicitly invalid backend name to ensure error logic is robust
         with pytest.raises(RuntimeError) as exc_info:
-            hdb.ComputeContext(backend, index=device_id)
+            bsdb.ComputeContext(backend, index=device_id)
         error_msg = str(exc_info.value)
         assert 'available' in error_msg.lower() or 'unsupported' in error_msg.lower()
 
@@ -60,7 +60,7 @@ def test_auto_detect_backend_property(device_id):
     Property: For auto-detected contexts, the backend property should return
     one of the valid backend names.
     """
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     
     # Property: backend should be one of the valid backends
     valid_backend_names = ['cpu', 'cuda', 'rocm', 'mps', 'intel']
@@ -68,7 +68,7 @@ def test_auto_detect_backend_property(device_id):
         f"Auto-detected backend '{ctx.backend}' is not valid"
     
     # Property: backend should be in the list of available backends
-    available_backends = hdb.ComputeContext.list_available_backends()
+    available_backends = bsdb.ComputeContext.list_available_backends()
     assert ctx.backend in available_backends, \
         f"Auto-detected backend '{ctx.backend}' not in available backends: {available_backends}"
 
@@ -94,11 +94,11 @@ def test_backend_case_insensitive_property(backend):
     backend_lower = backend.lower()
     
     # Get list of available backends
-    available_backends = hdb.ComputeContext.list_available_backends()
+    available_backends = bsdb.ComputeContext.list_available_backends()
     
     if backend_lower in available_backends:
         # Backend is available - should succeed
-        ctx = hdb.ComputeContext(backend)
+        ctx = bsdb.ComputeContext(backend)
         
         # Property: backend property should always return lowercase
         assert ctx.backend == backend_lower, \

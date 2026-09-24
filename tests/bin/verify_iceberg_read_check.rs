@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use arrow::array::StringArray;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

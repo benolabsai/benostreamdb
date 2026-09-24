@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>GPU Setup Guide for HyperStreamDB - HyperStreamDB 0.5.5 documentation</title>
+        <title>GPU Setup Guide for BenoStreamDB - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -263,12 +263,12 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="gpu-setup-guide-for-hyperstreamdb">
-<h1>GPU Setup Guide for HyperStreamDB<a class="headerlink" href="#gpu-setup-guide-for-hyperstreamdb" title="Link to this heading">¶</a></h1>
-<p>This guide provides detailed instructions for setting up GPU acceleration for vector operations in HyperStreamDB.</p>
+          <section id="gpu-setup-guide-for-benostreamdb">
+<h1>GPU Setup Guide for BenoStreamDB<a class="headerlink" href="#gpu-setup-guide-for-benostreamdb" title="Link to this heading">¶</a></h1>
+<p>This guide provides detailed instructions for setting up GPU acceleration for vector operations in BenoStreamDB.</p>
 <section id="overview">
 <h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB supports GPU acceleration for vector distance computations across multiple hardware backends:</p>
+<p>BenoStreamDB supports GPU acceleration for vector distance computations across multiple hardware backends:</p>
 <ul class="simple">
 <li><p><strong>NVIDIA CUDA</strong> - For NVIDIA GPUs (GeForce, Quadro, Tesla)</p></li>
 <li><p><strong>AMD ROCm</strong> - For AMD Radeon GPUs</p></li>
@@ -281,8 +281,8 @@
 <h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h2>
 <section id="unified-binary-pypi">
 <h3>Unified Binary (PyPI)<a class="headerlink" href="#unified-binary-pypi" title="Link to this heading">¶</a></h3>
-<p>HyperStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between “standard” and “CUDA” builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+<p>BenoStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between “standard” and “CUDA” builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>benostreamdb
 </pre></div>
 </div>
 <blockquote>
@@ -294,21 +294,21 @@
 <li><p><strong>Apple</strong>: Requires macOS 12.3+ (Built-in).</p></li>
 </ul>
 </div></blockquote>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Auto-detect and use best available GPU backend</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;auto&quot;</span><span class="p">)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;auto&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using backend: </span><span class="si">{</span><span class="n">device</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Pick a specific backend (Torch-aligned strings)</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>    <span class="c1"># NVIDIA or AMD ROCm (Torch standard)</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">)</span>     <span class="c1"># Intel XPU (Torch standard)</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>     <span class="c1"># Apple Silicon</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;cpu&quot;</span><span class="p">)</span>     <span class="c1"># CPU fallback (always available)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>    <span class="c1"># NVIDIA or AMD ROCm (Torch standard)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">)</span>     <span class="c1"># Intel XPU (Torch standard)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>     <span class="c1"># Apple Silicon</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;cpu&quot;</span><span class="p">)</span>     <span class="c1"># CPU fallback (always available)</span>
 
 <span class="c1"># Check availability</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="o">.</span><span class="n">is_available</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">))</span>  <span class="c1"># True if NVIDIA or AMD ROCm present</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="o">.</span><span class="n">is_available</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">))</span>   <span class="c1"># True if Intel hardware present</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="o">.</span><span class="n">is_available</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">))</span>  <span class="c1"># True if NVIDIA or AMD ROCm present</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="o">.</span><span class="n">is_available</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">))</span>   <span class="c1"># True if Intel hardware present</span>
 </pre></div>
 </div>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
@@ -322,7 +322,7 @@
 - **Driver**: NVIDIA driver 450.80.02 or later
 - **CUDA Runtime**: `libcuda.so` (provided by NVIDIA driver — no Toolkit/nvcc required)
 
-&gt; **Note:** HyperStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
+&gt; **Note:** BenoStreamDB compiles CUDA kernels at **runtime** via NVRTC (Just-In-Time). The CUDA Toolkit and `nvcc` are **not** required for building or running.
 
 ### Supported GPUs
 
@@ -366,7 +366,7 @@ maturin<span class="w"> </span>develop<span class="w"> </span>--features<span cl
 </section>
 <section id="installation-on-windows-via-wsl2">
 <h3>Installation on Windows (via WSL2)<a class="headerlink" href="#installation-on-windows-via-wsl2" title="Link to this heading">¶</a></h3>
-<p>Windows users should use <strong>WSL2</strong> (Windows Subsystem for Linux) to run HyperStreamDB with GPU support.</p>
+<p>Windows users should use <strong>WSL2</strong> (Windows Subsystem for Linux) to run BenoStreamDB with GPU support.</p>
 <ol class="arabic">
 <li><p>Install WSL2 and Ubuntu (e.g., <code class="docutils literal notranslate"><span class="pre">wsl</span> <span class="pre">--install</span> <span class="pre">-d</span> <span class="pre">Ubuntu-22.04</span></code>)</p></li>
 <li><p>Install NVIDIA Windows Driver (this provides the necessary kernel-mode interface for WSL2)</p></li>
@@ -380,17 +380,17 @@ maturin<span class="w"> </span>develop<span class="w"> </span>--features<span cl
 </section>
 <section id="verification">
 <h3>Verification<a class="headerlink" href="#verification" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Create CUDA context</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CUDA backend initialized: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Test GPU computation</span>
 <span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Computed </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span><span class="si">}</span><span class="s2"> distances on GPU&quot;</span><span class="p">)</span>
 
 <span class="c1"># Check performance stats</span>
@@ -407,12 +407,12 @@ maturin<span class="w"> </span>develop<span class="w"> </span>--features<span cl
 <ul class="simple">
 <li><p><strong>GPU</strong>: AMD Radeon RX 5000 series or newer (RDNA 1, 2, 3), or Instinct MI series.</p></li>
 <li><p><strong>OS</strong>: Linux (Primary support for compute workloads).</p></li>
-<li><p><strong>Backend</strong>: HyperStreamDB uses <strong>WGPU/Vulkan</strong> for AMD compute, ensuring compatibility across a wide range of Linux distributions.</p></li>
+<li><p><strong>Backend</strong>: BenoStreamDB uses <strong>WGPU/Vulkan</strong> for AMD compute, ensuring compatibility across a wide range of Linux distributions.</p></li>
 </ul>
 </section>
 <section id="installation-on-linux-ubuntu-debian">
 <h3>Installation on Linux (Ubuntu/Debian)<a class="headerlink" href="#installation-on-linux-ubuntu-debian" title="Link to this heading">¶</a></h3>
-<p>While HyperStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.</p>
+<p>While BenoStreamDB uses Vulkan for cross-backend stability, the official ROCm driver stack is highly recommended for the best performance and stability.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download and install AMD GPU driver installer</span>
 wget<span class="w"> </span>https://repo.radeon.com/amdgpu-install/latest/ubuntu/jammy/amdgpu-install_6.0.2-1_all.deb
 sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>./amdgpu-install_6.0.2-1_all.deb
@@ -511,17 +511,17 @@ sudo<span class="w"> </span>reboot
 </section>
 <section id="id1">
 <h3>Verification<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Create ROCm context</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;rocm&quot;</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;rocm&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ROCm backend initialized: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Test computation</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Computed </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span><span class="si">}</span><span class="s2"> distances on AMD GPU&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -578,21 +578,21 @@ sudo<span class="w"> </span>reboot
 </section>
 <section id="id3">
 <h3>Verification<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Auto-detect should find Metal on Apple Silicon</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Backend: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>  <span class="c1"># Should show &quot;mps&quot;</span>
 
 <span class="c1"># Or explicitly create Metal context</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Metal backend initialized&quot;</span><span class="p">)</span>
 
 <span class="c1"># Test computation</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Computed </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span><span class="si">}</span><span class="s2"> distances on Apple GPU&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -638,28 +638,28 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="sb">```</span>bash
 <span class="c1"># Verify Vulkan/WGPU installation</span>
 vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>vendor
-<span class="c1"># Or check adapter listing in HyperStreamDB</span>
-python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import hyperstreamdb as hdb; print(hdb.Device.list_available_backends())&quot;</span>
+<span class="c1"># Or check adapter listing in BenoStreamDB</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import benostreamdb as bsdb; print(bsdb.Device.list_available_backends())&quot;</span>
 </pre></div>
 </div>
 </section>
 <section id="id7">
 <h3>Installation on Windows (via WSL2)<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
-<p>Windows users should ensure they have the latest Intel Graphics drivers installed on the host. These provide Vulkan support to WSL2, enabling HyperStreamDB to detect and use the GPU via WGPU.</p>
+<p>Windows users should ensure they have the latest Intel Graphics drivers installed on the host. These provide Vulkan support to WSL2, enabling BenoStreamDB to detect and use the GPU via WGPU.</p>
 </section>
 <section id="id8">
 <h3>Verification<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Create XPU (Intel) context</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Device</span><span class="p">(</span><span class="s2">&quot;xpu&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Intel backend initialized: </span><span class="si">{</span><span class="n">device</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Test computation</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">10000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">compute_distance</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">768</span><span class="p">,</span> <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;l2&quot;</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">compute_distance</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">768</span><span class="p">,</span> <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;l2&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Success: Computed on </span><span class="si">{</span><span class="n">device</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -669,15 +669,15 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 For systems with multiple GPUs, specify the device ID:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # List available backends
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 print(f&quot;Available backends: {ctx.list_available_backends()}&quot;)
 
 # Use specific GPU device
-ctx = hdb.GPUContext(&quot;cuda&quot;, device_id=0)  # First GPU
-ctx = hdb.GPUContext(&quot;cuda&quot;, device_id=1)  # Second GPU
+ctx = bsdb.GPUContext(&quot;cuda&quot;, device_id=0)  # First GPU
+ctx = bsdb.GPUContext(&quot;cuda&quot;, device_id=1)  # Second GPU
 
 # Check which device is being used
 print(f&quot;Using device: {ctx.device_id}&quot;)
@@ -701,14 +701,14 @@ print(f&quot;Using device: {ctx.device_id}&quot;)
 </ul>
 </li>
 <li><p>Check backend availability:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">list_available_backends</span><span class="p">())</span>
 </pre></div>
 </div>
 </li>
 <li><p>Try creating backend explicitly:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
-    <span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
+    <span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">)</span>
 <span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CUDA not available: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
@@ -726,7 +726,7 @@ print(f&quot;Using device: {ctx.device_id}&quot;)
 <span class="n">all_distances</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">database</span><span class="p">),</span> <span class="n">chunk_size</span><span class="p">):</span>
     <span class="n">chunk</span> <span class="o">=</span> <span class="n">database</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="n">chunk_size</span><span class="p">]</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
     <span class="n">all_distances</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span>
 <span class="n">all_distances</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">all_distances</span><span class="p">)</span>
 </pre></div>
@@ -877,7 +877,7 @@ sudo<span class="w"> </span>ubuntu-drivers<span class="w"> </span>autoinstall
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -886,7 +886,7 @@ sudo<span class="w"> </span>ubuntu-drivers<span class="w"> </span>autoinstall
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>
@@ -910,7 +910,7 @@ sudo<span class="w"> </span>ubuntu-drivers<span class="w"> </span>autoinstall
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">GPU Setup Guide for HyperStreamDB</a><ul>
+<li><a class="reference internal" href="#">GPU Setup Guide for BenoStreamDB</a><ul>
 <li><a class="reference internal" href="#overview">Overview</a></li>
 <li><a class="reference internal" href="#installation">Installation</a><ul>
 <li><a class="reference internal" href="#unified-binary-pypi">Unified Binary (PyPI)</a></li>

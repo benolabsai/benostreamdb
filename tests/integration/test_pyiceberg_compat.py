@@ -2,7 +2,7 @@ import os
 import shutil
 import pyarrow as pa
 from pyiceberg.catalog.sql import SqlCatalog
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 def test_compatibility():
     print("=== STARTING PYICEBERG COMPATIBILITY TEST ===")
@@ -23,7 +23,7 @@ def test_compatibility():
 
     print(f"SqlCatalog Warehouse: {warehouse_path}")
     print(f"SqlCatalog DB: {catalog_db_path}")
-    print(f"HyperStreamDB cache: {hdb_cache_path}")
+    print(f"BenoStreamDB cache: {hdb_cache_path}")
 
     # 2. Initialize SqlCatalog via PyIceberg
     catalog = SqlCatalog(
@@ -77,15 +77,15 @@ def test_compatibility():
     metadata_path = f"file://{os.path.join(metadata_dir, latest_metadata)}"
     print(f"Located latest Iceberg metadata: {metadata_path}")
 
-    # 5. Register table with HyperStreamDB
-    print("Registering external Iceberg table with HyperStreamDB...")
-    hdb_table = hdb.Table.register_external(f"file://{hdb_cache_path}", metadata_path)
+    # 5. Register table with BenoStreamDB
+    print("Registering external Iceberg table with BenoStreamDB...")
+    hdb_table = bsdb.Table.register_external(f"file://{hdb_cache_path}", metadata_path)
     print("Successfully registered external table.")
 
-    # 6. Read table using HyperStreamDB
-    print("Reading table data using HyperStreamDB...")
+    # 6. Read table using BenoStreamDB
+    print("Reading table data using BenoStreamDB...")
     hdb_data = hdb_table.to_arrow()
-    print("HyperStreamDB Read Result:")
+    print("BenoStreamDB Read Result:")
     print(hdb_data)
 
     # 7. Assertions to verify correctness

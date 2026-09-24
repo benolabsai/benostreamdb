@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="HyperStreamDB.png" alt="HyperStreamDB Logo" width="300">
+  <img src="BenoStreamDB.png" alt="BenoStreamDB Logo" width="300">
 </p>
 
-# HyperStreamDB
+# BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
 An indexed lakehouse storage and search engine designed for production workloads, combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage.
 
 ## 🎯 Architecture: The Indexed Lakehouse
 
-HyperStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer:
+BenoStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer:
 
 ```text
                Iceberg Table
@@ -27,7 +27,7 @@ Authoritative Storage        Advisory Index Overlay
 > 3. **Durability Invariant**: WAL truncation is permitted only after the corresponding data is durably represented by a committed manifest snapshot.
 > 4. **Maintenance Invariant**: Maintenance operations may delete an artifact only if it is neither referenced by any active snapshot nor currently in-flight.
 
-| Feature | Iceberg/Delta | HyperStreamDB |
+| Feature | Iceberg/Delta | BenoStreamDB |
 |---------|---------------|---------------|
 | **Transactional Updates** | ✅ Yes | ✅ Yes |
 | **Time Travel** | ✅ Yes | ✅ Yes |
@@ -43,9 +43,9 @@ Authoritative Storage        Advisory Index Overlay
 
 ## ⚡ Iceberg V2/V3 Compatibility
 
-HyperStreamDB implements **100% of the core required Apache Iceberg table format V2 and V3 specifications**:
+BenoStreamDB implements **100% of the core required Apache Iceberg table format V2 and V3 specifications**:
 
-| Feature | V1 | V2 | V3 | HyperStreamDB |
+| Feature | V1 | V2 | V3 | BenoStreamDB |
 |---------|----|----|----|--------------| 
 | **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
 | **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
@@ -59,10 +59,10 @@ HyperStreamDB implements **100% of the core required Apache Iceberg table format
 ### New APIs
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create table with sort order (V2)
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
 
 # V3 tables automatically include row lineage
@@ -80,7 +80,7 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 ## 🌐 REST APIs (OpenSearch & Qdrant)
 
-HyperStreamDB includes a highly optimized HTTP frontend (`hyperstreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native HyperStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
+BenoStreamDB includes a highly optimized HTTP frontend (`benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
 
 - **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search. (e.g., connect Kibana or Grafana directly).
 - **Qdrant Vector API (Port 6333)**: Native vector database emulation. Fully compatible with Qdrant's unstructured JSON payloads, which are dynamically inferred and converted into highly compressed Arrow columns on write.
@@ -89,25 +89,25 @@ Both APIs are hosted concurrently from a single binary, completely share the exa
 
 To start the dual-API server:
 ```bash
-# Uses HYPERSEARCH_PORT=9200 and HYPERSEARCH_QDRANT_PORT=6333 by default
-cargo run -p hyperstreamdb-search
+# Uses BENOSEARCH_PORT=9200 and BENOSEARCH_QDRANT_PORT=6333 by default
+cargo run -p benostreamdb-search
 ```
 
 ## 🚀 Quick Start
 
 ### 🐳 Docker Quickstart (3 Minutes to First Query)
 
-Run the full HyperStreamDB gateway stack with one command:
+Run the full BenoStreamDB gateway stack with one command:
 
 ```bash
 # Standalone All-in-One Container (Local storage)
-docker run -d --name hyperstreamdb \
+docker run -d --name benostreamdb \
   -p 9200:9200 \
   -p 6333:6333 \
   -p 50051:50051 \
-  hyperstreamdb/quickstart:latest
+  benostreamdb/quickstart:latest
 
-# Or Full-Stack Compose (MinIO S3 + Nessie Catalog + HyperStreamDB)
+# Or Full-Stack Compose (MinIO S3 + Nessie Catalog + BenoStreamDB)
 docker compose -f docker/docker-compose.quickstart.yml up -d
 ```
 
@@ -134,8 +134,8 @@ curl -s http://localhost:9200/
 Output:
 ```json
 {
-  "name": "hypersearch-1",
-  "cluster_name": "hypersearch",
+  "name": "bsdb-search-1",
+  "cluster_name": "bsdb-search",
   "version": { "number": "7.10.2", ... },
   "compute": {
     "backend": "cuda",
@@ -154,11 +154,11 @@ Output:
 The default package includes automatic high-performance hardware detection for NVIDIA CUDA, Apple Metal, Intel Graphics/XPU, and AMD ROCm.
 
 ```bash
-pip install hyperstreamdb
+pip install benostreamdb
 ```
 
 **Windows Users:**
-HyperStreamDB is optimized for Linux/POSIX. Windows users should use **WSL2**.
+BenoStreamDB is optimized for Linux/POSIX. Windows users should use **WSL2**.
 
 
 ### GPU Acceleration (Optional)
@@ -195,7 +195,7 @@ See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GP
 
 ### pgvector SQL Compatibility
 
-HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:
+BenoStreamDB provides full pgvector-compatible SQL syntax for vector operations:
 
 ```sql
 -- Use familiar pgvector operators
@@ -217,11 +217,11 @@ LIMIT 10;
 ```
 
 > **💡 pgvector Compatibility Note on `<~>` (Hamming) & `<%>` (Jaccard):**  
-> In HyperStreamDB, `<~>` and `<%>` operate directly on standard float `::vector` embeddings (evaluating binary indicator sets and quantized vectors) for developer convenience. In upstream PostgreSQL `pgvector`, these two operators are restricted exclusively to the `bit` data type.  
+> In BenoStreamDB, `<~>` and `<%>` operate directly on standard float `::vector` embeddings (evaluating binary indicator sets and quantized vectors) for developer convenience. In upstream PostgreSQL `pgvector`, these two operators are restricted exclusively to the `bit` data type.  
 > 
 > **PostgreSQL Conversion Equivalent:**
 > ```sql
-> -- HyperStreamDB:
+> -- BenoStreamDB:
 > SELECT * FROM documents ORDER BY embedding <~> '[1, 0, 1]'::vector LIMIT 10;
 > 
 > -- PostgreSQL (pgvector 0.7.0+): requires binary_quantize() to produce bit types
@@ -233,10 +233,10 @@ See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation 
 ### Basic Usage
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create table
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # Write data (Pandas/PyArrow)
 import pandas as pd
@@ -268,14 +268,14 @@ results = table.to_pandas(
 
 ## 🔄 Fluent Query API
 
-HyperStreamDB features a fluent query API in Rust with method chaining. Python uses the `to_pandas()` API with filter and vector_filter arguments.
+BenoStreamDB features a fluent query API in Rust with method chaining. Python uses the `to_pandas()` API with filter and vector_filter arguments.
 
 ### Rust Fluent API
 
 The same fluent interface is available in native Rust:
 
 ```rust
-use hyperstreamdb::{Table, VectorValue};
+use benostreamdb::{Table, VectorValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -306,7 +306,7 @@ async fn main() -> anyhow::Result<()> {
 
 ### TurboQuant Quantization (TQ8 / TQ4)
 
-HyperStreamDB features **TurboQuant**, an optimized quantization engine that reduces vector storage costs while maintaining high search accuracy:
+BenoStreamDB features **TurboQuant**, an optimized quantization engine that reduces vector storage costs while maintaining high search accuracy:
 
 - **TQ8 (8-bit)**: 4x compression vs. float32. Near-lossless accuracy (typically >99% recall retention). Ideal for general-purpose RAG.
 - **TQ4 (4-bit)**: 8x compression vs. float32. Maximum efficiency for massive datasets where storage cost is the primary bottleneck.
@@ -329,14 +329,14 @@ table.add_index("embedding", {
 
 ### Python Vector Distance API with GPU Acceleration
 
-HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
+BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
+ctx = bsdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors
@@ -344,7 +344,7 @@ query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
 # Compute distances on GPU (10x+ faster for large databases)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Find top-k nearest neighbors
 k = 10
@@ -353,25 +353,25 @@ top_k_indices = np.argsort(distances)[:k]
 # Single-pair distance computation
 vec1 = np.array([1.0, 2.0, 3.0])
 vec2 = np.array([4.0, 5.0, 6.0])
-distance = hdb.cosine_distance(vec1, vec2)
+distance = bsdb.cosine_distance(vec1, vec2)
 
 # Sparse vector support for high-dimensional sparse data
-sparse1 = hdb.SparseVector(
+sparse1 = bsdb.SparseVector(
     indices=np.array([0, 5, 100], dtype=np.int32),
     values=np.array([1.0, 2.5, 0.8], dtype=np.float32),
     dim=1000
 )
-sparse2 = hdb.SparseVector(
+sparse2 = bsdb.SparseVector(
     indices=np.array([5, 50, 100], dtype=np.int32),
     values=np.array([2.0, 1.5, 0.9], dtype=np.float32),
     dim=1000
 )
-distance = hdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_distance_sparse(sparse1, sparse2)
 
 # Binary vector operations (bit-packed for efficiency)
 binary1 = np.packbits(np.random.randint(0, 2, 128))
 binary2 = np.packbits(np.random.randint(0, 2, 128))
-distance = hdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_distance_packed(binary1, binary2)
 ```
 
 **Supported GPU Backends:**
@@ -390,12 +390,12 @@ See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete AP
 ### SQL queries (full DataFusion support with pgvector syntax)
 
 ```python
-import hyperstreamdb as hdb
-session = hdb.Session()
+import benostreamdb as bsdb
+session = bsdb.Session()
 session.register("users", table)
 
 # Optional: Enable GPU acceleration for SQL queries
-device = hdb.Device.auto_detect()
+device = bsdb.Device.auto_detect()
 device.activate()
 
 # Simple SQL (via table — registers as table 't')
@@ -425,13 +425,13 @@ table.compact()
 
 ## 📊 Production Benchmarks & Verification
 
-HyperStreamDB performance has been validated across large-scale synthetic, real-world datasets, and head-to-head competitive benchmarks against industry-standard engines like **OpenSearch 2.11**:
+BenoStreamDB performance has been validated across large-scale synthetic, real-world datasets, and head-to-head competitive benchmarks against industry-standard engines like **OpenSearch 2.11**:
 
-### 🚀 Competitive Benchmarks: HyperStreamDB vs. OpenSearch 2.11 (4 CPUs, 4GB RAM)
+### 🚀 Competitive Benchmarks: BenoStreamDB vs. OpenSearch 2.11 (4 CPUs, 4GB RAM)
 
 Conducted under identical, strictly constrained container environments (4 CPU cores, 4GB RAM, 64-dimensional float32 vectors, Wikipedia text payloads):
 
-| Benchmark Scale | Metric / Operation | HyperStreamDB (p50) | HyperStreamDB (p99) | OpenSearch 2.11 (p50) | OpenSearch 2.11 (p99) | Advantage |
+| Benchmark Scale | Metric / Operation | BenoStreamDB (p50) | BenoStreamDB (p99) | OpenSearch 2.11 (p50) | OpenSearch 2.11 (p99) | Advantage |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | **100K Documents** | `knn` HNSW Vector Search | **1.94 ms** | **4.26 ms** | 4.29 ms | 62.58 ms | **14.7x faster p99** |
 | **100K Documents** | Total Storage Required | **~26.0 MB** | — | ~185.4 MB | — | **7.1x less disk space** |
@@ -441,9 +441,9 @@ Conducted under identical, strictly constrained container environments (4 CPU co
 | **1M Documents** | Ingestion Rate | 4,613 docs/s | — | **9,221 docs/s** | — | OpenSearch defers merges |
 
 > **Key Architectural Takeaways:**
-> - **Ironclad Vector Latency Stability**: At 1M vectors, OpenSearch tail latency collapses to **478.77 ms** due to JVM garbage collection pauses and Lucene segment merging. HyperStreamDB query latency stays completely flat (**1.91 ms p50 / 3.74 ms p99**) thanks to its Hot Row Cache bypassing disk I/O on scattered row lookups.
-> - **Zero Data Duplication (6.6x–7x Storage Savings)**: OpenSearch requires maintaining a separate primary data lake *plus* duplicating all vectors into amplified Lucene index files (~1.85 GB total). HyperStreamDB **is** the data lake, writing compressed Parquet files with compact `.hnsw` sidecar files (~280 MB total).
-> - **Instant Stateless Cold Starts**: HyperStreamDB eliminates the JVM boot, translog replay, and Lucene warmup delays of clustered search engines—memory mapping Parquet and `.hnsw` sidecars directly from the OS page cache for immediate query readiness.
+> - **Ironclad Vector Latency Stability**: At 1M vectors, OpenSearch tail latency collapses to **478.77 ms** due to JVM garbage collection pauses and Lucene segment merging. BenoStreamDB query latency stays completely flat (**1.91 ms p50 / 3.74 ms p99**) thanks to its Hot Row Cache bypassing disk I/O on scattered row lookups.
+> - **Zero Data Duplication (6.6x–7x Storage Savings)**: OpenSearch requires maintaining a separate primary data lake *plus* duplicating all vectors into amplified Lucene index files (~1.85 GB total). BenoStreamDB **is** the data lake, writing compressed Parquet files with compact `.hnsw` sidecar files (~280 MB total).
+> - **Instant Stateless Cold Starts**: BenoStreamDB eliminates the JVM boot, translog replay, and Lucene warmup delays of clustered search engines—memory mapping Parquet and `.hnsw` sidecars directly from the OS page cache for immediate query readiness.
 >
 > 📖 *For complete test methodology, memory safety metrics, and replication scripts, see the [Benchmarking Guide](docs/BENCHMARKING.md).*
 
@@ -477,7 +477,7 @@ python tests/benchmarks/benchmark_vs_iceberg.py
 
 ### Overlay Indexing
 
-HyperStreamDB stores indexes as **sidecar files** alongside Parquet data:
+BenoStreamDB stores indexes as **sidecar files** alongside Parquet data:
 
 ```
 s3://bucket/table/
@@ -528,71 +528,71 @@ s3://bucket/table/
 
 > [!NOTE]
 > **MERGE INTO Support**
-> While Apache DataFusion's native SQL engine does not currently support `MERGE INTO` syntax out-of-the-box, **you can seamlessly use `MERGE INTO` with HyperStreamDB via the Spark and Trino connectors**. Spark and Trino parse the SQL statements using their respective query engines, determine the row-level changes, and send standard Iceberg Position Deletes and Data Appends to the HyperStreamDB core via our optimized JNI bridges.
+> While Apache DataFusion's native SQL engine does not currently support `MERGE INTO` syntax out-of-the-box, **you can seamlessly use `MERGE INTO` with BenoStreamDB via the Spark and Trino connectors**. Spark and Trino parse the SQL statements using their respective query engines, determine the row-level changes, and send standard Iceberg Position Deletes and Data Appends to the BenoStreamDB core via our optimized JNI bridges.
 
 ### Spark
-The Spark connector supports **Spark 3.5, 4.0, and 4.1** via a shared JNI FFI bridge. It intercepts row-level operations (like `MERGE INTO`) to take advantage of HyperStreamDB's fast indexing and supports configuring GPU backends.
+The Spark connector supports **Spark 3.5, 4.0, and 4.1** via a shared JNI FFI bridge. It intercepts row-level operations (like `MERGE INTO`) to take advantage of BenoStreamDB's fast indexing and supports configuring GPU backends.
 
 ```scala
 // Read
 val df = spark.read
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   // Optionally configure the GPU device (cuda, mps, intel, rocm, auto, or cpu)
-  .option("hyperstream.gpu_device", "cuda")
+  .option("benostream.gpu_device", "cuda")
   .load()
 
 // Write
 df.write
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   .save()
 ```
 
 You can also globally configure the GPU for Spark stored procedures (e.g. index building):
 ```scala
-spark.conf.set("spark.hyperstream.gpu.device", "cuda")
+spark.conf.set("spark.benostream.gpu.device", "cuda")
 ```
 
 ### Trino
-The Trino connector intercepts reads to natively push down scalar and vector filtering to the HyperStreamDB core, drastically reducing IO.
+The Trino connector intercepts reads to natively push down scalar and vector filtering to the BenoStreamDB core, drastically reducing IO.
 
 ```sql
-SELECT * FROM hyperstream.default.my_table
+SELECT * FROM benostream.default.my_table
 WHERE id > 100;  -- Uses scalar index natively via JNI pushdown
 ```
 
-You can configure the GPU backend for Trino globally or per-catalog using the properties file (e.g. `etc/catalog/hyperstream.properties`):
+You can configure the GPU backend for Trino globally or per-catalog using the properties file (e.g. `etc/catalog/benostream.properties`):
 ```properties
-connector.name=hyperstreamdb
-hyperstream.gpu-device=cuda
+connector.name=benostreamdb
+benostream.gpu-device=cuda
 ```
 
 ### Arrow Flight SQL Gateway
-HyperStreamDB provides a high-performance Arrow Flight SQL server (`hyperstreamdb-flight`) running over gRPC (port 50051). This enables any JDBC, ODBC, ADBC, or Arrow-native client (including BI tools and distributed query engines) to query HyperStreamDB with zero-copy Arrow serialization and native index pushdown.
+BenoStreamDB provides a high-performance Arrow Flight SQL server (`benostreamdb-flight`) running over gRPC (port 50051). This enables any JDBC, ODBC, ADBC, or Arrow-native client (including BI tools and distributed query engines) to query BenoStreamDB with zero-copy Arrow serialization and native index pushdown.
 
 ```bash
-cargo run -p hyperstreamdb-flight
+cargo run -p benostreamdb-flight
 ```
 
-### dbt (`dbt-hyperstreamdb`)
-Official dbt adapter for HyperStreamDB over Arrow Flight SQL. Provides native vector search macros and custom materializations:
+### dbt (`dbt-benostreamdb`)
+Official dbt adapter for BenoStreamDB over Arrow Flight SQL. Provides native vector search macros and custom materializations:
 
 - **Vector Macros**: `vector_distance(...)`, `knn_search(...)`, `vector_avg(...)`, `type_vector(...)`, `type_sparsevec(...)` with pgvector-compatible operators.
 - **Custom Materializations**: Table and incremental materialization with support for `append`, `delete+insert`, and partition-looping `insert_overwrite`.
 - **DDL Support**: Iceberg-compatible `PARTITIONED BY` syntax.
 
 ```bash
-cd dbt-hyperstreamdb
+cd dbt-benostreamdb
 pip install -e .
 ```
 
 ### Python (Direct)
 ```python
 # No Spark needed for local/notebook work
-import hyperstreamdb as hdb
-df = hdb.Table("s3://bucket/table").query().execute()
-# Or using traditional API: df = hdb.Table("s3://bucket/table").to_pandas()
+import benostreamdb as bsdb
+df = bsdb.Table("s3://bucket/table").query().execute()
+# Or using traditional API: df = bsdb.Table("s3://bucket/table").to_pandas()
 ```
 
 ## 🔨 Building Connectors
@@ -642,7 +642,7 @@ pytest tests/
 ### Project Structure
 
 ```
-hyperstreamdb/
+benostreamdb/
 ├── src/
 │   ├── lib.rs                  # Main library & PyO3 module registration
 │   ├── core/
@@ -665,12 +665,12 @@ hyperstreamdb/
 │   ├── python_binding.rs       # PyO3 bindings
 │   ├── python_distance.rs      # Vector distance API
 │   └── python_gpu_context.rs   # GPU device management
-├── hyperstreamdb-flight/        # Arrow Flight SQL gRPC server
-├── hyperstreamdb-search/        # OpenSearch 7.10 & Qdrant REST search gateway
-├── dbt-hyperstreamdb/           # Official dbt adapter (Arrow Flight SQL)
-├── hyperstreamdb-enterprise/    # Enterprise extensions (Continuous Indexing, Enterprise Security)
-├── spark-hyperstream/          # Spark connector (Java)
-├── trino-hyperstream/          # Trino connector (Java)
+├── benostreamdb-flight/        # Arrow Flight SQL gRPC server
+├── benostreamdb-search/        # OpenSearch 7.10 & Qdrant REST search gateway
+├── dbt-benostreamdb/           # Official dbt adapter (Arrow Flight SQL)
+├── benostreamdb-enterprise/    # Enterprise extensions (Continuous Indexing, Enterprise Security)
+├── spark-benostream/          # Spark connector (Java)
+├── trino-benostream/          # Trino connector (Java)
 ├── tests/
 │   ├── integration/            # Infrastructure integration tests
 │   ├── benchmarks/             # Performance benchmarks
@@ -680,31 +680,31 @@ hyperstreamdb/
 
 ## 🔎 Search API (OpenSearch / Elasticsearch 7.10-compatible)
 
-HyperStreamDB ships an optional add-on, **`hypersearch`** (`hyperstreamdb-search`),
+BenoStreamDB ships an optional add-on, **`bsdb-search`** (`benostreamdb-search`),
 that serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API on top of
 the engine — plus a **Qdrant**-compatible API for vector workloads. It is built for
 website search, document catalogs, and knowledge bases where a 50–200 ms query latency
 envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
 
 ```bash
-cargo build --release -p hyperstreamdb-search --bin hypersearch
-HYPERSEARCH_BIND=127.0.0.1 HYPERSEARCH_PORT=9200 ./target/release/hypersearch
+cargo build --release -p benostreamdb-search --bin bsdb-search
+BENOSEARCH_BIND=127.0.0.1 BENOSEARCH_PORT=9200 ./target/release/bsdb-search
 
 # Index + search (ES 7.10 wire format)
 curl -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
-     -d '{"title":"Hello","body":"Welcome to HyperStreamDB"}'
+     -d '{"title":"Hello","body":"Welcome to BenoStreamDB"}'
 curl -X POST localhost:9200/articles/_refresh
 curl -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
-     -d '{"query":{"match":{"body":"HyperStreamDB"}}}'
+     -d '{"query":{"match":{"body":"BenoStreamDB"}}}'
 ```
 
 **Running as a Background Service**
 
-For production deployments on Linux and macOS, you can easily install `hyperstream-search` as a native background daemon (`systemd` or `launchd`) so it runs continuously and starts on boot:
+For production deployments on Linux and macOS, you can easily install `benostream-search` as a native background daemon (`systemd` or `launchd`) so it runs continuously and starts on boot:
 
 ```bash
-# Ensure the binary is built and available at /usr/local/bin/hyperstream-search
-sudo hyperstreamdb install-service
+# Ensure the binary is built and available at /usr/local/bin/benostream-search
+sudo benostreamdb install-service
 ```
 This will automatically generate the configuration file and start the service. See [scripts/services/README.md](scripts/services/README.md) for full configuration and uninstallation details.
 
@@ -728,7 +728,7 @@ reindex, ILM, snapshots, auth, multi-node. See
 - [x] **Vector Search**: Multi-backend GPU support (CUDA, ROCm, Metal, XPU), TurboQuant™ (TQ4/TQ8), Multi-vector search (RRF).
 - [x] **Advanced Search & Query**: Zero-Copy Arrow IPC Vector Index traversal, HNSW Hot Cache Optimization, Async Ingest Memory Buffer & WAL.
 - [x] **Graph RAG & Analytics**: Native graph analytics on Iceberg edge tables (PageRank, Community Detection, NetworkX interop).
-- [x] **APIs & Gateways**: OpenSearch 7.10 & Qdrant REST APIs (`hyperstreamdb-search`), Arrow Flight SQL Gateway (`hyperstreamdb-flight`).
+- [x] **APIs & Gateways**: OpenSearch 7.10 & Qdrant REST APIs (`benostreamdb-search`), Arrow Flight SQL Gateway (`benostreamdb-flight`).
 - [x] **Connectors**: Spark (V2) & Trino (SPI) connectors, Python Vector Distance API, Official dbt adapter.
 - [x] **Benchmarking & Validation**: 100k / 1M doc competitive benchmarks vs OpenSearch 2.11, Resource-Constrained Vector Benchmarking (4 GB RAM Matrix).
 - [x] **Lifecycle Verification**: Streaming Commit & Delete Lifecycle Verification (Iceberg V2 position delete masking in vector graph scans).
@@ -751,7 +751,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 The Python wrapper is licensed under the **MIT License**.
 The underlying Rust engine and core database logic is licensed under the **Apache License 2.0**.
 
-This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. HyperStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
+This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. BenoStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
 
 ## 🙏 Acknowledgments
 

@@ -378,59 +378,71 @@ impl HybridReader {
                 for i in 0..batch.num_rows() {
                     let key_ok = if let Some(values) = &filter.values {
                         match key_array.data_type() {
+                            // Each arm is guarded by `key_array.data_type()`, so the
+                            // downcast is a true invariant; `else { false }` keeps the
+                            // arm total instead of unwrapping.
                             arrow::datatypes::DataType::Utf8 => {
-                                let val = key_array
+                                if let Some(arr) = key_array
                                     .as_any()
                                     .downcast_ref::<arrow::array::StringArray>()
-                                    .unwrap()
-                                    .value(i);
-                                let mut matched = values.iter().any(|v| {
-                                    if let Some(s) = v.as_str() {
-                                        val == s || val.eq_ignore_ascii_case(s)
-                                    } else {
-                                        false
+                                {
+                                    let val = arr.value(i);
+                                    let mut matched = values.iter().any(|v| {
+                                        if let Some(s) = v.as_str() {
+                                            val == s || val.eq_ignore_ascii_case(s)
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                    if filter.negated {
+                                        matched = !matched;
                                     }
-                                });
-                                if filter.negated {
-                                    matched = !matched;
+                                    matched
+                                } else {
+                                    false
                                 }
-                                matched
                             }
                             arrow::datatypes::DataType::Int32 => {
-                                let val = key_array
+                                if let Some(arr) = key_array
                                     .as_any()
                                     .downcast_ref::<arrow::array::Int32Array>()
-                                    .unwrap()
-                                    .value(i);
-                                let mut matched = values.iter().any(|v| {
-                                    if let Some(vi) = v.as_i64() {
-                                        val == vi as i32
-                                    } else {
-                                        false
+                                {
+                                    let val = arr.value(i);
+                                    let mut matched = values.iter().any(|v| {
+                                        if let Some(vi) = v.as_i64() {
+                                            val == vi as i32
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                    if filter.negated {
+                                        matched = !matched;
                                     }
-                                });
-                                if filter.negated {
-                                    matched = !matched;
+                                    matched
+                                } else {
+                                    false
                                 }
-                                matched
                             }
                             arrow::datatypes::DataType::Int64 => {
-                                let val = key_array
+                                if let Some(arr) = key_array
                                     .as_any()
                                     .downcast_ref::<arrow::array::Int64Array>()
-                                    .unwrap()
-                                    .value(i);
-                                let mut matched = values.iter().any(|v| {
-                                    if let Some(vi) = v.as_i64() {
-                                        val == vi
-                                    } else {
-                                        false
+                                {
+                                    let val = arr.value(i);
+                                    let mut matched = values.iter().any(|v| {
+                                        if let Some(vi) = v.as_i64() {
+                                            val == vi
+                                        } else {
+                                            false
+                                        }
+                                    });
+                                    if filter.negated {
+                                        matched = !matched;
                                     }
-                                });
-                                if filter.negated {
-                                    matched = !matched;
+                                    matched
+                                } else {
+                                    false
                                 }
-                                matched
                             }
                             _ => true,
                         }
@@ -568,18 +580,14 @@ impl HybridReader {
                                     .downcast_ref::<arrow::array::Date32Array>()
                                     .context("Invalid cast")?
                                     .value(i);
+                                // `NaiveDate::default()` is 1970-01-01 (`UNIX_EPOCH`).
+                                let epoch = chrono::NaiveDate::default();
                                 let mut ok = true;
                                 if let Some(min_s) = min_v.as_str() {
                                     let min_date =
                                         chrono::NaiveDate::parse_from_str(min_s, "%Y-%m-%d")
-                                            .unwrap_or(
-                                                chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                                                    .unwrap(),
-                                            );
-                                    let min_i = (min_date
-                                        - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-                                    .num_days()
-                                        as i32;
+                                            .unwrap_or(epoch);
+                                    let min_i = (min_date - epoch).num_days() as i32;
                                     if filter.min_inclusive {
                                         ok &= val >= min_i;
                                     } else {
@@ -590,14 +598,8 @@ impl HybridReader {
                                     if let Some(max_s) = max_v.as_str() {
                                         let max_date =
                                             chrono::NaiveDate::parse_from_str(max_s, "%Y-%m-%d")
-                                                .unwrap_or(
-                                                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                                                        .unwrap(),
-                                                );
-                                        let max_i = (max_date
-                                            - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-                                        .num_days()
-                                            as i32;
+                                                .unwrap_or(epoch);
+                                        let max_i = (max_date - epoch).num_days() as i32;
                                         if filter.max_inclusive {
                                             ok &= val <= max_i;
                                         } else {

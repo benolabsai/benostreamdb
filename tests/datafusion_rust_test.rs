@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -61,8 +61,8 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     assert_eq!(ids.value(1), 3);
 
     // Test Joins via Session
-    use hyperstreamdb::core::sql::session::HyperStreamSession;
-    let session = HyperStreamSession::new(None);
+    use benostreamdb::core::sql::session::BenoStreamSession;
+    let session = BenoStreamSession::new(None);
     session.register_table("t1", Arc::new(table.clone()))?;
 
     // Create second table

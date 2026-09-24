@@ -44,15 +44,15 @@ impl Default for WalConfig {
 impl WalConfig {
     pub fn from_env() -> Self {
         Self {
-            compact_threshold_mb: std::env::var("HYPERSTREAM_WAL_COMPACT_MB")
+            compact_threshold_mb: std::env::var("BENOSTREAM_WAL_COMPACT_MB")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1024),
-            sync_batch_size: std::env::var("HYPERSTREAM_WAL_SYNC_BATCH_SIZE")
+            sync_batch_size: std::env::var("BENOSTREAM_WAL_SYNC_BATCH_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10),
-            sync_interval_ms: std::env::var("HYPERSTREAM_WAL_SYNC_INTERVAL_MS")
+            sync_interval_ms: std::env::var("BENOSTREAM_WAL_SYNC_INTERVAL_MS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100),
@@ -75,8 +75,8 @@ pub fn tag_batch_with_wal_tx(
     seq: u64,
 ) -> Result<RecordBatch> {
     let mut metadata = batch.schema().metadata().clone();
-    metadata.insert("hyperstream:tx_id".to_string(), tx_id.to_string());
-    metadata.insert("hyperstream:seq".to_string(), seq.to_string());
+    metadata.insert("benostream:tx_id".to_string(), tx_id.to_string());
+    metadata.insert("benostream:seq".to_string(), seq.to_string());
     let schema = Arc::new(batch.schema().as_ref().clone().with_metadata(metadata));
     RecordBatch::try_new(schema, batch.columns().to_vec()).map_err(Into::into)
 }
@@ -85,8 +85,8 @@ pub fn tag_batch_with_wal_tx(
 pub fn extract_wal_tx(batch: &RecordBatch) -> Option<WalRecordHeader> {
     let schema = batch.schema();
     let meta = schema.metadata();
-    let tx_id_str = meta.get("hyperstream:tx_id")?;
-    let seq_str = meta.get("hyperstream:seq")?;
+    let tx_id_str = meta.get("benostream:tx_id")?;
+    let seq_str = meta.get("benostream:seq")?;
     let tx_id = uuid::Uuid::parse_str(tx_id_str).ok()?;
     let sequence_number = seq_str.parse::<u64>().ok()?;
     Some(WalRecordHeader {

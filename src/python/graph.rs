@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 #![allow(deprecated)]
 
-use crate::core::sql::session::HyperStreamSession;
+use crate::core::sql::session::BenoStreamSession;
 use crate::python::helpers::{arrow_batches_to_pyarrow, TOKIO_RUNTIME};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::*;
@@ -107,7 +107,7 @@ impl PyGraphAPI {
         #[allow(deprecated)]
         let (batches, schema) = py.allow_threads(|| {
             TOKIO_RUNTIME.block_on(async {
-                let session = HyperStreamSession::new(None);
+                let session = BenoStreamSession::new(None);
                 session.register_table("edges", Arc::new(table_clone))?;
                 let ctx = session.get_ctx();
 
@@ -217,7 +217,14 @@ impl PyGraphAPI {
             let mut curr = end_node;
             while curr != start_node {
                 path.push(curr);
-                curr = *visited.get(&curr).unwrap();
+                match visited.get(&curr) {
+                    Some(next) => curr = *next,
+                    None => {
+                        // Unreachable: `visited` was populated by the BFS above.
+                        tracing::warn!("graph: broken predecessor chain; returning partial path");
+                        break;
+                    }
+                }
             }
             path.push(start_node);
             path.reverse();

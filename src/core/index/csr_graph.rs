@@ -97,9 +97,16 @@ impl MmapCsrGraph {
         let mut unique_ids = Vec::new();
 
         for chunk in buffer.chunks_exact(chunk_size) {
-            let src_id = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
-            let dst_id = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
-            let row_id = u32::from_le_bytes(chunk[16..20].try_into().unwrap());
+            // `chunks_exact` guarantees exactly `chunk_size` bytes, so these
+            // fixed-size reads are infallible without `try_into().unwrap()`.
+            let src_id = u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ]);
+            let dst_id = u64::from_le_bytes([
+                chunk[8], chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14],
+                chunk[15],
+            ]);
+            let row_id = u32::from_le_bytes([chunk[16], chunk[17], chunk[18], chunk[19]]);
             raw_edges.push((src_id, dst_id, row_id));
             unique_ids.push(src_id);
             unique_ids.push(dst_id);
@@ -111,8 +118,14 @@ impl MmapCsrGraph {
 
         // Rewrite raw edges to use dense IDs
         for edge in raw_edges.iter_mut() {
-            edge.0 = unique_ids.binary_search(&edge.0).unwrap() as u64;
-            edge.1 = unique_ids.binary_search(&edge.1).unwrap() as u64;
+            // Every endpoint was pushed into `unique_ids`, so the search always
+            // succeeds; on the impossible miss, keep the raw id rather than panic.
+            if let Ok(i) = unique_ids.binary_search(&edge.0) {
+                edge.0 = i as u64;
+            }
+            if let Ok(i) = unique_ids.binary_search(&edge.1) {
+                edge.1 = i as u64;
+            }
         }
 
         // Sort by dense src_id

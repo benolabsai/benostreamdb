@@ -400,7 +400,7 @@ impl Table {
     ///
     /// This recovers tables when an external Iceberg engine (such as Apache Spark
     /// `rewriteDataFiles`, Trino `OPTIMIZE`, or PyIceberg) has compacted or rewritten
-    /// data files, which creates new Parquet files lacking HyperStreamDB sidecars.
+    /// data files, which creates new Parquet files lacking BenoStreamDB sidecars.
     pub async fn recover_indexes_async(&self) -> Result<usize> {
         let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (_manifest, all_entries, _) = manager.load_latest_full().await?;

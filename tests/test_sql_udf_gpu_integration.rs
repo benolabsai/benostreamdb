@@ -8,10 +8,10 @@ use datafusion::prelude::*;
 ///
 /// This test verifies that SQL distance UDFs can use GPU acceleration
 /// when a GPU context is configured via the global context.
-use hyperstreamdb::core::index::gpu::{
+use benostreamdb::core::index::gpu::{
     get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
-use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
+use benostreamdb::core::sql::vector_udf::all_vector_udfs;
 use std::sync::Arc;
 
 #[tokio::test]

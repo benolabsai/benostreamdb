@@ -1,13 +1,13 @@
 # Benchmarking Strategy and Analysis
 
-This document provides a comprehensive overview of HyperStreamDB's benchmarking strategy, accuracy analysis, and optimization roadmap.
+This document provides a comprehensive overview of BenoStreamDB's benchmarking strategy, accuracy analysis, and optimization roadmap.
 
 ---
 
 ## 1. Benchmarking Strategy
 
 ### Core Competitors
-Our benchmarking efforts focus on three primary tiers of competition to demonstrate HyperStreamDB's unique value proposition.
+Our benchmarking efforts focus on three primary tiers of competition to demonstrate BenoStreamDB's unique value proposition.
 
 #### Tier 1: Direct Competitors (High Priority)
 - **Qdrant**: Direct vector database competitor. Focus: Filtered vector search performance (pre-filter advantage).
@@ -81,7 +81,7 @@ The results are automatically statistically analyzed by Criterion, providing p50
 
 ## 5. Ingestion Performance (April 2026 Update)
 
-Following a major optimization of the HNSW-IVF indexing pipeline, HyperStreamDB now features high-throughput vector ingestion that rivals industry-standard engines like LanceDB.
+Following a major optimization of the HNSW-IVF indexing pipeline, BenoStreamDB now features high-throughput vector ingestion that rivals industry-standard engines like LanceDB.
 
 ### Key Architectural Improvements:
 1. **Delayed Indexing (Async):** Ingestion is now non-blocking. Vectors are written to Parquet immediately, while indexing happens in the background using a 32-core optimized worker pool.
@@ -99,10 +99,10 @@ Measurements taken on Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz benchmarking envi
 | **Indexing Latency (10k rows)** | 27.8s | **1.46s** | **19.0x** |
 | **Write Availability** | Blocking | **Instant (Async)** | ∞ |
 
-### Competitive Landscape: HyperStreamDB vs LanceDB
-While LanceDB is a highly mature engine, HyperStreamDB's native Iceberg integration and parallel HNSW construction provide comparable performance for local-first vector workloads.
+### Competitive Landscape: BenoStreamDB vs LanceDB
+While LanceDB is a highly mature engine, BenoStreamDB's native Iceberg integration and parallel HNSW construction provide comparable performance for local-first vector workloads.
 
-- **HyperStreamDB (768D, 100k)**: **22,999 rows/sec** (on Intel i5 CPU)
+- **BenoStreamDB (768D, 100k)**: **22,999 rows/sec** (on Intel i5 CPU)
 - **LanceDB (768D, 100k)**: **45,427 rows/sec** (on Intel i5 CPU)
 
 **Last Updated**: June 2026

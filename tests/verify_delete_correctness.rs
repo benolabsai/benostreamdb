@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::core::table::Table;
-// use hyperstreamdb::core::manifest::Schema; // Unused
+use benostreamdb::core::table::Table;
+// use benostreamdb::core::manifest::Schema; // Unused
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;

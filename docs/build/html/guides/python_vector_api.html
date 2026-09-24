@@ -3,12 +3,12 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GPU Setup Guide for HyperStreamDB" href="gpu_setup_guide.html"><link rel="prev" title="HyperStreamDB Comprehensive Guide" href="comprehensive_guide.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="GPU Setup Guide for BenoStreamDB" href="gpu_setup_guide.html"><link rel="prev" title="BenoStreamDB Comprehensive Guide" href="comprehensive_guide.html">
         <link rel="prefetch" href="../_static/logo.png" as="image">
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Python Vector Distance API Reference - HyperStreamDB 0.5.5 documentation</title>
+        <title>Python Vector Distance API Reference - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -211,12 +211,12 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installation.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installation.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="comprehensive_guide.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="comprehensive_guide.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul class="current">
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="concurrency.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -270,7 +270,7 @@
 <h1>Python Vector Distance API Reference<a class="headerlink" href="#python-vector-distance-api-reference" title="Link to this heading">¶</a></h1>
 <section id="overview">
 <h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.</p>
+<p>BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.</p>
 <blockquote>
 <div><p>[!NOTE]
 This guide covers <strong>standalone</strong> distance functions for CPU/GPU. For persistent vector storage and search with TurboQuant indexing (TQ8/TQ4), please see <a class="reference internal" href="#VECTOR_CONFIGURATION.md"><span class="xref myst">Vector Configuration</span></a>.</p>
@@ -382,7 +382,7 @@ This guide covers <strong>standalone</strong> distance functions for CPU/GPU. Fo
 <h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h2>
 <section id="basic-installation">
 <h3>Basic Installation<a class="headerlink" href="#basic-installation" title="Link to this heading">¶</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>benostreamdb
 </pre></div>
 </div>
 </section>
@@ -449,8 +449,8 @@ rocm-smi
 <li><p>No additional installation required</p></li>
 </ul>
 <p><strong>Verification:</strong></p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="p">)</span>  <span class="c1"># Should show &quot;mps&quot; on Apple Silicon</span>
 </pre></div>
 </div>
@@ -475,7 +475,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">¶</a></h2>
 <section id="basic-distance-computation">
 <h3>Basic Distance Computation<a class="headerlink" href="#basic-distance-computation" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Create two vectors</span>
@@ -483,22 +483,22 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="n">vec2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">])</span>
 
 <span class="c1"># Compute L2 distance</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;L2 distance: </span><span class="si">{</span><span class="n">distance</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Compute cosine distance</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Cosine distance: </span><span class="si">{</span><span class="n">distance</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
 <section id="gpu-accelerated-batch-operations">
 <h3>GPU-Accelerated Batch Operations<a class="headerlink" href="#gpu-accelerated-batch-operations" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Create GPU context (auto-detect best backend)</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using backend: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Create query vector and database</span>
@@ -506,7 +506,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">100000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 
 <span class="c1"># Compute distances on GPU (10x+ faster for large databases)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># Find top-k nearest neighbors</span>
 <span class="n">k</span> <span class="o">=</span> <span class="mi">10</span>
@@ -521,25 +521,25 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="sparse-vector-operations">
 <h3>Sparse Vector Operations<a class="headerlink" href="#sparse-vector-operations" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Create sparse vectors (only store non-zero elements)</span>
 <span class="c1"># Useful for high-dimensional sparse data (e.g., TF-IDF, bag-of-words)</span>
-<span class="n">sparse1</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+<span class="n">sparse1</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
     <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">500</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
     <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">,</span> <span class="mf">3.2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
     <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
 <span class="p">)</span>
 
-<span class="n">sparse2</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+<span class="n">sparse2</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
     <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">5</span><span class="p">,</span> <span class="mi">50</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">600</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
     <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">,</span> <span class="mf">2.1</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
     <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
 <span class="p">)</span>
 
 <span class="c1"># Compute sparse distance (only processes non-zero elements)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Sparse L2 distance: </span><span class="si">{</span><span class="n">distance</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Convert to dense if needed</span>
@@ -549,7 +549,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="binary-vector-operations">
 <h3>Binary Vector Operations<a class="headerlink" href="#binary-vector-operations" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Binary vectors for efficient similarity search</span>
@@ -560,18 +560,18 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="n">binary2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">packbits</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">))</span>
 
 <span class="c1"># Compute Hamming distance (counts differing bits)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Hamming distance: </span><span class="si">{</span><span class="n">distance</span><span class="si">}</span><span class="s2"> bits differ&quot;</span><span class="p">)</span>
 
 <span class="c1"># Compute Jaccard distance for binary vectors</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">jaccard_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">jaccard_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Jaccard distance: </span><span class="si">{</span><span class="n">distance</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Auto-packing: provide unpacked binary vectors (0/1 values)</span>
 <span class="c1"># The API will automatically pack them for efficiency</span>
 <span class="n">unpacked1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
 <span class="n">unpacked2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">hamming_distance</span><span class="p">(</span><span class="n">unpacked1</span><span class="p">,</span> <span class="n">unpacked2</span><span class="p">)</span>  <span class="c1"># Auto-packed internally</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">hamming_distance</span><span class="p">(</span><span class="n">unpacked1</span><span class="p">,</span> <span class="n">unpacked2</span><span class="p">)</span>  <span class="c1"># Auto-packed internally</span>
 </pre></div>
 </div>
 </section>
@@ -707,17 +707,17 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="usage-examples">
 <h4>Usage Examples<a class="headerlink" href="#usage-examples" title="Link to this heading">¶</a></h4>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Auto-detect best backend</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 
 <span class="c1"># Create specific backend</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 <span class="c1"># List available backends</span>
 <span class="n">backends</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">list_available_backends</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Available backends: </span><span class="si">{</span><span class="n">backends</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Monitor performance</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 <span class="n">stats</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">get_stats</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;GPU time: </span><span class="si">{</span><span class="n">stats</span><span class="p">[</span><span class="s1">&#39;total_gpu_time_ms&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">ms&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Kernel launches: </span><span class="si">{</span><span class="n">stats</span><span class="p">[</span><span class="s1">&#39;kernel_launches&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -794,14 +794,14 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="best-practices">
 <h3>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># ✅ Good: Reuse GPU context</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="k">for</span> <span class="n">query</span> <span class="ow">in</span> <span class="n">queries</span><span class="p">:</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># ❌ Bad: Create new context each time</span>
 <span class="k">for</span> <span class="n">query</span> <span class="ow">in</span> <span class="n">queries</span><span class="p">:</span>
-    <span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>  <span class="c1"># Overhead!</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>  <span class="c1"># Overhead!</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># ✅ Good: Use appropriate data types</span>
 <span class="n">query</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>  <span class="c1"># float32 is faster on GPU</span>
@@ -815,14 +815,14 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="integration-with-sql">
 <h2>Integration with SQL<a class="headerlink" href="#integration-with-sql" title="Link to this heading">¶</a></h2>
 <p>The Python API shares the same GPU context with SQL queries:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Set global GPU context</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
-<span class="n">hdb</span><span class="o">.</span><span class="n">set_thread_gpu_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">bsdb</span><span class="o">.</span><span class="n">set_thread_gpu_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># SQL queries now use GPU acceleration</span>
-<span class="n">session</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
 <span class="n">session</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="s2">&quot;documents&quot;</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
 
 <span class="n">results</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
@@ -843,7 +843,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <h2>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this heading">¶</a></h2>
 <section id="gpu-not-detected">
 <h3>GPU Not Detected<a class="headerlink" href="#gpu-not-detected" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="p">)</span>  <span class="c1"># Shows &quot;cpu&quot; instead of GPU backend</span>
 </pre></div>
 </div>
@@ -857,7 +857,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="out-of-memory-errors">
 <h3>Out of Memory Errors<a class="headerlink" href="#out-of-memory-errors" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Error: RuntimeError: GPU out of memory</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">huge_database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">huge_database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 </pre></div>
 </div>
 <p><strong>Solutions:</strong></p>
@@ -866,7 +866,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="n">all_distances</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">database</span><span class="p">),</span> <span class="n">chunk_size</span><span class="p">):</span>
     <span class="n">chunk</span> <span class="o">=</span> <span class="n">database</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span><span class="o">+</span><span class="n">chunk_size</span><span class="p">]</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">chunk</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
     <span class="n">all_distances</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">distances</span><span class="p">)</span>
 <span class="n">all_distances</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">all_distances</span><span class="p">)</span>
 </pre></div>
@@ -875,7 +875,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="dimension-mismatch">
 <h3>Dimension Mismatch<a class="headerlink" href="#dimension-mismatch" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Error: ValueError: Vector dimensions must match</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 </pre></div>
 </div>
 <p><strong>Solutions:</strong></p>
@@ -912,7 +912,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">GPU Setup Guide for HyperStreamDB</div>
+                <div class="title">GPU Setup Guide for BenoStreamDB</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -923,7 +923,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">HyperStreamDB Comprehensive Guide</div>
+                <div class="title">BenoStreamDB Comprehensive Guide</div>
                 
               </div>
             </a>
@@ -931,7 +931,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -940,7 +940,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

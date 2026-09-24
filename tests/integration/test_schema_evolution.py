@@ -1,5 +1,5 @@
 """
-Schema evolution tests for HyperStreamDB.
+Schema evolution tests for BenoStreamDB.
 
 Tests various schema change scenarios including:
 - Adding/removing columns
@@ -11,7 +11,7 @@ import pytest
 import tempfile
 import shutil
 import pyarrow as pa
-from hyperstreamdb import Table
+from benostreamdb import Table
 
 
 @pytest.fixture

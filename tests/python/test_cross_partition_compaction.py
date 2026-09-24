@@ -18,7 +18,7 @@ import re
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 def _schema():
@@ -53,7 +53,7 @@ def _partition_values(t, field="category"):
 
 def test_bucket_partition_values_are_transformed(tmp_path):
     uri = f"file://{tmp_path}/t"
-    t = hdb.Table.create_partitioned(uri, _schema(), _spec("bucket(8)"))
+    t = bsdb.Table.create_partitioned(uri, _schema(), _spec("bucket(8)"))
     _write(t, [1, 2, 3], ["a", "b", "c"])
 
     vals = _partition_values(t)
@@ -67,7 +67,7 @@ def test_truncate_partition_values(tmp_path):
     uri = f"file://{tmp_path}/t"
     schema = pa.schema([("id", pa.int64()), ("n", pa.int64())])
     spec = {"fields": [{"name": "n", "transform": "truncate(10)", "source_id": 2, "field_id": 1000}]}
-    t = hdb.Table.create_partitioned(uri, schema, spec)
+    t = bsdb.Table.create_partitioned(uri, schema, spec)
     t.write(pa.table({"id": pa.array([1, 2], pa.int64()), "n": pa.array([123, 127], pa.int64())}))
     t.commit()
 
@@ -77,7 +77,7 @@ def test_truncate_partition_values(tmp_path):
 
 def test_cross_partition_compaction_preserves_rows_and_partitions(tmp_path):
     uri = f"file://{tmp_path}/t"
-    t = hdb.Table.create_partitioned(uri, _schema(), _spec("identity"))
+    t = bsdb.Table.create_partitioned(uri, _schema(), _spec("identity"))
 
     # Five tiny files spread across two partitions.
     for i in range(5):

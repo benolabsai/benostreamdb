@@ -251,15 +251,27 @@ impl Accumulator for ModularityAccumulator {
                 let a_arr = ac_list.value(i);
                 let e_arr = ec_list.value(i);
 
-                let c_vals = c_arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                let c_vals = c_arr.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution(
+                        "modularity: expected Int64Array for communities".to_string(),
+                    )
+                })?;
                 let a_vals = a_arr
                     .as_any()
                     .downcast_ref::<arrow::array::Float64Array>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "modularity: expected Float64Array for a_c".to_string(),
+                        )
+                    })?;
                 let e_vals = e_arr
                     .as_any()
                     .downcast_ref::<arrow::array::Float64Array>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        datafusion::error::DataFusionError::Execution(
+                            "modularity: expected Float64Array for e_c".to_string(),
+                        )
+                    })?;
 
                 for j in 0..c_vals.len() {
                     let c = c_vals.value(j);

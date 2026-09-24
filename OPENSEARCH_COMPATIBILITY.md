@@ -1,6 +1,6 @@
 # OpenSearch / Elasticsearch Compatibility
 
-`hypersearch` (the `hyperstreamdb-search` add-on) speaks the **OpenSearch 1.x /
+`bsdb-search` (the `benostreamdb-search` add-on) speaks the **OpenSearch 1.x /
 Elasticsearch 7.10** wire format. OpenSearch 1.x is the 7.10 fork, so the response
 shapes, error envelopes, and query DSL target that dialect. `GET /` reports
 `version.number = "7.10.2"` and `tagline = "You know, you search"`.
@@ -46,7 +46,7 @@ the gaps.
 | `POST /{index}/_count` | Document count, optionally filtered. |
 | `match` | BM25 (Okapi) lexical search over inverted indexes. Multi-field `match` OR-merges per-field results. |
 | `knn` | HNSW vector search. `k`, `num_candidates` (→ `ef_search`), `filter`. |
-| Hybrid (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `HYPERSEARCH_RRF_K`. |
+| Hybrid (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `BENOSEARCH_RRF_K`. |
 | `match_all` | Returns all docs (uniform score 1.0). |
 | `filter` / `bool` | `term`, `terms`, `range`, `exists`, and `bool { must, filter, must_not }` compiled to SQL `WHERE` and evaluated with DataFusion (with index-based pruning). |
 | `_source` filtering | `_source: { includes, excludes }` (dot-prefixed includes keep nested fields). |
@@ -97,7 +97,7 @@ Mapped types include `index_not_found_exception` (404), `resource_already_exists
 
 ## Positioning
 
-HyperStreamDB-Search is **not** a drop-in replacement for an in-memory, sub-millisecond
+BenoStreamDB-Search is **not** a drop-in replacement for an in-memory, sub-millisecond
 Elasticsearch cluster. It is positioned for **website search, document catalogs, and
 log archives** where a 50–200 ms query latency envelope is imperceptible to users, and
 the object-storage-native, scale-to-zero operational model (on-demand index fetch from

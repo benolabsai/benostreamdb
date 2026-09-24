@@ -1,12 +1,12 @@
-Welcome to HyperStreamDB
+Welcome to BenoStreamDB
 ========================
 
-.. image:: /_static/HyperStreamDB.png
+.. image:: /_static/BenoStreamDB.png
    :align: center
    :width: 300px
-   :alt: HyperStreamDB Logo
+   :alt: BenoStreamDB Logo
 
-HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
+BenoStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
 
 Built on Rust with Apache Arrow and DataFusion, it provides ultra-fast indexing and retrieval without the overhead of traditional database servers.
 

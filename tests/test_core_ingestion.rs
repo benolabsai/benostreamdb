@@ -3,7 +3,7 @@
 use arrow::array::{FixedSizeListArray, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -19,7 +19,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     table
         .add_index(
             "embedding".to_string(),
-            hyperstreamdb::core::manifest::IndexAlgorithm::Hnsw {
+            benostreamdb::core::manifest::IndexAlgorithm::Hnsw {
                 metric: "l2".to_string(),
                 complexity: 16,
                 quality: 200,
@@ -67,7 +67,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
             .query()
             .vector_search(
                 "embedding",
-                hyperstreamdb::core::index::VectorValue::Float32(vec![0.1, 0.2, 0.3]),
+                benostreamdb::core::index::VectorValue::Float32(vec![0.1, 0.2, 0.3]),
                 1,
             )
             .to_batches()
@@ -84,7 +84,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
     table2
         .add_index(
             "embedding".to_string(),
-            hyperstreamdb::core::manifest::IndexAlgorithm::Hnsw {
+            benostreamdb::core::manifest::IndexAlgorithm::Hnsw {
                 metric: "l2".to_string(),
                 complexity: 16,
                 quality: 200,
@@ -112,7 +112,7 @@ async fn test_core_ingestion_buffered_and_wal() -> anyhow::Result<()> {
             .query()
             .vector_search(
                 "embedding",
-                hyperstreamdb::core::index::VectorValue::Float32(vec![0.4, 0.5, 0.6]),
+                benostreamdb::core::index::VectorValue::Float32(vec![0.4, 0.5, 0.6]),
                 1,
             )
             .to_batches()

@@ -10,7 +10,7 @@ Note: If GPU is not available, this benchmark will document CPU performance base
 import pytest
 import time
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 def measure_batch_performance(query, database, context, metric_name="l2", warmup=True):
@@ -29,12 +29,12 @@ def measure_batch_performance(query, database, context, metric_name="l2", warmup
     """
     # Get the appropriate batch function
     batch_functions = {
-        "l2": hdb.l2_batch,
-        "cosine": hdb.cosine_batch,
-        "inner_product": hdb.inner_product_batch,
-        "l1": hdb.l1_batch,
-        "hamming": hdb.hamming_batch,
-        "jaccard": hdb.jaccard_batch,
+        "l2": bsdb.l2_batch,
+        "cosine": bsdb.cosine_batch,
+        "inner_product": bsdb.inner_product_batch,
+        "l1": bsdb.l1_batch,
+        "hamming": bsdb.hamming_batch,
+        "jaccard": bsdb.jaccard_batch,
     }
     
     batch_fn = batch_functions[metric_name]
@@ -85,12 +85,12 @@ class TestGPUBatchPerformance:
         print()
         
         # Check available backends
-        backends = hdb.ComputeContext.list_available_backends()
+        backends = bsdb.ComputeContext.list_available_backends()
         print(f"Available backends: {backends}")
         print()
         
         # Test CPU performance
-        cpu_ctx = hdb.ComputeContext('cpu')
+        cpu_ctx = bsdb.ComputeContext('cpu')
         print(f"Testing CPU backend...")
         cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="l2")
         
@@ -103,7 +103,7 @@ class TestGPUBatchPerformance:
         gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
         
         if gpu_available:
-            gpu_ctx = hdb.ComputeContext.auto_detect()
+            gpu_ctx = bsdb.ComputeContext.auto_detect()
             print(f"Testing GPU backend: {gpu_ctx.backend}")
             gpu_result = measure_batch_performance(query, database, gpu_ctx, metric_name="l2")
             
@@ -160,10 +160,10 @@ class TestGPUBatchPerformance:
         print()
         
         # Check available backends
-        backends = hdb.ComputeContext.list_available_backends()
+        backends = bsdb.ComputeContext.list_available_backends()
         
         # Test CPU performance
-        cpu_ctx = hdb.ComputeContext('cpu')
+        cpu_ctx = bsdb.ComputeContext('cpu')
         print(f"Testing CPU backend...")
         cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="cosine")
         
@@ -176,7 +176,7 @@ class TestGPUBatchPerformance:
         gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
         
         if gpu_available:
-            gpu_ctx = hdb.ComputeContext.auto_detect()
+            gpu_ctx = bsdb.ComputeContext.auto_detect()
             print(f"Testing GPU backend: {gpu_ctx.backend}")
             gpu_result = measure_batch_performance(query, database, gpu_ctx, metric_name="cosine")
             
@@ -219,10 +219,10 @@ class TestGPUBatchPerformance:
         print()
         
         # Check available backends
-        backends = hdb.ComputeContext.list_available_backends()
+        backends = bsdb.ComputeContext.list_available_backends()
         
         # Test CPU performance
-        cpu_ctx = hdb.ComputeContext('cpu')
+        cpu_ctx = bsdb.ComputeContext('cpu')
         print(f"Testing CPU backend...")
         cpu_result = measure_batch_performance(query, database, cpu_ctx, metric_name="inner_product")
         
@@ -235,7 +235,7 @@ class TestGPUBatchPerformance:
         gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
         
         if gpu_available:
-            gpu_ctx = hdb.ComputeContext.auto_detect()
+            gpu_ctx = bsdb.ComputeContext.auto_detect()
             print(f"Testing GPU backend: {gpu_ctx.backend}")
             gpu_result = measure_batch_performance(query, database, gpu_ctx, metric_name="inner_product")
             
@@ -272,12 +272,12 @@ class TestGPUBatchPerformance:
         sizes = [10_000, 50_000, 100_000, 200_000, 500_000]
         
         # Check available backends
-        backends = hdb.ComputeContext.list_available_backends()
+        backends = bsdb.ComputeContext.list_available_backends()
         gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
         
-        cpu_ctx = hdb.ComputeContext('cpu')
+        cpu_ctx = bsdb.ComputeContext('cpu')
         if gpu_available:
-            gpu_ctx = hdb.ComputeContext.auto_detect()
+            gpu_ctx = bsdb.ComputeContext.auto_detect()
             print(f"GPU backend: {gpu_ctx.backend}")
         else:
             print("⚠ No GPU backend available - CPU baseline only")
@@ -320,12 +320,12 @@ class TestGPUBatchPerformance:
         dimensions = [64, 128, 256, 512, 1024]
         
         # Check available backends
-        backends = hdb.ComputeContext.list_available_backends()
+        backends = bsdb.ComputeContext.list_available_backends()
         gpu_available = any(backend in backends for backend in ['cuda', 'rocm', 'mps', 'intel'])
         
-        cpu_ctx = hdb.ComputeContext('cpu')
+        cpu_ctx = bsdb.ComputeContext('cpu')
         if gpu_available:
-            gpu_ctx = hdb.ComputeContext.auto_detect()
+            gpu_ctx = bsdb.ComputeContext.auto_detect()
             print(f"GPU backend: {gpu_ctx.backend}")
         else:
             print("⚠ No GPU backend available - CPU baseline only")

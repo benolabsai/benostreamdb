@@ -16,9 +16,9 @@ Control the physical layout of data for optimal query performance.
 ### API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 
 # Set sort order (applied during writes)
 table.replace_sort_order(
@@ -45,7 +45,7 @@ Change partitioning strategy without rewriting data.
 ### API
 
 ```python
-from hyperstreamdb import PartitionField
+from benostreamdb import PartitionField
 
 # Initial partition spec
 table.update_spec([
@@ -114,7 +114,7 @@ When `format_version >= 3`, two metadata columns are automatically added:
 
 ```python
 # V3 tables automatically include row lineage
-table = hdb.Table("s3://bucket/v3-table")
+table = bsdb.Table("s3://bucket/v3-table")
 table.write_pandas(df)
 
 # Query with metadata columns
@@ -197,11 +197,11 @@ Define default values for schema evolution.
 ### Complete V2/V3 Workflow
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 
 # Create table with V2 features
-table = hdb.Table("s3://bucket/analytics")
+table = bsdb.Table("s3://bucket/analytics")
 
 # Configure sort order for time-series data
 table.replace_sort_order(

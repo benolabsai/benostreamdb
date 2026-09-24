@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>API Reference - HyperStreamDB 0.5.5 documentation</title>
+        <title>API Reference - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -265,15 +265,15 @@
         <article role="main" id="furo-main-content">
           <section id="api-reference">
 <h1>API Reference<a class="headerlink" href="#api-reference" title="Link to this heading">¶</a></h1>
-<p>This page provides an overview of HyperStreamDB APIs across different languages and interfaces.</p>
+<p>This page provides an overview of BenoStreamDB APIs across different languages and interfaces.</p>
 <section id="python-api">
 <h2>Python API<a class="headerlink" href="#python-api" title="Link to this heading">¶</a></h2>
 <section id="table-operations">
 <h3>Table Operations<a class="headerlink" href="#table-operations" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Create/open table</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
 
 <span class="c1"># Write data</span>
 <span class="n">table</span><span class="o">.</span><span class="n">write_pandas</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
@@ -324,23 +324,23 @@
 <section id="vector-distance-api">
 <h3>Vector Distance API<a class="headerlink" href="#vector-distance-api" title="Link to this heading">¶</a></h3>
 <p>See <span class="xref myst">Python Vector API Documentation</span> for complete reference.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># Single-pair distance</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 
 <span class="c1"># Batch operations with GPU acceleration</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># Sparse vectors</span>
-<span class="n">sparse</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
+<span class="n">sparse</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
 
 <span class="c1"># Binary vectors</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
 </pre></div>
 </div>
 <p><strong>Supported Distance Metrics:</strong></p>
@@ -363,10 +363,10 @@
 </section>
 <section id="sql-api">
 <h3>SQL API<a class="headerlink" href="#sql-api" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Create session</span>
-<span class="n">session</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
 <span class="n">session</span><span class="o">.</span><span class="n">register</span><span class="p">(</span><span class="s2">&quot;my_table&quot;</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
 
 <span class="c1"># Execute SQL with pgvector operators</span>
@@ -380,17 +380,17 @@
 <span class="s2">&quot;&quot;&quot;</span><span class="p">)</span>
 
 <span class="c1"># Enable GPU acceleration for SQL</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
-<span class="n">hdb</span><span class="o">.</span><span class="n">set_thread_gpu_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">bsdb</span><span class="o">.</span><span class="n">set_thread_gpu_context</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>See <span class="xref myst">pgvector SQL Guide</span> for SQL syntax reference.</p>
 </section>
 <section id="iceberg-v2-v3-api">
 <h3>Iceberg V2/V3 API<a class="headerlink" href="#iceberg-v2-v3-api" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 
 <span class="c1"># Sort orders (V2)</span>
 <span class="n">table</span><span class="o">.</span><span class="n">set_sort_order</span><span class="p">([</span><span class="s2">&quot;timestamp&quot;</span><span class="p">,</span> <span class="s2">&quot;user_id&quot;</span><span class="p">],</span> <span class="n">ascending</span><span class="o">=</span><span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">])</span>
@@ -417,13 +417,13 @@
 <h2>Spark Connector<a class="headerlink" href="#spark-connector" title="Link to this heading">¶</a></h2>
 <div class="highlight-scala notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read</span>
 <span class="kd">val</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">spark</span><span class="p">.</span><span class="n">read</span>
-<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;benostream&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">load</span><span class="p">()</span>
 
 <span class="c1">// Write</span>
 <span class="n">df</span><span class="p">.</span><span class="n">write</span>
-<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;benostream&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">save</span><span class="p">()</span>
 
@@ -442,13 +442,13 @@
 <section id="trino-connector">
 <h2>Trino Connector<a class="headerlink" href="#trino-connector" title="Link to this heading">¶</a></h2>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Query table</span>
-<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">hyperstream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">my_table</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">benostream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">my_table</span>
 <span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span>
 
 <span class="c1">-- Vector search with pgvector operators</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">content</span><span class="p">,</span>
 <span class="w">       </span><span class="n">embedding</span><span class="w"> </span><span class="o">&lt;-&gt;</span><span class="w"> </span><span class="nb">ARRAY</span><span class="p">[</span><span class="mi">0</span><span class="p">.</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">distance</span>
-<span class="k">FROM</span><span class="w"> </span><span class="n">hyperstream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">documents</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">benostream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">documents</span>
 <span class="k">WHERE</span><span class="w"> </span><span class="n">category</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;science&#39;</span>
 <span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">distance</span>
 <span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
@@ -459,16 +459,16 @@
 <h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">¶</a></h2>
 <section id="gpu-context-configuration">
 <h3>GPU Context Configuration<a class="headerlink" href="#gpu-context-configuration" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Auto-detect best backend</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 
 <span class="c1"># Specify backend explicitly</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;rocm&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;intel&quot;</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;cuda&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;rocm&quot;</span><span class="p">,</span> <span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;mps&quot;</span><span class="p">)</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="p">(</span><span class="s2">&quot;intel&quot;</span><span class="p">)</span>
 
 <span class="c1"># List available backends</span>
 <span class="n">backends</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">list_available_backends</span><span class="p">()</span>
@@ -484,9 +484,9 @@
 </section>
 <section id="vector-index-configuration">
 <h3>Vector Index Configuration<a class="headerlink" href="#vector-index-configuration" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 
 <span class="c1"># TurboQuant 8-bit (4x compression)</span>
 <span class="n">table</span><span class="o">.</span><span class="n">add_index</span><span class="p">(</span><span class="s2">&quot;embedding&quot;</span><span class="p">,</span> <span class="s2">&quot;hnsw_tq8&quot;</span><span class="p">)</span>
@@ -512,10 +512,10 @@
 <h2>Error Handling<a class="headerlink" href="#error-handling" title="Link to this heading">¶</a></h2>
 <section id="python-exceptions">
 <h3>Python Exceptions<a class="headerlink" href="#python-exceptions" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="k">try</span><span class="p">:</span>
-    <span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+    <span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
     <span class="c1"># Dimension mismatch, NaN/inf values, invalid input</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Invalid input: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -533,15 +533,15 @@
 </section>
 <section id="gpu-fallback">
 <h3>GPU Fallback<a class="headerlink" href="#gpu-fallback" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># GPU operations automatically fall back to CPU on error</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>
 <span class="k">try</span><span class="p">:</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 <span class="k">except</span> <span class="ne">RuntimeError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;GPU error, falling back to CPU: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-    <span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">)</span>  <span class="c1"># No context = CPU</span>
+    <span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">)</span>  <span class="c1"># No context = CPU</span>
 </pre></div>
 </div>
 </section>
@@ -581,7 +581,7 @@
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -590,7 +590,7 @@
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

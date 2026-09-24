@@ -1,18 +1,18 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 import os
 import shutil
 
 def verify_explain():
-    print("=== Verifying HyperStreamDB EXPLAIN ===")
+    print("=== Verifying BenoStreamDB EXPLAIN ===")
     
     db_path = "test_explain_db"
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
         
     # 1. Setup Table
-    table = hdb.Table(db_path)
+    table = bsdb.Table(db_path)
     table.add_index_columns(["embedding", "category"])
     
     # 2. Insert Data

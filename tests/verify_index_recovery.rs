@@ -2,7 +2,7 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -49,7 +49,7 @@ async fn test_recover_indexes_after_unindexed_ingest() -> anyhow::Result<()> {
 
     // Verify index files exist initially
     let manager =
-        hyperstreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
+        benostreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
     let (_manifest, mut all_entries, _) = manager.load_latest_full().await?;
     assert!(!all_entries.is_empty());
     assert!(

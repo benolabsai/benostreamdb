@@ -2,29 +2,32 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| v0.5.x  | :white_check_mark: |
-| v0.4.x  | :white_check_mark: (security fixes only) |
-| < v0.4  | :x:                |
+BenoStreamDB is a fast-moving project: only the **latest release** is
+supported. Older versions are not maintained — please upgrade before reporting
+an issue.
+
+| Version        | Supported          |
+| -------------- | ------------------ |
+| Latest release | :white_check_mark: |
+| Older releases | :x:                |
 
 ## Reporting a Vulnerability
 
 ### Responsible Disclosure
 
-We take the security of HyperStreamDB seriously. If you discover a security vulnerability, please report it responsibly following the guidelines below.
+We take the security of BenoStreamDB seriously. If you discover a security vulnerability, please report it responsibly following the guidelines below.
 
 **Do not** open a public GitHub issue for security concerns.
 
 ### How to Report
 
-1. **Email**: Send a detailed report to `security@hyperstreamdb.com`
+1. **Email**: Send a detailed report to `security@benostreamdb.org`
 2. **Encryption**: For sensitive findings, encrypt your report using the PGP key below
 3. **Include**: Steps to reproduce, impact assessment, and any proof-of-concept code
 
 ### PGP Key
 
-PGP key will be published at [https://hyperstreamdb.com/.well-known/security.txt](https://hyperstreamdb.com/.well-known/security.txt) once the public key infrastructure is provisioned.
+PGP key will be published at [https://benostreamdb.org/.well-known/security.txt](https://benostreamdb.org/.well-known/security.txt) once the public key infrastructure is provisioned.
 
 ### Scope
 
@@ -38,6 +41,10 @@ PGP key will be published at [https://hyperstreamdb.com/.well-known/security.txt
 - Path traversal in table URI resolution
 - Privilege escalation in multi-tenant catalog configurations
 - Side-channel attacks on vector similarity search
+- Malformed input (SQL vector literals, rewriter input, REST request bodies) that
+  crashes or panics a server process. These surfaces are fuzzed on every push —
+  see `fuzz/` — and a crash is the highest-severity class of finding we accept.
+  Production paths are under a no-panic policy (`NO_PANIC_POLICY.md`).
 
 #### Out of Scope
 
@@ -47,32 +54,26 @@ PGP key will be published at [https://hyperstreamdb.com/.well-known/security.txt
 - Issues requiring physical access to deployment hardware
 - Browser-based vulnerabilities in the MinIO web console (upstream MinIO issue)
 
-### Response SLA
+### Response Expectations
 
-| Milestone              | Target     |
-| ---------------------- | ---------- |
-| Acknowledgment         | **48 hours** |
-| Initial triage         | 5 business days |
-| Initial fix (CVE draft)| **7 days** |
+BenoStreamDB is a free, open-source project maintained by a single developer
+on a **best-effort basis**. There is no commercial support contract and no
+guaranteed response time, but security reports are prioritised over feature
+work.
+
+| Milestone              | Target (best effort) |
+| ---------------------- | -------------------- |
+| Acknowledgment         | As soon as possible, typically within a few days |
+| Initial triage         | Within ~1–2 weeks |
+| Initial fix            | Prioritised for critical/high severity |
 | Coordinated disclosure | Agreed with reporter |
 
-We will:
-- Acknowledge receipt within **48 hours**
-- Provide an initial severity assessment within 5 business days
-- Work toward an initial fix within **7 days** for critical/high severity issues
+We will, to the best of our ability:
+- Acknowledge receipt and confirm the report is being looked at
+- Provide an initial severity assessment
+- Prioritise a fix for critical/high severity issues
 - Keep you informed of progress throughout the resolution process
 - Credit you in the security advisory (unless you request anonymity)
-
-### Bug Bounty
-
-HyperStreamDB plans to participate in a bug bounty program. Details will be announced on the project website.
-
-- **Critical** (RCE, data exfiltration): Up to $10,000
-- **High** (authentication bypass, SQL injection): Up to $5,000
-- **Medium** (information disclosure, privilege escalation): Up to $2,000
-- **Low** (minor configuration exposure): Up to $500
-
-_Bounty program details and eligibility will be published at the referenced platform once active._
 
 ### What We Expect
 
@@ -83,7 +84,7 @@ _Bounty program details and eligibility will be published at the referenced plat
 
 ### What We Commit To
 
-- Respond within 48 hours of initial report
+- Acknowledge and review reports as promptly as we can
 - Keep you informed of progress and resolution timeline
 - Work with you to understand and validate the fix
 - Provide appropriate credit in release notes and CVE advisories

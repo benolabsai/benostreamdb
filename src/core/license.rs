@@ -7,10 +7,10 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
-/// Master Public Key for HyperStreamDB Enterprise
-/// Loaded from the `HDB_LICENSE_PUBLIC_KEY` environment variable for security.
+/// Master Public Key for BenoStreamDB Enterprise
+/// Loaded from the `BSDB_LICENSE_PUBLIC_KEY` environment variable for security.
 static MASTER_PUBLIC_KEY: Lazy<Option<VerifyingKey>> = Lazy::new(|| {
-    let hex_str = std::env::var("HDB_LICENSE_PUBLIC_KEY").ok()?;
+    let hex_str = std::env::var("BSDB_LICENSE_PUBLIC_KEY").ok()?;
 
     let bytes = hex::decode(hex_str.trim()).ok()?;
 
@@ -63,7 +63,7 @@ pub fn verify_license(key: &str) -> Result<LicensePayload> {
 
     // Verify signature using the environment-loaded Public Key
     let public_key = MASTER_PUBLIC_KEY.as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Enterprise License Public Key not found. Please set HDB_LICENSE_PUBLIC_KEY environment variable."))?;
+        .ok_or_else(|| anyhow::anyhow!("Enterprise License Public Key not found. Please set BSDB_LICENSE_PUBLIC_KEY environment variable."))?;
 
     public_key
         .verify(&payload_bytes, &signature)

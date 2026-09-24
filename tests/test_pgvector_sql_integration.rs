@@ -6,13 +6,13 @@
 use arrow::array::{FixedSizeListArray, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::sql::session::HyperStreamSession;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::sql::session::BenoStreamSession;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 // Helper function to create a test table with vector data
-async fn create_test_table_with_vectors() -> (HyperStreamSession, Arc<Table>, TempDir) {
+async fn create_test_table_with_vectors() -> (BenoStreamSession, Arc<Table>, TempDir) {
     // Create temporary directory for table
     let temp_dir = TempDir::new().unwrap();
     let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
@@ -63,7 +63,7 @@ async fn create_test_table_with_vectors() -> (HyperStreamSession, Arc<Table>, Te
     table.write_async(vec![batch]).await.unwrap();
 
     // Create session and register table AFTER data is written
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
     session.register_table("documents", table.clone()).unwrap();
 
     (session, table, temp_dir)
@@ -270,7 +270,7 @@ async fn test_knn_results_ordered_by_distance() {
 
 #[tokio::test]
 async fn test_vector_literal_in_select() {
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
 
     // Test vector literal parsing in SELECT
     let result = session.sql("SELECT ARRAY[1.0, 2.0, 3.0] as vec").await;
@@ -295,7 +295,7 @@ async fn test_vector_literal_in_where_clause() {
 
 #[tokio::test]
 async fn test_vector_literal_various_formats() {
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
 
     // Test integer format
     let result = session.sql("SELECT ARRAY[1, 2, 3] as vec").await;
@@ -420,7 +420,7 @@ async fn test_vector_avg_aggregation() {
 
 #[tokio::test]
 async fn test_vector_aggregation_with_group_by() {
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
 
     // Create temporary directory for table
     let temp_dir = TempDir::new().unwrap();
@@ -550,7 +550,7 @@ async fn test_error_dimension_mismatch() {
 
 #[tokio::test]
 async fn test_error_invalid_vector_literal() {
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
 
     // This should be caught by DataFusion's parser
     let result = session.sql("SELECT ARRAY[1, abc, 3] as vec").await;
@@ -563,7 +563,7 @@ async fn test_error_invalid_vector_literal() {
 
 #[test]
 fn test_vector_operators_registered() {
-    use hyperstreamdb::core::sql::vector_operators::VECTOR_OPERATORS;
+    use benostreamdb::core::sql::vector_operators::VECTOR_OPERATORS;
 
     assert_eq!(VECTOR_OPERATORS.len(), 6, "Should have 6 vector operators");
 
@@ -581,7 +581,7 @@ fn test_vector_operators_registered() {
 
 #[test]
 fn test_all_distance_udfs_available() {
-    use hyperstreamdb::core::sql::vector_udf;
+    use benostreamdb::core::sql::vector_udf;
 
     let udfs = vector_udf::all_vector_udfs();
     assert!(udfs.len() >= 6, "Should have at least 6 distance UDFs");
@@ -615,7 +615,7 @@ fn test_all_distance_udfs_available() {
 
 #[test]
 fn test_vector_literal_parser_available() {
-    use hyperstreamdb::core::sql::vector_literal::VectorLiteralParser;
+    use benostreamdb::core::sql::vector_literal::VectorLiteralParser;
 
     let result = VectorLiteralParser::parse("[1.0, 2.0, 3.0]");
     assert!(

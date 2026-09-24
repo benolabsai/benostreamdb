@@ -1,13 +1,13 @@
 # Trino Connector
 
-The HyperStreamDB Trino connector allows you to query your datasets using distributed SQL. It implements the Trino SPI (Service Provider Interface) and delegates IO operations to the Rust core via JNI.
+The BenoStreamDB Trino connector allows you to query your datasets using distributed SQL. It implements the Trino SPI (Service Provider Interface) and delegates IO operations to the Rust core via JNI.
 
 ## Building
 
 The connector is a standard Maven project.
 
 ```bash
-cd trino-hyperstream
+cd trino-benostream
 mvn clean install -DskipTests
 ```
 
@@ -17,22 +17,22 @@ This produces a plugin archive (ZIP) in `target/`.
 
 1.  **Extract Plugin**: Unzip the artifact into the Trino plugin directory on all nodes.
     ```bash
-    mkdir -p /usr/lib/trino/plugin/hyperstream
-    unzip trino-hyperstream-*-plugin.zip -d /usr/lib/trino/plugin/hyperstream
+    mkdir -p /usr/lib/trino/plugin/benostream
+    unzip trino-benostream-*-plugin.zip -d /usr/lib/trino/plugin/benostream
     ```
 
-2.  **Configure Catalog**: Create a catalog properties file `etc/catalog/hyperstreamdb.properties`.
+2.  **Configure Catalog**: Create a catalog properties file `etc/catalog/benostreamdb.properties`.
     ```properties
-    connector.name=hyperstreamdb
-    hyperstream.base-uri=s3://my-bucket/
+    connector.name=benostreamdb
+    benostream.base-uri=s3://my-bucket/
     ```
 
 ## Usage
 
-Once configured, you can query HyperStreamDB tables just like any other SQL table.
+Once configured, you can query BenoStreamDB tables just like any other SQL table.
 
 ```sql
-SELECT * FROM hyperstreamdb.default.logs
+SELECT * FROM benostreamdb.default.logs
 WHERE severity = 'ERROR' AND timestamp > NOW() - INTERVAL '1' DAY
 ```
 

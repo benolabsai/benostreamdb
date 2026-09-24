@@ -2,7 +2,7 @@
 
 ## Overview
 
-HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.
+BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration support across multiple hardware backends. This API allows you to compute distances between vectors directly from Python without writing SQL queries, with optional GPU acceleration for high-performance batch operations.
 
 > [!NOTE]
 > This guide covers **standalone** distance functions for CPU/GPU. For persistent vector storage and search with TurboQuant indexing (TQ8/TQ4), please see [Vector Configuration](VECTOR_CONFIGURATION.md).
@@ -46,7 +46,7 @@ When using `GPUContext.auto_detect()`, backends are selected in this priority or
 ### Basic Installation
 
 ```bash
-pip install hyperstreamdb
+pip install benostreamdb
 ```
 
 ### GPU Backend Requirements
@@ -109,8 +109,8 @@ rocm-smi
 
 **Verification:**
 ```python
-import hyperstreamdb as hdb
-ctx = hdb.GPUContext.auto_detect()
+import benostreamdb as bsdb
+ctx = bsdb.GPUContext.auto_detect()
 print(ctx.backend)  # Should show "mps" on Apple Silicon
 ```
 
@@ -131,7 +131,7 @@ vulkaninfo | grep vendor
 ### Basic Distance Computation
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Create two vectors
@@ -139,22 +139,22 @@ vec1 = np.array([1.0, 2.0, 3.0])
 vec2 = np.array([4.0, 5.0, 6.0])
 
 # Compute L2 distance
-distance = hdb.l2_distance(vec1, vec2)
+distance = bsdb.l2_distance(vec1, vec2)
 print(f"L2 distance: {distance}")
 
 # Compute cosine distance
-distance = hdb.cosine_distance(vec1, vec2)
+distance = bsdb.cosine_distance(vec1, vec2)
 print(f"Cosine distance: {distance}")
 ```
 
 ### GPU-Accelerated Batch Operations
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Create GPU context (auto-detect best backend)
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 print(f"Using backend: {ctx.backend}")
 
 # Create query vector and database
@@ -162,7 +162,7 @@ query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
 # Compute distances on GPU (10x+ faster for large databases)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Find top-k nearest neighbors
 k = 10
@@ -177,25 +177,25 @@ for idx, dist in zip(top_k_indices, top_k_distances):
 ### Sparse Vector Operations
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Create sparse vectors (only store non-zero elements)
 # Useful for high-dimensional sparse data (e.g., TF-IDF, bag-of-words)
-sparse1 = hdb.SparseVector(
+sparse1 = bsdb.SparseVector(
     indices=np.array([0, 5, 100, 500], dtype=np.int32),
     values=np.array([1.0, 2.5, 0.8, 3.2], dtype=np.float32),
     dim=1000
 )
 
-sparse2 = hdb.SparseVector(
+sparse2 = bsdb.SparseVector(
     indices=np.array([5, 50, 100, 600], dtype=np.int32),
     values=np.array([2.0, 1.5, 0.9, 2.1], dtype=np.float32),
     dim=1000
 )
 
 # Compute sparse distance (only processes non-zero elements)
-distance = hdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_distance_sparse(sparse1, sparse2)
 print(f"Sparse L2 distance: {distance}")
 
 # Convert to dense if needed
@@ -205,7 +205,7 @@ dense1 = sparse1.to_dense()
 ### Binary Vector Operations
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Binary vectors for efficient similarity search
@@ -216,18 +216,18 @@ binary1 = np.packbits(np.random.randint(0, 2, 128))  # 128 bits = 16 bytes
 binary2 = np.packbits(np.random.randint(0, 2, 128))
 
 # Compute Hamming distance (counts differing bits)
-distance = hdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_distance_packed(binary1, binary2)
 print(f"Hamming distance: {distance} bits differ")
 
 # Compute Jaccard distance for binary vectors
-distance = hdb.jaccard_distance_packed(binary1, binary2)
+distance = bsdb.jaccard_distance_packed(binary1, binary2)
 print(f"Jaccard distance: {distance}")
 
 # Auto-packing: provide unpacked binary vectors (0/1 values)
 # The API will automatically pack them for efficiency
 unpacked1 = np.random.randint(0, 2, 128, dtype=np.uint8)
 unpacked2 = np.random.randint(0, 2, 128, dtype=np.uint8)
-distance = hdb.hamming_distance(unpacked1, unpacked2)  # Auto-packed internally
+distance = bsdb.hamming_distance(unpacked1, unpacked2)  # Auto-packed internally
 ```
 
 ## API Reference
@@ -365,17 +365,17 @@ class GPUContext:
 
 ```python
 # Auto-detect best backend
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 
 # Create specific backend
-ctx = hdb.GPUContext("cuda", device_id=0)
+ctx = bsdb.GPUContext("cuda", device_id=0)
 
 # List available backends
 backends = ctx.list_available_backends()
 print(f"Available backends: {backends}")
 
 # Monitor performance
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 stats = ctx.get_stats()
 print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 print(f"Kernel launches: {stats['kernel_launches']}")
@@ -446,14 +446,14 @@ For large databases, consider:
 
 ```python
 # ✅ Good: Reuse GPU context
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 for query in queries:
-    distances = hdb.l2_distance_batch(query, database, context=ctx)
+    distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # ❌ Bad: Create new context each time
 for query in queries:
-    ctx = hdb.GPUContext.auto_detect()  # Overhead!
-    distances = hdb.l2_distance_batch(query, database, context=ctx)
+    ctx = bsdb.GPUContext.auto_detect()  # Overhead!
+    distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # ✅ Good: Use appropriate data types
 query = np.array(data, dtype=np.float32)  # float32 is faster on GPU
@@ -467,14 +467,14 @@ query = np.array(data, dtype=np.float64)  # Slower and uses more memory
 The Python API shares the same GPU context with SQL queries:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Set global GPU context
-ctx = hdb.GPUContext.auto_detect()
-hdb.set_thread_gpu_context(ctx)
+ctx = bsdb.GPUContext.auto_detect()
+bsdb.set_thread_gpu_context(ctx)
 
 # SQL queries now use GPU acceleration
-session = hdb.Session()
+session = bsdb.Session()
 session.register("documents", table)
 
 results = session.sql("""
@@ -495,7 +495,7 @@ print(f"GPU time: {stats['total_gpu_time_ms']}ms")
 ### GPU Not Detected
 
 ```python
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 print(ctx.backend)  # Shows "cpu" instead of GPU backend
 ```
 
@@ -508,7 +508,7 @@ print(ctx.backend)  # Shows "cpu" instead of GPU backend
 
 ```python
 # Error: RuntimeError: GPU out of memory
-distances = hdb.l2_distance_batch(query, huge_database, context=ctx)
+distances = bsdb.l2_distance_batch(query, huge_database, context=ctx)
 ```
 
 **Solutions:**
@@ -518,7 +518,7 @@ chunk_size = 10000
 all_distances = []
 for i in range(0, len(database), chunk_size):
     chunk = database[i:i+chunk_size]
-    distances = hdb.l2_distance_batch(query, chunk, context=ctx)
+    distances = bsdb.l2_distance_batch(query, chunk, context=ctx)
     all_distances.append(distances)
 all_distances = np.concatenate(all_distances)
 ```
@@ -527,7 +527,7 @@ all_distances = np.concatenate(all_distances)
 
 ```python
 # Error: ValueError: Vector dimensions must match
-distance = hdb.l2_distance(vec1, vec2)
+distance = bsdb.l2_distance(vec1, vec2)
 ```
 
 **Solutions:**

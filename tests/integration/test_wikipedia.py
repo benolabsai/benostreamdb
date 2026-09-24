@@ -12,7 +12,7 @@ Success Criteria:
 import sys
 import time
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow.parquet as pq
 from pathlib import Path
 
@@ -38,13 +38,13 @@ def test_wikipedia_hybrid_queries():
         generate_wikipedia(num_docs=num_docs, batch_size=10_000)
     
     # 2. Ingest
-    table_uri = "file:///tmp/hyperstream_test/wikipedia"
+    table_uri = "file:///tmp/benostream_test/wikipedia"
     
     try:
-        table = hdb.Table(table_uri)
+        table = bsdb.Table(table_uri)
     except AttributeError:
         print("AttributeError: Table not found")
-        print(dir(hdb))
+        print(dir(bsdb))
         sys.exit(1)
     
     # Enable indexing for vector search

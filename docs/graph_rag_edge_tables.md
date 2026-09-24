@@ -1,12 +1,12 @@
 # Graph RAG & Iceberg Edge Tables Guide
 
-HyperStreamDB provides native graph analytics and edge-level semantic search directly over Apache Iceberg edge tables. This architecture eliminates the need to run separate vector databases (e.g. Pinecone/Milvus) alongside dedicated graph databases (e.g. Neo4j) or Spark GraphX clusters.
+BenoStreamDB provides native graph analytics and edge-level semantic search directly over Apache Iceberg edge tables. This architecture eliminates the need to run separate vector databases (e.g. Pinecone/Milvus) alongside dedicated graph databases (e.g. Neo4j) or Spark GraphX clusters.
 
 ---
 
 ## 1. Standard Edge Table Schema Convention
 
-An edge table in HyperStreamDB represents relationships between entities. To guarantee high performance across graph analytics UDFs and vector search, edge tables follow this standard convention:
+An edge table in BenoStreamDB represents relationships between entities. To guarantee high performance across graph analytics UDFs and vector search, edge tables follow this standard convention:
 
 | Column Name | Arrow / Iceberg Data Type | Nullable | Description |
 |---|---|---|---|
@@ -21,7 +21,7 @@ An edge table in HyperStreamDB represents relationships between entities. To gua
 You can create a standardized edge table with automated indexing using `Table.create_edge_table`:
 
 ```python
-import hyperstreamdb as hs
+import benostreamdb as hs
 
 # Create an edge table with automated sidecar index generation
 edge_table = hs.Table.create_edge_table(
@@ -43,24 +43,24 @@ edge_table = hs.Table.create_edge_table(
 Graph traversals and vector searches require distinct physical acceleration structures:
 
 ### A. Endpoint Roaring Bitmaps (`source` and `target`)
-- When `index_endpoints=True` is specified, HyperStreamDB automatically configures **Roaring Bitmap sidecar indexes** on the `source` and `target` columns.
+- When `index_endpoints=True` is specified, BenoStreamDB automatically configures **Roaring Bitmap sidecar indexes** on the `source` and `target` columns.
 - **Why**: Allows $O(1)$ neighborhood lookups and instantaneous candidate filtering during breadth-first search (BFS) and induced subgraph extraction without table scanning.
 
 ### B. HNSW Vector Index on `embedding`
-- When `index_embedding=True` is specified and an `embedding` column exists, HyperStreamDB automatically configures an **HNSW vector index** on the relationship vectors.
+- When `index_embedding=True` is specified and an `embedding` column exists, BenoStreamDB automatically configures an **HNSW vector index** on the relationship vectors.
 - **Why**: Enables semantic similarity search directly over relationships (e.g. finding relationships describing "mergers and acquisitions" or "patent disputes").
 
 ---
 
 ## 3. NetworkX Interoperability
 
-HyperStreamDB provides complete bi-directional interoperability with NetworkX, supporting all graph types: `Graph`, `DiGraph`, `MultiGraph`, and `MultiDiGraph`.
+BenoStreamDB provides complete bi-directional interoperability with NetworkX, supporting all graph types: `Graph`, `DiGraph`, `MultiGraph`, and `MultiDiGraph`.
 
 ### Ingesting from NetworkX (`Table.from_networkx`)
 
 ```python
 import networkx as nx
-import hyperstreamdb as hs
+import benostreamdb as hs
 
 # Build or load a graph in NetworkX
 G = nx.DiGraph()
@@ -79,7 +79,7 @@ table.commit()
 
 ### Exporting to NetworkX (`table.to_networkx`)
 
-You can export any HyperStreamDB edge table back into a NetworkX graph while preserving all edge attributes and multi-edges:
+You can export any BenoStreamDB edge table back into a NetworkX graph while preserving all edge attributes and multi-edges:
 
 ```python
 # Export to a directed NetworkX graph
@@ -154,7 +154,7 @@ paths = table.connecting_paths(
    - For heterogeneous entity graphs (e.g. `user:101`, `product:502`), map string entity IDs to 64-bit integer hashes or maintain a dictionary mapping table.
 
 2. **Partitioning by Relation**:
-   - If your graph has millions of edges with distinct predicates (`partition_by_relation=True`), HyperStreamDB partitions data files into directories by `relation`.
+   - If your graph has millions of edges with distinct predicates (`partition_by_relation=True`), BenoStreamDB partitions data files into directories by `relation`.
    - Queries filtering on specific edge types (e.g. `WHERE relation = 'cites'`) prune irrelevant data files at the manifest level before scanning Parquet files.
 
 3. **Combined BM25 + Vector Search**:
@@ -164,7 +164,7 @@ paths = table.connecting_paths(
 
 ## 6. End-to-End Graph RAG Search & Community Summarization
 
-HyperStreamDB provides full native pipeline integration connecting vector document retrieval, knowledge graph traversal, and topological relevance scoring:
+BenoStreamDB provides full native pipeline integration connecting vector document retrieval, knowledge graph traversal, and topological relevance scoring:
 
 ### Local Graph RAG Search
 Local search finds seed entities via vector search, expands the neighborhood via an induced multi-hop subgraph, ranks entities using Personalized PageRank (PPR), and formats the context into prompt-ready markdown for an LLM:
@@ -191,7 +191,7 @@ llm_context = result.format_context(max_tokens=2000)
 ```
 
 ### HippoRAG-Style Continuous Seed-Weighted Personalized PageRank
-Unlike standard uniform seed PPR where teleportation probability is split uniformly across seeds ($p_0(v) = 1/|S|$), HyperStreamDB supports HippoRAG-style continuous similarity weighting ($p_0(v) \propto w(v)$):
+Unlike standard uniform seed PPR where teleportation probability is split uniformly across seeds ($p_0(v) = 1/|S|$), BenoStreamDB supports HippoRAG-style continuous similarity weighting ($p_0(v) \propto w(v)$):
 
 ```python
 # Pass continuous relevance weights from vector similarity scores or reciprocal distances
@@ -278,9 +278,9 @@ results = doc_table.hybrid_search(
 
 ---
 
-## 7. Analytics Engineering with dbt (`dbt-hyperstreamdb`)
+## 7. Analytics Engineering with dbt (`dbt-benostreamdb`)
 
-The official `dbt-hyperstreamdb` adapter plugin provides native Jinja macros for all Graph UDFs, allowing analytics engineers to model, transform, and materialize graph analytics tables into Apache Iceberg directly within dbt projects:
+The official `dbt-benostreamdb` adapter plugin provides native Jinja macros for all Graph UDFs, allowing analytics engineers to model, transform, and materialize graph analytics tables into Apache Iceberg directly within dbt projects:
 
 ```sql
 -- models/entity_pagerank.sql

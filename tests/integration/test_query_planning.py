@@ -1,6 +1,6 @@
 import os
 import shutil
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 def test_query_planning():
     base_dir = "/tmp/test_query_planning"
@@ -9,7 +9,7 @@ def test_query_planning():
     os.makedirs(base_dir)
 
     uri = f"file://{base_dir}"
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.add_index_columns(["id", "val"])
 
     # Create multiple segments to test planning across segments.

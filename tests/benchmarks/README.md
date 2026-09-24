@@ -1,6 +1,6 @@
-# HyperStreamDB Public Benchmark Suite
+# BenoStreamDB Public Benchmark Suite
 
-Reproducible benchmarks demonstrating HyperStreamDB's performance advantages over:
+Reproducible benchmarks demonstrating BenoStreamDB's performance advantages over:
 - **Vector Databases**: Qdrant, Pinecone, Weaviate, Milvus
 - **Table Formats**: Iceberg, Delta Lake, Hudi
 
@@ -111,7 +111,7 @@ benchmark_results/
 
 ## Verified Performance (2026-01-25)
 
-| Benchmark | HyperStreamDB | Competitor (Qdrant) | Speedup | Notes |
+| Benchmark | BenoStreamDB | Competitor (Qdrant) | Speedup | Notes |
 |-----------|---------------|------------|---------|-------|
 | **Ingestion** | ~52K/sec | ~775/sec* | **67x** | *Qdrant Python client in-memory |
 | **Filtered vector search** | ~2ms | ~260ms | **125x** | Pre-filtering advantage |
@@ -123,17 +123,17 @@ benchmark_results/
 
 ### 1. Pre-Filtering (vs Vector DBs)
 **Problem**: Pinecone/Qdrant search all vectors, then filter  
-**HyperStreamDB**: Filter first, search subset  
+**BenoStreamDB**: Filter first, search subset  
 **Result**: 10-100x faster for filtered searches
 
 ### 2. Index-First (vs Table Formats)
 **Problem**: Iceberg/Delta scan all data for selective queries  
-**HyperStreamDB**: Direct index lookup  
+**BenoStreamDB**: Direct index lookup  
 **Result**: 100-1000x faster for point lookups
 
 ### 3. Hybrid Queries (Unique)
 **Problem**: No system supports scalar + vector in one query  
-**HyperStreamDB**: Native support  
+**BenoStreamDB**: Native support  
 **Result**: Impossible elsewhere
 
 ## Publishing Results
@@ -183,4 +183,4 @@ To add new benchmarks:
 
 ## License
 
-Apache 2.0 (same as HyperStreamDB)
+Apache 2.0 (same as BenoStreamDB)

@@ -1,5 +1,11 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
+// No-panic policy for production binaries (see NO_PANIC_POLICY.md).
+#![cfg_attr(
+    not(test),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
+
 use ax_lib::{
     http::StatusCode,
     response::IntoResponse,
@@ -7,8 +13,8 @@ use ax_lib::{
     Json, Router,
 };
 use futures::StreamExt;
-use hyperstreamdb::core::manifest::ManifestManager;
-use hyperstreamdb::core::metadata::TableMetadata;
+use benostreamdb::core::manifest::ManifestManager;
+use benostreamdb::core::metadata::TableMetadata;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -28,7 +34,7 @@ async fn main() {
     }));
 
     // Task 3: Use proper telemetry init
-    let _telemetry_guard = hyperstreamdb::telemetry::tracing::init_tracing("iceberg_rest")
+    let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("iceberg_rest")
         .expect("Failed to initialize tracing");
 
     // Task 6: Track start time for uptime
@@ -59,14 +65,23 @@ async fn main() {
         .unwrap_or(8181);
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%addr, "Iceberg REST Server listening");
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(%addr, error = %e, "failed to bind Iceberg REST listener");
+            std::process::exit(1);
+        }
+    };
 
     let app_with_state = app.with_state(StartState { start_time });
     let server = ax_lib::serve(listener, app_with_state);
 
     // Task 4: Graceful shutdown on SIGINT/SIGTERM
     let graceful = server.with_graceful_shutdown(shutdown_signal());
-    graceful.await.unwrap();
+    if let Err(e) = graceful.await {
+        tracing::error!(error = %e, "Iceberg REST server error");
+        std::process::exit(1);
+    }
 }
 
 struct StartState {
@@ -99,11 +114,14 @@ async fn metrics_handler() -> impl IntoResponse {
     encoder
         .encode_utf8(&metric_families, &mut result)
         .unwrap_or_default();
-    ax_lib::response::Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain; version=0.0.4")
-        .body(ax_lib::body::Body::from(result))
-        .unwrap()
+    // Built by hand so there is no fallible builder step to unwrap: the status
+    // and header are static, and `Response::new` defaults to 200 OK.
+    let mut response = ax_lib::response::Response::new(ax_lib::body::Body::from(result));
+    let _ = response.headers_mut().insert(
+        ax_lib::http::header::CONTENT_TYPE,
+        ax_lib::http::HeaderValue::from_static("text/plain; version=0.0.4"),
+    );
+    response
 }
 
 async fn shutdown_signal() {
@@ -135,7 +153,7 @@ async fn shutdown_signal() {
 
 async fn get_config() -> impl IntoResponse {
     let mut overrides = std::collections::HashMap::new();
-    overrides.insert("prefix".to_string(), "hdb".to_string());
+    overrides.insert("prefix".to_string(), "bsdb".to_string());
 
     let config = CatalogConfig {
         overrides,
@@ -150,8 +168,8 @@ async fn list_namespaces(
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}", prefix);
     let uri =
-        std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = hyperstreamdb::core::storage::create_object_store(&uri)
+        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = benostreamdb::core::storage::create_object_store(&uri)
         .expect("Failed to create object store");
 
     // Discover namespaces by listing top-level directories
@@ -183,8 +201,8 @@ async fn list_tables(
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}, namespace: {}", prefix, namespace);
     let uri =
-        std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = hyperstreamdb::core::storage::create_object_store(&uri)
+        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = benostreamdb::core::storage::create_object_store(&uri)
         .expect("Failed to create object store");
 
     let mut tables = Vec::new();
@@ -217,7 +235,7 @@ async fn list_tables(
     Json(response)
 }
 
-// Replaced by hyperstreamdb::core::metadata::TableMetadata
+// Replaced by benostreamdb::core::metadata::TableMetadata
 
 async fn get_table(
     ax_lib::extract::Path((prefix, namespace, table)): ax_lib::extract::Path<(
@@ -227,7 +245,7 @@ async fn get_table(
     )>,
 ) -> impl IntoResponse {
     let uri =
-        std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     println!(
         "Prefix: {}, Getting metadata for {}.{} (Storage: {})",
         prefix, namespace, table, uri
@@ -236,7 +254,7 @@ async fn get_table(
     let table_path = format!("{}/{}", namespace, table);
     let table_full_uri = format!("{}/{}", uri.trim_end_matches('/'), table_path);
 
-    let store = hyperstreamdb::core::storage::create_object_store(&table_full_uri)
+    let store = benostreamdb::core::storage::create_object_store(&table_full_uri)
         .expect("Failed to create object store");
     let manager = ManifestManager::new(store.clone(), "", &table_full_uri);
 
@@ -323,7 +341,7 @@ async fn create_table(
     println!("Creating table {}.{}.{}", prefix, namespace, payload.name);
 
     let base_uri =
-        std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
 
     // Determine location
     let location = payload.location.unwrap_or_else(|| {
@@ -337,7 +355,7 @@ async fn create_table(
 
     // Convert schema
     let arrow_schema =
-        match hyperstreamdb::core::iceberg::iceberg_json_to_arrow_schema(&payload.schema) {
+        match benostreamdb::core::iceberg::iceberg_json_to_arrow_schema(&payload.schema) {
             Ok(s) => s,
             Err(e) => {
                 return (
@@ -355,10 +373,10 @@ async fn create_table(
         };
 
     // Create table
-    match hyperstreamdb::Table::create_async(location.clone(), arrow_schema.clone()).await {
+    match benostreamdb::Table::create_async(location.clone(), arrow_schema.clone()).await {
         Ok(_) => {
             // Load the newly created metadata
-            let store = hyperstreamdb::core::storage::create_object_store(&location)
+            let store = benostreamdb::core::storage::create_object_store(&location)
                 .expect("Failed to create object store");
             let metadata = TableMetadata::load_latest(store.as_ref())
                 .await
@@ -368,9 +386,9 @@ async fn create_table(
                         2,
                         uuid::Uuid::new_v4().to_string(),
                         location.clone(),
-                        hyperstreamdb::core::manifest::Schema::from_arrow(&arrow_schema, 0),
-                        hyperstreamdb::core::manifest::PartitionSpec::default(),
-                        hyperstreamdb::core::manifest::SortOrder::default(),
+                        benostreamdb::core::manifest::Schema::from_arrow(&arrow_schema, 0),
+                        benostreamdb::core::manifest::PartitionSpec::default(),
+                        benostreamdb::core::manifest::SortOrder::default(),
                     )
                 });
 
@@ -431,10 +449,10 @@ pub enum TableUpdateAction {
         #[serde(rename = "file-path")]
         file_path: String,
         #[serde(rename = "index-file")]
-        index_file: hyperstreamdb::core::manifest::IndexFile,
+        index_file: benostreamdb::core::manifest::IndexFile,
     },
     AddPartitionSpec {
-        spec: hyperstreamdb::core::manifest::PartitionSpec,
+        spec: benostreamdb::core::manifest::PartitionSpec,
     },
     SetDefaultSpec {
         #[serde(rename = "spec-id")]
@@ -442,7 +460,7 @@ pub enum TableUpdateAction {
     },
     AddSortOrder {
         #[serde(rename = "sort-order")]
-        sort_order: hyperstreamdb::core::manifest::SortOrder,
+        sort_order: benostreamdb::core::manifest::SortOrder,
     },
     SetDefaultSortOrder {
         #[serde(rename = "sort-order-id")]
@@ -487,8 +505,8 @@ async fn update_table(
     );
 
     let uri =
-        std::env::var("HYPERSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
-    let store = hyperstreamdb::core::storage::create_object_store(&uri)
+        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let store = benostreamdb::core::storage::create_object_store(&uri)
         .expect("Failed to create object store");
 
     // Support complex namespaces with '/' (URL decoded from '%2F')
@@ -513,7 +531,7 @@ async fn update_table(
     let (current_manifest, _) = manager
         .load_latest()
         .await
-        .unwrap_or((hyperstreamdb::core::manifest::Manifest::default(), 0));
+        .unwrap_or((benostreamdb::core::manifest::Manifest::default(), 0));
 
     // Pre-load all existing entries if we might be modifying them (rewriting)
     let mut all_existing_entries = if payload.updates.iter().any(|u| {
@@ -590,7 +608,7 @@ async fn update_table(
                     if let Ok(get_res) = res {
                         let bytes = get_res.bytes().await.unwrap_or_default();
                         if let Ok(list) =
-                            hyperstreamdb::core::iceberg::read_manifest_list(&bytes[..])
+                            benostreamdb::core::iceberg::read_manifest_list(&bytes[..])
                         {
                             let mut snapshot_data_entries = Vec::new();
                             let mut snapshot_delete_entries = Vec::new();
@@ -627,7 +645,7 @@ async fn update_table(
                                         println!("Read manifest file: {}", clean_path);
                                         let m_bytes = m_res.bytes().await.unwrap_or_default();
                                         if let Ok(m_entries) =
-                                            hyperstreamdb::core::iceberg::read_manifest(
+                                            benostreamdb::core::iceberg::read_manifest(
                                                 &m_bytes[..],
                                             )
                                         {
@@ -646,11 +664,11 @@ async fn update_table(
                                                     // Only add active files
                                                     if ie.status == 1 || ie.status == 0 {
                                                         // ADDED or EXISTING
-                                                        match hyperstreamdb::core::iceberg::convert_iceberg_to_object(&ie, s, &current_manifest.partition_spec) {
-                                                             Ok(hyperstreamdb::core::iceberg::IcebergManifestObject::Data(me)) => {
+                                                        match benostreamdb::core::iceberg::convert_iceberg_to_object(&ie, s, &current_manifest.partition_spec) {
+                                                             Ok(benostreamdb::core::iceberg::IcebergManifestObject::Data(me)) => {
                                                                  snapshot_data_entries.push(*me);
                                                              },
-                                                             Ok(hyperstreamdb::core::iceberg::IcebergManifestObject::Delete(df)) => {
+                                                             Ok(benostreamdb::core::iceberg::IcebergManifestObject::Delete(df)) => {
                                                                  snapshot_delete_entries.push(df);
                                                              },
                                                              Err(e) => {
@@ -708,7 +726,7 @@ async fn update_table(
             } => {
                 println!("Processing AddSchema...");
                 if let Ok(arrow_schema) =
-                    hyperstreamdb::core::iceberg::iceberg_json_to_arrow_schema(&schema)
+                    benostreamdb::core::iceberg::iceberg_json_to_arrow_schema(&schema)
                 {
                     let id = schema
                         .get("schema-id")
@@ -716,7 +734,7 @@ async fn update_table(
                         .map(|v| v as i32)
                         .unwrap_or(current_manifest.schemas.len() as i32 + 1);
                     let new_schema =
-                        hyperstreamdb::core::manifest::Schema::from_arrow(&arrow_schema, id);
+                        benostreamdb::core::manifest::Schema::from_arrow(&arrow_schema, id);
 
                     let mut schemas = current_manifest.schemas.clone();
                     schemas.push(new_schema);
@@ -774,7 +792,7 @@ async fn update_table(
     }
 
     // 2. Commit
-    let commit_metadata = hyperstreamdb::core::manifest::CommitMetadata {
+    let commit_metadata = benostreamdb::core::manifest::CommitMetadata {
         updated_schemas,
         updated_schema_id,
         updated_partition_specs,

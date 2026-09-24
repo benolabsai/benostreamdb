@@ -17,6 +17,13 @@ use std::sync::Arc;
 
 use super::vector_literal::VectorLiteralParser;
 
+/// The `::vector` / `::vector(1536)` cast pattern, compiled once.
+///
+/// A literal pattern cannot fail to compile; `None` exists only so this stays
+/// total (the cast is left in place) instead of unwrapping.
+static VECTOR_CAST_RE: once_cell::sync::Lazy<Option<regex::Regex>> =
+    once_cell::sync::Lazy::new(|| regex::Regex::new(r"::vector(?:\(\d+\))?").ok());
+
 /// Mapping of pgvector operators to UDF names
 const OPERATOR_MAPPINGS: &[(&str, &str)] = &[
     ("<->", "dist_l2"),
@@ -187,8 +194,9 @@ pub fn rewrite_sql_string(query: &str) -> String {
     let mut q = query.to_string();
 
     // 1. Remove ::vector, ::vector(1536), etc.
-    let re_cast = regex::Regex::new(r"::vector(?:\(\d+\))?").unwrap();
-    q = re_cast.replace_all(&q, "").to_string();
+    if let Some(re_cast) = VECTOR_CAST_RE.as_ref() {
+        q = re_cast.replace_all(&q, "").to_string();
+    }
 
     // 2. Replace distance operators: A <-> B -> dist_l2(A, B)
     // We match LHS: an identifier or function call (without nested parens)

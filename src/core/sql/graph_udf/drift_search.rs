@@ -7,7 +7,7 @@
 // The DRIFT (Dynamic Reasoning and Inference with Flexible Traversal) search
 // algorithm, including the multi-phase primer/follow-up/reduction architecture,
 // the DriftAction search tree, and the DriftQueryState traversal management,
-// has been adapted to use HyperStreamDB-native graph primitives.
+// has been adapted to use BenoStreamDB-native graph primitives.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -293,7 +293,12 @@ pub fn execute_drift_search(
         let mut newly_discovered_epoch = Vec::new();
 
         for action_id in actions_to_run {
-            let seeds = state.actions.get(&action_id).unwrap().query_seeds.clone();
+            // `action_id` came from `state.actions`, so the lookup is normally
+            // present; skip defensively if the map changed under us.
+            let seeds = match state.actions.get(&action_id) {
+                Some(action) => action.query_seeds.clone(),
+                None => continue,
+            };
 
             // Execute local search (PPR)
             let discovered = local_search_ppr(graph, &seeds, params);

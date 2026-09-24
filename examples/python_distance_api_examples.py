@@ -1,7 +1,7 @@
 """
 Python Distance API Examples
 
-This file demonstrates the usage of HyperStreamDB's Python distance API with GPU acceleration.
+This file demonstrates the usage of BenoStreamDB's Python distance API with GPU acceleration.
 It covers:
 - Single-pair distance computations
 - Batch operations for efficient similarity search
@@ -10,13 +10,13 @@ It covers:
 - GPU context management
 
 Requirements:
-- hyperstreamdb installed
+- benostreamdb installed
 - numpy
 - Optional: CUDA, ROCm, or Metal (MPS) for GPU acceleration
 """
 
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # ============================================================================
 # Example 1: Single-Pair Distance Computations
@@ -37,22 +37,22 @@ def example_single_pair_distances():
     print()
     
     # Compute various distance metrics
-    l2_dist = hdb.l2(vec_a, vec_b)
+    l2_dist = bsdb.l2(vec_a, vec_b)
     print(f"L2 (Euclidean) distance: {l2_dist:.4f}")
     
-    cosine_dist = hdb.cosine(vec_a, vec_b)
+    cosine_dist = bsdb.cosine(vec_a, vec_b)
     print(f"Cosine distance: {cosine_dist:.4f}")
     
-    inner_prod = hdb.inner_product(vec_a, vec_b)
+    inner_prod = bsdb.inner_product(vec_a, vec_b)
     print(f"Inner product: {inner_prod:.4f}")
     
-    l1_dist = hdb.l1(vec_a, vec_b)
+    l1_dist = bsdb.l1(vec_a, vec_b)
     print(f"L1 (Manhattan) distance: {l1_dist:.4f}")
     
-    hamming_dist = hdb.hamming(vec_a, vec_b)
+    hamming_dist = bsdb.hamming(vec_a, vec_b)
     print(f"Hamming distance: {hamming_dist:.4f}")
     
-    jaccard_dist = hdb.jaccard(vec_a, vec_b)
+    jaccard_dist = bsdb.jaccard(vec_a, vec_b)
     print(f"Jaccard distance: {jaccard_dist:.4f}")
     print()
 
@@ -68,23 +68,23 @@ def example_gpu_context():
     print("=" * 80)
     
     # List available backends
-    backends = hdb.ComputeContext.list_available_backends()
+    backends = bsdb.ComputeContext.list_available_backends()
     print(f"Available backends: {backends}")
     print()
     
     # Auto-detect best backend
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     print(f"Auto-detected backend: {ctx.backend}")
     print(f"Device ID: {ctx.device_id}")
     print()
     
     # Create context with specific backend (if available)
     if 'cuda' in backends:
-        cuda_ctx = hdb.ComputeContext('cuda', device_id=0)
+        cuda_ctx = bsdb.ComputeContext('cuda', device_id=0)
         print(f"Created CUDA context: {cuda_ctx}")
     
     # Force CPU computation
-    cpu_ctx = hdb.ComputeContext('cpu')
+    cpu_ctx = bsdb.ComputeContext('cpu')
     print(f"Created CPU context: {cpu_ctx}")
     print()
     
@@ -92,8 +92,8 @@ def example_gpu_context():
     vec_a = np.random.rand(128).astype(np.float32)
     vec_b = np.random.rand(128).astype(np.float32)
     
-    dist_gpu = hdb.l2(vec_a, vec_b, context=ctx)
-    dist_cpu = hdb.l2(vec_a, vec_b, context=cpu_ctx)
+    dist_gpu = bsdb.l2(vec_a, vec_b, context=ctx)
+    dist_cpu = bsdb.l2(vec_a, vec_b, context=cpu_ctx)
     
     print(f"Distance (GPU): {dist_gpu:.6f}")
     print(f"Distance (CPU): {dist_cpu:.6f}")
@@ -123,7 +123,7 @@ def example_batch_operations():
     print()
     
     # Create GPU context for acceleration
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     print(f"Using backend: {ctx.backend}")
     print()
     
@@ -131,7 +131,7 @@ def example_batch_operations():
     import time
     
     start = time.time()
-    distances = hdb.l2_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, context=ctx)
     elapsed = time.time() - start
     
     print(f"Computed {len(distances)} distances in {elapsed*1000:.2f}ms")
@@ -150,9 +150,9 @@ def example_batch_operations():
     
     # Compare different metrics
     print("Comparing different distance metrics:")
-    l2_dists = hdb.l2_batch(query, database[:100], context=ctx)
-    cosine_dists = hdb.cosine_batch(query, database[:100], context=ctx)
-    inner_prods = hdb.inner_product_batch(query, database[:100], context=ctx)
+    l2_dists = bsdb.l2_batch(query, database[:100], context=ctx)
+    cosine_dists = bsdb.cosine_batch(query, database[:100], context=ctx)
+    inner_prods = bsdb.inner_product_batch(query, database[:100], context=ctx)
     
     print(f"  L2 distances (first 5): {l2_dists[:5]}")
     print(f"  Cosine distances (first 5): {cosine_dists[:5]}")
@@ -176,12 +176,12 @@ def example_sparse_vectors():
     # Sparse vector A: non-zero at indices [0, 100, 500, 1000]
     indices_a = np.array([0, 100, 500, 1000], dtype=np.uint32)
     values_a = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
-    sparse_a = hdb.SparseVector(indices_a, values_a, dim)
+    sparse_a = bsdb.SparseVector(indices_a, values_a, dim)
     
     # Sparse vector B: non-zero at indices [0, 200, 500, 1500]
     indices_b = np.array([0, 200, 500, 1500], dtype=np.uint32)
     values_b = np.array([1.5, 1.0, 3.5, 2.0], dtype=np.float32)
-    sparse_b = hdb.SparseVector(indices_b, values_b, dim)
+    sparse_b = bsdb.SparseVector(indices_b, values_b, dim)
     
     print(f"Sparse vector A: {len(indices_a)} non-zero elements in {dim} dimensions")
     print(f"  Indices: {indices_a}")
@@ -194,9 +194,9 @@ def example_sparse_vectors():
     print()
     
     # Compute sparse distances
-    l2_sparse = hdb.l2_sparse(sparse_a, sparse_b)
-    cosine_sparse = hdb.cosine_sparse(sparse_a, sparse_b)
-    inner_prod_sparse = hdb.inner_product_sparse(sparse_a, sparse_b)
+    l2_sparse = bsdb.l2_sparse(sparse_a, sparse_b)
+    cosine_sparse = bsdb.cosine_sparse(sparse_a, sparse_b)
+    inner_prod_sparse = bsdb.inner_product_sparse(sparse_a, sparse_b)
     
     print("Sparse distance computations:")
     print(f"  L2 distance: {l2_sparse:.4f}")
@@ -208,9 +208,9 @@ def example_sparse_vectors():
     dense_a = sparse_a.to_dense()
     dense_b = sparse_b.to_dense()
     
-    l2_dense = hdb.l2(dense_a, dense_b)
-    cosine_dense = hdb.cosine(dense_a, dense_b)
-    inner_prod_dense = hdb.inner_product(dense_a, dense_b)
+    l2_dense = bsdb.l2(dense_a, dense_b)
+    cosine_dense = bsdb.cosine(dense_a, dense_b)
+    inner_prod_dense = bsdb.inner_product(dense_a, dense_b)
     
     print("Dense distance computations (for verification):")
     print(f"  L2 distance: {l2_dense:.4f}")
@@ -245,11 +245,11 @@ def example_binary_vectors():
     print()
     
     # Compute Hamming distance (count of differing bits)
-    hamming_dist = hdb.hamming_packed(binary_a, binary_b)
+    hamming_dist = bsdb.hamming_packed(binary_a, binary_b)
     print(f"Hamming distance (packed): {hamming_dist} bits")
     
     # Compute Jaccard distance
-    jaccard_dist = hdb.jaccard_packed(binary_a, binary_b)
+    jaccard_dist = bsdb.jaccard_packed(binary_a, binary_b)
     print(f"Jaccard distance (packed): {jaccard_dist:.4f}")
     print()
     
@@ -263,8 +263,8 @@ def example_binary_vectors():
     print()
     
     # These functions automatically pack the vectors
-    hamming_auto = hdb.hamming_auto(unpacked_a, unpacked_b)
-    jaccard_auto = hdb.jaccard_auto(unpacked_a, unpacked_b)
+    hamming_auto = bsdb.hamming_auto(unpacked_a, unpacked_b)
+    jaccard_auto = bsdb.jaccard_auto(unpacked_a, unpacked_b)
     
     print(f"Hamming distance (auto-packed): {hamming_auto} bits")
     print(f"Jaccard distance (auto-packed): {jaccard_auto:.4f}")
@@ -282,7 +282,7 @@ def example_performance_monitoring():
     print("=" * 80)
     
     # Create GPU context
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     print(f"Using backend: {ctx.backend}")
     print()
     
@@ -294,7 +294,7 @@ def example_performance_monitoring():
     database = np.random.rand(50000, 256).astype(np.float32)
     
     print(f"Computing distances for {len(database)} vectors...")
-    distances = hdb.l2_batch(query, database, context=ctx)
+    distances = bsdb.l2_batch(query, database, context=ctx)
     print(f"Computed {len(distances)} distances")
     print()
     
@@ -343,10 +343,10 @@ def example_semantic_search():
     print()
     
     # Use GPU acceleration for search
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     
     # Compute cosine distances (lower is more similar)
-    distances = hdb.cosine_batch(query_embedding, document_embeddings, context=ctx)
+    distances = bsdb.cosine_batch(query_embedding, document_embeddings, context=ctx)
     
     # Find top-10 most similar documents
     k = 10
@@ -368,7 +368,7 @@ def main():
     """Run all examples"""
     print("\n")
     print("*" * 80)
-    print("HyperStreamDB Python Distance API Examples")
+    print("BenoStreamDB Python Distance API Examples")
     print("*" * 80)
     print("\n")
     

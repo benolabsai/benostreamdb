@@ -4,7 +4,7 @@ use anyhow::Result;
 use arrow::array::{Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 fn create_composite_test_batch(

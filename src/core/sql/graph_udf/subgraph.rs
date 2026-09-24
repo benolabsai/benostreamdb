@@ -162,11 +162,36 @@ impl Accumulator for SubgraphAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        let sources_list = states[0].as_any().downcast_ref::<ListArray>().unwrap();
-        let targets_list = states[1].as_any().downcast_ref::<ListArray>().unwrap();
-        let seeds_list = states[2].as_any().downcast_ref::<ListArray>().unwrap();
-        let hops_arr = states[3].as_any().downcast_ref::<UInt32Array>().unwrap();
-        let dir_arr = states[4].as_any().downcast_ref::<BooleanArray>().unwrap();
+        let sources_list = states[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for sources".to_string())
+            })?;
+        let targets_list = states[1]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for targets".to_string())
+            })?;
+        let seeds_list = states[2]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for seeds".to_string())
+            })?;
+        let hops_arr = states[3]
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt32Array for hops".to_string())
+            })?;
+        let dir_arr = states[4]
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected BooleanArray for directed".to_string())
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -279,7 +304,7 @@ impl Accumulator for SubgraphAccumulator {
         ]))
         .add_child_data(struct_array.into_data())
         .build()
-        .unwrap();
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
         let list_array = arrow::array::ListArray::from(list_data);
         Ok(ScalarValue::List(Arc::new(list_array)))
@@ -289,8 +314,18 @@ impl Accumulator for SubgraphAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
+            })?;
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());
@@ -461,10 +496,30 @@ impl Accumulator for ConnectingPathsAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        let sources_list = states[0].as_any().downcast_ref::<ListArray>().unwrap();
-        let targets_list = states[1].as_any().downcast_ref::<ListArray>().unwrap();
-        let seeds_list = states[2].as_any().downcast_ref::<ListArray>().unwrap();
-        let dir_arr = states[3].as_any().downcast_ref::<BooleanArray>().unwrap();
+        let sources_list = states[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for sources".to_string())
+            })?;
+        let targets_list = states[1]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for targets".to_string())
+            })?;
+        let seeds_list = states[2]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for seeds".to_string())
+            })?;
+        let dir_arr = states[3]
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected BooleanArray for directed".to_string())
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -593,7 +648,7 @@ impl Accumulator for ConnectingPathsAccumulator {
         ]))
         .add_child_data(struct_array.into_data())
         .build()
-        .unwrap();
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
         let list_array = ListArray::from(list_data);
         Ok(ScalarValue::List(Arc::new(list_array)))
@@ -603,8 +658,18 @@ impl Accumulator for ConnectingPathsAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
+            })?;
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());

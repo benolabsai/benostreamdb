@@ -1,6 +1,6 @@
 # Configuration Guide
 
-HyperStreamDB is designed to be highly configurable through environment variables and a centralized configuration file.
+BenoStreamDB is designed to be highly configurable through environment variables and a centralized configuration file.
 
 ## Environment Variables
 
@@ -8,21 +8,21 @@ These variables control the core behavior of the system, including memory manage
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HYPERSTREAM_CACHE_GB` | Memory limit for the hybrid vector index (HNSW-IVF) in GB. | `2` |
-| `HYPERSTREAM_BLOCK_CACHE_GB` | Memory limit for the decoded RecordBatch block cache in GB. | `4` |
-| `HYPERSTREAM_DISK_CACHE_DIR` | Directory used for caching segmented index files on local disk. | `/tmp/hdb_cache` |
-| `HYPERSTREAM_WAL_DIR` | Directory for the Write-Ahead Log (WAL) used for fault tolerance. | `{table_uri}/_wal` |
-| `HYPERSTREAM_CONFIG` | Path to a centralized `hyperstream.toml` configuration file. | None |
+| `BENOSTREAM_CACHE_GB` | Memory limit for the hybrid vector index (HNSW-IVF) in GB. | `2` |
+| `BENOSTREAM_BLOCK_CACHE_GB` | Memory limit for the decoded RecordBatch block cache in GB. | `4` |
+| `BENOSTREAM_DISK_CACHE_DIR` | Directory used for caching segmented index files on local disk. | `/tmp/hdb_cache` |
+| `BENOSTREAM_WAL_DIR` | Directory for the Write-Ahead Log (WAL) used for fault tolerance. | `{table_uri}/_wal` |
+| `BENOSTREAM_CONFIG` | Path to a centralized `benostream.toml` configuration file. | None |
 | `JAEGER_ENABLED` | Enable distributed tracing via Jaeger (requires `opentelemetry` feature). | `false` |
 
-## The hyperstream.toml File
+## The benostream.toml File
 
 You can use a TOML file to manage complex configurations, especially for catalogs and multi-cloud storage.
 
-HyperStreamDB looks for this file in the following order:
-1. Environment variable `HYPERSTREAM_CONFIG`
-2. `./hyperstream.toml` (current directory)
-3. `~/.hyperstream/config.toml`
+BenoStreamDB looks for this file in the following order:
+1. Environment variable `BENOSTREAM_CONFIG`
+2. `./benostream.toml` (current directory)
+3. `~/.benostream/config.toml`
 
 ### Example Configuration
 
@@ -45,7 +45,7 @@ ref = "main"
 
 ## Storage Credentials
 
-HyperStreamDB uses the standard `object-store` crate, which automatically picks up credentials from:
+BenoStreamDB uses the standard `object-store` crate, which automatically picks up credentials from:
 - **AWS**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, or IAM Roles.
 - **GCP**: `GOOGLE_APPLICATION_CREDENTIALS` (JSON key file path).
 - **Azure**: `AZURE_STORAGE_ACCOUNT`, `AZURE_STORAGE_KEY`.
@@ -63,9 +63,9 @@ Query-level options can be set via the `QueryConfig` struct (Rust) or passed as 
 ### Python Example
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # Apply query-level limits
 results = table.sql(
@@ -78,7 +78,7 @@ results = table.sql(
 ### Rust Example
 
 ```rust
-use hyperstreamdb::{Table, QueryConfig};
+use benostreamdb::{Table, QueryConfig};
 
 let table = Table::new("s3://bucket/my-table")?;
 let config = QueryConfig::default()

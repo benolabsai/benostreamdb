@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 
 from utils import generate_openai_embeddings
 from minio_setup import setup_minio_for_benchmarks
-from hyperstreamdb import Table
+from benostreamdb import Table
 import numpy as np
 
 

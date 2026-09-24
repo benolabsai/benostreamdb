@@ -1,4 +1,4 @@
-# Clippy configuration for HyperStreamDB
+# Clippy configuration for BenoStreamDB
 # Database systems require complex types and logic; thresholds are tuned accordingly.
 
 # Maximum type complexity before clippy warns (default: 250).

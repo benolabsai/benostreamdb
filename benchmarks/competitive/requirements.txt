@@ -2,7 +2,7 @@
 numpy>=1.24.0
 pandas>=2.0.0
 
-# HyperStreamDB (local)
+# BenoStreamDB (local)
 # Install with: pip install -e ../../
 
 # Competitors (optional - install what you want to benchmark)

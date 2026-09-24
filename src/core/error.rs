@@ -1,15 +1,15 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-//! Structured error types for HyperStreamDB.
+//! Structured error types for BenoStreamDB.
 //!
-//! All public APIs return `Result<T, HyperstreamError>`. Internal implementation
+//! All public APIs return `Result<T, BenoStreamError>`. Internal implementation
 //! details may still use `anyhow::Error` for convenience, converting at module
-//! boundaries via `?` or `.map_err(HyperstreamError::from_anyhow)`.
+//! boundaries via `?` or `.map_err(BenoStreamError::from_anyhow)`.
 
 use std::fmt;
 
 #[derive(Debug)]
-pub enum HyperstreamError {
+pub enum BenoStreamError {
     /// I/O or object-store failure (S3, Azure, GCS, local fs).
     Io { source: std::io::Error },
 
@@ -178,11 +178,11 @@ pub enum HyperstreamError {
 
 // ─── Result type alias ────────────────────────────────────────────────────────
 
-pub type Result<T> = std::result::Result<T, HyperstreamError>;
+pub type Result<T> = std::result::Result<T, BenoStreamError>;
 
 // ─── Display ───────────────────────────────────────────────────────────────────
 
-impl fmt::Display for HyperstreamError {
+impl fmt::Display for BenoStreamError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io { source } => write!(f, "I/O error: {source}"),
@@ -330,7 +330,7 @@ impl fmt::Display for HyperstreamError {
     }
 }
 
-impl std::error::Error for HyperstreamError {
+impl std::error::Error for BenoStreamError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source } => Some(source),
@@ -346,31 +346,31 @@ impl std::error::Error for HyperstreamError {
 
 // ─── From conversions for common upstream types ────────────────────────────────
 
-impl From<std::io::Error> for HyperstreamError {
+impl From<std::io::Error> for BenoStreamError {
     fn from(source: std::io::Error) -> Self {
         Self::Io { source }
     }
 }
 
-impl From<object_store::Error> for HyperstreamError {
+impl From<object_store::Error> for BenoStreamError {
     fn from(source: object_store::Error) -> Self {
         Self::ObjectStore { source }
     }
 }
 
-impl From<arrow::error::ArrowError> for HyperstreamError {
+impl From<arrow::error::ArrowError> for BenoStreamError {
     fn from(source: arrow::error::ArrowError) -> Self {
         Self::Arrow { source }
     }
 }
 
-impl From<datafusion::error::DataFusionError> for HyperstreamError {
+impl From<datafusion::error::DataFusionError> for BenoStreamError {
     fn from(source: datafusion::error::DataFusionError) -> Self {
         Self::DataFusion { source }
     }
 }
 
-impl From<anyhow::Error> for HyperstreamError {
+impl From<anyhow::Error> for BenoStreamError {
     fn from(source: anyhow::Error) -> Self {
         // Note: we can't downcast and re-wrap here because the upstream error
         // types (io::Error, object_store::Error, etc.) do not implement Clone.
@@ -383,7 +383,7 @@ impl From<anyhow::Error> for HyperstreamError {
 
 // ─── Convenience constructors ─────────────────────────────────────────────────
 
-impl HyperstreamError {
+impl BenoStreamError {
     /// Wrap a generic message into an `Internal` anyhow error.
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::Internal {

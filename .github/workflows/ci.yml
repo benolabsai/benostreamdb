@@ -55,6 +55,15 @@ jobs:
       - name: Run Cargo Check
         run: cargo check --all-targets
 
+      # Binary targets are not linted reliably by clippy (it re-lints the
+      # same-package lib), but they must at least *build*: this is what catches
+      # things like a bin declaring a global allocator that conflicts with the
+      # library's.
+      - name: Check binary targets
+        run: |
+          cargo check --bins
+          cargo check -p benostreamdb-search --bin bsdb-search
+
   #########################
   # Rust unit/integration tests
   #########################
@@ -165,7 +174,7 @@ jobs:
         run: |
           pip install maturin
           maturin build --features python
-          pip install "$(ls target/wheels/hyperstreamdb-*.whl)[dev]"
+          pip install "$(ls target/wheels/benostreamdb-*.whl)[dev]"
 
       - name: Run Python Tests (pytest)
         run: |
@@ -192,3 +201,37 @@ jobs:
 
       - name: Run cargo audit
         run: cargo audit --ignore RUSTSEC-2026-0258 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0221 --ignore RUSTSEC-2026-0204
+
+  #########################
+  # No-panic ratchet for production code paths
+  #########################
+  # Fails if `unwrap()`/`expect()`/`panic!` sites in production (non-test) code
+  # grow relative to scripts/no_panic_baseline.txt. See NO_PANIC_POLICY.md.
+  no-panic:
+    name: No-Panic Ratchet
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "no-panic"
+
+      - name: Run no-panic ratchet + hard gate
+        run: bash scripts/no_panic_check.sh

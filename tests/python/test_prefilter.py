@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, './python')
-from hyperstreamdb import Table
+from benostreamdb import Table
 from sentence_transformers import SentenceTransformer
 
 def test_hybrid_search_prefilter():

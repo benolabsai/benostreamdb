@@ -1,6 +1,6 @@
 import pytest
 import numpy as np
-import hyperstreamdb as hs
+import benostreamdb as hs
 import os
 import shutil
 

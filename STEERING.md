@@ -1,7 +1,7 @@
-# HyperStreamDB Steering Guidelines
+# BenoStreamDB Steering Guidelines
 *Based on the core tenets of The Pragmatic Programmer*
 
-This file serves as the "steering" document for all development on HyperStreamDB. Every contribution, refactor, and release should align with these principles.
+This file serves as the "steering" document for all development on BenoStreamDB. Every contribution, refactor, and release should align with these principles.
 
 ## 👤 Development Identity
 - **Use the Correct Identity**: All contributions, PRs, and commits must be issued using the `rla3rd` GitHub account. This ensures consistent ownership and correct collaborator permissions across the project infrastructure.

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use arrow::array::{Date32Array, StringArray, TimestampMicrosecondArray};
-use hyperstreamdb::core::iceberg::{murmur3_32_x86, IcebergTransform};
+use benostreamdb::core::iceberg::{murmur3_32_x86, IcebergTransform};
 use serde_json::json;
 
 #[test]

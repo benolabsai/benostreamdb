@@ -1,16 +1,16 @@
 # Getting Started
 
-This guide covers two ways to use HyperStreamDB:
+This guide covers two ways to use BenoStreamDB:
 
-1. **The `hypersearch` REST server** — an OpenSearch / Elasticsearch 7.10-compatible
-   API (plus a Qdrant-compatible API) served on top of the HyperStreamDB engine.
+1. **The `bsdb-search` REST server** — an OpenSearch / Elasticsearch 7.10-compatible
+   API (plus a Qdrant-compatible API) served on top of the BenoStreamDB engine.
 2. **The Python client** — direct, in-process access to the engine via `pyo3` bindings.
 
 ---
 
-## 1. The `hypersearch` REST server
+## 1. The `bsdb-search` REST server
 
-`hypersearch` is an optional add-on crate (`hyperstreamdb-search`) that exposes an
+`bsdb-search` is an optional add-on crate (`benostreamdb-search`) that exposes an
 Elasticsearch/OpenSearch 7.10 wire-compatible REST API. It is ideal for website
 search, document catalogs, and knowledge bases where a 50–200 ms query latency
 envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
@@ -19,39 +19,39 @@ envelope is acceptable and object-storage-native, scale-to-zero hosting is desir
 
 ```bash
 # From the repository root (the workspace builds both the core and the add-on):
-cargo build --release -p hyperstreamdb-search --bin hypersearch
+cargo build --release -p benostreamdb-search --bin bsdb-search
 ```
 
-The binary is produced at `target/release/hypersearch`.
+The binary is produced at `target/release/bsdb-search`.
 
 ### Run
 
 ```bash
-# Defaults: bind 127.0.0.1:9200, store indexes under file://~/.hyperstreamdb/search
-./target/release/hypersearch
+# Defaults: bind 127.0.0.1:9200, store indexes under file://~/.benostreamdb/search
+./target/release/bsdb-search
 
 # Or with explicit configuration:
-HYPERSEARCH_BIND=0.0.0.0 \
-HYPERSEARCH_PORT=9200 \
-HYPERSEARCH_STORAGE_URI=file:///data/search \
-./target/release/hypersearch
+BENOSEARCH_BIND=0.0.0.0 \
+BENOSEARCH_PORT=9200 \
+BENOSEARCH_STORAGE_URI=file:///data/search \
+./target/release/bsdb-search
 ```
 
 ### Configuration (environment variables)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `HYPERSEARCH_STORAGE_URI` | `file://~/.hyperstreamdb/search` | Index root. Each index `<name>` is a table at `{root}/{name}`. Supports `file://`, `s3://`, `gs://`, `az://`, `http(s)://`. |
-| `HYPERSEARCH_BIND` | `127.0.0.1` | OpenSearch/ES API bind address. |
-| `HYPERSEARCH_PORT` | `9200` | OpenSearch/ES API port. |
-| `HYPERSEARCH_AUTO_REFRESH_SECS` | `0` (off) | Periodically flush every index so new docs become searchable without an explicit `_refresh`. |
-| `HYPERSEARCH_RRF_K` | `60` | Default RRF fusion constant for hybrid (BM25 + HNSW) search. Overridable per-request with `rrf_k`. |
+| `BENOSEARCH_STORAGE_URI` | `file://~/.benostreamdb/search` | Index root. Each index `<name>` is a table at `{root}/{name}`. Supports `file://`, `s3://`, `gs://`, `az://`, `http(s)://`. |
+| `BENOSEARCH_BIND` | `127.0.0.1` | OpenSearch/ES API bind address. |
+| `BENOSEARCH_PORT` | `9200` | OpenSearch/ES API port. |
+| `BENOSEARCH_AUTO_REFRESH_SECS` | `0` (off) | Periodically flush every index so new docs become searchable without an explicit `_refresh`. |
+| `BENOSEARCH_RRF_K` | `60` | Default RRF fusion constant for hybrid (BM25 + HNSW) search. Overridable per-request with `rrf_k`. |
 | `QDRANT_BIND` | `127.0.0.1` | Qdrant-compatible API bind address. |
 | `QDRANT_PORT` | `6333` | Qdrant-compatible API port. |
-| `HYPERSTREAM_CACHE_GB` | — | (inherited) read-cache size in GB. |
-| `HYPERSTREAM_WAL_SYNC_INTERVAL_MS` | — | (inherited) WAL sync interval. |
+| `BENOSTREAM_CACHE_GB` | — | (inherited) read-cache size in GB. |
+| `BENOSTREAM_WAL_SYNC_INTERVAL_MS` | — | (inherited) WAL sync interval. |
 
-> **Security note:** `hypersearch` v1 has **no authentication** and binds to
+> **Security note:** `bsdb-search` v1 has **no authentication** and binds to
 > `127.0.0.1` by default. If you expose it beyond localhost, place it behind a
 > reverse proxy with authentication (e.g. an auth-enabled gateway) and TLS.
 
@@ -63,14 +63,14 @@ curl -s localhost:9200/ | jq
 
 # Index a document (auto-creates the index on first write)
 curl -s -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
-  -d '{"title":"Hello","body":"Welcome to HyperStreamDB"}' | jq
+  -d '{"title":"Hello","body":"Welcome to BenoStreamDB"}' | jq
 
 # Make it searchable
 curl -s -X POST localhost:9200/articles/_refresh | jq
 
 # Lexical (BM25) search
 curl -s -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
-  -d '{"query":{"match":{"body":"HyperStreamDB"}}}' | jq
+  -d '{"query":{"match":{"body":"BenoStreamDB"}}}' | jq
 
 # Vector (HNSW) search
 curl -s -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
@@ -100,7 +100,7 @@ supported / unsupported matrix.
 
 ## 2. The Python client
 
-The core engine ships `pyo3` bindings so you can use HyperStreamDB in-process
+The core engine ships `pyo3` bindings so you can use BenoStreamDB in-process
 without the REST server.
 
 ### Install
@@ -115,10 +115,10 @@ cd python && pip install -e .
 ### Quickstart
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Open (or create) a table on local disk or object storage.
-table = hdb.Table("file:///tmp/my_table")
+table = bsdb.Table("file:///tmp/my_table")
 
 # Write rows (schema-on-write; columns are inferred and evolved).
 table.write([
@@ -138,15 +138,15 @@ rows = table.read(filter="body LIKE '%fox%'")
 
 ### Vector Quantization with TurboQuant (TQ8 / TQ4)
 
-HyperStreamDB includes **TurboQuant™** out-of-the-box in the free community core engine. TurboQuant uses Fast Walsh-Hadamard Transform (FWHT) followed by scalar quantization to deliver outlier-robust compression with high recall retention:
+BenoStreamDB includes **TurboQuant™** out-of-the-box in the free community core engine. TurboQuant uses Fast Walsh-Hadamard Transform (FWHT) followed by scalar quantization to deliver outlier-robust compression with high recall retention:
 
 - **TQ8 (8-bit)**: 4x RAM and disk compression with >99% recall retention. Ideal default for production RAG and semantic search.
 - **TQ4 (4-bit)**: 8x RAM and disk compression for massive datasets.
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("file:///tmp/my_rag_table")
+table = bsdb.Table("file:///tmp/my_rag_table")
 
 # High-Performance Default: HNSW with TurboQuant 8-bit (4x compression)
 table.add_index("embedding", "hnsw_tq8")
@@ -176,8 +176,8 @@ cargo test --workspace
 # Python test suite:
 pytest tests/
 
-# hypersearch REST conformance suite:
-pytest hyperstreamdb-search/tests/test_search_api.py
+# bsdb-search REST conformance suite:
+pytest benostreamdb-search/tests/test_search_api.py
 ```
 
 ---

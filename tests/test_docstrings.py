@@ -7,7 +7,7 @@ import os
 # Add the built library to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'target', 'release'))
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import inspect
 
 def check_docstring(func_name, func):
@@ -50,8 +50,8 @@ def main():
     print("-" * 80)
     all_passed = True
     for func_name in distance_functions:
-        if hasattr(hdb, func_name):
-            func = getattr(hdb, func_name)
+        if hasattr(bsdb, func_name):
+            func = getattr(bsdb, func_name)
             passed, msg = check_docstring(func_name, func)
             status = "✓" if passed else "✗"
             print(f"{status} {func_name:30s} {msg}")
@@ -65,8 +65,8 @@ def main():
     # Test ComputeContext class
     print("\nComputeContext Class:")
     print("-" * 80)
-    if hasattr(hdb, 'ComputeContext'):
-        ctx_class = hdb.ComputeContext
+    if hasattr(bsdb, 'ComputeContext'):
+        ctx_class = bsdb.ComputeContext
         
         # Check class docstring
         if ctx_class.__doc__:
@@ -95,8 +95,8 @@ def main():
     # Test SparseVector class
     print("\nSparseVector Class:")
     print("-" * 80)
-    if hasattr(hdb, 'SparseVector'):
-        sv_class = hdb.SparseVector
+    if hasattr(bsdb, 'SparseVector'):
+        sv_class = bsdb.SparseVector
         
         # Check class docstring
         if sv_class.__doc__:

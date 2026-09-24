@@ -260,7 +260,13 @@ impl MergePlanner {
                     break;
                 }
             }
-            let original_entry = original_entry.unwrap();
+            let Some(original_entry) = original_entry else {
+                tracing::warn!(
+                    "No manifest entry found for segment {}; skipping its update",
+                    seg_id
+                );
+                continue;
+            };
             let old_path = original_entry.file_path.clone();
 
             if mode == MergeMode::CopyOnWrite {
@@ -389,6 +395,11 @@ impl MergePlanner {
         Ok(commit_actions)
     }
 
+    // `Runtime::build()` has no infallible form (it fails only if the OS cannot
+    // give us a reactor), and `join()` on a thread that panicked has no way to
+    // produce a `T` other than re-panicking. Both are intentional, documented
+    // invariants; see NO_PANIC_POLICY.md.
+    #[allow(clippy::expect_used)]
     fn runtime_block_on<T: Send, F: std::future::Future<Output = T> + Send>(&self, future: F) -> T {
         // A nested `block_on` on a freshly built runtime panics with
         // "Cannot start a runtime from within a runtime" when the current

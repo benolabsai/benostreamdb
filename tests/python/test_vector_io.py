@@ -13,7 +13,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 DIM = 16
 N = 500
@@ -31,7 +31,7 @@ def table(tmp_path_factory):
         ("title", pa.large_string()),
         ("embedding", pa.list_(pa.float32(), DIM)),
     ])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
     t.write(pa.table({
         "id": pa.array(np.arange(N), pa.int64()),
         "title": pa.array([f"p{i}" for i in range(N)], pa.large_string()),

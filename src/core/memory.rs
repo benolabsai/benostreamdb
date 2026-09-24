@@ -40,8 +40,13 @@ pub fn trim_heap() -> bool {
 }
 
 /// Resident set size in bytes, if the platform exposes it.
+///
+/// This is the single RSS source for the process: the ingest back-pressure
+/// high-water mark and the heap-trim policy both read it, so they agree on what
+/// "over budget" means.
 #[cfg(target_os = "linux")]
 pub fn rss_bytes() -> Option<u64> {
+    // `VmRSS` is reported in kB, so no page-size assumption is needed.
     let status = std::fs::read_to_string("/proc/self/status").ok()?;
     for line in status.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
@@ -52,19 +57,43 @@ pub fn rss_bytes() -> Option<u64> {
     None
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS has no `/proc`; ask the Mach kernel for the task's resident size.
+#[cfg(target_os = "macos")]
+pub fn rss_bytes() -> Option<u64> {
+    unsafe {
+        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        let res = libc::task_info(
+            libc::mach_task_self(),
+            libc::MACH_TASK_BASIC_INFO,
+            &mut info as *mut _ as libc::task_info_t,
+            &mut count,
+        );
+        if res == libc::KERN_SUCCESS {
+            Some(info.resident_size)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn rss_bytes() -> Option<u64> {
     None
 }
 
 /// Default RSS budget for opportunistic trimming, in GiB.
+///
+/// Retained for callers that want a fixed budget; the derived default is
+/// [`crate::core::resources::default_memory_budget_bytes`].
 pub const DEFAULT_MEMORY_BUDGET_GB: f64 = 8.0;
 
 /// Resolve the RSS trim budget in bytes.
 ///
-/// A positive `HDB_INGEST_MEMORY_BUDGET_GB` overrides `default_gb`.
+/// A positive `BSDB_INGEST_MEMORY_BUDGET_GB` overrides `default_gb`; otherwise
+/// `default_gb` applies. The budget is always active.
 pub fn memory_budget_bytes(default_gb: f64) -> u64 {
-    let gb = std::env::var("HDB_INGEST_MEMORY_BUDGET_GB")
+    let gb = std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .filter(|g| *g > 0.0)
@@ -111,20 +140,20 @@ impl HeapTrimPolicy {
     }
 
     /// Resolve a policy from an explicit budget or the
-    /// `HDB_INGEST_MEMORY_BUDGET_GB` environment variable. Returns `None` when
-    /// neither is set (trimming disabled).
-    pub fn from_budget_or_env(budget_bytes: Option<u64>) -> Option<Self> {
+    /// `BSDB_INGEST_MEMORY_BUDGET_GB` environment variable, falling back to the
+    /// memory-derived default. Trimming is always active.
+    pub fn from_budget_or_env(budget_bytes: Option<u64>) -> Self {
         if let Some(b) = budget_bytes {
-            return Some(Self::new(b));
+            return Self::new(b);
         }
-        let gb: f64 = std::env::var("HDB_INGEST_MEMORY_BUDGET_GB")
-            .ok()?
-            .parse()
-            .ok()?;
-        if gb <= 0.0 {
-            return None;
+        if let Some(gb) = std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|g| *g > 0.0)
+        {
+            return Self::new((gb * 1024.0 * 1024.0 * 1024.0) as u64);
         }
-        Some(Self::new((gb * 1024.0 * 1024.0 * 1024.0) as u64))
+        Self::new(crate::core::resources::default_memory_budget_bytes())
     }
 
     /// Trim if RSS exceeds the budget. Returns `true` when a trim ran.
@@ -198,7 +227,17 @@ mod tests {
 
     #[test]
     fn policy_from_explicit_budget() {
-        let p = HeapTrimPolicy::from_budget_or_env(Some(1024)).expect("explicit budget");
+        let p = HeapTrimPolicy::from_budget_or_env(Some(1024));
         assert_eq!(p.budget_bytes(), 1024);
+    }
+
+    #[test]
+    fn policy_from_env_or_default_is_always_active() {
+        // No explicit budget and (in the test env) no override: the policy must
+        // still carry a positive, memory-derived budget rather than disabling.
+        if std::env::var("BSDB_INGEST_MEMORY_BUDGET_GB").is_err() {
+            let p = HeapTrimPolicy::from_budget_or_env(None);
+            assert!(p.budget_bytes() > 0);
+        }
     }
 }

@@ -134,11 +134,19 @@ impl Accumulator for StronglyConnectedComponentsAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "strongly_connected_components: expected ListArray for sources".to_string(),
+                )
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "strongly_connected_components: expected ListArray for targets".to_string(),
+                )
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {

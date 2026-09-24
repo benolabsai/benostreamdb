@@ -25,7 +25,7 @@ test_venv/
 python/**/*.so
 python/**/*.pyd
 
-# HyperStream Data
+# BenoStream Data
 *.parquet
 *.idx
 *.hnsw.graph
@@ -61,8 +61,8 @@ compliance_run.log
 benchmark_output.log
 build_output.log
 benchmarks/competitive/venv/
-trino-hyperstream/src/main/resources/libhyperstreamdb.so
-spark-hyperstream/src/main/resources/libhyperstreamdb.so
+trino-benostream/src/main/resources/libbenostreamdb.so
+spark-benostream/src/main/resources/libbenostreamdb.so
 
 # Internal markdown docs (not for public release)
 COMPETITIVE*.md
@@ -93,10 +93,10 @@ benchmarks/competitive/benchmark_results/*.md
 *.so
 *.dll
 *.exe
-python/hyperstreamdb/*.so
-python/hyperstreamdb/*.pyd
-python/hyperstreamdb/*.dylib
-python/hyperstreamdb/*.dSYM/
+python/benostreamdb/*.so
+python/benostreamdb/*.pyd
+python/benostreamdb/*.dylib
+python/benostreamdb/*.dSYM/
 groq_api_key.txt
 
 # Local Vector DBs

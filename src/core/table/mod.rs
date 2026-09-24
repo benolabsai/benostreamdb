@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-/// Core Table API - High-level interface for HyperStreamDB tables
+/// Core Table API - High-level interface for BenoStreamDB tables
 ///
 /// This module provides the main Table abstraction that encapsulates:
 /// - Query execution (with filters, vector search)
@@ -59,7 +59,7 @@ use crate::core::wal::WriteAheadLog;
 use crate::SegmentConfig;
 use arrow::datatypes::{Schema, SchemaRef};
 
-/// Main Table struct - represents a HyperStreamDB table
+/// Main Table struct - represents a BenoStreamDB table
 pub struct Table {
     pub uri: String,
     pub store: Arc<dyn ObjectStore>,
@@ -88,7 +88,7 @@ pub struct Table {
     /// budget (see [`crate::core::memory`]) and, by avoiding page-cache
     /// eviction, is usually *faster* than unbounded fan-out.
     ///
-    /// Sized by `HDB_INDEX_BUILD_CONCURRENCY` (default 2).
+    /// Sized by `BSDB_INDEX_BUILD_CONCURRENCY` (memory-scaled default).
     pub(crate) index_build_gate: Arc<tokio::sync::Semaphore>,
 
     /// Sort order to apply when writing data (Iceberg V2 spec compliance)
@@ -107,6 +107,10 @@ pub struct Table {
     pub(crate) durability: WalDurability,
     /// Maximum RAM (in GB) allowed for ingest before blocking writes
     pub(crate) max_ingest_ram_gb: Option<f64>,
+    /// Signalled when a background task releases memory (a segment index build
+    /// finished, or the ingest loop trimmed the heap), so writers blocked by
+    /// `max_ingest_ram_gb` wake immediately instead of polling RSS on a timer.
+    pub(crate) memory_reclaimed: Arc<tokio::sync::Notify>,
 }
 
 /// Durability level for WAL writes.
@@ -135,25 +139,39 @@ pub fn excel_column_label(mut index: usize) -> String {
     label.chars().rev().collect()
 }
 
+/// Bytes of working set assumed per concurrent index build.
+///
+/// Each build holds its segment's vectors plus the HNSW/IVF/quantizer
+/// structures — several GB at a 1 GB flush size. Used to scale the default
+/// concurrency to the memory actually available.
+const INDEX_BUILD_WORKING_SET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 /// Build the concurrency gate for background segment index builds.
 ///
-/// Defaults to `2` concurrent builds; override with `HDB_INDEX_BUILD_CONCURRENCY`.
-/// A value of `0` re-enables unbounded fan-out (only sensible when the segments
-/// are small enough that `nproc` of them fit in RAM).
+/// Always bounded. `BSDB_INDEX_BUILD_CONCURRENCY` overrides the default; a
+/// non-positive value is ignored. The default scales with the memory available
+/// to the process (one build per ~8 GB, capped at the CPU count, at least 1), so
+/// a 4 GB container runs one build at a time while a large host fans out.
 pub(crate) fn index_build_concurrency() -> usize {
-    let n = std::env::var("HDB_INDEX_BUILD_CONCURRENCY")
+    if let Some(n) = std::env::var("BSDB_INDEX_BUILD_CONCURRENCY")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(2);
-    if n == 0 {
-        // 0 = unbounded: only sensible when segments are small enough that
-        // `nproc` of them fit in RAM.
-        std::thread::available_parallelism()
-            .map(|p| p.get())
-            .unwrap_or(8)
-    } else {
-        n
+        .filter(|n| *n > 0)
+    {
+        return n;
     }
+    let cpus = std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(1);
+    index_build_concurrency_for(crate::core::resources::effective_memory_bytes(), cpus)
+}
+
+/// Memory-scaled build concurrency for a given memory budget and CPU count.
+///
+/// Pure so the derivation can be asserted for a specific container size.
+pub(crate) fn index_build_concurrency_for(memory_bytes: u64, cpus: usize) -> usize {
+    let by_memory = (memory_bytes / INDEX_BUILD_WORKING_SET_BYTES) as usize;
+    by_memory.clamp(1, cpus.max(1))
 }
 
 pub(crate) fn new_index_build_gate() -> Arc<tokio::sync::Semaphore> {
@@ -188,6 +206,7 @@ impl Clone for Table {
             label_pattern: self.label_pattern,
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
+            memory_reclaimed: self.memory_reclaimed.clone(),
         }
     }
 }
@@ -396,6 +415,16 @@ impl Table {
         }
     }
 
+    /// Wake writers blocked by the ingest RAM high-water mark.
+    ///
+    /// Called when a background task has released memory — a segment index build
+    /// finished, or the ingest loop trimmed the heap — so
+    /// `write_with_durability_async` re-checks RSS at once instead of waiting out
+    /// its fallback poll interval.
+    pub(crate) fn notify_memory_reclaimed(&self) {
+        self.memory_reclaimed.notify_waiters();
+    }
+
     /// Acquire a permit bounding concurrent segment index builds.
     ///
     /// The permit is released when dropped, so the caller must move it into the
@@ -405,11 +434,18 @@ impl Table {
     pub(crate) async fn acquire_index_build_permit(
         &self,
     ) -> Result<tokio::sync::OwnedSemaphorePermit> {
-        self.index_build_gate
+        let start = std::time::Instant::now();
+        let permit = self
+            .index_build_gate
             .clone()
             .acquire_owned()
             .await
-            .map_err(|e| anyhow::anyhow!("index build gate closed: {}", e))
+            .map_err(|e| anyhow::anyhow!("index build gate closed: {}", e))?;
+        // Observability: how long writers wait for a build slot. A rising value
+        // means the gate (BSDB_INDEX_BUILD_CONCURRENCY) is the throughput limit.
+        crate::telemetry::metrics::INDEX_BUILD_GATE_WAIT_SECONDS
+            .observe(start.elapsed().as_secs_f64());
+        Ok(permit)
     }
 
     #[cfg(feature = "enterprise")]
@@ -636,5 +672,32 @@ impl Table {
 
     pub fn get_max_parallel_readers(&self) -> Option<usize> {
         self.query_config.max_parallel_readers
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn four_gb_container_runs_one_build() {
+        let four_gib = 4 * 1024 * 1024 * 1024;
+        assert_eq!(index_build_concurrency_for(four_gib, 8), 1);
+        assert_eq!(index_build_concurrency_for(four_gib, 1), 1);
+    }
+
+    #[test]
+    fn concurrency_scales_with_memory_and_caps_at_cpus() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(index_build_concurrency_for(16 * gib, 32), 2);
+        assert_eq!(index_build_concurrency_for(32 * gib, 32), 4);
+        // 128 GiB / 8 GiB = 16, but only 8 CPUs -> capped at 8.
+        assert_eq!(index_build_concurrency_for(128 * gib, 8), 8);
+    }
+
+    #[test]
+    fn concurrency_is_never_zero() {
+        assert_eq!(index_build_concurrency_for(0, 0), 1);
+        assert_eq!(index_build_concurrency_for(1, 0), 1);
     }
 }

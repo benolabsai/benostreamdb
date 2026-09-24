@@ -1,5 +1,5 @@
 
-import hyperstreamdb
+import benostreamdb
 import pyarrow
 import time
 import sys
@@ -14,10 +14,10 @@ sys.stderr.reconfigure(line_buffering=True)
 URI = "file:///tmp/hdb_test_delete/default/test_delete_table"
 
 def verify_iceberg_read():
-    print(f"Connecting to HyperStreamDB Table at {URI}...")
+    print(f"Connecting to BenoStreamDB Table at {URI}...")
     try:
         # Create Table instance
-        table = hyperstreamdb.Table(URI)
+        table = benostreamdb.Table(URI)
         print("Table connected successfully.")
         
         # Read to PyArrow Table

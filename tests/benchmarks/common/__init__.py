@@ -1,4 +1,4 @@
-"""Common utilities for HyperStreamDB benchmarks."""
+"""Common utilities for BenoStreamDB benchmarks."""
 
 from .utils import (
     BenchmarkMetrics,

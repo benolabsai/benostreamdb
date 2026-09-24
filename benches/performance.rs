@@ -2,7 +2,7 @@ use arrow::array::{FixedSizeListArray, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use hyperstreamdb::{
+use benostreamdb::{
     core::{
         compaction::{CompactionOptions, Compactor},
         index::{VectorMetric, VectorValue},
@@ -60,7 +60,7 @@ fn bench_query_indexed(c: &mut Criterion) {
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
 
-    let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
+    let filter = benostreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
 
     c.bench_function("query_indexed", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
@@ -154,7 +154,7 @@ fn bench_hybrid_search(c: &mut Criterion) {
     let store = Arc::new(LocalFileSystem::new_with_prefix(base_path).unwrap());
     let reader = HybridReader::new(reader_config, store, base_path);
 
-    let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
+    let filter = benostreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
 
     group.bench_function("hybrid_filter_50_percent", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
@@ -230,7 +230,7 @@ fn bench_high_selectivity(c: &mut Criterion) {
     let store = Arc::new(LocalFileSystem::new_with_prefix(path).unwrap());
     let reader = HybridReader::new(reader_config, store, path);
 
-    let filter = hyperstreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
+    let filter = benostreamdb::core::planner::QueryFilter::parse("id > 0").unwrap();
 
     c.bench_function("read_single_row_via_index", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())

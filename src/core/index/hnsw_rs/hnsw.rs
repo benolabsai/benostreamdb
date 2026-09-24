@@ -449,7 +449,10 @@ impl<T: Clone + Send + Sync> Drop for PointIndexation<T> {
         let cpu_start = ProcessTime::now();
         let sys_now = SystemTime::now();
         log::info!("entering PointIndexation drop");
-        tracing::info!("PointIndexation drop started! max_level = {}", self.get_max_level_observed());
+        tracing::info!(
+            "PointIndexation drop started! max_level = {}",
+            self.get_max_level_observed()
+        );
         // clear_neighborhood. There are no point in neighborhoods that are not referenced directly in layers.
         // so we cannot loose reference to a point by cleaning neighborhood
         fn clear_neighborhoods<T: Clone + Send + Sync>(init: &Point<T>) {
@@ -473,7 +476,10 @@ impl<T: Clone + Send + Sync> Drop for PointIndexation<T> {
             cleared_count += layer.len();
             layer.into_par_iter().for_each(|p| clear_neighborhoods(p));
         }
-        tracing::info!("PointIndexation drop finished! Cleared {} points.", cleared_count);
+        tracing::info!(
+            "PointIndexation drop finished! Cleared {} points.",
+            cleared_count
+        );
         //
         log::trace!("dropping layers ...");
         for l in 0..=nb_level {

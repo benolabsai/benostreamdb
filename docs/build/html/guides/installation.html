@@ -3,12 +3,12 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="HyperStreamDB Comprehensive Guide" href="comprehensive_guide.html"><link rel="prev" title="Welcome to HyperStreamDB" href="../index.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="BenoStreamDB Comprehensive Guide" href="comprehensive_guide.html"><link rel="prev" title="Welcome to BenoStreamDB" href="../index.html">
         <link rel="prefetch" href="../_static/logo.png" as="image">
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Installation - HyperStreamDB 0.5.5 documentation</title>
+        <title>Installation - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -211,12 +211,12 @@
 <li class="toctree-l1"><a class="reference internal" href="#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="comprehensive_guide.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="comprehensive_guide.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="python_vector_api.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="concurrency.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -269,8 +269,8 @@
           <section id="installation">
 <h1>Installation<a class="headerlink" href="#installation" title="Link to this heading">¶</a></h1>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Install from source</span>
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/rla3rd/hyperstreamdb
-<span class="nb">cd</span><span class="w"> </span>hyperstreamdb
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/benolabsai/benostreamdb
+<span class="nb">cd</span><span class="w"> </span>benostreamdb
 
 <span class="c1"># Build Python bindings (CPU + AMD/Intel/Apple GPU backends)</span>
 pip<span class="w"> </span>install<span class="w"> </span>maturin
@@ -280,10 +280,10 @@ maturin<span class="w"> </span>develop
 maturin<span class="w"> </span>develop<span class="w"> </span>--features<span class="w"> </span>cuda
 
 <span class="c1"># Or install from PyPI (coming soon)</span>
-pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+pip<span class="w"> </span>install<span class="w"> </span>benostreamdb
 
 <span class="c1"># Windows Users</span>
-<span class="c1"># HyperStreamDB is optimized for Linux/POSIX environments.</span>
+<span class="c1"># BenoStreamDB is optimized for Linux/POSIX environments.</span>
 <span class="c1"># Windows users should use WSL2 (Windows Subsystem for Linux).</span>
 </pre></div>
 </div>
@@ -293,7 +293,7 @@ pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
 <p>For GPU-accelerated vector operations, install the appropriate backend:</p>
 <p><strong>GPU Support (NVIDIA/AMD/Intel/Apple):</strong>
 Hardware acceleration is now part of the base package.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>hyperstreamdb
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>benostreamdb
 <span class="c1"># Verify: nvidia-smi / rocm-smi / clinfo</span>
 </pre></div>
 </div>
@@ -320,7 +320,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="pgvector-sql-compatibility">
 <h1>pgvector SQL Compatibility<a class="headerlink" href="#pgvector-sql-compatibility" title="Link to this heading">¶</a></h1>
-<p>HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:</p>
+<p>BenoStreamDB provides full pgvector-compatible SQL syntax for vector operations:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Use familiar pgvector operators</span>
 <span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">content</span><span class="p">,</span><span class="w"> </span>
 <span class="w">       </span><span class="n">embedding</span><span class="w"> </span><span class="o">&lt;-&gt;</span><span class="w"> </span><span class="s1">&#39;[0.1, 0.2, 0.3]&#39;</span><span class="p">::</span><span class="n">vector</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">l2_distance</span><span class="p">,</span>
@@ -343,10 +343,10 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="basic-usage">
 <h1>Basic Usage<a class="headerlink" href="#basic-usage" title="Link to this heading">¶</a></h1>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Create table</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
 
 <span class="c1"># Write data (Pandas/PyArrow)</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
@@ -380,12 +380,12 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="fluent-query-api">
 <h1>🔄 Fluent Query API<a class="headerlink" href="#fluent-query-api" title="Link to this heading">¶</a></h1>
-<p>HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:</p>
+<p>BenoStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:</p>
 <section id="python-fluent-api">
 <h2>Python Fluent API<a class="headerlink" href="#python-fluent-api" title="Link to this heading">¶</a></h2>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/my-table&quot;</span><span class="p">)</span>
 
 <span class="c1"># Method chaining with filters</span>
 <span class="n">results</span> <span class="o">=</span> <span class="p">(</span><span class="n">table</span><span class="o">.</span><span class="n">query</span><span class="p">()</span>
@@ -419,7 +419,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <section id="rust-fluent-api">
 <h2>Rust Fluent API<a class="headerlink" href="#rust-fluent-api" title="Link to this heading">¶</a></h2>
 <p>The same fluent interface is available in native Rust:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">hyperstreamdb</span><span class="p">::{</span><span class="n">Table</span><span class="p">,</span><span class="w"> </span><span class="n">VectorValue</span><span class="p">};</span>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">use</span><span class="w"> </span><span class="n">benostreamdb</span><span class="p">::{</span><span class="n">Table</span><span class="p">,</span><span class="w"> </span><span class="n">VectorValue</span><span class="p">};</span>
 
 <span class="cp">#[tokio::main]</span>
 <span class="k">async</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">anyhow</span><span class="p">::</span><span class="nb">Result</span><span class="o">&lt;</span><span class="p">()</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
@@ -452,12 +452,12 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="python-vector-distance-api-with-gpu-acceleration">
 <h2>Python Vector Distance API with GPU Acceleration<a class="headerlink" href="#python-vector-distance-api-with-gpu-acceleration" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<p>BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 
 <span class="c1"># GPU-accelerated batch distance computation</span>
-<span class="n">ctx</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>  <span class="c1"># Auto-detect CUDA/ROCm/Metal/XPU</span>
+<span class="n">ctx</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">GPUContext</span><span class="o">.</span><span class="n">auto_detect</span><span class="p">()</span>  <span class="c1"># Auto-detect CUDA/ROCm/Metal/XPU</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using GPU backend: </span><span class="si">{</span><span class="n">ctx</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="c1"># Create query and database vectors</span>
@@ -465,7 +465,7 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="n">database</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">100000</span><span class="p">,</span> <span class="mi">768</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 
 <span class="c1"># Compute distances on GPU (10x+ faster for large databases)</span>
-<span class="n">distances</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
+<span class="n">distances</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_batch</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">database</span><span class="p">,</span> <span class="n">context</span><span class="o">=</span><span class="n">ctx</span><span class="p">)</span>
 
 <span class="c1"># Find top-k nearest neighbors</span>
 <span class="n">k</span> <span class="o">=</span> <span class="mi">10</span>
@@ -474,25 +474,25 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 <span class="c1"># Single-pair distance computation</span>
 <span class="n">vec1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">])</span>
 <span class="n">vec2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="mf">6.0</span><span class="p">])</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">cosine_distance</span><span class="p">(</span><span class="n">vec1</span><span class="p">,</span> <span class="n">vec2</span><span class="p">)</span>
 
 <span class="c1"># Sparse vector support for high-dimensional sparse data</span>
-<span class="n">sparse1</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+<span class="n">sparse1</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
     <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">0</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
     <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.5</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
     <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
 <span class="p">)</span>
-<span class="n">sparse2</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
+<span class="n">sparse2</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">SparseVector</span><span class="p">(</span>
     <span class="n">indices</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">5</span><span class="p">,</span> <span class="mi">50</span><span class="p">,</span> <span class="mi">100</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">),</span>
     <span class="n">values</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">2.0</span><span class="p">,</span> <span class="mf">1.5</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
     <span class="n">dim</span><span class="o">=</span><span class="mi">1000</span>
 <span class="p">)</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">l2_distance_sparse</span><span class="p">(</span><span class="n">sparse1</span><span class="p">,</span> <span class="n">sparse2</span><span class="p">)</span>
 
 <span class="c1"># Binary vector operations (bit-packed for efficiency)</span>
 <span class="n">binary1</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">packbits</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">))</span>
 <span class="n">binary2</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">packbits</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">128</span><span class="p">))</span>
-<span class="n">distance</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
+<span class="n">distance</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">hamming_distance_packed</span><span class="p">(</span><span class="n">binary1</span><span class="p">,</span> <span class="n">binary2</span><span class="p">)</span>
 </pre></div>
 </div>
 <p><strong>Supported GPU Backends:</strong></p>
@@ -512,14 +512,14 @@ vulkaninfo<span class="w"> </span><span class="p">|</span><span class="w"> </spa
 </section>
 <section id="sql-queries-full-datafusion-support-with-pgvector-syntax">
 <h1>SQL queries (full DataFusion support with pgvector syntax)<a class="headerlink" href="#sql-queries-full-datafusion-support-with-pgvector-syntax" title="Link to this heading">¶</a></h1>
-<p>import hyperstreamdb as hdb
-session = hdb.Session()
+<p>import benostreamdb as bsdb
+session = bsdb.Session()
 session.register(“users”, table)</p>
 </section>
 <section id="optional-enable-gpu-acceleration-for-sql-queries">
 <h1>Optional: Enable GPU acceleration for SQL queries<a class="headerlink" href="#optional-enable-gpu-acceleration-for-sql-queries" title="Link to this heading">¶</a></h1>
-<p>ctx = hdb.GPUContext.auto_detect()
-hdb.set_thread_gpu_context(ctx)</p>
+<p>ctx = bsdb.GPUContext.auto_detect()
+bsdb.set_thread_gpu_context(ctx)</p>
 </section>
 <section id="simple-sql">
 <h1>Simple SQL<a class="headerlink" href="#simple-sql" title="Link to this heading">¶</a></h1>
@@ -626,7 +626,7 @@ python<span class="w"> </span>tests/integration/test_nyc_taxi.py
 <li><p>[ ] Schema evolution support</p></li>
 <li><p>[ ] Partition evolution</p></li>
 <li><p>[ ] Cloud-agnostic distributed locking (FileBasedLock)</p></li>
-<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">hyperstream</span> <span class="pre">compact</span></code>, <code class="docutils literal notranslate"><span class="pre">vacuum</span></code>)</p></li>
+<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">benostream</span> <span class="pre">compact</span></code>, <code class="docutils literal notranslate"><span class="pre">vacuum</span></code>)</p></li>
 <li><p>[ ] Prometheus metrics</p></li>
 <li><p>[ ] Error handling &amp; retries</p></li>
 </ul>
@@ -635,7 +635,7 @@ python<span class="w"> </span>tests/integration/test_nyc_taxi.py
 <h2>🏗️ Architecture<a class="headerlink" href="#architecture" title="Link to this heading">¶</a></h2>
 <section id="overlay-indexing">
 <h3>Overlay Indexing<a class="headerlink" href="#overlay-indexing" title="Link to this heading">¶</a></h3>
-<p>HyperStreamDB stores indexes as <strong>sidecar files</strong> alongside Parquet data:</p>
+<p>BenoStreamDB stores indexes as <strong>sidecar files</strong> alongside Parquet data:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>s3://bucket/table/
 ├── data/
 │   ├── segment_001.parquet                   # Main Data (Parquet)
@@ -687,13 +687,13 @@ python<span class="w"> </span>tests/integration/test_nyc_taxi.py
 <h3>Spark<a class="headerlink" href="#spark" title="Link to this heading">¶</a></h3>
 <div class="highlight-scala notranslate"><div class="highlight"><pre><span></span><span class="c1">// Read</span>
 <span class="kd">val</span><span class="w"> </span><span class="n">df</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">spark</span><span class="p">.</span><span class="n">read</span>
-<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;benostream&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">load</span><span class="p">()</span>
 
 <span class="c1">// Write</span>
 <span class="n">df</span><span class="p">.</span><span class="n">write</span>
-<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;hyperstream&quot;</span><span class="p">)</span>
+<span class="w">  </span><span class="p">.</span><span class="n">format</span><span class="p">(</span><span class="s">&quot;benostream&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">option</span><span class="p">(</span><span class="s">&quot;path&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;s3://bucket/table&quot;</span><span class="p">)</span>
 <span class="w">  </span><span class="p">.</span><span class="n">save</span><span class="p">()</span>
 </pre></div>
@@ -701,7 +701,7 @@ python<span class="w"> </span>tests/integration/test_nyc_taxi.py
 </section>
 <section id="trino">
 <h3>Trino<a class="headerlink" href="#trino" title="Link to this heading">¶</a></h3>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">hyperstream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">my_table</span>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">benostream</span><span class="p">.</span><span class="k">default</span><span class="p">.</span><span class="n">my_table</span>
 <span class="k">WHERE</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">100</span><span class="p">;</span><span class="w">  </span><span class="c1">-- Uses scalar index</span>
 </pre></div>
 </div>
@@ -709,9 +709,9 @@ python<span class="w"> </span>tests/integration/test_nyc_taxi.py
 <section id="python-direct">
 <h3>Python (Direct)<a class="headerlink" href="#python-direct" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># No Spark needed for local/notebook work</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
-<span class="n">df</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">query</span><span class="p">()</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
-<span class="c1"># Or using traditional API: df = hdb.Table(&quot;s3://bucket/table&quot;).to_pandas()</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">query</span><span class="p">()</span><span class="o">.</span><span class="n">execute</span><span class="p">()</span>
+<span class="c1"># Or using traditional API: df = bsdb.Table(&quot;s3://bucket/table&quot;).to_pandas()</span>
 </pre></div>
 </div>
 </section>
@@ -769,7 +769,7 @@ pytest<span class="w"> </span>tests/
 </section>
 <section id="project-structure">
 <h3>Project Structure<a class="headerlink" href="#project-structure" title="Link to this heading">¶</a></h3>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>hyperstreamdb/
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>benostreamdb/
 ├── src/
 │   ├── lib.rs              # Main library
 │   ├── segment.rs          # Hybrid segment writer
@@ -779,8 +779,8 @@ pytest<span class="w"> </span>tests/
 │   ├── maintenance.rs      # Vacuum/GC
 │   ├── python_binding.rs   # PyO3 bindings
 │   └── storage.rs          # Multi-cloud storage
-├── spark-hyperstream/      # Spark connector (Java)
-├── trino-hyperstream/      # Trino connector (Java)
+├── spark-benostream/      # Spark connector (Java)
+├── trino-benostream/      # Trino connector (Java)
 ├── tests/
 │   ├── data/               # Test datasets
 │   ├── integration/        # Integration tests
@@ -827,7 +827,7 @@ pytest<span class="w"> </span>tests/
 <h3>📋 Planned<a class="headerlink" href="#planned" title="Link to this heading">¶</a></h3>
 <ul class="simple">
 <li><p>[ ] Cloud-agnostic distributed locking (FileBasedLock)</p></li>
-<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">hyperstream</span> <span class="pre">admin</span></code>)</p></li>
+<li><p>[ ] CLI tools (<code class="docutils literal notranslate"><span class="pre">benostream</span> <span class="pre">admin</span></code>)</p></li>
 <li><p>[ ] Prometheus metrics</p></li>
 <li><p>[ ] <strong>REST Gateway</strong> (OpenAPI for JS/Frontend RAG integration)</p></li>
 </ul>
@@ -841,7 +841,7 @@ pytest<span class="w"> </span>tests/
 <h2>📄 License<a class="headerlink" href="#license" title="Link to this heading">¶</a></h2>
 <p>The Python wrapper is licensed under the <strong>MIT License</strong>.
 The underlying Rust engine and core database logic is licensed under the <strong>Apache License 2.0</strong>.</p>
-<p>This project contains modified source code from various upstream open-source projects (including <code class="docutils literal notranslate"><span class="pre">hnsw_rs</span></code> for pre-filtering support), which were originally licensed under Apache 2.0. HyperStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.</p>
+<p>This project contains modified source code from various upstream open-source projects (including <code class="docutils literal notranslate"><span class="pre">hnsw_rs</span></code> for pre-filtering support), which were originally licensed under Apache 2.0. BenoStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.</p>
 </section>
 <section id="acknowledgments">
 <h2>🙏 Acknowledgments<a class="headerlink" href="#acknowledgments" title="Link to this heading">¶</a></h2>
@@ -865,7 +865,7 @@ The underlying Rust engine and core database logic is licensed under the <strong
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">HyperStreamDB Comprehensive Guide</div>
+                <div class="title">BenoStreamDB Comprehensive Guide</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -884,7 +884,7 @@ The underlying Rust engine and core database logic is licensed under the <strong
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -893,7 +893,7 @@ The underlying Rust engine and core database logic is licensed under the <strong
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>

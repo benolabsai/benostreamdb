@@ -1,5 +1,5 @@
 """
-Hybrid query benchmarks - HyperStreamDB's unique capability.
+Hybrid query benchmarks - BenoStreamDB's unique capability.
 
 These queries combine scalar filters with vector search,
 which is impossible in Iceberg/Delta and inefficient in Pinecone/Qdrant.
@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 
 from utils import BenchmarkMetrics, generate_openai_embeddings, save_results
 from minio_setup import setup_minio_for_benchmarks
-from hyperstreamdb import Table
+from benostreamdb import Table
 import tempfile
 import shutil
 import numpy as np
@@ -47,7 +47,7 @@ class TestHybridQueryBenchmarks:
         
         Iceberg/Delta: NOT POSSIBLE (no vector support)
         Pinecone/Qdrant: INEFFICIENT (post-filter: search all → filter)
-        HyperStreamDB: EFFICIENT (pre-filter: filter → search subset)
+        BenoStreamDB: EFFICIENT (pre-filter: filter → search subset)
         
         Expected: 10-100x faster than post-filtering approach.
         """
@@ -102,7 +102,7 @@ class TestHybridQueryBenchmarks:
         metrics.print_summary()
         stats = metrics.get_stats()
         
-        print(f"\n✓ HyperStreamDB (pre-filter): p99 = {stats['latency_p99_ms']:.2f}ms")
+        print(f"\n✓ BenoStreamDB (pre-filter): p99 = {stats['latency_p99_ms']:.2f}ms")
         print(f"✓ Pinecone/Qdrant (post-filter): Would search all {n_vectors:,} vectors")
         print(f"✓ Iceberg/Delta: NOT POSSIBLE (no vector support)")
         print(f"✓ Pre-filter reduces search space by ~80%")
@@ -172,7 +172,7 @@ class TestHybridQueryBenchmarks:
         """
         Benchmark: Direct comparison of post-filter vs pre-filter.
         
-        Simulates what Pinecone/Qdrant do (post-filter) vs HyperStreamDB (pre-filter).
+        Simulates what Pinecone/Qdrant do (post-filter) vs BenoStreamDB (pre-filter).
         """
         print("\n" + "="*60)
         print("BENCHMARK: Post-Filter vs Pre-Filter Comparison")
@@ -191,8 +191,8 @@ class TestHybridQueryBenchmarks:
         table.write_arrow(data)
         table.checkpoint()
         
-        # Test 1: Pre-filter (HyperStreamDB way)
-        print("\n--- Pre-Filter Approach (HyperStreamDB) ---")
+        # Test 1: Pre-filter (BenoStreamDB way)
+        print("\n--- Pre-Filter Approach (BenoStreamDB) ---")
         pre_filter_metrics = BenchmarkMetrics("pre_filter")
         
         for _ in range(5):
@@ -226,7 +226,7 @@ class TestHybridQueryBenchmarks:
         print(f"\n{'='*60}")
         print(f"COMPARISON RESULTS")
         print(f"{'='*60}")
-        print(f"Pre-filter (HyperStreamDB):  {pre_stats['latency_mean_ms']:.2f}ms")
+        print(f"Pre-filter (BenoStreamDB):  {pre_stats['latency_mean_ms']:.2f}ms")
         print(f"Post-filter (Pinecone/Qdrant): {post_stats['latency_mean_ms']:.2f}ms")
         print(f"Speedup: {speedup:.1f}x faster")
         print(f"{'='*60}\n")

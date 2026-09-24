@@ -4,8 +4,8 @@ use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
 use futures::StreamExt;
-use hyperstreamdb::core::manifest::{PartitionField, PartitionSpec};
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::manifest::{PartitionField, PartitionSpec};
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
 
     // 4. Verify Physical Layout (Partitioned Directories)
     // Should see "id_bucket=N/" folders in data directory?
-    // HyperStreamDB currently writes files into `data/` but encodes partition in path?
+    // BenoStreamDB currently writes files into `data/` but encodes partition in path?
     // Or uses Hive-style partitioning structure?
     // Checking implementation... Reader uses `partition_values` from manifest.
     // Writer... let's check if it respects partition paths.

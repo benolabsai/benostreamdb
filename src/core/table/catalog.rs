@@ -28,8 +28,8 @@ impl Table {
         let client = crate::core::catalog::nessie::NessieClient::new(nessie_config.uri.clone());
         let metadata = client.load_table(namespace, table).await?;
 
-        // We use a local path for the HyperStreamDB artifacts for this external table
-        let local_uri = format!("file:///tmp/hyperstream_nessie_{}_{}", namespace, table);
+        // We use a local path for the BenoStreamDB artifacts for this external table
+        let local_uri = format!("file:///tmp/benostream_nessie_{}_{}", namespace, table);
 
         tracing::info!(
             "Resolved Nessie table {} to metadata: {}",
@@ -55,7 +55,7 @@ impl Table {
         let metadata = client.load_table(namespace, table).await?;
 
         // Use local path for artifacts
-        let local_uri = format!("file:///tmp/hyperstream_glue_{}_{}", namespace, table);
+        let local_uri = format!("file:///tmp/benostream_glue_{}_{}", namespace, table);
         tracing::info!(
             "Resolved Glue table {}.{} to metadata: {}",
             namespace,
@@ -77,7 +77,7 @@ impl Table {
         let client = crate::core::catalog::hive::HiveMetastoreClient::new(address.to_string())?;
         let metadata = client.load_table(namespace, table).await?;
 
-        let local_uri = format!("file:///tmp/hyperstream_hive_{}_{}", namespace, table);
+        let local_uri = format!("file:///tmp/benostream_hive_{}_{}", namespace, table);
         tracing::info!(
             "Resolved Hive table {}.{} to metadata: {}",
             namespace,
@@ -156,7 +156,7 @@ impl Table {
         let iceberg_meta: crate::core::iceberg::IcebergTableMetadata =
             serde_json::from_slice(&bytes)?;
 
-        // 2. Map Iceberg Schema to HyperStreamDB Schema
+        // 2. Map Iceberg Schema to BenoStreamDB Schema
         let current_schema_json = iceberg_meta
             .schemas
             .iter()
@@ -175,7 +175,7 @@ impl Table {
             serde_json::from_value(current_schema_json.clone())?;
         let schema_ref: SchemaRef = Arc::new(hdb_schema.to_arrow());
 
-        // 3. Initialize HyperStream Table
+        // 3. Initialize BenoStream Table
         let mut table = Self::create_async(uri.clone(), schema_ref.clone()).await?;
 
         // Root data_store carefully: if file, root at / to support absolute paths in manifests.
@@ -259,9 +259,9 @@ impl Table {
         let metadata = client.load_table(&namespace, &table_name).await?;
 
         // Derive local native URI (Cache location for layered index)
-        let cache_dir = std::env::var("HYPERSTREAM_CACHE_DIR")
+        let cache_dir = std::env::var("BENOSTREAM_CACHE_DIR")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir().join("hyperstream_cache"));
+            .unwrap_or_else(|_| std::env::temp_dir().join("benostream_cache"));
 
         if !cache_dir.exists() {
             let _ = std::fs::create_dir_all(&cache_dir);
@@ -294,7 +294,7 @@ impl Table {
             Ok(table)
         } else {
             tracing::debug!(
-                "Checking if warehouse location is a HyperStreamDB table: {}",
+                "Checking if warehouse location is a BenoStreamDB table: {}",
                 metadata.location
             );
 
@@ -306,7 +306,7 @@ impl Table {
                     if let Ok((_, warehouse_version)) = warehouse_manager.load_latest().await {
                         if warehouse_version > 0 {
                             tracing::info!(
-                                "✅ Opening existing HyperStreamDB table from REST catalog: {}",
+                                "✅ Opening existing BenoStreamDB table from REST catalog: {}",
                                 metadata.location
                             );
                             let mut table = TableBuilder::new(metadata.location)
@@ -319,7 +319,7 @@ impl Table {
                             return Ok(table);
                         } else {
                             tracing::info!(
-                                "✅ Creating new HyperStreamDB table at warehouse location: {}",
+                                "✅ Creating new BenoStreamDB table at warehouse location: {}",
                                 metadata.location
                             );
                             let current_schema = metadata
@@ -531,7 +531,7 @@ impl Table {
                 .partition_specs
                 .iter()
                 .find(|s| s["spec-id"].as_i64().map(|id| id as i32) == Some(meta.default_spec_id))
-                .and_then(|s| crate::core::iceberg::iceberg_partition_spec_to_hyperstream(s).ok())
+                .and_then(|s| crate::core::iceberg::iceberg_partition_spec_to_benostream(s).ok())
                 .unwrap_or_default();
 
             let mut data_entries = Vec::new();

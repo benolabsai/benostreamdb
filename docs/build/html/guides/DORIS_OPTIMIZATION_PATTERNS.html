@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Apache Doris Optimization Patterns for HyperStreamDB - HyperStreamDB 0.5.5 documentation</title>
+        <title>Apache Doris Optimization Patterns for BenoStreamDB - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -208,12 +208,12 @@
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="INSTALLATION.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="COMPREHENSIVE_GUIDE.html">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="PYTHON_VECTOR_API.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="GPU_SETUP_GUIDE.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONFIGURATION.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="CONCURRENCY.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -263,11 +263,11 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="apache-doris-optimization-patterns-for-hyperstreamdb">
-<h1>Apache Doris Optimization Patterns for HyperStreamDB<a class="headerlink" href="#apache-doris-optimization-patterns-for-hyperstreamdb" title="Link to this heading">¶</a></h1>
+          <section id="apache-doris-optimization-patterns-for-benostreamdb">
+<h1>Apache Doris Optimization Patterns for BenoStreamDB<a class="headerlink" href="#apache-doris-optimization-patterns-for-benostreamdb" title="Link to this heading">¶</a></h1>
 <section id="executive-summary">
 <h2>Executive Summary<a class="headerlink" href="#executive-summary" title="Link to this heading">¶</a></h2>
-<p>This document extracts key optimization patterns from Apache Doris (OLAP database) that can enhance HyperStreamDB’s query execution, indexing strategy, and data ingestion pipeline. These are architectural lessons, not direct code copies.</p>
+<p>This document extracts key optimization patterns from Apache Doris (OLAP database) that can enhance BenoStreamDB’s query execution, indexing strategy, and data ingestion pipeline. These are architectural lessons, not direct code copies.</p>
 </section>
 <hr class="docutils" />
 <section id="vectorized-execution-model">
@@ -288,8 +288,8 @@
 <li><p>Minimal branch mispredictions with predictable data patterns</p></li>
 </ul>
 </section>
-<section id="hyperstreamdb-application">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#hyperstreamdb-application" title="Link to this heading">¶</a></h3>
+<section id="benostreamdb-application">
+<h3>BenoStreamDB Application:<a class="headerlink" href="#benostreamdb-application" title="Link to this heading">¶</a></h3>
 <p><strong>Current State:</strong> Your segment-based approach is already block-oriented</p>
 <p><strong>Enhancement Opportunities:</strong></p>
 <ol class="arabic">
@@ -352,7 +352,7 @@
 </ul>
 </section>
 <section id="id1">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h3>
 <ol class="arabic">
 <li><p><strong>Column-Aware Compression Decision</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">CodecChoice</span><span class="w"> </span><span class="p">{</span>
@@ -411,7 +411,7 @@
 </ul>
 </section>
 <section id="id2">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h3>
 <ol class="arabic">
 <li><p><strong>Segment-Level Zone Maps</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">SegmentStats</span><span class="w"> </span><span class="p">{</span>
@@ -488,7 +488,7 @@
 </ul>
 </section>
 <section id="id3">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
 <ol class="arabic">
 <li><p><strong>Write Path Enhancement</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">WriteBuffer</span><span class="w"> </span><span class="p">{</span>
@@ -565,7 +565,7 @@
 </div>
 </section>
 <section id="id4">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
 <ol class="arabic">
 <li><p><strong>Segment Metadata Index</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">GlobalSegmentIndex</span><span class="w"> </span><span class="p">{</span>
@@ -647,7 +647,7 @@
 <p><strong>Benefit:</strong> Fast write path + Eventual fast read path (no tradeoff)</p>
 </section>
 <section id="id5">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
 <ol class="arabic">
 <li><p><strong>Deferred HNSW Building</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">IndexState</span><span class="w"> </span><span class="p">{</span>
@@ -721,7 +721,7 @@
 <p><strong>Space Savings:</strong> 50-70% vs naive list storage</p>
 </section>
 <section id="id6">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Instead of: vec![1, 5, 12, 23, 45, 98, 156...]</span>
 <span class="c1">// Store as:  block[0] = [1, 4, 7, 11, 22, 53, 58]  (deltas)</span>
 
@@ -763,7 +763,7 @@
 <p><strong>Decision:</strong> Made during segment flush, stored in metadata</p>
 </section>
 <section id="id7">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">fn</span><span class="w"> </span><span class="nf">choose_string_encoding</span><span class="p">(</span>
 <span class="w">    </span><span class="n">column</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="nb">String</span><span class="p">],</span>
 <span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">StringEncoding</span><span class="w"> </span><span class="p">{</span>
@@ -805,7 +805,7 @@
 </ul>
 </section>
 <section id="id8">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
 <p>Already using Parquet’s null handling, but can optimize:</p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Instead of nullable&lt;T&gt;, use explicit null bitmap for vectors</span>
 <span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">NullableColumn</span><span class="w"> </span><span class="p">{</span>
@@ -832,7 +832,7 @@
 </ul>
 </section>
 <section id="id9">
-<h3>HyperStreamDB Application:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<h3>BenoStreamDB Application:<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
 <p><strong>For RAG workloads (repeated queries on same knowledge base):</strong></p>
 <div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">pub</span><span class="w"> </span><span class="k">struct</span><span class="w"> </span><span class="nc">QueryCache</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">cache</span><span class="p">:</span><span class="w"> </span><span class="nc">HashMap</span><span class="o">&lt;</span><span class="n">QueryKey</span><span class="p">,</span><span class="w"> </span><span class="n">CachedResult</span><span class="o">&gt;</span><span class="p">,</span>
@@ -876,8 +876,8 @@
 </section>
 </section>
 <hr class="docutils" />
-<section id="implementation-priority-for-hyperstreamdb">
-<h2>Implementation Priority for HyperStreamDB<a class="headerlink" href="#implementation-priority-for-hyperstreamdb" title="Link to this heading">¶</a></h2>
+<section id="implementation-priority-for-benostreamdb">
+<h2>Implementation Priority for BenoStreamDB<a class="headerlink" href="#implementation-priority-for-benostreamdb" title="Link to this heading">¶</a></h2>
 <section id="phase-1-immediate-high-roi">
 <h3>Phase 1 (Immediate - High ROI)<a class="headerlink" href="#phase-1-immediate-high-roi" title="Link to this heading">¶</a></h3>
 <ol class="arabic simple">
@@ -915,7 +915,7 @@ https://github.com/apache/doris</p>
 <li><p>Deferred index construction (Doris Background Task)</p></li>
 <li><p>Cardinality-aware encoding (Doris Segment Writer)</p></li>
 </ul>
-<p>These are <strong>architectural patterns and algorithms</strong>, not code copies. Implementations are written from scratch to fit HyperStreamDB’s architecture.</p>
+<p>These are <strong>architectural patterns and algorithms</strong>, not code copies. Implementations are written from scratch to fit BenoStreamDB’s architecture.</p>
 </section>
 </section>
 
@@ -930,7 +930,7 @@ https://github.com/apache/doris</p>
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -939,7 +939,7 @@ https://github.com/apache/doris</p>
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>
@@ -963,59 +963,59 @@ https://github.com/apache/doris</p>
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Apache Doris Optimization Patterns for HyperStreamDB</a><ul>
+<li><a class="reference internal" href="#">Apache Doris Optimization Patterns for BenoStreamDB</a><ul>
 <li><a class="reference internal" href="#executive-summary">Executive Summary</a></li>
 <li><a class="reference internal" href="#vectorized-execution-model">1. Vectorized Execution Model</a><ul>
 <li><a class="reference internal" href="#doris-pattern-block-based-execution">Doris Pattern: Block-Based Execution</a></li>
-<li><a class="reference internal" href="#hyperstreamdb-application">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#benostreamdb-application">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#columnar-compression-with-adaptive-codec-selection">2. Columnar Compression with Adaptive Codec Selection</a><ul>
 <li><a class="reference internal" href="#doris-pattern-automatic-codec-selection">Doris Pattern: Automatic Codec Selection</a></li>
-<li><a class="reference internal" href="#id1">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id1">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#column-statistics-for-query-optimization">3. Column Statistics for Query Optimization</a><ul>
 <li><a class="reference internal" href="#doris-pattern-zone-maps-bloom-filters">Doris Pattern: Zone Maps + Bloom Filters</a></li>
-<li><a class="reference internal" href="#id2">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id2">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#write-ahead-logging-for-atomic-commits">4. Write-Ahead Logging for Atomic Commits</a><ul>
 <li><a class="reference internal" href="#doris-pattern-memtable-write-ahead-log-wal">Doris Pattern: Memtable + Write-Ahead Log (WAL)</a></li>
-<li><a class="reference internal" href="#id3">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id3">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#segment-pruning-and-multi-level-indexing">5. Segment Pruning and Multi-Level Indexing</a><ul>
 <li><a class="reference internal" href="#doris-pattern-hierarchical-index-structure">Doris Pattern: Hierarchical Index Structure</a></li>
-<li><a class="reference internal" href="#id4">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id4">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#adaptive-index-building">6. Adaptive Index Building</a><ul>
 <li><a class="reference internal" href="#doris-pattern-deferred-index-construction">Doris Pattern: Deferred Index Construction</a></li>
-<li><a class="reference internal" href="#id5">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id5">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#memory-efficient-inverted-index-with-delta-compression">7. Memory-Efficient Inverted Index with Delta Compression</a><ul>
 <li><a class="reference internal" href="#doris-pattern-block-based-inverted-index">Doris Pattern: Block-Based Inverted Index</a></li>
-<li><a class="reference internal" href="#id6">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id6">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#cardinality-aware-dictionary-encoding">8. Cardinality-Aware Dictionary Encoding</a><ul>
 <li><a class="reference internal" href="#doris-pattern-adaptive-dictionary-selection">Doris Pattern: Adaptive Dictionary Selection</a></li>
-<li><a class="reference internal" href="#id7">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id7">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#efficient-null-handling">9. Efficient Null Handling</a><ul>
 <li><a class="reference internal" href="#doris-pattern-null-bitmap-with-rle">Doris Pattern: Null Bitmap with RLE</a></li>
-<li><a class="reference internal" href="#id8">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id8">BenoStreamDB Application:</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#query-cache-with-segment-versioning">10. Query Cache with Segment Versioning</a><ul>
 <li><a class="reference internal" href="#doris-pattern-query-result-cache">Doris Pattern: Query Result Cache</a></li>
-<li><a class="reference internal" href="#id9">HyperStreamDB Application:</a></li>
+<li><a class="reference internal" href="#id9">BenoStreamDB Application:</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#implementation-priority-for-hyperstreamdb">Implementation Priority for HyperStreamDB</a><ul>
+<li><a class="reference internal" href="#implementation-priority-for-benostreamdb">Implementation Priority for BenoStreamDB</a><ul>
 <li><a class="reference internal" href="#phase-1-immediate-high-roi">Phase 1 (Immediate - High ROI)</a></li>
 <li><a class="reference internal" href="#phase-2-medium-term">Phase 2 (Medium-term)</a></li>
 <li><a class="reference internal" href="#phase-3-long-term">Phase 3 (Long-term)</a></li>

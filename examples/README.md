@@ -1,4 +1,4 @@
-# HyperStreamDB examples
+# BenoStreamDB examples
 
 Everything that demonstrates the engine, in one tree (the old top-level
 `demo/` directory was merged in here).

@@ -1,6 +1,6 @@
-# HyperStreamDB Search Background Services
+# BenoStreamDB Search Background Services
 
-This directory contains configuration files and an installer script to run `hyperstream-search` natively in the background, allowing it to start automatically on system boot.
+This directory contains configuration files and an installer script to run `benostream-search` natively in the background, allowing it to start automatically on system boot.
 
 Running natively provides the best performance and enables direct GPU (CUDA/wgpu) access without needing to configure complex Docker GPU passthrough.
 
@@ -10,20 +10,20 @@ By default, the Qdrant-compatible REST API is exposed on `http://localhost:6333`
 
 ### Method 1: Using the Python CLI (Recommended)
 
-If you have installed the `hyperstreamdb` Python package via PyPI, you can install and configure the background service directly from the terminal:
+If you have installed the `benostreamdb` Python package via PyPI, you can install and configure the background service directly from the terminal:
 
 ```bash
-sudo hyperstreamdb install-service
+sudo benostreamdb install-service
 ```
-This automatically detects your OS and installs the required `systemd` or `launchd` configuration files. (Note: you must have the `hyperstream-search` binary built or installed at `/usr/local/bin/hyperstream-search`, or pass `--binary-path`).
+This automatically detects your OS and installs the required `systemd` or `launchd` configuration files. (Note: you must have the `benostream-search` binary built or installed at `/usr/local/bin/benostream-search`, or pass `--binary-path`).
 
 ### Method 2: Using the Shell Scripts
 
 If you are building from source and prefer not to use the Python CLI:
 
-Ensure you have built the `hyperstream-search` binary first:
+Ensure you have built the `benostream-search` binary first:
 ```bash
-cargo build --release -p hyperstreamdb-search
+cargo build --release -p benostreamdb-search
 ```
 
 Then run the installer:
@@ -37,37 +37,37 @@ The script will automatically detect your OS, install the binary to `/usr/local/
 
 The background service uses a centralized configuration file where you can adjust environment variables (such as enabling GPU, changing ports, or configuring storage).
 
-- **Linux**: Edit `/etc/hyperstreamdb/hyperstream-search.conf`
-- **macOS**: Edit `/usr/local/etc/hyperstreamdb/hyperstream-search.conf`
+- **Linux**: Edit `/etc/benostreamdb/benostream-search.conf`
+- **macOS**: Edit `/usr/local/etc/benostreamdb/benostream-search.conf`
 
 After changing the configuration file, you must restart the service:
 
 - **Linux**:
   ```bash
-  sudo systemctl restart hyperstream-search.service
+  sudo systemctl restart benostream-search.service
   ```
 - **macOS**:
   ```bash
-  sudo launchctl unload -w /Library/LaunchDaemons/com.hyperstreamdb.search.plist
-  sudo launchctl load -w /Library/LaunchDaemons/com.hyperstreamdb.search.plist
+  sudo launchctl unload -w /Library/LaunchDaemons/com.benostreamdb.search.plist
+  sudo launchctl load -w /Library/LaunchDaemons/com.benostreamdb.search.plist
   ```
 
 ## Viewing Logs
 
 - **Linux**:
   ```bash
-  sudo journalctl -u hyperstream-search.service -f
+  sudo journalctl -u benostream-search.service -f
   ```
 - **macOS**:
   ```bash
-  tail -f /tmp/hyperstream-search.log
+  tail -f /tmp/benostream-search.log
   ```
 
 ## Uninstallation
 
 To completely remove the service, configuration, and binary, you can use the Python CLI:
 ```bash
-sudo hyperstreamdb uninstall-service
+sudo benostreamdb uninstall-service
 ```
 
 Or you can use the included script:

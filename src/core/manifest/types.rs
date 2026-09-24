@@ -14,7 +14,7 @@ pub struct IndexFile {
     pub file_path: String,
     pub index_type: String, // e.g. "scalar", "vector", "bloom"
     pub column_name: Option<String>,
-    /// HyperStream Extension: Puffin blob details if this is a Puffin file
+    /// BenoStream Extension: Puffin blob details if this is a Puffin file
     #[serde(default)]
     pub blob_type: Option<String>,
     #[serde(default)]
@@ -156,12 +156,12 @@ pub struct ManifestEntry {
     pub file_path: String,
     pub file_size_bytes: i64,
     pub record_count: i64,
-    /// HyperStream Extension: File checksum (e.g. SHA256) for data integrity verification
+    /// BenoStream Extension: File checksum (e.g. SHA256) for data integrity verification
     #[serde(default)]
     pub file_checksum: Option<String>,
-    /// HyperStream Extension: Sidecar Index Files
+    /// BenoStream Extension: Sidecar Index Files
     pub index_files: Vec<IndexFile>,
-    /// HyperStream Extension: Merge-on-Read Delete Files (Iceberg v2 compliant)
+    /// BenoStream Extension: Merge-on-Read Delete Files (Iceberg v2 compliant)
     #[serde(default)]
     pub delete_files: Vec<DeleteFile>,
     /// Column Statistics for Pruning (Min/Max/Nulls)
@@ -170,7 +170,7 @@ pub struct ManifestEntry {
     /// Partition values for this file
     #[serde(default)]
     pub partition_values: HashMap<String, Value>,
-    /// HyperStream Extension: Clustering metadata for advanced pruning
+    /// BenoStream Extension: Clustering metadata for advanced pruning
     #[serde(default)]
     pub clustering_strategy: Option<String>,
     #[serde(default)]
@@ -238,44 +238,38 @@ impl ManifestValue {
 
         use arrow::datatypes::DataType;
         match array.data_type() {
-            DataType::Utf8 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::StringArray>()
-                    .unwrap();
-                ManifestValue::String(arr.value(i).to_string())
-            }
+            // Arrow guarantees the array variant matches `data_type()`, so the
+            // downcasts below cannot fail in practice; `map(..).unwrap_or(Null)`
+            // keeps this decode path total (a violated invariant degrades to
+            // Null instead of panicking a commit/read).
+            DataType::Utf8 => array
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .map(|arr| ManifestValue::String(arr.value(i).to_string()))
+                .unwrap_or(ManifestValue::Null),
             // `large_string` is the default for PyArrow string columns; without
             // this arm partition values silently became Null.
-            DataType::LargeUtf8 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::LargeStringArray>()
-                    .unwrap();
-                ManifestValue::String(arr.value(i).to_string())
-            }
-            DataType::Utf8View => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::StringViewArray>()
-                    .unwrap();
-                ManifestValue::String(arr.value(i).to_string())
-            }
+            DataType::LargeUtf8 => array
+                .as_any()
+                .downcast_ref::<arrow::array::LargeStringArray>()
+                .map(|arr| ManifestValue::String(arr.value(i).to_string()))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Utf8View => array
+                .as_any()
+                .downcast_ref::<arrow::array::StringViewArray>()
+                .map(|arr| ManifestValue::String(arr.value(i).to_string()))
+                .unwrap_or(ManifestValue::Null),
             // Date/time types feed the year/month/day/hour transforms.
-            DataType::Date32 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Date32Array>()
-                    .unwrap();
-                ManifestValue::Int32(arr.value(i))
-            }
-            DataType::Date64 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Date64Array>()
-                    .unwrap();
-                ManifestValue::Int64(arr.value(i))
-            }
+            DataType::Date32 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Date32Array>()
+                .map(|arr| ManifestValue::Int32(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Date64 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Date64Array>()
+                .map(|arr| ManifestValue::Int64(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
             DataType::Timestamp(_, _) => {
                 let arr = array
                     .as_any()
@@ -304,41 +298,31 @@ impl ManifestValue {
                     None => ManifestValue::Null,
                 }
             }
-            DataType::Int32 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Int32Array>()
-                    .unwrap();
-                ManifestValue::Int32(arr.value(i))
-            }
-            DataType::Int64 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Int64Array>()
-                    .unwrap();
-                ManifestValue::Int64(arr.value(i))
-            }
-            DataType::Float32 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Float32Array>()
-                    .unwrap();
-                ManifestValue::Float32(arr.value(i))
-            }
-            DataType::Float64 => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::Float64Array>()
-                    .unwrap();
-                ManifestValue::Float64(arr.value(i))
-            }
-            DataType::Boolean => {
-                let arr = array
-                    .as_any()
-                    .downcast_ref::<arrow::array::BooleanArray>()
-                    .unwrap();
-                ManifestValue::Boolean(arr.value(i))
-            }
+            DataType::Int32 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Int32Array>()
+                .map(|arr| ManifestValue::Int32(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Int64 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .map(|arr| ManifestValue::Int64(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Float32 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Float32Array>()
+                .map(|arr| ManifestValue::Float32(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Float64 => array
+                .as_any()
+                .downcast_ref::<arrow::array::Float64Array>()
+                .map(|arr| ManifestValue::Float64(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
+            DataType::Boolean => array
+                .as_any()
+                .downcast_ref::<arrow::array::BooleanArray>()
+                .map(|arr| ManifestValue::Boolean(arr.value(i)))
+                .unwrap_or(ManifestValue::Null),
             _ => ManifestValue::Null, // Unsupported complex types for equality/stats
         }
     }
@@ -349,13 +333,13 @@ impl From<Value> for ManifestValue {
         match val {
             Value::String(s) => ManifestValue::String(s),
             Value::Number(n) => {
-                if n.is_i64() {
-                    ManifestValue::Int64(n.as_i64().unwrap())
-                } else if n.is_f64() {
-                    ManifestValue::Float64(n.as_f64().unwrap())
+                if let Some(i) = n.as_i64() {
+                    ManifestValue::Int64(i)
+                } else if let Some(f) = n.as_f64() {
+                    ManifestValue::Float64(f)
                 } else {
                     // Fallback, treated as f64 or 0 if nan/inf (json doesn't have nan)
-                    ManifestValue::Float64(n.as_f64().unwrap_or(0.0))
+                    ManifestValue::Float64(0.0)
                 }
             }
             Value::Bool(b) => ManifestValue::Boolean(b),
@@ -373,7 +357,7 @@ pub struct ColumnStats {
     /// Number of distinct values (NDV) - Iceberg V2 spec field
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distinct_count: Option<i64>,
-    /// HyperStream Extension: Vector-specific statistics
+    /// BenoStream Extension: Vector-specific statistics
     #[serde(default)]
     pub vector_stats: Option<VectorStats>,
 }
@@ -383,7 +367,7 @@ pub struct VectorStats {
     pub min_norm: f32,
     pub max_norm: f32,
     pub mean_norm: f32,
-    /// HyperStream Extension: Per-dimension ranges for advanced pruning
+    /// BenoStream Extension: Per-dimension ranges for advanced pruning
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dim_min: Option<Vec<f32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -619,7 +603,7 @@ pub struct SchemaField {
     /// Iceberg V3: Default value for new rows when this column is null
     #[serde(skip_serializing_if = "Option::is_none")]
     pub write_default: Option<Value>,
-    /// HyperStream Extension: Multiple indexing algorithms for this column
+    /// BenoStream Extension: Multiple indexing algorithms for this column
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub indexes: Vec<IndexAlgorithm>,
 }

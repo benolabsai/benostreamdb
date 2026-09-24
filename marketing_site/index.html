@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HyperStreamDB | GPU-Accelerated Hybrid Vector Database for the Lakehouse</title>
-    <meta name="description" content="HyperStreamDB is the high-performance Rust vector database engine featuring GPU-accelerated SIMD kernels, native Iceberg integration, and smart hybrid query optimization.">
+    <title>BenoStreamDB | GPU-Accelerated Hybrid Vector Database for the Lakehouse</title>
+    <meta name="description" content="BenoStreamDB is the high-performance Rust vector database engine featuring GPU-accelerated SIMD kernels, native Iceberg integration, and smart hybrid query optimization.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -26,7 +26,7 @@
                         </defs>
                     </svg>
                 </div>
-                <span class="logo-text">HyperStream<span>DB</span></span>
+                <span class="logo-text">BenoStream<span>DB</span></span>
             </a>
             <nav class="nav">
                 <a href="#features" class="nav-link">Features</a>
@@ -49,7 +49,7 @@
                 <div class="badge">v0.7.0 Now Available</div>
                 <h1 class="hero-title">The Speed of In-Memory.<br><span class="gradient-text">The Scale of the Lakehouse.</span></h1>
                 <p class="hero-subtitle">
-                    HyperStreamDB is a ultra-fast, Rust-native hybrid vector database built directly for Iceberg tables. 
+                    BenoStreamDB is a ultra-fast, Rust-native hybrid vector database built directly for Iceberg tables. 
                     Harness GPU-accelerated SIMD kernels and intelligent query optimization to build real-time AI search at petabyte scale.
                 </p>
                 <div class="hero-actions-group">
@@ -81,10 +81,10 @@
                             <span class="dot yellow"></span>
                             <span class="dot green"></span>
                         </div>
-                        <div class="terminal-title">hyperstreamdb.rs</div>
+                        <div class="terminal-title">benostreamdb.rs</div>
                     </div>
                     <div class="terminal-body">
-                        <pre><code><span class="keyword">use</span> hyperstreamdb::{Database, Query, Metric};
+                        <pre><code><span class="keyword">use</span> benostreamdb::{Database, Query, Metric};
 
 <span class="comment">// 1. Connect to Iceberg catalog directly</span>
 <span class="keyword">let</span> db = Database::connect(<span class="string">"thrift://localhost:9083"</span>).<span class="keyword">await</span>?;
@@ -165,7 +165,7 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
                     </div>
                     <h3 class="feature-title">75% Storage Cost Savings</h3>
                     <p class="feature-description">
-                        By avoiding proprietary schemas and using parquet-backed column-optimized storage, HyperStreamDB drops vector DB operations costs to an absolute fraction of alternatives.
+                        By avoiding proprietary schemas and using parquet-backed column-optimized storage, BenoStreamDB drops vector DB operations costs to an absolute fraction of alternatives.
                     </p>
                 </div>
             </div>
@@ -197,7 +197,7 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
                             </div>
                         </div>
                         <div class="chart-row active">
-                            <span class="bar-name">HyperStreamDB (CUDA)</span>
+                            <span class="bar-name">BenoStreamDB (CUDA)</span>
                             <div class="bar-wrapper">
                                 <div class="bar bar-hs" style="width: 8%;">0.95ms</div>
                             </div>
@@ -221,7 +221,7 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
                             </div>
                         </div>
                         <div class="chart-row active">
-                            <span class="bar-name">HyperStreamDB (Lakehouse)</span>
+                            <span class="bar-name">BenoStreamDB (Lakehouse)</span>
                             <div class="bar-wrapper">
                                 <div class="bar bar-hs" style="width: 15%;">$280</div>
                             </div>
@@ -237,7 +237,7 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
         <div class="container">
             <div class="section-header">
                 <h2 class="section-title">Zero-Copy Architecture</h2>
-                <p class="section-subtitle">How HyperStreamDB embeds into your data lakehouse without duplicating data.</p>
+                <p class="section-subtitle">How BenoStreamDB embeds into your data lakehouse without duplicating data.</p>
             </div>
             
             <div class="arch-visual-container">
@@ -257,7 +257,7 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
                     <div class="node-icon">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
                     </div>
-                    <h4>2. HyperStream Optimizer</h4>
+                    <h4>2. BenoStream Optimizer</h4>
                     <p>Performs limit pushdowns, predicate evaluation, metadata caching, and row-group skipping.</p>
                 </div>
                 <div class="arch-arrow">
@@ -318,13 +318,13 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
         <div class="container contact-container">
             <div class="contact-info">
                 <h3>Ready to accelerate your lakehouse?</h3>
-                <p>Speak to an engineer today to learn how HyperStreamDB can integrate into your existing Spark, Trino, and Iceberg pipelines.</p>
+                <p>Speak to an engineer today to learn how BenoStreamDB can integrate into your existing Spark, Trino, and Iceberg pipelines.</p>
                 <div class="contact-details">
                     <div class="detail-item">
-                        <strong>Email:</strong> sales@hyperstreamdb.com
+                        <strong>Email:</strong> sales@benostreamdb.org
                     </div>
                     <div class="detail-item">
-                        <strong>Enterprise Licensing:</strong> compliance@hyperstreamdb.com
+                        <strong>Enterprise Licensing:</strong> compliance@benostreamdb.org
                     </div>
                 </div>
             </div>
@@ -350,14 +350,14 @@ println!(<span class="string">"Query completed in: {:?}"</span>, results.latency
     <footer class="footer">
         <div class="container footer-container">
             <div class="footer-left">
-                <span class="logo-text">HyperStream<span>DB</span></span>
-                <p class="copyright">&copy; 2026 HyperStreamDB. Dual-licensed under Apache 2.0 and MIT.</p>
+                <span class="logo-text">BenoStream<span>DB</span></span>
+                <p class="copyright">&copy; 2026 BenoStreamDB. Dual-licensed under Apache 2.0 and MIT.</p>
             </div>
             <div class="footer-links">
                 <a href="#features">Features</a>
                 <a href="#benchmarks">Benchmarks</a>
                 <a href="#architecture">Architecture</a>
-                <a href="https://github.com/hyperstreamdb/hyperstream" target="_blank">GitHub</a>
+                <a href="https://github.com/benolabsai/benostreamdb" target="_blank">GitHub</a>
             </div>
         </div>
     </footer>

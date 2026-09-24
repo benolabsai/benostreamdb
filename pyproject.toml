@@ -3,14 +3,14 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "hyperstreamdb"
-version = "0.9.1"
-description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
+name = "benostreamdb"
+version = "0.10.0"
+description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT AND Apache-2.0" }
 authors = [
-    { name = "HyperStream Team" }
+    { name = "Beno Labs Artificial Intelligence LLC" }
 ]
 keywords = ["database", "vector", "search", "indexing", "parquet", "iceberg"]
 classifiers = [
@@ -54,17 +54,17 @@ all_gpu = []
 src = ["maturin>=1.7"]
 
 [project.urls]
-Homepage = "https://github.com/rla3rd/hyperstreamdb"
-Repository = "https://github.com/rla3rd/hyperstreamdb"
+Homepage = "https://github.com/benolabsai/benostreamdb"
+Repository = "https://github.com/benolabsai/benostreamdb"
 
 [project.scripts]
-hyperstreamdb = "hyperstreamdb.cli:main"
+bsdb = "benostreamdb.cli:main"
 
 
 [tool.maturin]
 features = ["python"]
 # Build both the Rust library and Python bindings (multi-version compatible)
-module-name = "hyperstreamdb.hyperstreamdb"
+module-name = "benostreamdb.benostreamdb"
 python-source = "python"
 # Build both the Rust library and Python bindings
 bindings = "pyo3"

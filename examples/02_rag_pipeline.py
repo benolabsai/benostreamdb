@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 import os
@@ -23,7 +23,7 @@ except ImportError:
     pass
 
 def run_rag_demo():
-    print("=== HyperStreamDB RAG Pipeline Demo ===")
+    print("=== BenoStreamDB RAG Pipeline Demo ===")
     
     db_path = "rag_db"
     if os.path.exists(db_path):
@@ -51,8 +51,8 @@ def run_rag_demo():
     embeddings = model.encode(unique_contexts_df["context"].tolist(), show_progress_bar=True)
     unique_contexts_df["embedding"] = [list(e) for e in embeddings]
 
-    print(f"Ingesting {len(unique_contexts_df)} entries into HyperStreamDB...")
-    table = hdb.Table(db_path, explain=True, device=ctx)
+    print(f"Ingesting {len(unique_contexts_df)} entries into BenoStreamDB...")
+    table = bsdb.Table(db_path, explain=True, device=ctx)
     table.add_index_columns(["embedding", "context"])
     table.write(unique_contexts_df[["context", "title", "embedding"]])
     print("Committing table (flushes data and builds vector indexes)...")

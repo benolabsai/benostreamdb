@@ -2,11 +2,11 @@ import os
 import getpass
 import pandas as pd
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 from datasets import load_dataset
 from huggingface_hub import InferenceClient
 
-# RAG Demo: HyperStreamDB + Hugging Face
+# RAG Demo: BenoStreamDB + Hugging Face
 # ------------------------------------
 
 # 1. Setup API Token
@@ -17,7 +17,7 @@ if "HF_TOKEN" not in os.environ:
 # We use this for both generating embeddings and asking questions
 client = InferenceClient(token=os.environ["HF_TOKEN"])
 
-print("\n--- HYPERSTREAMDB RAG DEMO ---")
+print("\n--- BENOSTREAMDB RAG DEMO ---")
 
 # 3. Define Inference Functions
 def get_embeddings(texts):
@@ -54,9 +54,9 @@ print(f"\nIngesting {len(df)} knowledge base articles...")
 embeddings = get_embeddings(df["context"].tolist())
 df["embedding"] = [np.array(e).astype(np.float32) for e in embeddings]
 
-# Setup HyperStreamDB Table
+# Setup BenoStreamDB Table
 table_uri = "./rag_hf_db"
-table = hdb.Table(table_uri)
+table = bsdb.Table(table_uri)
 table.add_index_columns(["embedding"])  # Enable semantic graph indexing
 table.write_pandas(df)
 table.commit()  # Finalize the initial manifest
@@ -69,11 +69,11 @@ def run_query(question):
     
     # Retrieval
     q_emb = np.array(get_embeddings([question])[0]).astype(np.float32)
-    # HyperStreamDB search handles the vector indexing + scalar filtering automatically
+    # BenoStreamDB search handles the vector indexing + scalar filtering automatically
     results = table.to_pandas(vector_filter={"column": "embedding", "query": q_emb, "k": 3})
     
     contexts = results["context"].tolist()
-    print(f"Retrieved {len(contexts)} contexts from HyperStreamDB.")
+    print(f"Retrieved {len(contexts)} contexts from BenoStreamDB.")
     
     # Generation
     print("Generating answer via Mistral...")

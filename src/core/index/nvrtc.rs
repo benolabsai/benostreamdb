@@ -16,7 +16,7 @@
 //! prefix, no hardcoded version list.
 //!
 //! Search order (the highest version across all directories wins):
-//! 1. `HDB_NVRTC_PATH` (explicit file or directory)
+//! 1. `BSDB_NVRTC_PATH` (explicit file or directory)
 //! 2. the Python `site-packages` reported at module init (pip wheels)
 //! 3. `CUDA_HOME` / `CUDA_PATH` / `CUDA_ROOT` (`lib64`, `lib`, `targets/.../lib`)
 //! 4. `VIRTUAL_ENV` / `CONDA_PREFIX` / `~/.local` / `/usr` / `/usr/local` wheels
@@ -161,7 +161,7 @@ fn candidate_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
 
     // 1. Explicit override (file or directory).
-    if let Some(p) = std::env::var_os("HDB_NVRTC_PATH") {
+    if let Some(p) = std::env::var_os("BSDB_NVRTC_PATH") {
         let p = PathBuf::from(p);
         if p.is_dir() {
             dirs.push(p);
@@ -329,7 +329,7 @@ pub fn compile_ptx(src: &str) -> Result<String> {
     let path = resolve_nvrtc().ok_or_else(|| {
         anyhow!(
             "libnvrtc not found. Install a CUDA toolkit or the `nvidia-cuda-nvrtc-cuXX` \
-             wheel, or set HDB_NVRTC_PATH to the library."
+             wheel, or set BSDB_NVRTC_PATH to the library."
         )
     })?;
     compile_ptx_with_path(src, &path)
@@ -367,7 +367,7 @@ pub fn compile_ptx_with_path(src: &str, path: &Path) -> Result<String> {
             .context("nvrtcDestroyProgram symbol")?;
 
         let src_c = CString::new(src).context("CUDA source contains a NUL byte")?;
-        let name_c = CString::new("kernel.cu").unwrap();
+        let name_c = CString::new("kernel.cu").context("kernel name contains a NUL byte")?;
 
         let mut prog: NvrtcProgram = std::ptr::null_mut();
         let rc = create(

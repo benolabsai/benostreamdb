@@ -1,6 +1,6 @@
 # Table Format Benchmarks
 
-Benchmarks comparing HyperStreamDB against Iceberg/Delta Lake for filtered queries.
+Benchmarks comparing BenoStreamDB against Iceberg/Delta Lake for filtered queries.
 
 ## Dataset
 
@@ -14,14 +14,14 @@ Benchmarks comparing HyperStreamDB against Iceberg/Delta Lake for filtered queri
 ### 1. Point Lookup
 **Query**: `SELECT * WHERE l_orderkey = X`
 
-**HyperStreamDB**: <10ms (index lookup)  
+**BenoStreamDB**: <10ms (index lookup)  
 **Iceberg**: 10-60s (full scan)  
 **Speedup**: **1000x faster**
 
 ### 2. High Selectivity Filter
 **Query**: `SELECT * WHERE l_suppkey = X` (0.01% of data)
 
-**HyperStreamDB**: <100ms (index)  
+**BenoStreamDB**: <100ms (index)  
 **Iceberg**: 5-30s (scan)  
 **Speedup**: **100x faster**
 
@@ -47,7 +47,7 @@ pytest tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmar
 
 ## Expected Results
 
-| Query Type | HyperStreamDB | Iceberg | Speedup |
+| Query Type | BenoStreamDB | Iceberg | Speedup |
 |------------|---------------|---------|---------|
 | Point lookup | <10ms | 10-60s | **1000x** |
 | High selectivity | <100ms | 5-30s | **100x** |
@@ -61,14 +61,14 @@ pytest tests/benchmarks/table_format/test_vs_iceberg.py::TestTableFormatBenchmar
 3. **Full scans**: Similar performance (no index helps)
 4. **Cost**: Same S3 storage cost as Iceberg
 
-## Why HyperStreamDB is Faster
+## Why BenoStreamDB is Faster
 
 **Iceberg/Delta**:
 - Rely on min/max statistics (row group pruning)
 - Must scan entire files to find matching rows
 - O(n) complexity for selective queries
 
-**HyperStreamDB**:
+**BenoStreamDB**:
 - Row-level inverted indexes (exact pruning)
 - Direct lookup of matching row IDs
 - O(log n) complexity for indexed queries

@@ -1,7 +1,7 @@
-# Apache Doris Optimization Patterns for HyperStreamDB
+# Apache Doris Optimization Patterns for BenoStreamDB
 
 ## Executive Summary
-This document extracts key optimization patterns from Apache Doris (OLAP database) that can enhance HyperStreamDB's query execution, indexing strategy, and data ingestion pipeline. These are architectural lessons, not direct code copies.
+This document extracts key optimization patterns from Apache Doris (OLAP database) that can enhance BenoStreamDB's query execution, indexing strategy, and data ingestion pipeline. These are architectural lessons, not direct code copies.
 
 ---
 
@@ -19,7 +19,7 @@ This document extracts key optimization patterns from Apache Doris (OLAP databas
 - L1/L2 cache hit rate >95% with proper block sizing
 - Minimal branch mispredictions with predictable data patterns
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 **Current State:** Your segment-based approach is already block-oriented
 
 **Enhancement Opportunities:**
@@ -74,7 +74,7 @@ This document extracts key optimization patterns from Apache Doris (OLAP databas
 - String columns: 2-4x compression (dictionary + RLE)
 - Sparse columns: 50-100x compression (RLE)
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 1. **Column-Aware Compression Decision**
    ```rust
@@ -125,7 +125,7 @@ This document extracts key optimization patterns from Apache Doris (OLAP databas
 - False positive rate: 1-5%
 - Found useful for sparse predicates
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 1. **Segment-Level Zone Maps**
    ```rust
@@ -196,7 +196,7 @@ This document extracts key optimization patterns from Apache Doris (OLAP databas
 - Can guarantee ACID semantics
 - Point-in-time recovery possible
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 1. **Write Path Enhancement**
    ```rust
@@ -269,7 +269,7 @@ Query: WHERE title = 'NFL' AND score > 0.8
 3. Block phase: Skip blocks within segment
 ```
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 1. **Segment Metadata Index**
    ```rust
@@ -347,7 +347,7 @@ Query: WHERE title = 'NFL' AND score > 0.8
 
 **Benefit:** Fast write path + Eventual fast read path (no tradeoff)
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 1. **Deferred HNSW Building**
    ```rust
@@ -417,7 +417,7 @@ Query: WHERE title = 'NFL' AND score > 0.8
 
 **Space Savings:** 50-70% vs naive list storage
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 ```rust
 // Instead of: vec![1, 5, 12, 23, 45, 98, 156...]
@@ -458,7 +458,7 @@ pub fn decode_range(&self, start: u32, end: u32) -> Vec<u32> {
 
 **Decision:** Made during segment flush, stored in metadata
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 ```rust
 pub fn choose_string_encoding(
@@ -498,7 +498,7 @@ pub fn choose_string_encoding(
 - Compress null bitmap with RLE (many consecutive non-nulls)
 - Reduces space from 1 byte to ~1 bit per null
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 Already using Parquet's null handling, but can optimize:
 
@@ -524,7 +524,7 @@ pub struct NullableColumn {
 - When segments change: invalidate cache entries
 - Useful for repeated RAG queries
 
-### HyperStreamDB Application:
+### BenoStreamDB Application:
 
 **For RAG workloads (repeated queries on same knowledge base):**
 
@@ -570,7 +570,7 @@ pub fn invalidate_on_segment_update(&mut self, seg_id: SegmentId) {
 
 ---
 
-## Implementation Priority for HyperStreamDB
+## Implementation Priority for BenoStreamDB
 
 ### Phase 1 (Immediate - High ROI)
 1. ✅ Column statistics (zone maps) - Easy, high payoff
@@ -600,5 +600,5 @@ Specific optimizations adapted:
 - Deferred index construction (Doris Background Task)
 - Cardinality-aware encoding (Doris Segment Writer)
 
-These are **architectural patterns and algorithms**, not code copies. Implementations are written from scratch to fit HyperStreamDB's architecture.
+These are **architectural patterns and algorithms**, not code copies. Implementations are written from scratch to fit BenoStreamDB's architecture.
 

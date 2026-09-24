@@ -1,14 +1,14 @@
 # Architecture
 
-HyperStreamDB is a **Universal Vector & Metadata Streaming** storage engine. It bridges the gap between streaming data management and high-dimensional vector indexing by providing an "Overlay Index" on top of standard file formats (Parquet).
+BenoStreamDB is a **Universal Vector & Metadata Streaming** storage engine. It bridges the gap between streaming data management and high-dimensional vector indexing by providing an "Overlay Index" on top of standard file formats (Parquet).
 
 ## Core Philosophy
 
 **"Your Data is Standard. Your Index is Custom."**
 
-HyperStreamDB adds a sophisticated sidecar index (Roaring + HNSW) *on top* of standard files.
+BenoStreamDB adds a sophisticated sidecar index (Roaring + HNSW) *on top* of standard files.
 *   **Compatibility**: You can still read your data with standard tools (Spark, Presto, Pandas) at normal speed.
-*   **Performance**: HyperStreamDB-aware readers get **O(log n)** lookup speed using inverted and vector indexes.
+*   **Performance**: BenoStreamDB-aware readers get **O(log n)** lookup speed using inverted and vector indexes.
 
 ## Storage Layout: The "Hybrid Segment"
 
@@ -16,7 +16,7 @@ Data is written in immutable **Segments**. Each segment is a self-contained unit
 
 ### Ingestion Pipeline: Delayed Indexing
 
-HyperStreamDB uses a **non-blocking ingestion architecture** similar to modern vector databases like LanceDB to achieve maximum throughput:
+BenoStreamDB uses a **non-blocking ingestion architecture** similar to modern vector databases like LanceDB to achieve maximum throughput:
 - **Instant Flush**: Incoming data is written directly to high-performance Parquet files for immediate durability.
 - **Background Indexing**: High-dimensional vector indexes (HNSW-IVF) are built asynchronously in the background using a parallelized worker pool (Rayon + Parallel PQ) that scales to all available CPU cores.
 - **Atomic Patching**: Once background builds complete, the segment manifest is atomically patched to register the new indexes without stopping active writes.
@@ -30,7 +30,7 @@ HyperStreamDB uses a **non-blocking ingestion architecture** similar to modern v
 
 ## The Streaming Read Path
 
-HyperStreamDB enables "Pre-Filtered Vector Search" by combining scalar pruning with vector search.
+BenoStreamDB enables "Pre-Filtered Vector Search" by combining scalar pruning with vector search.
 
 1.  **Scalar Pruning**: The reader loads the inverted index for the filtered column (e.g., `category`) and identifies relevant rows using efficient bitmap operations.
 2.  **Restricted Vector Search**:
@@ -46,4 +46,4 @@ HyperStreamDB enables "Pre-Filtered Vector Search" by combining scalar pruning w
 
 ## "Serverless Index-Streaming"
 
-HyperStreamDB enables the **Client** to become the database engine. By streaming lightweight, aligned indexes first, a stateless client can perform complex, indexed queries over massive datasets directly from S3, paying **zero** compute cost when idle.
+BenoStreamDB enables the **Client** to become the database engine. By streaming lightweight, aligned indexes first, a stateless client can perform complex, indexed queries over massive datasets directly from S3, paying **zero** compute cost when idle.

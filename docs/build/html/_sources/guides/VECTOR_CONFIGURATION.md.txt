@@ -1,6 +1,6 @@
 # Vector Search Configuration Guide
 
-This guide covers configuration parameters for tuning vector search performance in HyperStreamDB.
+This guide covers configuration parameters for tuning vector search performance in BenoStreamDB.
 
 ## Configuration Parameters
 
@@ -29,9 +29,9 @@ LIMIT 10;
 
 **Python API**:
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-session = hdb.Session()
+session = bsdb.Session()
 session.set_config("hnsw.ef_search", 128)
 
 results = session.sql("""
@@ -166,10 +166,10 @@ SET ivf.probes = 20;
 ### Measuring Recall
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
-session = hdb.Session()
+session = bsdb.Session()
 
 # Ground truth (sequential scan)
 session.set_config("vector.use_index", False)
@@ -237,9 +237,9 @@ LIMIT 10;
 Index build parameters are set during index creation using the fluent `add_index` method:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # TurboQuant 8-bit quantization (Recommended Default)
 # 4x compression, near-lossless accuracy

@@ -1288,13 +1288,13 @@ impl PyTable {
 
                 // Register table as 't'
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/hyperstream_cc");
+                let temp_dir = std::path::Path::new("/tmp/benostream_cc");
                 let final_table =
                     crate::core::algorithms::connected_components::compute_connected_components(
                         &ctx,
@@ -1332,13 +1332,13 @@ impl PyTable {
                 let ctx = SessionContext::new();
 
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/hyperstream_ts");
+                let temp_dir = std::path::Path::new("/tmp/benostream_ts");
                 let final_table =
                     crate::core::algorithms::topological_sort::compute_topological_sort(
                         &ctx,
@@ -1376,7 +1376,7 @@ impl PyTable {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
@@ -1430,7 +1430,7 @@ impl PyTable {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
@@ -1533,13 +1533,13 @@ impl PyTable {
 
                 // Register table as 't'
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/hyperstream_lp");
+                let temp_dir = std::path::Path::new("/tmp/benostream_lp");
                 let final_table =
                     crate::core::algorithms::label_propagation::compute_label_propagation(
                         &ctx,
@@ -1713,7 +1713,7 @@ impl PyTable {
 
                 let ctx = SessionContext::new();
                 let provider =
-                    std::sync::Arc::new(crate::core::sql::HyperStreamTableProvider::new(
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                         std::sync::Arc::new(self.table.clone()),
                     ));
                 ctx.register_table("t", provider)
@@ -1732,7 +1732,7 @@ impl PyTable {
                         .column(0)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
-                        .unwrap();
+                        .ok_or_else(|| "expected UInt64Array for graph nodes".to_string())?;
                     for i in 0..array.len() {
                         if !array.is_null(i) {
                             let node = array.value(i);
@@ -1752,12 +1752,12 @@ impl PyTable {
                         .column(0)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
-                        .unwrap();
+                        .ok_or_else(|| "expected UInt64Array for graph sources".to_string())?;
                     let tgt_array = batch
                         .column(1)
                         .as_any()
                         .downcast_ref::<UInt64Array>()
-                        .unwrap();
+                        .ok_or_else(|| "expected UInt64Array for graph targets".to_string())?;
                     for i in 0..src_array.len() {
                         if !src_array.is_null(i) && !tgt_array.is_null(i) {
                             let src = src_array.value(i);
@@ -1890,11 +1890,19 @@ impl PyTable {
                 let sources = sources_casted
                     .as_any()
                     .downcast_ref::<arrow::array::UInt64Array>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "graph build: expected UInt64Array for sources",
+                        )
+                    })?;
                 let targets = targets_casted
                     .as_any()
                     .downcast_ref::<arrow::array::UInt64Array>()
-                    .unwrap();
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "graph build: expected UInt64Array for targets",
+                        )
+                    })?;
 
                 for i in 0..batch.num_rows() {
                     if sources.is_valid(i) && targets.is_valid(i) {
@@ -2318,7 +2326,7 @@ impl PyTable {
             let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
 
             // Register table as 't' (short alias, safe from keywords)
-            let provider = Arc::new(crate::core::sql::HyperStreamTableProvider::new(Arc::new(
+            let provider = Arc::new(crate::core::sql::BenoStreamTableProvider::new(Arc::new(
                 self.table.clone(),
             )));
             ctx.register_table("t", provider)

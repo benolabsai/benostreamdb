@@ -1,6 +1,6 @@
 import pyarrow as pa
 import pytest
-from hyperstreamdb import Table
+from benostreamdb import Table
 
 @pytest.fixture
 def rag_knowledge_graph(tmpdir):

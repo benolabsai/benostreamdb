@@ -1,11 +1,11 @@
 """
-HyperStreamDB pgvector SQL Examples - Python API
+BenoStreamDB pgvector SQL Examples - Python API
 
 This file demonstrates how to use pgvector-compatible SQL syntax
-through the HyperStreamDB Python API.
+through the BenoStreamDB Python API.
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 from typing import List
@@ -17,16 +17,16 @@ from typing import List
 
 def setup_session():
     """Create a session and register a table."""
-    session = hdb.Session()
+    session = bsdb.Session()
     
     # Register a table
-    table = hdb.Table("s3://bucket/documents")
+    table = bsdb.Table("s3://bucket/documents")
     session.register("documents", table)
     
     return session
 
 
-def basic_distance_queries(session: hdb.Session):
+def basic_distance_queries(session: bsdb.Session):
     """Examples of basic distance operator queries."""
     
     # L2 distance (Euclidean)
@@ -67,7 +67,7 @@ def basic_distance_queries(session: hdb.Session):
 # 2. HYBRID SEARCH (VECTOR + FILTERS)
 # ============================================================================
 
-def hybrid_search(session: hdb.Session, query_vector: List[float], 
+def hybrid_search(session: bsdb.Session, query_vector: List[float], 
                   category: str, k: int = 10):
     """Perform hybrid search with vector similarity and scalar filters."""
     
@@ -86,7 +86,7 @@ def hybrid_search(session: hdb.Session, query_vector: List[float],
     return results.to_pandas()
 
 
-def multi_filter_search(session: hdb.Session, query_vector: List[float]):
+def multi_filter_search(session: bsdb.Session, query_vector: List[float]):
     """Search with multiple filters."""
     
     vec_literal = f"'[{','.join(map(str, query_vector))}]'::vector"
@@ -105,7 +105,7 @@ def multi_filter_search(session: hdb.Session, query_vector: List[float]):
     return results.to_pandas()
 
 
-def distance_threshold_search(session: hdb.Session, query_vector: List[float],
+def distance_threshold_search(session: bsdb.Session, query_vector: List[float],
                                threshold: float = 0.5):
     """Find all documents within a distance threshold."""
     
@@ -126,7 +126,7 @@ def distance_threshold_search(session: hdb.Session, query_vector: List[float],
 # 3. PAGINATION
 # ============================================================================
 
-def paginated_search(session: hdb.Session, query_vector: List[float],
+def paginated_search(session: bsdb.Session, query_vector: List[float],
                      page: int = 1, page_size: int = 10):
     """Perform paginated vector search."""
     
@@ -148,7 +148,7 @@ def paginated_search(session: hdb.Session, query_vector: List[float],
 # 4. VECTOR AGGREGATIONS
 # ============================================================================
 
-def compute_centroids(session: hdb.Session):
+def compute_centroids(session: bsdb.Session):
     """Compute centroids for each category."""
     
     results = session.sql("""
@@ -162,7 +162,7 @@ def compute_centroids(session: hdb.Session):
     return results.to_pandas()
 
 
-def find_closest_to_centroid(session: hdb.Session, category: str, k: int = 10):
+def find_closest_to_centroid(session: bsdb.Session, category: str, k: int = 10):
     """Find documents closest to their category centroid."""
     
     results = session.sql(f"""
@@ -187,7 +187,7 @@ def find_closest_to_centroid(session: hdb.Session, category: str, k: int = 10):
 # 5. CONFIGURATION MANAGEMENT
 # ============================================================================
 
-def configure_search_parameters(session: hdb.Session, 
+def configure_search_parameters(session: bsdb.Session, 
                                 ef_search: int = 64,
                                 probes: int = 10):
     """Set vector search configuration parameters."""
@@ -198,7 +198,7 @@ def configure_search_parameters(session: hdb.Session,
     print(f"Configuration set: ef_search={ef_search}, probes={probes}")
 
 
-def benchmark_configurations(session: hdb.Session, query_vector: List[float]):
+def benchmark_configurations(session: bsdb.Session, query_vector: List[float]):
     """Benchmark different configuration settings."""
     
     import time
@@ -252,7 +252,7 @@ def benchmark_configurations(session: hdb.Session, query_vector: List[float]):
 # 6. SPARSE VECTORS
 # ============================================================================
 
-def sparse_vector_search(session: hdb.Session, sparse_indices: List[int],
+def sparse_vector_search(session: bsdb.Session, sparse_indices: List[int],
                          sparse_values: List[float], dimension: int):
     """Search using sparse vectors."""
     
@@ -271,7 +271,7 @@ def sparse_vector_search(session: hdb.Session, sparse_indices: List[int],
     return results.to_pandas()
 
 
-def analyze_sparsity(session: hdb.Session):
+def analyze_sparsity(session: bsdb.Session):
     """Analyze sparsity of sparse vectors."""
     
     results = session.sql("""
@@ -292,7 +292,7 @@ def analyze_sparsity(session: hdb.Session):
 # 7. BINARY VECTORS
 # ============================================================================
 
-def binary_vector_search(session: hdb.Session, binary_string: str):
+def binary_vector_search(session: bsdb.Session, binary_string: str):
     """Search using binary vectors."""
     
     results = session.sql(f"""
@@ -306,7 +306,7 @@ def binary_vector_search(session: hdb.Session, binary_string: str):
     return results.to_pandas()
 
 
-def quantize_vectors(session: hdb.Session):
+def quantize_vectors(session: bsdb.Session):
     """Convert dense vectors to binary quantized vectors."""
     
     results = session.sql("""
@@ -323,7 +323,7 @@ def quantize_vectors(session: hdb.Session):
 # 8. ADVANCED QUERIES
 # ============================================================================
 
-def semantic_search_with_reranking(session: hdb.Session, 
+def semantic_search_with_reranking(session: bsdb.Session, 
                                    query_vector: List[float],
                                    category: str):
     """Perform semantic search with two-stage ranking."""
@@ -351,7 +351,7 @@ def semantic_search_with_reranking(session: hdb.Session,
     return results.to_pandas()
 
 
-def find_duplicates(session: hdb.Session, threshold: float = 0.1):
+def find_duplicates(session: bsdb.Session, threshold: float = 0.1):
     """Find near-duplicate documents."""
     
     results = session.sql(f"""
@@ -370,7 +370,7 @@ def find_duplicates(session: hdb.Session, threshold: float = 0.1):
     return results.to_pandas()
 
 
-def recommend_items(session: hdb.Session, user_id: int, k: int = 20):
+def recommend_items(session: bsdb.Session, user_id: int, k: int = 20):
     """Generate recommendations based on user history."""
     
     results = session.sql(f"""
@@ -398,7 +398,7 @@ def recommend_items(session: hdb.Session, user_id: int, k: int = 20):
     return results.to_pandas()
 
 
-def temporal_decay_search(session: hdb.Session, query_vector: List[float],
+def temporal_decay_search(session: bsdb.Session, query_vector: List[float],
                           decay_rate: float = 0.01):
     """Search with temporal decay factor."""
     
@@ -423,7 +423,7 @@ def temporal_decay_search(session: hdb.Session, query_vector: List[float],
 # 9. PERFORMANCE TESTING
 # ============================================================================
 
-def measure_recall(session: hdb.Session, query_vector: List[float], k: int = 100):
+def measure_recall(session: bsdb.Session, query_vector: List[float], k: int = 100):
     """Measure recall by comparing index search to ground truth."""
     
     vec_literal = f"'[{','.join(map(str, query_vector))}]'::vector"
@@ -452,7 +452,7 @@ def measure_recall(session: hdb.Session, query_vector: List[float], k: int = 100
     return recall
 
 
-def measure_latency(session: hdb.Session, query_vector: List[float],
+def measure_latency(session: bsdb.Session, query_vector: List[float],
                     num_queries: int = 100):
     """Measure query latency statistics."""
     

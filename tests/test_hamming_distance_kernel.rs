@@ -2,8 +2,8 @@
 
 mod gpu_test_helpers;
 use anyhow::Result;
-use hyperstreamdb::core::index::gpu::{compute_distance, set_thread_gpu_context, ComputeContext};
-use hyperstreamdb::core::index::VectorMetric;
+use benostreamdb::core::index::gpu::{compute_distance, set_thread_gpu_context, ComputeContext};
+use benostreamdb::core::index::VectorMetric;
 
 #[test]
 fn test_hamming_distance_cpu() -> Result<()> {

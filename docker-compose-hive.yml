@@ -37,9 +37,9 @@ services:
       /bin/sh -c "
       mc alias set minio http://minio:9000 admin admin123;
       mc mb minio/warehouse --ignore-existing;
-      mc mb minio/hyperstream --ignore-existing;
+      mc mb minio/benostream --ignore-existing;
       mc policy set public minio/warehouse;
-      mc policy set public minio/hyperstream;
+      mc policy set public minio/benostream;
       exit 0;
       "
 
@@ -71,7 +71,7 @@ services:
       retries: 5
 
   # ---------------------
-  # 3. Trino (with HyperStreamDB Connector)
+  # 3. Trino (with BenoStreamDB Connector)
   # ---------------------
   trino:
     image: trinodb/trino:latest
@@ -79,10 +79,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Mount the Trino configurations (contains catalogs: iceberg_hive, hyperstreamdb, memory, etc.)
+      # Mount the Trino configurations (contains catalogs: iceberg_hive, benostreamdb, memory, etc.)
       - ./trino-config:/etc/trino
-      # Mount our compiled HyperStreamDB Trino connector plugin
-      - ./trino-hyperstream/target/trino-hyperstream-0.1.0-SNAPSHOT:/usr/lib/trino/plugin/hyperstream
+      # Mount our compiled BenoStreamDB Trino connector plugin
+      - ./trino-benostream/target/trino-benostream-0.1.0-SNAPSHOT:/usr/lib/trino/plugin/benostream
     environment:
       - TRINO_ENV=dev
       - TRINO_S3_ACCESS_KEY=admin

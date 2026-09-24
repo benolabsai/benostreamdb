@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
-# HyperStreamDB Quickstart — Full Stack
-# Single command to launch MinIO + Nessie + HyperStreamDB (all APIs)
+# BenoStreamDB Quickstart — Full Stack
+# Single command to launch MinIO + Nessie + BenoStreamDB (all APIs)
 #
 # Usage:
 #   docker compose -f docker-compose.quickstart.yml up
@@ -19,7 +19,7 @@ services:
   # ---------------------
   minio:
     image: minio/minio:latest
-    container_name: hdb-minio
+    container_name: bsdb-minio
     environment:
       - MINIO_ROOT_USER=minioadmin
       - MINIO_ROOT_PASSWORD=minioadmin
@@ -30,7 +30,7 @@ services:
       - minio-data:/data
     command: server /data --console-address ":9001"
     networks:
-      - hyperstream_net
+      - benostream_net
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -40,9 +40,9 @@ services:
   # MinIO bucket initialization
   minio-init:
     image: minio/mc:latest
-    container_name: hdb-minio-init
+    container_name: bsdb-minio-init
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -50,9 +50,9 @@ services:
       /bin/sh -c "
       mc alias set minio http://minio:9000 minioadmin minioadmin;
       mc mb minio/warehouse --ignore-existing;
-      mc mb minio/hyperstream --ignore-existing;
+      mc mb minio/benostream --ignore-existing;
       mc policy set public minio/warehouse;
-      mc policy set public minio/hyperstream;
+      mc policy set public minio/benostream;
       exit 0;
       "
 
@@ -61,7 +61,7 @@ services:
   # ---------------------
   nessie:
     image: ghcr.io/projectnessie/nessie:0.105.5
-    container_name: hdb-nessie
+    container_name: bsdb-nessie
     ports:
       - "19120:19120"
     environment:
@@ -77,7 +77,7 @@ services:
       - nessie.catalog.s3.path-style-access=true
       - nessie.server.authentication.enabled=false
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -88,26 +88,26 @@ services:
       retries: 5
 
   # ---------------------
-  # 3. HyperStreamDB (All APIs)
+  # 3. BenoStreamDB (All APIs)
   # ---------------------
-  hyperstreamdb:
+  benostreamdb:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: hyperstreamdb/quickstart:latest
-    container_name: hdb-server
+    image: benostreamdb/quickstart:latest
+    container_name: bsdb-server
     restart: unless-stopped
     ports:
       - "9200:9200"    # Elasticsearch 7.10 REST
       - "6333:6333"    # Qdrant REST
       - "50051:50051"  # Arrow Flight SQL gRPC
     environment:
-      - HYPERSEARCH_BIND=0.0.0.0
-      - HYPERSEARCH_PORT=9200
+      - BENOSEARCH_BIND=0.0.0.0
+      - BENOSEARCH_PORT=9200
       - QDRANT_BIND=0.0.0.0
       - QDRANT_PORT=6333
-      - HYPERSEARCH_STORAGE_URI=s3://hyperstream/
-      - HYPERSEARCH_AUTO_REFRESH_SECS=5
+      - BENOSEARCH_STORAGE_URI=s3://benostream/
+      - BENOSEARCH_AUTO_REFRESH_SECS=5
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - AWS_ENDPOINT=http://minio:9000
@@ -120,9 +120,9 @@ services:
           memory: 4G
           cpus: "2.0"
     volumes:
-      - hdb-cache:/home/hyperstream/.hyperstreamdb
+      - bsdb-cache:/home/benostream/.benostreamdb
     networks:
-      - hyperstream_net
+      - benostream_net
     depends_on:
       minio:
         condition: service_healthy
@@ -130,9 +130,9 @@ services:
 volumes:
   minio-data:
     driver: local
-  hdb-cache:
+  bsdb-cache:
     driver: local
 
 networks:
-  hyperstream_net:
+  benostream_net:
     driver: bridge

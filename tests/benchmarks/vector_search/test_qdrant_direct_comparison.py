@@ -1,5 +1,5 @@
 """
-Direct side-by-side comparison: HyperStreamDB vs Qdrant.
+Direct side-by-side comparison: BenoStreamDB vs Qdrant.
 
 This benchmark runs both systems on identical datasets to provide
 fair, transparent performance comparisons.
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 
 from utils import BenchmarkMetrics, generate_openai_embeddings, save_results
 from minio_setup import setup_minio_for_benchmarks
-from hyperstreamdb import Table
+from benostreamdb import Table
 import tempfile
 import shutil
 
@@ -36,7 +36,7 @@ except ImportError:
 
 @pytest.fixture(scope="module")
 def minio_manager():
-    """Setup MinIO for HyperStreamDB tests."""
+    """Setup MinIO for BenoStreamDB tests."""
     minio = setup_minio_for_benchmarks(bucket_name="qdrant-comparison")
     yield minio
     minio.stop(use_docker=True)
@@ -44,7 +44,7 @@ def minio_manager():
 
 @pytest.fixture
 def benchmark_dir(minio_manager):
-    """Create temporary directory for HyperStreamDB."""
+    """Create temporary directory for BenoStreamDB."""
     tmpdir = tempfile.mkdtemp()
     uri = f"s3://qdrant-comparison/test_{int(time.time())}"
     yield uri
@@ -132,21 +132,21 @@ class TestQdrantComparison:
         print(f"Qdrant throughput: {qdrant_stats['throughput']:,.0f} vectors/sec")
         
         # ==========================================
-        # Benchmark 2: HyperStreamDB
+        # Benchmark 2: BenoStreamDB
         # ==========================================
-        print("\n--- HyperStreamDB Ingestion ---")
+        print("\n--- BenoStreamDB Ingestion ---")
         
         table = Table(benchmark_dir)
-        hyperstream_metrics = BenchmarkMetrics("hyperstream_ingestion")
+        benostream_metrics = BenchmarkMetrics("benostream_ingestion")
         
         # Write data
         table.write_arrow(data)
         table.checkpoint()
         
-        hyperstream_metrics.finish(total_operations=n_vectors)
-        hyperstream_stats = hyperstream_metrics.get_stats()
+        benostream_metrics.finish(total_operations=n_vectors)
+        benostream_stats = benostream_metrics.get_stats()
         
-        print(f"HyperStreamDB throughput: {hyperstream_stats['throughput']:,.0f} vectors/sec")
+        print(f"BenoStreamDB throughput: {benostream_stats['throughput']:,.0f} vectors/sec")
         
         # ==========================================
         # Comparison
@@ -157,12 +157,12 @@ class TestQdrantComparison:
         print(f"Dataset: {n_vectors:,} vectors ({dim}D)")
         print(f"")
         print(f"Qdrant:        {qdrant_stats['throughput']:>10,.0f} vectors/sec")
-        print(f"HyperStreamDB: {hyperstream_stats['throughput']:>10,.0f} vectors/sec")
+        print(f"BenoStreamDB: {benostream_stats['throughput']:>10,.0f} vectors/sec")
         print(f"")
         
-        ratio = hyperstream_stats['throughput'] / qdrant_stats['throughput']
+        ratio = benostream_stats['throughput'] / qdrant_stats['throughput']
         if ratio >= 1.0:
-            print(f"Result: HyperStreamDB is {ratio:.2f}x faster")
+            print(f"Result: BenoStreamDB is {ratio:.2f}x faster")
         else:
             print(f"Result: Qdrant is {1/ratio:.2f}x faster")
         
@@ -173,7 +173,7 @@ class TestQdrantComparison:
             "dataset_size": n_vectors,
             "dimensions": dim,
             "qdrant_throughput": qdrant_stats['throughput'],
-            "hyperstream_throughput": hyperstream_stats['throughput'],
+            "benostream_throughput": benostream_stats['throughput'],
             "ratio": ratio,
         }
         save_results([comparison], "ingestion_comparison")
@@ -214,7 +214,7 @@ class TestQdrantComparison:
         
         qdrant_client.upsert(collection_name=collection_name, points=points)
         
-        # Setup HyperStreamDB with vector index
+        # Setup BenoStreamDB with vector index
         table = Table(benchmark_dir)
         table.add_index_columns(["embedding"])  # Build HNSW-IVF index for vector search
         table.write_arrow(data)
@@ -267,23 +267,23 @@ class TestQdrantComparison:
         print(f"Qdrant p99: {qdrant_stats['latency_p99_ms']:.2f}ms")
         
         # ==========================================
-        # Benchmark 2: HyperStreamDB Queries
+        # Benchmark 2: BenoStreamDB Queries
         # ==========================================
-        print("\n--- HyperStreamDB Query Performance ---")
-        hyperstream_metrics = BenchmarkMetrics("hyperstream_query")
+        print("\n--- BenoStreamDB Query Performance ---")
+        benostream_metrics = BenchmarkMetrics("benostream_query")
         
         for query_vec in query_vectors:
             start = time.time()
             results = table.search(column="embedding", query=query_vec.tolist(), k=10)
             latency_ms = (time.time() - start) * 1000
-            hyperstream_metrics.record_latency(latency_ms)
+            benostream_metrics.record_latency(latency_ms)
         
-        hyperstream_metrics.finish()
-        hyperstream_stats = hyperstream_metrics.get_stats()
+        benostream_metrics.finish()
+        benostream_stats = benostream_metrics.get_stats()
         
-        print(f"HyperStreamDB p50: {hyperstream_stats['latency_p50_ms']:.2f}ms")
-        print(f"HyperStreamDB p95: {hyperstream_stats['latency_p95_ms']:.2f}ms")
-        print(f"HyperStreamDB p99: {hyperstream_stats['latency_p99_ms']:.2f}ms")
+        print(f"BenoStreamDB p50: {benostream_stats['latency_p50_ms']:.2f}ms")
+        print(f"BenoStreamDB p95: {benostream_stats['latency_p95_ms']:.2f}ms")
+        print(f"BenoStreamDB p99: {benostream_stats['latency_p99_ms']:.2f}ms")
         
         # ==========================================
         # Comparison
@@ -294,25 +294,25 @@ class TestQdrantComparison:
         print(f"Dataset: {n_vectors:,} vectors ({dim}D)")
         print(f"Queries: {n_queries} (top-10 nearest neighbors)")
         print(f"")
-        print(f"{'Metric':<20} {'Qdrant':>15} {'HyperStreamDB':>15}")
+        print(f"{'Metric':<20} {'Qdrant':>15} {'BenoStreamDB':>15}")
         print(f"{'-'*20} {'-'*15} {'-'*15}")
-        print(f"{'p50 latency':<20} {qdrant_stats['latency_p50_ms']:>12.2f}ms {hyperstream_stats['latency_p50_ms']:>12.2f}ms")
-        print(f"{'p95 latency':<20} {qdrant_stats['latency_p95_ms']:>12.2f}ms {hyperstream_stats['latency_p95_ms']:>12.2f}ms")
-        print(f"{'p99 latency':<20} {qdrant_stats['latency_p99_ms']:>12.2f}ms {hyperstream_stats['latency_p99_ms']:>12.2f}ms")
+        print(f"{'p50 latency':<20} {qdrant_stats['latency_p50_ms']:>12.2f}ms {benostream_stats['latency_p50_ms']:>12.2f}ms")
+        print(f"{'p95 latency':<20} {qdrant_stats['latency_p95_ms']:>12.2f}ms {benostream_stats['latency_p95_ms']:>12.2f}ms")
+        print(f"{'p99 latency':<20} {qdrant_stats['latency_p99_ms']:>12.2f}ms {benostream_stats['latency_p99_ms']:>12.2f}ms")
         print("="*70 + "\n")
         
         # Note about differences
-        print("Note: Qdrant is in-memory, HyperStreamDB uses S3 (MinIO).")
+        print("Note: Qdrant is in-memory, BenoStreamDB uses S3 (MinIO).")
         print("Expected: Qdrant faster for pure vector search (no filters).")
-        print("HyperStreamDB advantage: Filtered searches (see next test).\n")
+        print("BenoStreamDB advantage: Filtered searches (see next test).\n")
         
         # Save comparison
         comparison = {
             "dataset_size": n_vectors,
             "qdrant_p50_ms": qdrant_stats['latency_p50_ms'],
             "qdrant_p99_ms": qdrant_stats['latency_p99_ms'],
-            "hyperstream_p50_ms": hyperstream_stats['latency_p50_ms'],
-            "hyperstream_p99_ms": hyperstream_stats['latency_p99_ms'],
+            "benostream_p50_ms": benostream_stats['latency_p50_ms'],
+            "benostream_p99_ms": benostream_stats['latency_p99_ms'],
         }
         save_results([comparison], "query_comparison")
     
@@ -320,11 +320,11 @@ class TestQdrantComparison:
         """
         Direct comparison: Filtered vector search.
         
-        This demonstrates HyperStreamDB's KEY ADVANTAGE:
+        This demonstrates BenoStreamDB's KEY ADVANTAGE:
         - Qdrant: Post-filter (search all → filter)
-        - HyperStreamDB: Pre-filter (filter → search subset)
+        - BenoStreamDB: Pre-filter (filter → search subset)
         
-        Expected: HyperStreamDB significantly faster.
+        Expected: BenoStreamDB significantly faster.
         """
         print("\n" + "="*70)
         print("SIDE-BY-SIDE COMPARISON: Filtered Search (KEY ADVANTAGE)")
@@ -357,7 +357,7 @@ class TestQdrantComparison:
         
         qdrant_client.upsert(collection_name=collection_name, points=points)
         
-        # Setup HyperStreamDB
+        # Setup BenoStreamDB
         table = Table(benchmark_dir)
         table.add_index_columns(["category"])  # Index for pre-filtering
         table.write_arrow(data)
@@ -407,12 +407,12 @@ class TestQdrantComparison:
         print(f"Qdrant mean: {qdrant_stats['latency_mean_ms']:.2f}ms")
         
         # ==========================================
-        # Benchmark 2: HyperStreamDB (Pre-Filter)
+        # Benchmark 2: BenoStreamDB (Pre-Filter)
         # ==========================================
-        print("\n--- HyperStreamDB (Pre-Filter Approach) ---")
+        print("\n--- BenoStreamDB (Pre-Filter Approach) ---")
         print("Filters FIRST to category='A', then searches subset")
         
-        hyperstream_metrics = BenchmarkMetrics("hyperstream_filtered")
+        benostream_metrics = BenchmarkMetrics("benostream_filtered")
         
         for _ in range(10):
             start = time.time()
@@ -420,12 +420,12 @@ class TestQdrantComparison:
             filtered = table.read(filter="category = 'A'", columns=["id", "embedding"])
             # In production, would do vector search on filtered results
             latency_ms = (time.time() - start) * 1000
-            hyperstream_metrics.record_latency(latency_ms)
+            benostream_metrics.record_latency(latency_ms)
         
-        hyperstream_metrics.finish()
-        hyperstream_stats = hyperstream_metrics.get_stats()
+        benostream_metrics.finish()
+        benostream_stats = benostream_metrics.get_stats()
         
-        print(f"HyperStreamDB mean: {hyperstream_stats['latency_mean_ms']:.2f}ms")
+        print(f"BenoStreamDB mean: {benostream_stats['latency_mean_ms']:.2f}ms")
         
         # ==========================================
         # Comparison
@@ -437,13 +437,13 @@ class TestQdrantComparison:
         print(f"Dataset: {n_vectors:,} vectors, ~20% match filter")
         print(f"")
         print(f"Qdrant (post-filter):  {qdrant_stats['latency_mean_ms']:>10.2f}ms")
-        print(f"HyperStreamDB (pre-filter): {hyperstream_stats['latency_mean_ms']:>10.2f}ms")
+        print(f"BenoStreamDB (pre-filter): {benostream_stats['latency_mean_ms']:>10.2f}ms")
         print(f"")
         
-        speedup = qdrant_stats['latency_mean_ms'] / hyperstream_stats['latency_mean_ms']
+        speedup = qdrant_stats['latency_mean_ms'] / benostream_stats['latency_mean_ms']
         print(f"Speedup: {speedup:.1f}x faster with pre-filtering")
         print(f"")
-        print("Why HyperStreamDB is faster:")
+        print("Why BenoStreamDB is faster:")
         print("- Pre-filter reduces search space by ~80%")
         print("- Only searches ~2K vectors instead of 10K")
         print("- Qdrant must traverse full graph, then filter")
@@ -454,7 +454,7 @@ class TestQdrantComparison:
             "dataset_size": n_vectors,
             "filter_selectivity": "20%",
             "qdrant_mean_ms": qdrant_stats['latency_mean_ms'],
-            "hyperstream_mean_ms": hyperstream_stats['latency_mean_ms'],
+            "benostream_mean_ms": benostream_stats['latency_mean_ms'],
             "speedup": speedup,
         }
         save_results([comparison], "filtered_search_comparison")

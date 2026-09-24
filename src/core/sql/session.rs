@@ -4,11 +4,11 @@ use anyhow::Result;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
-use crate::core::sql::HyperStreamTableProvider;
+use crate::core::sql::BenoStreamTableProvider;
 use crate::core::table::Table;
 
 #[derive(Clone)]
-pub struct HyperStreamSession {
+pub struct BenoStreamSession {
     ctx: SessionContext,
 }
 
@@ -16,10 +16,10 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 // use datafusion::execution::context::SessionState; // Unused
 use crate::core::sql::optimizer::IndexJoinOptimizerRule;
 use crate::core::sql::vector_udf;
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 
-impl HyperStreamSession {
+impl BenoStreamSession {
     pub fn get_ctx(&self) -> SessionContext {
         self.ctx.clone()
     }
@@ -29,15 +29,28 @@ impl HyperStreamSession {
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
         config = config.with_information_schema(true);
 
-        let runtime = Arc::new({
+        // Session creation is on the request path for the Python/FFI bindings
+        // (`PySession::new`), so a failure here must degrade rather than panic.
+        let runtime = {
             let builder = RuntimeEnvBuilder::new();
             let builder = if let Some(limit) = memory_limit_bytes {
                 builder.with_memory_limit(limit, 1.0)
             } else {
                 builder
             };
-            builder.build().expect("Failed to build RuntimeEnv")
-        });
+            match builder.build() {
+                Ok(rt) => Arc::new(rt),
+                Err(e) => {
+                    // Only reachable with an invalid memory limit; a default
+                    // runtime keeps queries working instead of aborting them.
+                    tracing::error!(
+                        error = %e,
+                        "failed to build DataFusion RuntimeEnv with the requested memory limit; using defaults"
+                    );
+                    Arc::new(RuntimeEnv::default())
+                }
+            }
+        };
 
         let state_builder = SessionStateBuilder::new()
             .with_config(config)
@@ -51,11 +64,14 @@ impl HyperStreamSession {
         let state = state_builder.build();
         let mut ctx = SessionContext::new_with_state(state);
 
-        // Register standard functions (now that we've added the crates to Cargo.toml)
-        datafusion_functions::register_all(&mut ctx)
-            .expect("Failed to register standard functions");
-        datafusion_functions_aggregate::register_all(&mut ctx)
-            .expect("Failed to register standard aggregates");
+        // Registration only fails on a duplicate definition, which cannot happen
+        // in a fresh context; log rather than abort the query if it ever does.
+        if let Err(e) = datafusion_functions::register_all(&mut ctx) {
+            tracing::error!(error = %e, "failed to register standard DataFusion functions");
+        }
+        if let Err(e) = datafusion_functions_aggregate::register_all(&mut ctx) {
+            tracing::error!(error = %e, "failed to register standard DataFusion aggregates");
+        }
 
         // Add Vector Scalar Functions (Additive registration)
         for udf in vector_udf::all_vector_udfs() {
@@ -73,14 +89,15 @@ impl HyperStreamSession {
         }
 
         // Register vector operators (validates UDFs are present)
-        crate::core::sql::vector_operators::register_vector_operators(&mut ctx)
-            .expect("Failed to register vector operators");
+        if let Err(e) = crate::core::sql::vector_operators::register_vector_operators(&mut ctx) {
+            tracing::error!(error = %e, "failed to register vector operators");
+        }
 
         Self { ctx }
     }
 
     pub fn register_table(&self, name: &str, table: Arc<Table>) -> Result<()> {
-        let provider = Arc::new(HyperStreamTableProvider::new(table));
+        let provider = Arc::new(BenoStreamTableProvider::new(table));
         self.ctx.register_table(name, provider)?;
         Ok(())
     }
@@ -140,7 +157,7 @@ impl HyperStreamSession {
     }
 }
 
-impl Default for HyperStreamSession {
+impl Default for BenoStreamSession {
     fn default() -> Self {
         Self::new(None)
     }

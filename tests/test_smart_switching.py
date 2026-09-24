@@ -1,4 +1,4 @@
-import hyperstreamdb as hs
+import benostreamdb as hs
 import numpy as np
 import time
 import os

@@ -95,7 +95,7 @@ impl QueryConfig {
         embedding_dim: usize,
     ) -> usize {
         let manual_readers = self.max_parallel_readers.or_else(|| {
-            std::env::var("HYPERSTREAM_MAX_CONCURRENCY")
+            std::env::var("BENOSTREAM_MAX_CONCURRENCY")
                 .ok()
                 .and_then(|s| s.parse::<usize>().ok())
         });
@@ -357,21 +357,17 @@ pub async fn execute_multi_vector_search_with_config(
     store: Arc<dyn ObjectStore>,
     data_store: Option<Arc<dyn ObjectStore>>,
     base_uri: &str,
-    requests: Vec<VectorSearchRequest>,
+    mut requests: Vec<VectorSearchRequest>,
 ) -> Result<Vec<(String, RecordBatch)>> {
     if requests.is_empty() {
         return Ok(Vec::new());
     }
 
     if requests.len() == 1 {
-        return execute_vector_search_with_config(
-            entries,
-            store,
-            data_store,
-            base_uri,
-            requests.into_iter().next().unwrap(),
-        )
-        .await;
+        // `len() == 1` guarantees `remove(0)` yields the sole request.
+        let first = requests.remove(0);
+        return execute_vector_search_with_config(entries, store, data_store, base_uri, first)
+            .await;
     }
 
     // Multi-Vector Search: execute each vector search request concurrently and fuse with RRF
@@ -535,7 +531,7 @@ pub async fn execute_vector_search_with_config(
     );
 
     // Record planning duration
-    metrics::histogram!("hyperstreamdb.query.planning_duration")
+    metrics::histogram!("benostreamdb.query.planning_duration")
         .record(planning_start.elapsed().as_secs_f64());
 
     // Semaphore to limit concurrent HNSW loads
@@ -646,7 +642,7 @@ pub async fn execute_vector_search_with_config(
     let search_start = std::time::Instant::now();
     let results: Vec<anyhow::Result<Vec<(String, RecordBatch, Vec<f32>)>>> =
         join_all(search_futures).await;
-    metrics::histogram!("hyperstreamdb.query.segment_search_duration")
+    metrics::histogram!("benostreamdb.query.segment_search_duration")
         .record(search_start.elapsed().as_secs_f64());
 
     // Collect successful results, failing if any segment search fails
@@ -674,7 +670,7 @@ pub async fn execute_vector_search_with_config(
         "Vector search found {} total batches across all segments",
         all_results_with_distances.len()
     );
-    metrics::histogram!("hyperstreamdb.query.execution_duration")
+    metrics::histogram!("benostreamdb.query.execution_duration")
         .record(total_start.elapsed().as_secs_f64());
     merge_and_rerank_vector_results(all_results_with_distances, request.k, 0)
 }
@@ -867,20 +863,20 @@ mod tests {
 
     #[test]
     fn test_auto_detect_respects_env_var() {
-        std::env::set_var("HYPERSTREAM_MAX_CONCURRENCY", "12");
+        std::env::set_var("BENOSTREAM_MAX_CONCURRENCY", "12");
         let config = QueryConfig::new();
         let readers = config.auto_detect_parallel_readers(1_000, 128);
         assert_eq!(readers, 12);
-        std::env::remove_var("HYPERSTREAM_MAX_CONCURRENCY");
+        std::env::remove_var("BENOSTREAM_MAX_CONCURRENCY");
     }
 
     #[test]
     fn test_manual_override_precedes_env_var() {
-        std::env::set_var("HYPERSTREAM_MAX_CONCURRENCY", "12");
+        std::env::set_var("BENOSTREAM_MAX_CONCURRENCY", "12");
         let config = QueryConfig::new().with_max_parallel_readers(5);
         let readers = config.auto_detect_parallel_readers(1_000, 128);
         assert_eq!(readers, 5);
-        std::env::remove_var("HYPERSTREAM_MAX_CONCURRENCY");
+        std::env::remove_var("BENOSTREAM_MAX_CONCURRENCY");
     }
 
     #[test]

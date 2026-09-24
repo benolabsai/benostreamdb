@@ -3,7 +3,7 @@
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -11,7 +11,7 @@ use tempfile::tempdir;
 async fn test_bloom_filter_caching() -> anyhow::Result<()> {
     // 1. Initialize Tracing to see the Cache Miss/Hit logs
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("hyperstreamdb=debug")
+        .with_env_filter("benostreamdb=debug")
         .with_test_writer()
         .try_init();
 

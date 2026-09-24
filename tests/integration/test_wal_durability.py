@@ -1,5 +1,5 @@
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import tempfile
 import shutil
@@ -21,7 +21,7 @@ def test_wal_durability():
     
     # 1. Write Data (Unflushed)
     print("\nPhase 1: Writing Data (Buffered)...")
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.autocommit = False
     df = pd.DataFrame({'id': range(10), 'val': range(10)})
     table.write_pandas(df)
@@ -48,7 +48,7 @@ def test_wal_durability():
     del table # Drop instance (release lock if any, though we use simple file append)
     
     # Re-open
-    table2 = hdb.Table(uri)
+    table2 = bsdb.Table(uri)
     
     # 3. Verify Recovery
     print("Phase 3: Verifying Recovery...")

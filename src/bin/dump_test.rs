@@ -1,7 +1,7 @@
 use arrow::ipc::reader::FileReader;
-use hyperstreamdb::core::index::hnsw_ivf::HnswIvfIndex;
-use hyperstreamdb::core::index::VectorMetric;
-use hyperstreamdb::core::manifest::IndexAlgorithm;
+use benostreamdb::core::index::hnsw_ivf::HnswIvfIndex;
+use benostreamdb::core::index::VectorMetric;
+use benostreamdb::core::manifest::IndexAlgorithm;
 use std::fs::File;
 
 fn main() {

@@ -138,19 +138,35 @@ impl Accumulator for PreferentialAttachmentAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "preferential_attachment: expected ListArray for sources".to_string(),
+                )
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "preferential_attachment: expected ListArray for targets".to_string(),
+                )
+            })?;
         let node1_arr = states[2]
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "preferential_attachment: expected UInt64Array for node1".to_string(),
+                )
+            })?;
         let node2_arr = states[3]
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "preferential_attachment: expected UInt64Array for node2".to_string(),
+                )
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {

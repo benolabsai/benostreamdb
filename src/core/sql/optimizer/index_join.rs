@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 //! Index join optimizer rule.
-//! Rewrites HashJoinExec nodes with HyperStreamExec on the right side
-//! into HyperStreamIndexJoinExec for point-lookup optimization.
+//! Rewrites HashJoinExec nodes with BenoStreamExec on the right side
+//! into BenoStreamIndexJoinExec for point-lookup optimization.
 
 use std::sync::Arc;
 
@@ -15,8 +15,8 @@ use datafusion::physical_optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::execution_plan::ExecutionPlan;
 use datafusion::physical_plan::joins::HashJoinExec;
 
-use crate::core::sql::physical_plan::index_join::HyperStreamIndexJoinExec;
-use crate::core::sql::physical_plan::HyperStreamExec;
+use crate::core::sql::physical_plan::index_join::BenoStreamIndexJoinExec;
+use crate::core::sql::physical_plan::BenoStreamExec;
 
 #[derive(Debug, Default)]
 pub struct IndexJoinOptimizerRule {}
@@ -41,8 +41,8 @@ impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
                 // Lets check direct scan compatibility first.
 
                 let right = hash_join.right();
-                if let Some(hs_exec) = right.as_any().downcast_ref::<HyperStreamExec>() {
-                    // It is HyperStream Scan!
+                if let Some(hs_exec) = right.as_any().downcast_ref::<BenoStreamExec>() {
+                    // It is BenoStream Scan!
 
                     // Check logic: Join On keys
                     let on = hash_join.on();
@@ -64,7 +64,7 @@ impl PhysicalOptimizerRule for IndexJoinOptimizerRule {
                     }
 
                     // Construct Custom Node
-                    let new_node = Arc::new(HyperStreamIndexJoinExec::new(
+                    let new_node = Arc::new(BenoStreamIndexJoinExec::new(
                         hash_join.left().clone(),
                         hs_exec.table.clone(), // Access internal table
                         left_on,

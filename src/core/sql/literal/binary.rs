@@ -17,7 +17,7 @@ use datafusion::error::{DataFusionError, Result};
 ///
 /// # Examples
 /// ```
-/// use hyperstreamdb::core::sql::literal::binary::parse_binary_vector;
+/// use benostreamdb::core::sql::literal::binary::parse_binary_vector;
 ///
 /// let result = parse_binary_vector("B'10110101'", Some(8)).unwrap();
 /// let result = parse_binary_vector("'\\xB5'", Some(8)).unwrap();
@@ -143,7 +143,7 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
 ///
 /// # Examples
 /// ```
-/// use hyperstreamdb::core::sql::literal::binary::format_binary_vector;
+/// use benostreamdb::core::sql::literal::binary::format_binary_vector;
 ///
 /// let bytes = vec![0b10110101];
 /// let binary_str = format_binary_vector(&bytes, 8, false); // "10110101"

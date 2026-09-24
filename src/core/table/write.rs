@@ -5,7 +5,7 @@ use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
-use crate::core::error::HyperstreamError;
+use crate::core::error::BenoStreamError;
 use crate::core::manifest::ManifestManager;
 use crate::telemetry::metrics::INGEST_ROWS_TOTAL;
 use crate::SegmentConfig;
@@ -20,47 +20,20 @@ use futures::StreamExt;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[cfg(target_os = "linux")]
+/// Resident set size in bytes, or `0` when the platform cannot report it.
+///
+/// Delegates to [`crate::core::memory::rss_bytes`] so the back-pressure
+/// high-water mark and the heap-trim policy read the same number. A `0` result
+/// (unknown) makes the back-pressure check fail-open rather than block forever.
 fn current_rss_bytes() -> usize {
-    if let Ok(statm) = std::fs::read_to_string("/proc/self/statm") {
-        if let Some(rss_pages) = statm.split_whitespace().nth(1) {
-            if let Ok(pages) = rss_pages.parse::<usize>() {
-                return pages * 4096;
-            }
-        }
-    }
-    0
-}
-
-#[cfg(target_os = "macos")]
-fn current_rss_bytes() -> usize {
-    unsafe {
-        let mut info: libc::mach_task_basic_info = std::mem::zeroed();
-        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
-        let res = libc::task_info(
-            libc::mach_task_self(),
-            libc::MACH_TASK_BASIC_INFO,
-            &mut info as *mut _ as libc::task_info_t,
-            &mut count,
-        );
-        if res == libc::KERN_SUCCESS {
-            info.resident_size as usize
-        } else {
-            0
-        }
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn current_rss_bytes() -> usize {
-    0
+    crate::core::memory::rss_bytes().unwrap_or(0) as usize
 }
 
 impl Table {
     /// Write Arrow RecordBatches to the table (Buffered)
     ///
     /// Data is written to an in-memory buffer. It is NOT persisted to disk until:
-    /// 1. The buffer exceeds `HYPERSTREAM_CACHE_GB`
+    /// 1. The buffer exceeds `BENOSTREAM_CACHE_GB`
     /// 2. `commit()` is called explicitly
     pub fn write(&self, batches: Vec<RecordBatch>) -> Result<()> {
         self.runtime().block_on(self.write_async(batches))
@@ -172,17 +145,52 @@ impl Table {
         if let Some(max_gb) = self.max_ingest_ram_gb {
             let max_bytes = (max_gb * 1_000_000_000.0) as usize;
             let mut logged = false;
-            loop {
-                let rss = current_rss_bytes();
-                if rss == 0 || rss < max_bytes {
-                    break;
-                }
+            let mut paused: Option<std::time::Instant> = None;
+            // Back-pressure on the ingest RAM high-water mark. Wait on a
+            // notification from background tasks that release memory (index
+            // builds, heap trims) with a bounded fallback poll so we still
+            // re-check RSS if nothing fires. The previous implementation slept a
+            // flat 500 ms per iteration, which both wasted time when memory was
+            // freed promptly and delayed resumption when it was not.
+            while max_bytes > 0 && current_rss_bytes() >= max_bytes {
                 if !logged {
-                    tracing::warn!("RSS ({:.2} GB) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion for background tasks to reclaim memory...", rss as f64 / 1_000_000_000.0, max_gb);
+                    tracing::warn!(
+                        "RSS ({:.2} GB) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion until background tasks reclaim memory...",
+                        current_rss_bytes() as f64 / 1_000_000_000.0,
+                        max_gb
+                    );
                     logged = true;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if paused.is_none() {
+                    paused = Some(std::time::Instant::now());
+                }
+                tokio::select! {
+                    _ = self.memory_reclaimed.notified() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                }
             }
+            crate::telemetry::metrics::INGEST_RSS_BYTES_GAUGE.set(current_rss_bytes() as i64);
+            if let Some(start) = paused {
+                let paused_secs = start.elapsed().as_secs_f64();
+                crate::telemetry::metrics::INGEST_BACKPRESSURE_PAUSES_TOTAL.inc();
+                crate::telemetry::metrics::INGEST_BACKPRESSURE_PAUSE_SECONDS.observe(paused_secs);
+                tracing::info!(
+                    paused_seconds = paused_secs,
+                    "RSS back under the ingest RAM limit; resuming ingestion"
+                );
+            }
+        }
+
+        // Disk admission: refuse a flush when a local table's filesystem is below
+        // the free-space threshold (default `BSDB_MIN_FREE_DISK_GB`), so the
+        // failure is a clear error instead of a partial segment written mid-way.
+        // Fail-open when the free space is unknown.
+        if let Some(local) = self.uri.strip_prefix("file://") {
+            let path = std::path::Path::new(local);
+            if let Some(free) = crate::core::resources::free_disk_bytes_for_new_file(path) {
+                crate::telemetry::metrics::FREE_DISK_BYTES_GAUGE.set(free as i64);
+            }
+            crate::core::resources::check_min_free_disk(path).map_err(|e| anyhow::anyhow!(e))?;
         }
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -258,7 +266,7 @@ impl Table {
                             // Check for nulls in PK
                             if matches!(m_val, crate::core::manifest::ManifestValue::Null) {
                                 return Err(anyhow::Error::from(
-                                    HyperstreamError::NullConstraintViolation {
+                                    BenoStreamError::NullConstraintViolation {
                                         column: pk_col.clone(),
                                     },
                                 ));
@@ -269,7 +277,7 @@ impl Table {
                             // Check against buffer and current batch
                             if seen_keys.contains(&val_str) {
                                 return Err(anyhow::Error::from(
-                                    HyperstreamError::PrimaryKeyViolation {
+                                    BenoStreamError::PrimaryKeyViolation {
                                         key: val_str.clone(),
                                     },
                                 ));
@@ -280,7 +288,7 @@ impl Table {
                                 serde_json::to_value(&m_val).unwrap_or(serde_json::Value::Null);
                             if self._check_pk_in_storage_async(pk_col, &val_json).await? {
                                 return Err(anyhow::Error::from(
-                                    HyperstreamError::PrimaryKeyViolation {
+                                    BenoStreamError::PrimaryKeyViolation {
                                         key: val_str.clone(),
                                     },
                                 ));
@@ -302,7 +310,7 @@ impl Table {
                                 // Check for nulls in PK
                                 if matches!(val, crate::core::manifest::ManifestValue::Null) {
                                     return Err(anyhow::Error::from(
-                                        HyperstreamError::NullConstraintViolation {
+                                        BenoStreamError::NullConstraintViolation {
                                             column: pk_col.clone(),
                                         },
                                     ));
@@ -318,7 +326,7 @@ impl Table {
                                                 );
                                             if val == b_val {
                                                 return Err(anyhow::Error::from(
-                                                    HyperstreamError::PrimaryKeyViolation {
+                                                    BenoStreamError::PrimaryKeyViolation {
                                                         key: val.to_string(),
                                                     },
                                                 ));
@@ -333,7 +341,7 @@ impl Table {
                                         crate::core::manifest::ManifestValue::from_array(col, j);
                                     if val == b_val {
                                         return Err(anyhow::Error::from(
-                                            HyperstreamError::PrimaryKeyViolation {
+                                            BenoStreamError::PrimaryKeyViolation {
                                                 key: val.to_string(),
                                             },
                                         ));
@@ -372,15 +380,18 @@ impl Table {
                             field.data_type()
                         );
 
-                        let idx = evolved_schema.index_of(field.name()).unwrap();
-                        let mut fields: Vec<arrow::datatypes::Field> = evolved_schema
-                            .fields()
-                            .iter()
-                            .map(|f| (**f).clone())
-                            .collect();
-                        fields[idx] = (**field).clone();
-                        evolved_schema = Schema::new(fields);
-                        changed = true;
+                        // `field` came from `evolved_schema`, so `index_of` cannot
+                        // fail; skip defensively rather than panicking the writer.
+                        if let Ok(idx) = evolved_schema.index_of(field.name()) {
+                            let mut fields: Vec<arrow::datatypes::Field> = evolved_schema
+                                .fields()
+                                .iter()
+                                .map(|f| (**f).clone())
+                                .collect();
+                            fields[idx] = (**field).clone();
+                            evolved_schema = Schema::new(fields);
+                            changed = true;
+                        }
                     }
 
                     // Check if we need to change Nullability (Required -> Nullable)
@@ -389,17 +400,18 @@ impl Table {
                             "Schema Evolution: Changing column '{}' to nullable",
                             field.name()
                         );
-                        let idx = evolved_schema.index_of(field.name()).unwrap();
-                        let mut fields: Vec<arrow::datatypes::Field> = evolved_schema
-                            .fields()
-                            .iter()
-                            .map(|f| (**f).clone())
-                            .collect();
-                        let mut new_field = (**field).clone();
-                        new_field.set_nullable(true);
-                        fields[idx] = new_field;
-                        evolved_schema = Schema::new(fields);
-                        changed = true;
+                        if let Ok(idx) = evolved_schema.index_of(field.name()) {
+                            let mut fields: Vec<arrow::datatypes::Field> = evolved_schema
+                                .fields()
+                                .iter()
+                                .map(|f| (**f).clone())
+                                .collect();
+                            let mut new_field = (**field).clone();
+                            new_field.set_nullable(true);
+                            fields[idx] = new_field;
+                            evolved_schema = Schema::new(fields);
+                            changed = true;
+                        }
                     }
                 } else {
                     // New column added
@@ -513,7 +525,7 @@ impl Table {
                                 .to_string();
                             if !seen.insert(val_str.clone()) {
                                 return Err(anyhow::Error::from(
-                                    HyperstreamError::PrimaryKeyViolation { key: val_str },
+                                    BenoStreamError::PrimaryKeyViolation { key: val_str },
                                 ));
                             }
                         }
@@ -651,7 +663,7 @@ impl Table {
             // Calculate size in bytes (approximate)
             let total_bytes: usize = buffer.iter().map(|b| b.get_array_memory_size()).sum();
 
-            let cache_gb: usize = std::env::var("HYPERSTREAM_CACHE_GB")
+            let cache_gb: usize = std::env::var("BENOSTREAM_CACHE_GB")
                 .unwrap_or_else(|_| "1".to_string())
                 .parse()
                 .unwrap_or(1);
@@ -978,6 +990,7 @@ impl Table {
                 // thrashes (see `Table::index_build_gate`). Acquiring here
                 // back-pressures the writer instead.
                 let permit = self.acquire_index_build_permit().await?;
+                let memory_reclaimed = self.memory_reclaimed.clone();
 
                 let handle = tokio::spawn(async move {
                     let _permit = permit;
@@ -1082,7 +1095,10 @@ impl Table {
                         }
                     }
 
-
+                    // The build's working set has been dropped (or moved into the
+                    // writer) and its permit released; wake any writer blocked on
+                    // the ingest RAM high-water mark.
+                    memory_reclaimed.notify_waiters();
                 });
                 self.background_tasks.lock().await.push(handle);
             }
@@ -1344,8 +1360,6 @@ impl Table {
                 recovered.clear();
             }
         }
-
-
 
         Ok(())
     }

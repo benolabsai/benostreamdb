@@ -148,11 +148,19 @@ impl Accumulator for GraphNeighborsAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "graph_neighbors: expected ListArray for sources".to_string(),
+                )
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "graph_neighbors: expected ListArray for targets".to_string(),
+                )
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -237,8 +245,22 @@ impl Accumulator for GraphNeighborsAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "graph_neighbors: expected UInt64Array for sources".to_string(),
+                )
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "graph_neighbors: expected UInt64Array for targets".to_string(),
+                )
+            })?;
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());

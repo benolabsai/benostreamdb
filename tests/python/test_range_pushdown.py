@@ -12,14 +12,14 @@ drops a matching row and never leaks a non-matching one.
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 @pytest.fixture()
 def table(tmp_path):
     uri = f"file://{tmp_path}/oranges"
     schema = pa.schema([("id", pa.int64()), ("v", pa.large_string())])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
     t.add_index("id", "inverted")
     # 10 segments of 10 rows: ids 0..99 — enough segments that pruning matters.
     for chunk in range(10):

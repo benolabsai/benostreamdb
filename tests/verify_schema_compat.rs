@@ -8,13 +8,13 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::manifest::{PartitionField, PartitionSpec};
-use hyperstreamdb::Table;
+use benostreamdb::core::manifest::{PartitionField, PartitionSpec};
+use benostreamdb::Table;
 use std::sync::Arc;
 
 async fn clear_caches() {
-    hyperstreamdb::core::cache::MANIFEST_CACHE.invalidate_all();
-    hyperstreamdb::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+    benostreamdb::core::cache::MANIFEST_CACHE.invalidate_all();
+    benostreamdb::core::cache::LATEST_VERSION_CACHE.invalidate_all();
 }
 
 #[tokio::test]
@@ -137,7 +137,7 @@ async fn test_uuid_and_fixed() -> Result<()> {
     let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
 
     // UUID is often mapped to Fixed(16) or String in Arrow.
-    // HyperStream currently treats it as String/Utf8 for compatibility.
+    // BenoStream currently treats it as String/Utf8 for compatibility.
     let schema = Arc::new(Schema::new(vec![
         Field::new("f_uuid", DataType::Utf8, false),
         Field::new("f_fixed", DataType::FixedSizeBinary(3), false),

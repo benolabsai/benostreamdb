@@ -3,7 +3,7 @@
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -129,7 +129,7 @@ async fn test_primary_key_nullability_enforcement() -> anyhow::Result<()> {
 
     // Verify Iceberg schema in manifest is now NOT NULL (required: true)
     let manifest_manager =
-        hyperstreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
+        benostreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
     let (latest, _, _) = manifest_manager.load_latest_full().await?;
     let field = latest
         .schemas

@@ -227,7 +227,7 @@ impl HybridSegmentWriter {
         }
     }
 
-    /// Compute vector statistics (HyperStream exclusive) while delegating
+    /// Compute vector statistics (BenoStream exclusive) while delegating
     /// scalar statistics to the Parquet writer metadata (Zero-Copy).
     fn compute_vector_stats(&self, _batch: &RecordBatch) -> Result<HashMap<String, VectorStats>> {
         // Bypassing vector stats computation (dim_min, dim_max) to maximize bulk ingestion throughput.
@@ -288,7 +288,7 @@ impl HybridSegmentWriter {
                     }
                 }
 
-                // Merge in HyperStream-specific vector stats if applicable
+                // Merge in BenoStream-specific vector stats if applicable
                 if let Some(v_stats) = vector_stats_map.get(&col_name) {
                     col_stats.vector_stats = Some(v_stats.clone());
                 }
@@ -306,7 +306,7 @@ impl HybridSegmentWriter {
             self.config.base_path.contains("://") && !self.config.base_path.starts_with("file://");
         let (path, _local_staging_dir) = if is_remote {
             let temp_dir = std::env::temp_dir()
-                .join("hyperstream_staging")
+                .join("benostream_staging")
                 .join(uuid::Uuid::new_v4().to_string());
             std::fs::create_dir_all(&temp_dir)?;
             let filename = format!("{}.parquet", self.config.segment_id);
@@ -411,7 +411,7 @@ impl HybridSegmentWriter {
         let mut final_paths = Vec::new();
 
         for local_path in files {
-            if !local_path.contains("hyperstream_staging") {
+            if !local_path.contains("benostream_staging") {
                 // Not a staged file, assume it's already in the right place (or local)
                 final_paths.push(local_path);
                 continue;
@@ -684,7 +684,9 @@ impl HybridSegmentWriter {
 
                 // Get the staging directory from the tmp_path
                 let tmp_path_buf = std::path::PathBuf::from(&tmp_path);
-                let local_staging_dir = tmp_path_buf.parent().unwrap();
+                let local_staging_dir = tmp_path_buf
+                    .parent()
+                    .context("temporary vector file has no parent directory")?;
 
                 let local_base_path =
                     local_staging_dir.join(format!("{}.{}", self.config.segment_id, suffix));
@@ -725,7 +727,9 @@ impl HybridSegmentWriter {
 
             // Get the staging directory from the tmp_path
             let tmp_path_buf = std::path::PathBuf::from(&tmp_path);
-            let local_staging_dir = tmp_path_buf.parent().unwrap();
+            let local_staging_dir = tmp_path_buf
+                .parent()
+                .context("temporary graph file has no parent directory")?;
 
             let local_base_path =
                 local_staging_dir.join(format!("{}.{}", self.config.segment_id, col_name));
@@ -740,7 +744,7 @@ impl HybridSegmentWriter {
             for local_file in &saved_files {
                 let file_name = std::path::Path::new(local_file)
                     .file_name()
-                    .unwrap()
+                    .context("saved index file has no file name")?
                     .to_string_lossy()
                     .to_string();
 
@@ -879,7 +883,7 @@ impl HybridSegmentWriter {
                     && !self.config.base_path.starts_with("file://");
                 let local_staging_dir = if is_remote {
                     let temp_dir = std::env::temp_dir()
-                        .join("hyperstream_staging")
+                        .join("benostream_staging")
                         .join(uuid::Uuid::new_v4().to_string());
                     std::fs::create_dir_all(&temp_dir)?;
                     temp_dir
@@ -987,7 +991,7 @@ impl HybridSegmentWriter {
             self.config.base_path.contains("://") && !self.config.base_path.starts_with("file://");
         let local_staging_dir = if is_remote {
             let temp_dir = std::env::temp_dir()
-                .join("hyperstream_staging")
+                .join("benostream_staging")
                 .join(uuid::Uuid::new_v4().to_string());
             std::fs::create_dir_all(&temp_dir)?;
             temp_dir

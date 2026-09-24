@@ -1,5 +1,5 @@
 import time
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import pyarrow as pa
 import pytest
@@ -13,7 +13,7 @@ def table_path(tmp_path):
 
 def test_sql_basic_query(table_path, tmp_path):
     print(f"Creating table at {table_path}")
-    table = hdb.Table(f"file://{table_path}")
+    table = bsdb.Table(f"file://{table_path}")
     
     # Create Data
     df = pd.DataFrame({
@@ -44,7 +44,7 @@ def test_sql_basic_query(table_path, tmp_path):
     # Boolean column and filter test
     # Create a new table for boolean testing
     bool_table_path = str(tmp_path / "sql_test_table_bool")
-    table_bool = hdb.Table(f"file://{bool_table_path}")
+    table_bool = bsdb.Table(f"file://{bool_table_path}")
     
     # Create DataFrame (including Boolean)
     df_bool = pd.DataFrame({'id': [1, 2, 3], 'category': ['science', 'math', 'science'], 'is_active': [True, False, True]})
@@ -66,7 +66,7 @@ def test_sql_basic_query(table_path, tmp_path):
     assert not any(results_false_df['is_active'])  # All returned rows should be false
 
     # Check Memory Limit Argument (Should not crash even if unused)
-    session_limited = hdb.Session(memory_mb=100)
+    session_limited = bsdb.Session(memory_mb=100)
     assert session_limited is not None
     
     # Filter Query
@@ -98,10 +98,10 @@ def test_sql_basic_query(table_path, tmp_path):
 
     # Joins
     print("Executing Join Test...")
-    session = hdb.Session()
+    session = bsdb.Session()
     
     # Create orders table
-    orders_table = hdb.Table(f"file://{tmp_path}/orders")
+    orders_table = bsdb.Table(f"file://{tmp_path}/orders")
     orders_df = pd.DataFrame({
         "order_id": [101, 102, 103],
         "user_id": [1, 2, 4], # 4 has no match

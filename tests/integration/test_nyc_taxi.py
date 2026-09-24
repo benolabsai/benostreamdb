@@ -3,7 +3,7 @@ Integration test: NYC Taxi dataset (1.5B rows)
 Tests: Ingest, compaction, query performance
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow.parquet as pq
 import time
 from pathlib import Path
@@ -16,7 +16,7 @@ def test_nyc_taxi_ingest():
         print("NYC Taxi data not found. Run: tests/data/download_nyc_taxi.sh")
         return
     
-    table = hdb.Table("file:///tmp/hyperstream_test/nyc_taxi")
+    table = bsdb.Table("file:///tmp/benostream_test/nyc_taxi")
     table.add_index_columns(["passenger_count"])
     
     # Ingest all Parquet files
@@ -33,7 +33,7 @@ def test_nyc_taxi_ingest():
         arrow_table = arrow_table.rename_columns([c.lower() for c in arrow_table.column_names])
         total_rows += len(arrow_table)
         
-        # Write to HyperStream
+        # Write to BenoStream
         table.write_arrow(arrow_table)
     
     elapsed = time.time() - start_time
@@ -53,7 +53,7 @@ def test_nyc_taxi_query():
         return
     """Test querying NYC Taxi data with filters"""
     
-    table = hdb.Table("file:///tmp/hyperstream_test/nyc_taxi")
+    table = bsdb.Table("file:///tmp/benostream_test/nyc_taxi")
     
     # Test 1: High-selectivity indexed query - must meet <100ms p99 target
     # Test 1: High selectivity query - tests p99 latency target
@@ -112,7 +112,7 @@ def test_nyc_taxi_query():
 def test_nyc_taxi_compaction():
     """Test compaction on NYC Taxi data"""
     
-    table = hdb.Table("file:///tmp/hyperstream_test/nyc_taxi")
+    table = bsdb.Table("file:///tmp/benostream_test/nyc_taxi")
     
     start_time = time.time()
     table.compact()

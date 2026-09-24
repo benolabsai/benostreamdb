@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import os, shutil
 import pandas as pd
@@ -17,7 +17,7 @@ spec = {
     ]
 }
 
-table = hdb.Table.create_partitioned('file:///tmp/part_demo', schema, spec)
+table = bsdb.Table.create_partitioned('file:///tmp/part_demo', schema, spec)
 table.write(pd.DataFrame({'id': [1, 2], 'category': ['A', 'B']}))
 table.commit()
 

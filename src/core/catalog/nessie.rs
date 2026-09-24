@@ -408,7 +408,7 @@ impl NessieClient {
             operations: vec![op],
             meta: CommitMeta {
                 message,
-                author: "hyperstream".to_string(),
+                author: "benostream".to_string(),
                 properties: HashMap::new(),
             },
         };

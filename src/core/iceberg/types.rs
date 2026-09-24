@@ -71,9 +71,9 @@ pub struct IcebergDataFile {
     pub referenced_data_file: Option<String>,
     pub content_offset: Option<i64>,
     pub content_size_in_bytes: Option<i64>,
-    /// HyperStream Extension: Serialized Index Files (JSON)
+    /// BenoStream Extension: Serialized Index Files (JSON)
     pub index_files: Option<String>,
-    /// HyperStream Extension: File Checksum for integrity validation
+    /// BenoStream Extension: File Checksum for integrity validation
     pub file_checksum: Option<String>,
 }
 

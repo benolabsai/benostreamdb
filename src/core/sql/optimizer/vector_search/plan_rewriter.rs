@@ -86,20 +86,20 @@ pub fn build_optimized_plan(
 
     // Construct optimized scan
     let scan_exec = VectorScanExec::new(
-        pattern.hyperstream_exec.table.clone(),
-        pattern.hyperstream_exec.partitions.clone(),
-        pattern.hyperstream_exec.projection.clone(),
-        pattern.hyperstream_exec.filter_str.clone(),
+        pattern.benostream_exec.table.clone(),
+        pattern.benostream_exec.partitions.clone(),
+        pattern.benostream_exec.projection.clone(),
+        pattern.benostream_exec.filter_str.clone(),
         vector_params,
         Some(k_with_offset),
-        pattern.hyperstream_exec.schema.clone(),
+        pattern.benostream_exec.schema.clone(),
     )?;
 
     let merge_exec = VectorMergeExec::new(
         Arc::new(scan_exec),
         pattern.limit,
         pattern.offset,
-        pattern.hyperstream_exec.schema.clone(),
+        pattern.benostream_exec.schema.clone(),
     )?;
 
     tracing::info!(

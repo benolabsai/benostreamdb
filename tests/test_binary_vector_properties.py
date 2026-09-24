@@ -7,7 +7,7 @@ Feature: python-vector-api-gpu-acceleration
 import pytest
 import numpy as np
 from hypothesis import given, strategies as st, settings
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 # ============================================================================
@@ -33,7 +33,7 @@ def test_binary_hamming_distance_correctness(num_bits, seed):
     b_packed = np.random.randint(0, 256, size=num_bytes, dtype=np.uint8)
     
     # Compute distance using our function
-    result = hdb.hamming_packed(a_packed, b_packed)
+    result = bsdb.hamming_packed(a_packed, b_packed)
     
     # Compute expected distance by unpacking and comparing bits
     expected = 0
@@ -59,7 +59,7 @@ def test_binary_hamming_distance_identical_vectors(num_bits, seed):
     num_bytes = (num_bits + 7) // 8
     a_packed = np.random.randint(0, 256, size=num_bytes, dtype=np.uint8)
     
-    result = hdb.hamming_packed(a_packed, a_packed)
+    result = bsdb.hamming_packed(a_packed, a_packed)
     
     assert result == 0, f"Hamming distance to self should be 0, got {result}"
 
@@ -79,8 +79,8 @@ def test_binary_hamming_distance_symmetry(num_bits, seed):
     a_packed = np.random.randint(0, 256, size=num_bytes, dtype=np.uint8)
     b_packed = np.random.randint(0, 256, size=num_bytes, dtype=np.uint8)
     
-    result_ab = hdb.hamming_packed(a_packed, b_packed)
-    result_ba = hdb.hamming_packed(b_packed, a_packed)
+    result_ab = bsdb.hamming_packed(a_packed, b_packed)
+    result_ba = bsdb.hamming_packed(b_packed, a_packed)
     
     assert result_ab == result_ba, f"Hamming distance should be symmetric: {result_ab} != {result_ba}"
 
@@ -122,10 +122,10 @@ def test_binary_vector_auto_packing_hamming(num_bits, seed):
     b_packed = pack_vector(b_unpacked)
     
     # Compute distance using auto-packing
-    result_auto = hdb.hamming_auto(a_unpacked, b_unpacked)
+    result_auto = bsdb.hamming_auto(a_unpacked, b_unpacked)
     
     # Compute distance using manually packed vectors
-    result_manual = hdb.hamming_packed(a_packed, b_packed)
+    result_manual = bsdb.hamming_packed(a_packed, b_packed)
     
     assert result_auto == result_manual, \
         f"Auto-packed distance {result_auto} should equal manually packed distance {result_manual}"
@@ -163,10 +163,10 @@ def test_binary_vector_auto_packing_jaccard(num_bits, seed):
     b_packed = pack_vector(b_unpacked)
     
     # Compute distance using auto-packing
-    result_auto = hdb.jaccard_auto(a_unpacked, b_unpacked)
+    result_auto = bsdb.jaccard_auto(a_unpacked, b_unpacked)
     
     # Compute distance using manually packed vectors
-    result_manual = hdb.jaccard_packed(a_packed, b_packed)
+    result_manual = bsdb.jaccard_packed(a_packed, b_packed)
     
     assert np.isclose(result_auto, result_manual, rtol=1e-5), \
         f"Auto-packed distance {result_auto} should equal manually packed distance {result_manual}"
@@ -189,10 +189,10 @@ def test_binary_vector_auto_packing_rejects_non_binary(num_bits, seed):
     
     # Should raise ValueError for non-binary values
     with pytest.raises(ValueError, match="must contain only 0.0 or 1.0"):
-        hdb.hamming_auto(a, b)
+        bsdb.hamming_auto(a, b)
     
     with pytest.raises(ValueError, match="must contain only 0.0 or 1.0"):
-        hdb.jaccard_auto(a, b)
+        bsdb.jaccard_auto(a, b)
 
 
 # ============================================================================
@@ -215,7 +215,7 @@ def test_binary_jaccard_distance_correctness():
     # Jaccard similarity = 3/6 = 0.5
     # Jaccard distance = 1 - 0.5 = 0.5
     
-    result = hdb.jaccard_packed(a, b)
+    result = bsdb.jaccard_packed(a, b)
     expected = 0.5
     
     assert np.isclose(result, expected, rtol=1e-5), \
@@ -228,7 +228,7 @@ def test_binary_jaccard_distance_identical():
     """
     a = np.array([0b10110101, 0b11001100], dtype=np.uint8)
     
-    result = hdb.jaccard_packed(a, a)
+    result = bsdb.jaccard_packed(a, a)
     
     assert np.isclose(result, 0.0, rtol=1e-5), \
         f"Jaccard distance to self should be 0, got {result}"
@@ -241,7 +241,7 @@ def test_binary_jaccard_distance_all_zeros():
     a = np.array([0, 0, 0], dtype=np.uint8)
     b = np.array([0, 0, 0], dtype=np.uint8)
     
-    result = hdb.jaccard_packed(a, b)
+    result = bsdb.jaccard_packed(a, b)
     
     assert np.isclose(result, 0.0, rtol=1e-5), \
         f"Jaccard distance between all-zero vectors should be 0, got {result}"
@@ -255,10 +255,10 @@ def test_binary_vector_dimension_mismatch():
     b = np.array([0b10101100, 0b11001100], dtype=np.uint8)
     
     with pytest.raises(ValueError, match="length mismatch"):
-        hdb.hamming_packed(a, b)
+        bsdb.hamming_packed(a, b)
     
     with pytest.raises(ValueError, match="length mismatch"):
-        hdb.jaccard_packed(a, b)
+        bsdb.jaccard_packed(a, b)
 
 
 if __name__ == "__main__":

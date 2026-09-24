@@ -3,9 +3,9 @@
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::manifest::IndexAlgorithm;
-use hyperstreamdb::core::sql::session::HyperStreamSession;
-use hyperstreamdb::Table;
+use benostreamdb::core::manifest::IndexAlgorithm;
+use benostreamdb::core::sql::session::BenoStreamSession;
+use benostreamdb::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -27,7 +27,7 @@ async fn test_index_lifecycle_add_drop_readd() -> anyhow::Result<()> {
         schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![
-                "HyperStreamDB is a fast database",
+                "BenoStreamDB is a fast database",
                 "DataFusion is a SQL engine",
                 "BM25 is for search",
             ])),
@@ -37,7 +37,7 @@ async fn test_index_lifecycle_add_drop_readd() -> anyhow::Result<()> {
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
 
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
     session.register_table("docs", table.clone())?;
 
     // 3. Add BM25 Index to 'text'
@@ -162,7 +162,7 @@ async fn test_index_lifecycle_add_drop_readd() -> anyhow::Result<()> {
     // Since we dropped the index, and our TableProvider only handles = as BM25 if index exists,
     // this will now be a normal DataFusion Filter on the text column.
     // It should STILL find the row if exact match, but BM25 is keyword.
-    // Our test data "HyperStreamDB is a fast database" != "database", so expected 0 results without index.
+    // Our test data "BenoStreamDB is a fast database" != "database", so expected 0 results without index.
     assert!(results.is_empty(), "Keyword search should return empty results if index is dropped because equality filter falls back to exact match");
 
     Ok(())

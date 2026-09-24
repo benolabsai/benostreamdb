@@ -1,12 +1,12 @@
 # ---------------------------------------------------------------------------
-# HyperStreamDB Search — benchmark image
+# BenoStreamDB Search — benchmark image
 #
 # Base image must match the host glibc (the binary is built on the host and
 # copied in, not compiled inside Docker). Ubuntu 26.04 == glibc 2.43, same
 # as the dev host.
 #
-# Build from the repo root after `cargo build -p hyperstreamdb-search --release`:
-#   docker build -f docker/Dockerfile.search-bench -t hypersearch-bench:latest .
+# Build from the repo root after `cargo build -p benostreamdb-search --release`:
+#   docker build -f docker/Dockerfile.search-bench -t bsdb-search-bench:latest .
 # ---------------------------------------------------------------------------
 FROM ubuntu:26.04
 
@@ -15,12 +15,12 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY target/release/hypersearch /usr/local/bin/hypersearch
+COPY target/release/bsdb-search /usr/local/bin/bsdb-search
 
 # Default: bind to 0.0.0.0 for container networking
-ENV HYPERSEARCH_BIND=0.0.0.0
-ENV HYPERSEARCH_PORT=9200
+ENV BENOSEARCH_BIND=0.0.0.0
+ENV BENOSEARCH_PORT=9200
 ENV RUST_LOG=info
 
-ENTRYPOINT ["hypersearch"]
+ENTRYPOINT ["bsdb-search"]
 CMD []

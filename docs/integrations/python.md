@@ -1,11 +1,11 @@
 # Python Bindings
 
-HyperStreamDB provides high-performance Python bindings using [PyO3](https://github.com/PyO3/pyo3). This allows you to use HyperStreamDB directly from Python scripts, Jupyter notebooks, and AI pipelines.
+BenoStreamDB provides high-performance Python bindings using [PyO3](https://github.com/PyO3/pyo3). This allows you to use BenoStreamDB directly from Python scripts, Jupyter notebooks, and AI pipelines.
 
 ## Installation
 
 ```bash
-pip install hyperstreamdb
+pip install benostreamdb
 ```
 
 *(Note: Ensure you have the Rust toolchain installed if building from source)*
@@ -14,25 +14,25 @@ pip install hyperstreamdb
 
 ### Catalog Selection and Configuration
 
-HyperStreamDB supports multiple catalog backends (Nessie, Hive, REST, Glue, Unity). You can configure the catalog using a factory method or a TOML configuration file.
+BenoStreamDB supports multiple catalog backends (Nessie, Hive, REST, Glue, Unity). You can configure the catalog using a factory method or a TOML configuration file.
 
 #### 1. Direct Instantiation
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create a Nessie catalog
-catalog = hdb.create_catalog("nessie", {"url": "http://localhost:19120"})
+catalog = bsdb.create_catalog("nessie", {"url": "http://localhost:19120"})
 
 # Create a Hive catalog
 # Note: Requires Thrift connection
-catalog = hdb.create_catalog("hive", {
+catalog = bsdb.create_catalog("hive", {
     "url": "thrift://localhost:9083", 
     "warehouse": "s3://bucket/warehouse"
 })
 
 # Create a Unity Catalog
-catalog = hdb.create_catalog("unity", {
+catalog = bsdb.create_catalog("unity", {
     "url": "https://<host>.cloud.databricks.com",
     "token": "dapi123..."
 })
@@ -40,19 +40,19 @@ catalog = hdb.create_catalog("unity", {
 
 #### 2. Default Configuration (Recommended)
 
-You can define your catalog configuration in a standard location. HyperStreamDB searches in the following order:
+You can define your catalog configuration in a standard location. BenoStreamDB searches in the following order:
 
-1.  `HYPERSTREAM_CONFIG` (Environment Variable path)
-2.  `./hyperstream.toml` (Current Directory)
-3.  `~/.hyperstream/config.toml` (Home Directory)
+1.  `BENOSTREAM_CONFIG` (Environment Variable path)
+2.  `./benostream.toml` (Current Directory)
+3.  `~/.benostream/config.toml` (Home Directory)
 
 **Load Default Catalog:**
 ```python
 # Automatically loads from the first found config file
-catalog = hdb.load_default_catalog()
+catalog = bsdb.load_default_catalog()
 ```
 
-**Example TOML Config (`hyperstream.toml`):**
+**Example TOML Config (`benostream.toml`):**
 ```toml
 catalog_type = "nessie"
 
@@ -64,7 +64,7 @@ branch = "main"
 #### 3. Load Config from Specific File
 
 ```python
-catalog = hdb.create_catalog_from_config("/path/to/my_config.toml")
+catalog = bsdb.create_catalog_from_config("/path/to/my_config.toml")
 ```
 
 See [examples/configs/](../examples/configs/) for example configuration files for each catalog type.
@@ -72,16 +72,16 @@ See [examples/configs/](../examples/configs/) for example configuration files fo
 ### Writing Data
 
 ```python
-import hyperstreamdb as hyperstream
+import benostreamdb as benostream
 import pandas as pd
 
 # Create a writer
-writer = hyperstream.Writer("s3://my-bucket/dataset")
+writer = benostream.Writer("s3://my-bucket/dataset")
 
 # Create a dataframe
 df = pd.DataFrame({
     "id": [1, 2, 3],
-    "text": ["hello", "world", "hyperstream"],
+    "text": ["hello", "world", "benostream"],
     "vector": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
 })
 
@@ -93,7 +93,7 @@ writer.commit()
 ### Reading Data (with Predicate Pushdown)
 
 ```python
-reader = hyperstream.Reader("s3://my-bucket/dataset")
+reader = benostream.Reader("s3://my-bucket/dataset")
 
 # Filter logic is pushed down to Rust and uses Inverted Indexes
 # Only relevant rows are materialized into Pandas

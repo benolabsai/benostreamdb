@@ -141,11 +141,19 @@ impl Accumulator for DegreeCentralityAccumulator {
         let sources_list = states[0]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "degree_centrality: expected ListArray for sources".to_string(),
+                )
+            })?;
         let targets_list = states[1]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
-            .unwrap();
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "degree_centrality: expected ListArray for targets".to_string(),
+                )
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -196,7 +204,7 @@ impl Accumulator for DegreeCentralityAccumulator {
         .add_buffer(arrow::buffer::Buffer::from_slice_ref([0i32, 1i32]))
         .add_child_data(struct_array.into_data())
         .build()
-        .unwrap();
+        .map_err(|e| datafusion::error::DataFusionError::ArrowError(Box::new(e), None))?;
 
         let list_array = arrow::array::ListArray::from(list_data);
         Ok(ScalarValue::List(Arc::new(list_array)))
@@ -206,8 +214,22 @@ impl Accumulator for DegreeCentralityAccumulator {
         if values.is_empty() {
             return Ok(());
         }
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "degree_centrality: expected UInt64Array for sources".to_string(),
+                )
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                datafusion::error::DataFusionError::Execution(
+                    "degree_centrality: expected UInt64Array for targets".to_string(),
+                )
+            })?;
 
         self.sources.extend(sources.iter().flatten());
         self.targets.extend(targets.iter().flatten());

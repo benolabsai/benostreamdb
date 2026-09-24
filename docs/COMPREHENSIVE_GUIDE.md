@@ -1,15 +1,15 @@
-# HyperStreamDB Comprehensive Guide
+# BenoStreamDB Comprehensive Guide
 
 **Version:** 0.7.0+  
 **Last Updated:** September 2026
 
-HyperStreamDB is a serverless, indexed streaming lakehouse database combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar roaring bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage (S3, GCS, Azure, Local).
+BenoStreamDB is a serverless, indexed streaming lakehouse database combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar roaring bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage (S3, GCS, Azure, Local).
 
 ---
 
 ## 1. Architecture Overview
 
-HyperStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.
+BenoStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.
 
 *   **Storage-Native**: Authoritative open table format (Apache Iceberg V2 & V3) storing raw data in standard Parquet files.
 *   **Advisory Index Overlays**: Reconstructible sidecar index files attached directly to Parquet data:
@@ -18,7 +18,7 @@ HyperStreamDB decouples compute from storage, allowing for infinite scaling and 
     *   **Inverted Index & BM25 Okapi**: Full-text and keyword search sidecars with term frequency and document length normalization.
     *   **Roaring Bitmaps**: For boolean, categorical, and composite multi-column filtering.
     *   **Hot Row Cache**: Sub-millisecond scattered row fetches directly bypassing disk I/O on vector candidate lookups.
-*   **Dual REST Search API (`hypersearch`)**: Concurrently exposes OpenSearch/Elasticsearch 7.10 (port 9200) and Qdrant Vector API (port 6333) from a single shared engine.
+*   **Dual REST Search API (`bsdb-search`)**: Concurrently exposes OpenSearch/Elasticsearch 7.10 (port 9200) and Qdrant Vector API (port 6333) from a single shared engine.
 *   **Engine**: Built in Rust with Apache Arrow and DataFusion for vectorized query execution.
 
 ---
@@ -39,7 +39,7 @@ pip install .
 ### Basic Usage (Python)
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pandas as pd
 import numpy as np
@@ -53,7 +53,7 @@ schema = pa.schema([
     ('embedding', pa.list_(pa.float32(), 384)) # SBERT/all-MiniLM-L6-v2 size
 ])
 
-table = hdb.Table.create("file:///tmp/news_db", schema)
+table = bsdb.Table.create("file:///tmp/news_db", schema)
 
 # 2. Ingest Real Data
 df = pd.DataFrame({
@@ -83,10 +83,10 @@ print(results.to_pandas()[['title', 'description']])
 ## 3. Key Features
 
 ### 3.1 SQL Support & pgvector Operators
-HyperStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.
+BenoStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.
 
 ```python
-session = hdb.Session()
+session = bsdb.Session()
 session.register_table("my_table", table)
 
 df = session.sql("""
@@ -134,12 +134,12 @@ table.create_composite_index(
 )
 ```
 
-### 3.4 Dual REST Search API (`hypersearch`)
-Run standard OpenSearch / Elasticsearch 7.10 clients or Qdrant vector clients directly against HyperStreamDB:
+### 3.4 Dual REST Search API (`bsdb-search`)
+Run standard OpenSearch / Elasticsearch 7.10 clients or Qdrant vector clients directly against BenoStreamDB:
 
 ```bash
 # Start dual REST gateway (OpenSearch on :9200, Qdrant on :6333)
-cargo run -p hyperstreamdb-search --bin hypersearch
+cargo run -p benostreamdb-search --bin bsdb-search
 ```
 
 - **OpenSearch / Elasticsearch (Port 9200)**: Supports `_bulk`, `_search` (BM25, kNN, hybrid RRF), `_mapping`, `_cat/indices`, and index management.
@@ -167,7 +167,7 @@ The indexing engine supports hardware acceleration across multiple backends:
 
 ## 4. Multi-Catalog & Enterprise Governance
 
-HyperStreamDB integrates seamlessly with standard data catalogs for table discovery and atomic commits:
+BenoStreamDB integrates seamlessly with standard data catalogs for table discovery and atomic commits:
 
 *   **Apache Polaris & Lakekeeper**: Full OAuth2 client credentials grant flow (`/v1/oauth/tokens`) with automatic background token refresh.
 *   **Project Nessie**: Git-like branching, merging, and versioning for lakehouse tables.
@@ -177,7 +177,7 @@ HyperStreamDB integrates seamlessly with standard data catalogs for table discov
 
 Example connecting to Apache Polaris REST catalog with OAuth2:
 ```python
-table = hdb.Table.from_rest(
+table = bsdb.Table.from_rest(
     url="https://polaris.example.com/api/catalog/v1",
     namespace="production",
     table="events",
@@ -190,16 +190,16 @@ table = hdb.Table.from_rest(
 
 ## 5. Operational Tooling & Observability
 
-### CLI Commands (`hyperstream`)
+### CLI Commands (`benostream`)
 ```bash
 # Inspect table metadata and partitions
-hyperstream table inspect --uri s3://bucket/table
+benostream table inspect --uri s3://bucket/table
 
 # Compaction (Merge small Parquet files)
-hyperstream table compact --uri s3://bucket/table
+benostream table compact --uri s3://bucket/table
 
 # Clean up unreferenced snapshots
-hyperstream table expire-snapshots --uri s3://bucket/table --older-than-days 7
+benostream table expire-snapshots --uri s3://bucket/table --older-than-days 7
 ```
 
 ### Prometheus Metrics & Tracing
@@ -210,7 +210,7 @@ hyperstream table expire-snapshots --uri s3://bucket/table --older-than-days 7
 
 ## 6. Performance Best Practices
 
-1. **Leverage Hot Row Cache**: `HYPERSTREAM_BLOCK_CACHE_GB` defaults to 1 GB (proven rock-solid under 4GB container constraints during 1M document scaling tests), caching candidate record batches in memory for sub-2ms kNN search.
+1. **Leverage Hot Row Cache**: `BENOSTREAM_BLOCK_CACHE_GB` defaults to 1 GB (proven rock-solid under 4GB container constraints during 1M document scaling tests), caching candidate record batches in memory for sub-2ms kNN search.
 2. **Column Projection**: Always specify `columns=[...]` in scalar reads to skip reading large high-dimensional vector embeddings.
 3. **Use TurboQuant for Large Vector Sets**: TQ8 and TQ4 provide 4x–8x memory savings with negligible recall loss.
 4. **Regular Compaction**: Run `table.compact()` to merge fragmented segments and maintain optimal HNSW graph structures.

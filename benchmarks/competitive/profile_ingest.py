@@ -1,11 +1,11 @@
 import time
 import os
-os.environ['HYPERSTREAM_WAL_SYNC_INTERVAL_MS'] = '10'
-os.environ['HYPERSTREAM_WAL_SYNC_BATCH_SIZE'] = '100000'
+os.environ['BENOSTREAM_WAL_SYNC_INTERVAL_MS'] = '10'
+os.environ['BENOSTREAM_WAL_SYNC_BATCH_SIZE'] = '100000'
 os.environ['RUST_LOG'] = 'info'
 import numpy as np
 import pyarrow as pa
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import tempfile
 import sys
 
@@ -23,7 +23,7 @@ def profile():
     df = pd.DataFrame(metadata)
     
     with tempfile.TemporaryDirectory() as tmpdir:
-        table = hdb.Table(f"file://{tmpdir}/test_table")
+        table = bsdb.Table(f"file://{tmpdir}/test_table")
         
         start = time.time()
         

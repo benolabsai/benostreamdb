@@ -14,7 +14,7 @@
 // limitations under the License.
 
 //! Vector search optimizer rule.
-//! Detects KNN patterns (Limit -> Sort -> Filter -> HyperStreamExec) and rewrites
+//! Detects KNN patterns (Limit -> Sort -> Filter -> BenoStreamExec) and rewrites
 //! them to use vector index search via VectorScanExec and VectorMergeExec.
 
 mod plan_detection;
@@ -37,7 +37,7 @@ use sort_expr_parser::parse_vector_search_exprs;
 /// the plan to use vector index search.
 ///
 /// Detects patterns of the form:
-/// `GlobalLimitExec -> SortExec -> FilterExec? -> HyperStreamExec`
+/// `GlobalLimitExec -> SortExec -> FilterExec? -> BenoStreamExec`
 ///
 /// When the SortExec contains a vector distance expression (UDF or operator),
 /// the plan is rewritten to use `VectorScanExec` and `VectorMergeExec`

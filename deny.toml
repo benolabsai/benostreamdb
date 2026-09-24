@@ -1,4 +1,4 @@
-# cargo-deny configuration for HyperStreamDB
+# cargo-deny configuration for BenoStreamDB
 # https://embarkstudios.github.io/cargo-deny/
 
 [graph]
@@ -22,6 +22,10 @@ ignore = [
     "RUSTSEC-2026-0190",
     "RUSTSEC-2026-0221",
     "RUSTSEC-2026-0204",
+    # `paste` is unmaintained (RUSTSEC-2024-0436) but is pulled in transitively
+    # by datafusion-common 52.x; it cannot be removed without forking DataFusion.
+    # It is a compile-time proc-macro with no runtime attack surface.
+    "RUSTSEC-2024-0436",
 ]
 
 [bans]

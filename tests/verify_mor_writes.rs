@@ -5,13 +5,13 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use hyperstreamdb::Table;
+    use benostreamdb::Table;
     use std::fs;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_mor_position_deletes() -> anyhow::Result<()> {
-        let test_dir = "/tmp/hyperstream_mor_test";
+        let test_dir = "/tmp/benostream_mor_test";
         let _ = fs::remove_dir_all(test_dir);
         fs::create_dir_all(test_dir)?;
 
@@ -58,8 +58,8 @@ mod tests {
         assert!(found_del_file, "Position Delete File should be created");
 
         // 5. Verify Manifest contains Delete Entry
-        let manifest_manager = hyperstreamdb::core::manifest::ManifestManager::new(
-            hyperstreamdb::core::storage::create_object_store(&uri)?,
+        let manifest_manager = benostreamdb::core::manifest::ManifestManager::new(
+            benostreamdb::core::storage::create_object_store(&uri)?,
             "",
             &uri,
         );

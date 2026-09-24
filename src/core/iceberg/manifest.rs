@@ -394,7 +394,7 @@ fn parse_map_int_bytes(val: AvroValue) -> Option<std::collections::HashMap<i32, 
     None
 }
 
-/// Convert Iceberg Manifest Entry to HyperStream Manifest Entry or Delete File
+/// Convert Iceberg Manifest Entry to BenoStream Manifest Entry or Delete File
 pub fn convert_iceberg_to_object(
     iceberg_entry: &IcebergManifestEntry,
     schema: &crate::core::manifest::Schema,

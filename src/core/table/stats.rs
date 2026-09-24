@@ -790,7 +790,7 @@ impl Table {
     // -----------------------------------------------------------------------
 
     /// Read from the in-memory write buffer with optional filter and projection
-    /// Used by HyperStreamExec to include uncommitted data in SQL queries
+    /// Used by BenoStreamExec to include uncommitted data in SQL queries
     pub fn read_write_buffer(
         &self,
         filter: Option<&QueryFilter>,

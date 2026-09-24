@@ -16,7 +16,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 DIM = 8
 
@@ -30,7 +30,7 @@ def _table(uri, n=2000, seed=0):
         ("title", pa.large_string()),
         ("embedding", pa.list_(pa.float32(), DIM)),
     ])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
     t.write(pa.table({
         "id": pa.array(np.arange(n), pa.int64()),
         "title": pa.array([f"page {i}" for i in range(n)], pa.large_string()),
@@ -59,7 +59,7 @@ def test_index_config_persists_and_is_inherited(tmp_path):
     t.wait_for_background_tasks()
 
     # Reopen: the config must come back from the manifest
-    t2 = hdb.Table(uri)
+    t2 = bsdb.Table(uri)
     assert t2.index_all is not None  # property exists / table usable
     # Write through the reopened instance and confirm the new segment is indexed
     before = set(glob.glob(os.path.join(str(tmp_path), "tbl", "*.embedding.*")))

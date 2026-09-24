@@ -1,8 +1,8 @@
 # pgvector SQL Support Guide
 
-**HyperStreamDB pgvector-Compatible SQL Interface**
+**BenoStreamDB pgvector-Compatible SQL Interface**
 
-HyperStreamDB provides full pgvector-compatible SQL syntax through Apache DataFusion integration, allowing you to use familiar PostgreSQL vector operations for similarity search, aggregations, and type conversions.
+BenoStreamDB provides full pgvector-compatible SQL syntax through Apache DataFusion integration, allowing you to use familiar PostgreSQL vector operations for similarity search, aggregations, and type conversions.
 
 ## Table of Contents
 
@@ -20,9 +20,9 @@ HyperStreamDB provides full pgvector-compatible SQL syntax through Apache DataFu
 
 ## Distance Operators
 
-HyperStreamDB supports all six pgvector distance operators for computing vector similarity:
+BenoStreamDB supports all six pgvector distance operators for computing vector similarity:
 
-| Operator | Distance Metric | Description | HyperStreamDB Type | Upstream pgvector Type | Use Case |
+| Operator | Distance Metric | Description | BenoStreamDB Type | Upstream pgvector Type | Use Case |
 |:---|:---|:---|:---|:---|:---|
 | `<->` | L2 (Euclidean) | Straight-line distance | `::vector` | `vector`, `halfvec`, `sparsevec` | General similarity |
 | `<=>` | Cosine | Angle-based similarity | `::vector` | `vector`, `halfvec`, `sparsevec` | Text embeddings |
@@ -31,7 +31,7 @@ HyperStreamDB supports all six pgvector distance operators for computing vector 
 | `<~>` | Hamming | Bit difference count | `::vector` *(enhanced)* | `bit` only | Binary vectors / bitsets |
 | `<%>` | Jaccard | Set similarity | `::vector` *(enhanced)* | `bit` only | Categorical / indicator sets |
 
-> **Note on `<~>` and `<%>`:** In upstream PostgreSQL `pgvector`, `<~>` and `<%>` only accept the native PostgreSQL `bit` type (e.g. `'101'::bit(3)`). In HyperStreamDB, these operators are extended to execute directly on standard `::vector` (Arrow Float32) columns without requiring casting or binary conversion functions. See [Compatibility Notes & Conversions](#compatibility-notes) below for exact PostgreSQL translation syntax.
+> **Note on `<~>` and `<%>`:** In upstream PostgreSQL `pgvector`, `<~>` and `<%>` only accept the native PostgreSQL `bit` type (e.g. `'101'::bit(3)`). In BenoStreamDB, these operators are extended to execute directly on standard `::vector` (Arrow Float32) columns without requiring casting or binary conversion functions. See [Compatibility Notes & Conversions](#compatibility-notes) below for exact PostgreSQL translation syntax.
 
 ### Basic Usage
 
@@ -118,7 +118,7 @@ FROM documents;
 
 ## KNN Queries
 
-K-Nearest Neighbors (KNN) queries find the k most similar vectors to a query vector. HyperStreamDB automatically optimizes these queries to use vector indexes.
+K-Nearest Neighbors (KNN) queries find the k most similar vectors to a query vector. BenoStreamDB automatically optimizes these queries to use vector indexes.
 
 ### Basic KNN
 
@@ -227,9 +227,9 @@ SET vector.use_index = false;
 ### Python API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-session = hdb.Session()
+session = bsdb.Session()
 
 # Set configuration parameters
 session.set_config("hnsw.ef_search", 128)
@@ -647,16 +647,16 @@ SELECT vector_avg(embedding) FROM mixed_dimension_table;
 
 ### pgvector Compatibility Matrix
 
-HyperStreamDB implements the pgvector SQL interface with the following behavior:
+BenoStreamDB implements the pgvector SQL interface with the following behavior:
 
-| Feature / Operator | HyperStreamDB | PostgreSQL + pgvector | Notes |
+| Feature / Operator | BenoStreamDB | PostgreSQL + pgvector | Notes |
 |:---|:---|:---|:---|
 | `<->` (L2 / Euclidean) | ✅ Direct on `::vector` | ✅ Direct on `vector`, `halfvec`, `sparsevec` | 100% 1-to-1 drop-in syntax |
 | `<=>` (Cosine) | ✅ Direct on `::vector` | ✅ Direct on `vector`, `halfvec`, `sparsevec` | 100% 1-to-1 drop-in syntax |
 | `<#>` (Negative Inner Product) | ✅ Direct on `::vector` | ✅ Direct on `vector`, `halfvec`, `sparsevec` | 100% 1-to-1 drop-in syntax |
 | `<+>` (L1 / Manhattan) | ✅ Direct on `::vector` | ✅ Direct on `vector`, `halfvec`, `sparsevec` | Added in pgvector 0.7.0+ |
-| `<~>` (Hamming Distance) | ✅ **Enhanced: Direct on `::vector`** | ⚠️ **`bit` type only** | HyperStreamDB evaluates on float indicators directly; PostgreSQL requires `bit` type |
-| `<%>` (Jaccard Distance) | ✅ **Enhanced: Direct on `::vector`** | ⚠️ **`bit` type only** | HyperStreamDB evaluates on float indicator sets directly; PostgreSQL requires `bit` type |
+| `<~>` (Hamming Distance) | ✅ **Enhanced: Direct on `::vector`** | ⚠️ **`bit` type only** | BenoStreamDB evaluates on float indicators directly; PostgreSQL requires `bit` type |
+| `<%>` (Jaccard Distance) | ✅ **Enhanced: Direct on `::vector`** | ⚠️ **`bit` type only** | BenoStreamDB evaluates on float indicator sets directly; PostgreSQL requires `bit` type |
 | Vector Literals | `[0.1, 0.2]'::vector` | `[0.1, 0.2]'` or `::vector` | Compatible |
 | KNN Pushdown | `ORDER BY dist LIMIT k` | `ORDER BY dist LIMIT k` | Compatible |
 | Vector Aggregations | `vector_sum`, `vector_avg` | `avg(vector)`, `sum(vector)` | Compatible |
@@ -665,13 +665,13 @@ HyperStreamDB implements the pgvector SQL interface with the following behavior:
 
 ### Exact PostgreSQL Conversion Guide
 
-If you are porting queries between HyperStreamDB and PostgreSQL with `pgvector`, use the exact conversions below:
+If you are porting queries between BenoStreamDB and PostgreSQL with `pgvector`, use the exact conversions below:
 
 #### 1. Standard Distance Operators (`<->`, `<=>`, `<#>`, `<+>`)
 These operators share identical semantics and syntax between engines:
 
 ```sql
--- HyperStreamDB:
+-- BenoStreamDB:
 SELECT id, content FROM documents
 ORDER BY embedding <-> '[0.1, 0.2, 0.3]'::vector
 LIMIT 10;
@@ -683,11 +683,11 @@ LIMIT 10;
 ```
 
 #### 2. Hamming Distance (`<~>`)
-- **HyperStreamDB**: Directly calculates Hamming distance over standard float embeddings or binary indicator vectors.
+- **BenoStreamDB**: Directly calculates Hamming distance over standard float embeddings or binary indicator vectors.
 - **PostgreSQL (pgvector)**: `<~>` is strictly typed for PostgreSQL's `bit` type. You must convert float vectors using `binary_quantize()` (or store the column as `bit(N)`):
 
 ```sql
--- HyperStreamDB (direct on ::vector):
+-- BenoStreamDB (direct on ::vector):
 SELECT id, content FROM documents
 ORDER BY embedding <~> '[1, 0, 1]'::vector
 LIMIT 10;
@@ -704,11 +704,11 @@ LIMIT 10;
 ```
 
 #### 3. Jaccard Distance (`<%>`)
-- **HyperStreamDB**: Evaluates Jaccard set distance ($1.0 - \frac{\text{intersection}}{\text{union}}$) directly on float binary indicator vectors (where values $> 0.0$ represent set membership).
+- **BenoStreamDB**: Evaluates Jaccard set distance ($1.0 - \frac{\text{intersection}}{\text{union}}$) directly on float binary indicator vectors (where values $> 0.0$ represent set membership).
 - **PostgreSQL (pgvector)**: `<%>` is strictly typed for the `bit` type. Convert via `binary_quantize()`:
 
 ```sql
--- HyperStreamDB (direct on ::vector):
+-- BenoStreamDB (direct on ::vector):
 SELECT id, content FROM documents
 ORDER BY embedding <%> '[1, 0, 1]'::vector
 LIMIT 10;
@@ -728,7 +728,7 @@ LIMIT 10;
 
 ## Additional Resources
 
-- [HyperStreamDB Architecture](architecture.md)
+- [BenoStreamDB Architecture](architecture.md)
 - [DataFusion SQL Reference](https://arrow.apache.org/datafusion/user-guide/sql/index.html)
 - [pgvector Documentation](https://github.com/pgvector/pgvector)
 - [Vector Search Best Practices](COMPREHENSIVE_GUIDE.md)

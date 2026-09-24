@@ -2,7 +2,7 @@
 
 //! Verify that multi-chunk HNSW search returns correct results when the
 //! vector index is split into multiple chunks (chunked build for large
-//! datasets). Uses a small `HYPERSTREAM_HNSW_CHUNK_SIZE` so a modest number
+//! datasets). Uses a small `BENOSTREAM_HNSW_CHUNK_SIZE` so a modest number
 //! of vectors produces multiple chunks.
 
 use std::sync::Arc;
@@ -10,11 +10,11 @@ use std::sync::Arc;
 use arrow::array::{FixedSizeListArray, Int32Array};
 use arrow::datatypes::{DataType, Field, Float32Type, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::index::VectorValue;
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::index::VectorValue;
+use benostreamdb::core::table::Table;
 use tempfile::tempdir;
 
-/// Serialize tests that mutate the global HYPERSTREAM_HNSW_CHUNK_SIZE env var.
+/// Serialize tests that mutate the global BENOSTREAM_HNSW_CHUNK_SIZE env var.
 static CHUNK_SIZE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
@@ -22,7 +22,7 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     let _guard = CHUNK_SIZE_LOCK.lock().await;
 
     // Use a tiny chunk size so 25 vectors -> 3 chunks (10, 10, 5).
-    std::env::set_var("HYPERSTREAM_HNSW_CHUNK_SIZE", "10");
+    std::env::set_var("BENOSTREAM_HNSW_CHUNK_SIZE", "10");
 
     let dir = tempdir()?;
     let path = dir.path().to_str().unwrap().to_string();
@@ -33,7 +33,7 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     table
         .add_index(
             "embedding".to_string(),
-            hyperstreamdb::core::manifest::IndexAlgorithm::Hnsw {
+            benostreamdb::core::manifest::IndexAlgorithm::Hnsw {
                 metric: "l2".to_string(),
                 complexity: 16,
                 quality: 200,
@@ -81,7 +81,7 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     table.commit_async().await?;
 
     // Clear caches so the search loads the (chunked) index from disk.
-    hyperstreamdb::core::cache::HNSW_IVF_CACHE.invalidate_all();
+    benostreamdb::core::cache::HNSW_IVF_CACHE.invalidate_all();
 
     // Query closest to the LAST vector (id=24, in chunk 3).
     let hits = table
@@ -111,7 +111,7 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     );
 
     // Clean up env var.
-    std::env::remove_var("HYPERSTREAM_HNSW_CHUNK_SIZE");
+    std::env::remove_var("BENOSTREAM_HNSW_CHUNK_SIZE");
 
     Ok(())
 }

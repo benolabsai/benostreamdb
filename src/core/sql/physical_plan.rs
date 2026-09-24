@@ -20,7 +20,7 @@ use crate::core::manifest::ManifestEntry;
 use crate::core::table::Table;
 
 #[derive(Debug)]
-pub struct HyperStreamExec {
+pub struct BenoStreamExec {
     pub table: Arc<Table>,
     // Partitions: Each partition is a list of segments to read
     pub partitions: Vec<Vec<ManifestEntry>>,
@@ -35,7 +35,7 @@ pub struct HyperStreamExec {
     pruning_summary: Option<String>,
 }
 
-impl HyperStreamExec {
+impl BenoStreamExec {
     pub fn new(
         table: Arc<Table>,
         partitions: Vec<Vec<ManifestEntry>>,
@@ -94,7 +94,7 @@ impl HyperStreamExec {
     }
 }
 
-impl DisplayAs for HyperStreamExec {
+impl DisplayAs for BenoStreamExec {
     fn fmt_as(
         &self,
         t: datafusion::physical_plan::DisplayFormatType,
@@ -105,7 +105,7 @@ impl DisplayAs for HyperStreamExec {
             | datafusion::physical_plan::DisplayFormatType::Verbose => {
                 write!(
                     f,
-                    "HyperStreamExec: partitions={}, filter={:?}, projection={:?}, limit={:?}",
+                    "BenoStreamExec: partitions={}, filter={:?}, projection={:?}, limit={:?}",
                     self.partitions.len(),
                     self.filter,
                     self.projection,
@@ -121,9 +121,9 @@ impl DisplayAs for HyperStreamExec {
     }
 }
 
-impl ExecutionPlan for HyperStreamExec {
+impl ExecutionPlan for BenoStreamExec {
     fn name(&self) -> &str {
-        "HyperStreamExec"
+        "BenoStreamExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -147,7 +147,7 @@ impl ExecutionPlan for HyperStreamExec {
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(
-            HyperStreamExec::new(
+            BenoStreamExec::new(
                 self.table.clone(),
                 self.partitions.clone(),
                 self.projection.clone(),
@@ -166,7 +166,7 @@ impl ExecutionPlan for HyperStreamExec {
     ) -> Result<SendableRecordBatchStream> {
         if partition >= self.partitions.len() && !self.partitions.is_empty() {
             return Err(DataFusionError::Internal(format!(
-                "HyperStreamExec invalid partition {} (count {})",
+                "BenoStreamExec invalid partition {} (count {})",
                 partition,
                 self.partitions.len()
             )));

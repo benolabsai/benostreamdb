@@ -35,9 +35,9 @@ def check_docstring(func_name, func):
 
 def main():
     try:
-        import hyperstreamdb as hdb
+        import benostreamdb as bsdb
     except ImportError:
-        print("❌ Cannot import hyperstreamdb. Make sure it's built and installed.")
+        print("❌ Cannot import benostreamdb. Make sure it's built and installed.")
         sys.exit(1)
     
     print("Checking docstrings for all Python functions...\n")
@@ -45,36 +45,36 @@ def main():
     # List of all functions to check
     functions = [
         # Single-pair distance functions
-        ("l2", hdb.l2),
-        ("cosine", hdb.cosine),
-        ("inner_product", hdb.inner_product),
-        ("l1", hdb.l1),
-        ("hamming", hdb.hamming),
-        ("jaccard", hdb.jaccard),
+        ("l2", bsdb.l2),
+        ("cosine", bsdb.cosine),
+        ("inner_product", bsdb.inner_product),
+        ("l1", bsdb.l1),
+        ("hamming", bsdb.hamming),
+        ("jaccard", bsdb.jaccard),
         
         # Batch distance functions
-        ("l2_batch", hdb.l2_batch),
-        ("cosine_batch", hdb.cosine_batch),
-        ("inner_product_batch", hdb.inner_product_batch),
-        ("l1_batch", hdb.l1_batch),
-        ("hamming_batch", hdb.hamming_batch),
-        ("jaccard_batch", hdb.jaccard_batch),
+        ("l2_batch", bsdb.l2_batch),
+        ("cosine_batch", bsdb.cosine_batch),
+        ("inner_product_batch", bsdb.inner_product_batch),
+        ("l1_batch", bsdb.l1_batch),
+        ("hamming_batch", bsdb.hamming_batch),
+        ("jaccard_batch", bsdb.jaccard_batch),
         
         # Sparse distance functions
-        ("l2_sparse", hdb.l2_sparse),
-        ("cosine_sparse", hdb.cosine_sparse),
-        ("inner_product_sparse", hdb.inner_product_sparse),
+        ("l2_sparse", bsdb.l2_sparse),
+        ("cosine_sparse", bsdb.cosine_sparse),
+        ("inner_product_sparse", bsdb.inner_product_sparse),
         
         # Binary distance functions
-        ("hamming_packed", hdb.hamming_packed),
-        ("hamming_auto", hdb.hamming_auto),
-        ("jaccard_packed", hdb.jaccard_packed),
-        ("jaccard_auto", hdb.jaccard_auto),
+        ("hamming_packed", bsdb.hamming_packed),
+        ("hamming_auto", bsdb.hamming_auto),
+        ("jaccard_packed", bsdb.jaccard_packed),
+        ("jaccard_auto", bsdb.jaccard_auto),
     ]
     
     classes = [
-        ("SparseVector", hdb.SparseVector),
-        ("ComputeContext", hdb.ComputeContext),
+        ("SparseVector", bsdb.SparseVector),
+        ("ComputeContext", bsdb.ComputeContext),
     ]
     
     all_good = True

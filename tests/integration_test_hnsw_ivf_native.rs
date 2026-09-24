@@ -3,8 +3,8 @@
 use anyhow::Result;
 use arrow::array::Int32Array;
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::reader::HybridReader;
-use hyperstreamdb::SegmentConfig;
+use benostreamdb::core::reader::HybridReader;
+use benostreamdb::SegmentConfig;
 
 use object_store::memory::InMemory;
 use std::sync::Arc;
@@ -35,11 +35,11 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     // The SegmentWriter logic is complex to mock entirely here without writing files.
     // However, HnswIvfIndex::build and save can be tested.
 
-    use hyperstreamdb::core::index::hnsw_ivf::HnswIvfIndex;
-    let algo = hyperstreamdb::core::manifest::IndexAlgorithm::hnsw();
+    use benostreamdb::core::index::hnsw_ivf::HnswIvfIndex;
+    let algo = benostreamdb::core::manifest::IndexAlgorithm::hnsw();
     let index = HnswIvfIndex::build(
         vectors.clone(),
-        hyperstreamdb::core::index::VectorMetric::L2,
+        benostreamdb::core::index::VectorMetric::L2,
         Some(10),
         Some(16),
         &algo,
@@ -124,14 +124,14 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     let config = SegmentConfig::new("", "seg_test_native");
     let reader = HybridReader::new(config, local_store, "");
 
-    let query_val = hyperstreamdb::core::index::VectorValue::Float32(query);
+    let query_val = benostreamdb::core::index::VectorValue::Float32(query);
     let results = reader
         .vector_search_index(
             "embedding",
             &query_val,
             k,
             None,
-            hyperstreamdb::core::index::VectorMetric::L2,
+            benostreamdb::core::index::VectorMetric::L2,
             None,
             None,
             false, // use_mmap
@@ -164,7 +164,7 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
     Ok(())
 }
 
-/// Regression test for: https://github.com/rla3rd/hyperstreamdb/issues/blob_type_puffin_dispatch
+/// Regression test for: https://github.com/benolabsai/benostreamdb/issues/blob_type_puffin_dispatch
 ///
 /// Bug: When a ManifestEntry's IndexFile had `blob_type = Some("hnsw_tq8")`, the reader
 /// branched into `load_puffin_async()`, which attempted to GET a single-file Puffin container
@@ -177,9 +177,9 @@ async fn test_hnsw_ivf_native_integration() -> Result<()> {
 async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
     use arrow::array::{FixedSizeListBuilder, Float32Builder, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use hyperstreamdb::core::index::hnsw_ivf::HnswIvfIndex;
-    use hyperstreamdb::core::index::{VectorMetric, VectorValue};
-    use hyperstreamdb::core::manifest::{IndexAlgorithm, IndexFile};
+    use benostreamdb::core::index::hnsw_ivf::HnswIvfIndex;
+    use benostreamdb::core::index::{VectorMetric, VectorValue};
+    use benostreamdb::core::manifest::{IndexAlgorithm, IndexFile};
     use object_store::local::LocalFileSystem;
 
     let dim = 32usize;
@@ -278,11 +278,11 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
         length: None,
     };
 
-    let mut config = hyperstreamdb::SegmentConfig::new("", seg_id);
+    let mut config = benostreamdb::SegmentConfig::new("", seg_id);
     config.index_files.push(index_file);
 
     let local_store = Arc::new(LocalFileSystem::new_with_prefix(temp_dir.path())?);
-    let reader = hyperstreamdb::core::reader::HybridReader::new(config, local_store, "");
+    let reader = benostreamdb::core::reader::HybridReader::new(config, local_store, "");
 
     // Query for vector 42 — it should be the nearest neighbour of itself.
     let query = VectorValue::Float32(vectors[42].clone());

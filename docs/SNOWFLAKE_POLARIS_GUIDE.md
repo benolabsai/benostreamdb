@@ -1,9 +1,9 @@
-# Snowflake + Apache Polaris + HyperStreamDB Integration Guide
+# Snowflake + Apache Polaris + BenoStreamDB Integration Guide
 
-This guide walks through configuring a **Zero-Copy Open Data Lakehouse** connecting **HyperStreamDB**, **Apache Polaris**, and **Snowflake**. 
+This guide walks through configuring a **Zero-Copy Open Data Lakehouse** connecting **BenoStreamDB**, **Apache Polaris**, and **Snowflake**. 
 
 With this architecture:
-- **HyperStreamDB** provides sub-2ms hybrid vector (HNSW) and full-text (BM25) search.
+- **BenoStreamDB** provides sub-2ms hybrid vector (HNSW) and full-text (BM25) search.
 - **Apache Polaris** acts as the centralized open Iceberg REST catalog.
 - **Snowflake** queries the exact same Parquet data natively using standard Snowflake SQL without data duplication, ETL pipelines, or storage lock-in.
 
@@ -24,12 +24,12 @@ flowchart LR
     end
 
     subgraph Workloads ["Multi-Engine Execution"]
-        HDB["HyperStreamDB / hypersearch<br>• Real-time REST ingestion<br>• Sub-2ms Vector / BM25 Search"]
+        BSDB["BenoStreamDB / bsdb-search<br>• Real-time REST ingestion<br>• Sub-2ms Vector / BM25 Search"]
         Snowflake["Snowflake Cloud Data Warehouse<br>• Native SQL queries & aggregations<br>• Zero-copy joins with enterprise data<br>• BI dashboards & Snowpark ML"]
     end
 
-    HDB -->|1. Writes Parquet & Commits| S3
-    HDB -->|2. Iceberg Atomic Swap| Polaris
+    BSDB -->|1. Writes Parquet & Commits| S3
+    BSDB -->|2. Iceberg Atomic Swap| Polaris
     Polaris -.->|3. Synchronizes Snapshot| Snowflake
     Snowflake -->|4. Zero-Copy Query Execution| S3
 ```
@@ -38,31 +38,31 @@ flowchart LR
 
 ## Prerequisites
 
-1. An **S3 Bucket** (or GCS/Azure container) storing your HyperStreamDB tables.
+1. An **S3 Bucket** (or GCS/Azure container) storing your BenoStreamDB tables.
 2. An active **Apache Polaris** instance (Open-source Polaris or Snowflake-managed Open Catalog).
 3. A **Snowflake** account with `ACCOUNTADMIN` or privileges to create storage and catalog integrations.
 
 ---
 
-## Step 1: Configure HyperStreamDB to Sync with Polaris
+## Step 1: Configure BenoStreamDB to Sync with Polaris
 
-Configure `hyperstreamdb-search` using environment variables or a `hyperstream.toml` configuration file.
+Configure `benostreamdb-search` using environment variables or a `benostream.toml` configuration file.
 
 ### Option A: Environment Variables
 
 ```bash
 # Storage location for Parquet data and Iceberg metadata
-export HYPERSEARCH_STORAGE_URI=s3://my-lakehouse-bucket/tables
+export BENOSEARCH_STORAGE_URI=s3://my-lakehouse-bucket/tables
 
 # Polaris Iceberg REST catalog configuration
-export HYPERSEARCH_CATALOG_TYPE=rest
-export HYPERSEARCH_CATALOG_URL=https://polaris.example.com/api/catalog/v1
-export HYPERSEARCH_CATALOG_CREDENTIAL="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>"
-export HYPERSEARCH_CATALOG_PREFIX="my_warehouse"
-export HYPERSEARCH_CATALOG_NAMESPACE="production"
+export BENOSEARCH_CATALOG_TYPE=rest
+export BENOSEARCH_CATALOG_URL=https://polaris.example.com/api/catalog/v1
+export BENOSEARCH_CATALOG_CREDENTIAL="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>"
+export BENOSEARCH_CATALOG_PREFIX="my_warehouse"
+export BENOSEARCH_CATALOG_NAMESPACE="production"
 ```
 
-### Option B: `hyperstream.toml`
+### Option B: `benostream.toml`
 
 ```toml
 [storage]
@@ -80,7 +80,7 @@ prefix = "my_warehouse"
 namespace = "production"
 ```
 
-When you start `hypersearch`, startup diagnostics confirm Polaris catalog synchronization:
+When you start `bsdb-search`, startup diagnostics confirm Polaris catalog synchronization:
 ```
 INFO Initialized external Iceberg catalog from environment catalog_type=Rest namespace=production
 ```
@@ -89,10 +89,10 @@ INFO Initialized external Iceberg catalog from environment catalog_type=Rest nam
 
 ## Step 2: Configure Storage Access in Snowflake (External Volume)
 
-Create an `EXTERNAL VOLUME` in Snowflake pointing to the same S3 bucket where HyperStreamDB writes Parquet files:
+Create an `EXTERNAL VOLUME` in Snowflake pointing to the same S3 bucket where BenoStreamDB writes Parquet files:
 
 ```sql
-CREATE OR REPLACE EXTERNAL VOLUME hyperstream_s3_volume
+CREATE OR REPLACE EXTERNAL VOLUME benostream_s3_volume
   STORAGE_LOCATIONS =
     (
       (
@@ -104,7 +104,7 @@ CREATE OR REPLACE EXTERNAL VOLUME hyperstream_s3_volume
     );
 
 -- Retrieve Snowflake IAM user ARN to authorize trust relationship in AWS IAM
-DESCRIBE EXTERNAL VOLUME hyperstream_s3_volume;
+DESCRIBE EXTERNAL VOLUME benostream_s3_volume;
 ```
 
 ---
@@ -142,16 +142,16 @@ USE DATABASE my_analytics_db;
 USE SCHEMA public;
 
 CREATE OR REPLACE ICEBERG TABLE customer_reviews
-  EXTERNAL_VOLUME = 'hyperstream_s3_volume'
+  EXTERNAL_VOLUME = 'benostream_s3_volume'
   CATALOG = 'polaris_iceberg_catalog'
   CATALOG_TABLE_NAME = 'customer_reviews';
 ```
 
 ---
 
-## Step 5: Ingest via HyperStreamDB and Query in Snowflake
+## Step 5: Ingest via BenoStreamDB and Query in Snowflake
 
-### 1. Ingest Data via HyperStreamDB Search API
+### 1. Ingest Data via BenoStreamDB Search API
 
 Ingest documents via the OpenSearch-compatible REST API:
 
@@ -168,9 +168,9 @@ curl -X POST "http://localhost:9200/customer_reviews/_doc" \
 ```
 
 * **What happens immediately:**
-  1. HyperStreamDB persists the row to Parquet on S3.
-  2. HyperStreamDB indexes the vector in the local HNSW sidecar for sub-2ms ANN search.
-  3. HyperStreamDB triggers an **Iceberg Atomic Swap** to Apache Polaris, advancing the snapshot ID.
+  1. BenoStreamDB persists the row to Parquet on S3.
+  2. BenoStreamDB indexes the vector in the local HNSW sidecar for sub-2ms ANN search.
+  3. BenoStreamDB triggers an **Iceberg Atomic Swap** to Apache Polaris, advancing the snapshot ID.
 
 ### 2. Query Natively in Snowflake
 
@@ -205,6 +205,6 @@ WHERE r.rating <= 2;
 
 1. **Zero-Copy Architecture**: No `COPY INTO`, no Kafka-to-Snowflake connectors, and no duplicate storage charges.
 2. **Dual-Speed Workloads**:
-   * **Sub-2ms Interactive Search**: Applications query `hypersearch` over HTTP for instant vector & full-text retrieval.
+   * **Sub-2ms Interactive Search**: Applications query `bsdb-search` over HTTP for instant vector & full-text retrieval.
    * **Petabyte-Scale BI & SQL**: Data analysts and data scientists query the exact same data in Snowflake.
 3. **Open Standards**: If you ever migrate away from Snowflake, all data remains in vanilla Apache Iceberg / Parquet format with Apache Polaris as the vendor-neutral catalog.

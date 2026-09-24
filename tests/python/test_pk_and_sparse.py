@@ -13,13 +13,13 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 def test_add_primary_key_and_filter(tmp_path):
     uri = f"file://{tmp_path}/pk"
     schema = pa.schema([("a", pa.int64()), ("b", pa.int64()), ("v", pa.large_string())])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
 
     # Must not panic.
     t.add_primary_key("a")
@@ -39,7 +39,7 @@ def test_add_primary_key_and_filter(tmp_path):
 def test_primary_key_rejects_duplicates(tmp_path):
     uri = f"file://{tmp_path}/pk_dup"
     schema = pa.schema([("a", pa.int64()), ("v", pa.large_string())])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
     t.add_primary_key("a")
     t.write(pa.table({
         "a": pa.array([1, 2], pa.int64()),
@@ -64,7 +64,7 @@ def test_row_value_in_list_read_path(tmp_path):
     """
     uri = f"file://{tmp_path}/pkread"
     schema = pa.schema([("a", pa.int64()), ("b", pa.int64()), ("v", pa.large_string())])
-    t = hdb.Table.create(uri, schema)
+    t = bsdb.Table.create(uri, schema)
     t.add_primary_key("a")
     t.add_index("a", "inverted")
     t.add_index("b", "inverted")
@@ -89,12 +89,12 @@ def test_row_value_in_list_read_path(tmp_path):
 
 
 def test_sparse_vector_accepts_lists_and_arrays():
-    from_list = hdb.SparseVector([0, 5, 10], [1.0, 2.0, 3.0], 100)
+    from_list = bsdb.SparseVector([0, 5, 10], [1.0, 2.0, 3.0], 100)
     assert from_list.dim == 100
     assert list(from_list.indices) == [0, 5, 10]
     assert list(from_list.values) == [1.0, 2.0, 3.0]
 
-    from_np = hdb.SparseVector(
+    from_np = bsdb.SparseVector(
         np.array([0, 5, 10], dtype=np.uint32),
         np.array([1.0, 2.0, 3.0], dtype=np.float32),
         100,
@@ -102,16 +102,16 @@ def test_sparse_vector_accepts_lists_and_arrays():
     assert list(from_np.indices) == [0, 5, 10]
 
     # Identical vectors -> zero L2 distance.
-    assert hdb.l2_sparse(from_list, from_np) == pytest.approx(0.0)
+    assert bsdb.l2_sparse(from_list, from_np) == pytest.approx(0.0)
 
 
 def test_sparse_vector_validates_input():
     with pytest.raises(Exception):
         # indices not sorted
-        hdb.SparseVector([5, 0], [1.0, 2.0], 10)
+        bsdb.SparseVector([5, 0], [1.0, 2.0], 10)
     with pytest.raises(Exception):
         # length mismatch
-        hdb.SparseVector([0, 1], [1.0], 10)
+        bsdb.SparseVector([0, 1], [1.0], 10)
     with pytest.raises(Exception):
         # out of bounds
-        hdb.SparseVector([0, 99], [1.0, 2.0], 10)
+        bsdb.SparseVector([0, 99], [1.0, 2.0], 10)

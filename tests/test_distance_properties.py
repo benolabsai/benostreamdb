@@ -8,7 +8,7 @@ Tests Properties 1, 2, 3, 5, and 6 from the design document
 import pytest
 import numpy as np
 from hypothesis import given, strategies as st, settings
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 1: Distance Computation Correctness
@@ -24,7 +24,7 @@ def test_l2_distance_correctness(dim, seed):
     a = np.random.randn(dim).astype(np.float32)
     b = np.random.randn(dim).astype(np.float32)
     
-    result = hdb.l2(a, b)
+    result = bsdb.l2(a, b)
     expected = np.sqrt(np.sum((a - b) ** 2))
     
     assert isinstance(result, float)
@@ -44,7 +44,7 @@ def test_cosine_distance_correctness(dim, seed):
     a = np.random.randn(dim).astype(np.float32)
     b = np.random.randn(dim).astype(np.float32)
     
-    result = hdb.cosine(a, b)
+    result = bsdb.cosine(a, b)
     
     # Compute expected cosine distance
     dot = np.dot(a, b)
@@ -76,7 +76,7 @@ def test_inner_product_correctness(dim, seed):
     a = np.random.randn(dim).astype(np.float32)
     b = np.random.randn(dim).astype(np.float32)
     
-    result = hdb.inner_product(a, b)
+    result = bsdb.inner_product(a, b)
     expected = np.dot(a, b)
     
     assert isinstance(result, float)
@@ -97,7 +97,7 @@ def test_l1_distance_correctness(dim, seed):
     a = np.random.randn(dim).astype(np.float32)
     b = np.random.randn(dim).astype(np.float32)
     
-    result = hdb.l1(a, b)
+    result = bsdb.l1(a, b)
     expected = np.sum(np.abs(a - b))
     
     assert isinstance(result, float)
@@ -118,7 +118,7 @@ def test_hamming_distance_correctness(dim, seed):
     a = np.random.randint(0, 10, size=dim).astype(np.float32)
     b = np.random.randint(0, 10, size=dim).astype(np.float32)
     
-    result = hdb.hamming(a, b)
+    result = bsdb.hamming(a, b)
     expected = float(np.sum(a != b))
     
     assert isinstance(result, float)
@@ -139,7 +139,7 @@ def test_jaccard_distance_correctness(dim, seed):
     a = (np.random.rand(dim) > 0.5).astype(np.float32)
     b = (np.random.rand(dim) > 0.5).astype(np.float32)
     
-    result = hdb.jaccard(a, b)
+    result = bsdb.jaccard(a, b)
     
     # Compute expected Jaccard distance
     intersection = np.sum((a > 0) & (b > 0) & (a == b))
@@ -173,7 +173,7 @@ def test_dimension_mismatch_raises_error(dim_a, dim_b, seed):
     b = np.random.randn(dim_b).astype(np.float32)
     
     with pytest.raises(ValueError, match="dimension mismatch"):
-        hdb.l2(a, b)
+        bsdb.l2(a, b)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 2: Input Validation
@@ -195,7 +195,7 @@ def test_nan_values_raise_error(dim, nan_idx, seed):
     a[nan_idx] = np.nan
     
     with pytest.raises(ValueError, match="NaN"):
-        hdb.l2(a, b)
+        bsdb.l2(a, b)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 2: Input Validation
@@ -217,7 +217,7 @@ def test_inf_values_raise_error(dim, inf_idx, seed):
     a[inf_idx] = np.inf
     
     with pytest.raises(ValueError, match="infinite"):
-        hdb.l2(a, b)
+        bsdb.l2(a, b)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 3: Input Type Flexibility
@@ -233,7 +233,7 @@ def test_accepts_numpy_arrays(dim, seed):
     a = np.random.randn(dim).astype(np.float32)
     b = np.random.randn(dim).astype(np.float32)
     
-    result = hdb.l2(a, b)
+    result = bsdb.l2(a, b)
     assert isinstance(result, float)
     assert result >= 0.0
 
@@ -252,7 +252,7 @@ def test_batch_operation_shape_correctness(dim, n_vectors, seed):
     query = np.random.randn(dim).astype(np.float32)
     vectors = np.random.randn(n_vectors, dim).astype(np.float32)
     
-    distances = hdb.l2_batch(query, vectors)
+    distances = bsdb.l2_batch(query, vectors)
     
     assert isinstance(distances, np.ndarray)
     assert distances.shape == (n_vectors,), \
@@ -276,12 +276,12 @@ def test_batch_operation_all_metrics(dim, n_vectors, seed):
     
     # Test all 6 metrics
     batch_functions = [
-        hdb.l2_batch,
-        hdb.cosine_batch,
-        hdb.inner_product_batch,
-        hdb.l1_batch,
-        hdb.hamming_batch,
-        hdb.jaccard_batch,
+        bsdb.l2_batch,
+        bsdb.cosine_batch,
+        bsdb.inner_product_batch,
+        bsdb.l1_batch,
+        bsdb.hamming_batch,
+        bsdb.jaccard_batch,
     ]
     
     for batch_fn in batch_functions:
@@ -306,10 +306,10 @@ def test_batch_matches_single_pair(dim, n_vectors, seed):
     vectors = np.random.randn(n_vectors, dim).astype(np.float32)
     
     # Test L2 metric
-    batch_distances = hdb.l2_batch(query, vectors)
+    batch_distances = bsdb.l2_batch(query, vectors)
     
     for i in range(n_vectors):
-        single_distance = hdb.l2(query, vectors[i])
+        single_distance = bsdb.l2(query, vectors[i])
         assert np.isclose(batch_distances[i], single_distance, rtol=1e-5), \
             f"Batch distance mismatch at index {i}: {batch_distances[i]} vs {single_distance}"
 
@@ -341,16 +341,16 @@ def test_sparse_l2_equivalence(dim, sparsity, seed):
     values_b = np.random.randn(n_nonzero_b).astype(np.float32)
     
     # Create sparse vectors
-    sparse_a = hdb.SparseVector(indices_a, values_a, dim)
-    sparse_b = hdb.SparseVector(indices_b, values_b, dim)
+    sparse_a = bsdb.SparseVector(indices_a, values_a, dim)
+    sparse_b = bsdb.SparseVector(indices_b, values_b, dim)
     
     # Compute sparse distance
-    sparse_dist = hdb.l2_sparse(sparse_a, sparse_b)
+    sparse_dist = bsdb.l2_sparse(sparse_a, sparse_b)
     
     # Convert to dense and compute dense distance
     dense_a = sparse_a.to_dense()
     dense_b = sparse_b.to_dense()
-    dense_dist = hdb.l2(dense_a, dense_b)
+    dense_dist = bsdb.l2(dense_a, dense_b)
     
     assert isinstance(sparse_dist, float)
     assert np.isclose(sparse_dist, dense_dist, rtol=1e-5, atol=1e-6), \
@@ -380,16 +380,16 @@ def test_sparse_cosine_equivalence(dim, sparsity, seed):
     values_b = np.random.randn(n_nonzero_b).astype(np.float32)
     
     # Create sparse vectors
-    sparse_a = hdb.SparseVector(indices_a, values_a, dim)
-    sparse_b = hdb.SparseVector(indices_b, values_b, dim)
+    sparse_a = bsdb.SparseVector(indices_a, values_a, dim)
+    sparse_b = bsdb.SparseVector(indices_b, values_b, dim)
     
     # Compute sparse distance
-    sparse_dist = hdb.cosine_sparse(sparse_a, sparse_b)
+    sparse_dist = bsdb.cosine_sparse(sparse_a, sparse_b)
     
     # Convert to dense and compute dense distance
     dense_a = sparse_a.to_dense()
     dense_b = sparse_b.to_dense()
-    dense_dist = hdb.cosine(dense_a, dense_b)
+    dense_dist = bsdb.cosine(dense_a, dense_b)
     
     assert isinstance(sparse_dist, float)
     assert np.isclose(sparse_dist, dense_dist, rtol=1e-5, atol=1e-6), \
@@ -419,16 +419,16 @@ def test_sparse_inner_product_equivalence(dim, sparsity, seed):
     values_b = np.random.randn(n_nonzero_b).astype(np.float32)
     
     # Create sparse vectors
-    sparse_a = hdb.SparseVector(indices_a, values_a, dim)
-    sparse_b = hdb.SparseVector(indices_b, values_b, dim)
+    sparse_a = bsdb.SparseVector(indices_a, values_a, dim)
+    sparse_b = bsdb.SparseVector(indices_b, values_b, dim)
     
     # Compute sparse inner product
-    sparse_prod = hdb.inner_product_sparse(sparse_a, sparse_b)
+    sparse_prod = bsdb.inner_product_sparse(sparse_a, sparse_b)
     
     # Convert to dense and compute dense inner product
     dense_a = sparse_a.to_dense()
     dense_b = sparse_b.to_dense()
-    dense_prod = hdb.inner_product(dense_a, dense_b)
+    dense_prod = bsdb.inner_product(dense_a, dense_b)
     
     assert isinstance(sparse_prod, float)
     assert np.isclose(sparse_prod, dense_prod, rtol=1e-5, atol=1e-6), \
@@ -457,7 +457,7 @@ def test_sparse_vector_unsorted_indices_error(dim, n_nonzero, seed):
     values = np.random.randn(n_nonzero).astype(np.float32)
     
     with pytest.raises(ValueError, match="must be sorted"):
-        hdb.SparseVector(indices, values, dim)
+        bsdb.SparseVector(indices, values, dim)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 10: Sparse Vector Validation
@@ -482,7 +482,7 @@ def test_sparse_vector_out_of_bounds_error(dim, n_nonzero, seed):
     values = np.random.randn(n_nonzero).astype(np.float32)
     
     with pytest.raises(ValueError, match="out of bounds"):
-        hdb.SparseVector(indices, values, dim)
+        bsdb.SparseVector(indices, values, dim)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 10: Sparse Vector Validation
@@ -510,7 +510,7 @@ def test_sparse_vector_length_mismatch_error(dim, n_indices, n_values, seed):
     values = np.random.randn(n_values).astype(np.float32)
     
     with pytest.raises(ValueError, match="Length mismatch"):
-        hdb.SparseVector(indices, values, dim)
+        bsdb.SparseVector(indices, values, dim)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 10: Sparse Vector Validation
@@ -536,7 +536,7 @@ def test_sparse_vector_nan_values_error(dim, n_nonzero, nan_idx, seed):
     values[nan_idx] = np.nan
     
     with pytest.raises(ValueError, match="NaN"):
-        hdb.SparseVector(indices, values, dim)
+        bsdb.SparseVector(indices, values, dim)
 
 
 # Feature: python-vector-api-gpu-acceleration, Property 10: Sparse Vector Validation
@@ -557,12 +557,12 @@ def test_sparse_vector_dimension_mismatch_error(dim, n_nonzero, seed):
     # Create two sparse vectors with different dimensions
     indices_a = np.sort(np.random.choice(dim, size=n_nonzero, replace=False)).astype(np.uint32)
     values_a = np.random.randn(n_nonzero).astype(np.float32)
-    sparse_a = hdb.SparseVector(indices_a, values_a, dim)
+    sparse_a = bsdb.SparseVector(indices_a, values_a, dim)
     
     dim_b = dim + 10
     indices_b = np.sort(np.random.choice(dim_b, size=n_nonzero, replace=False)).astype(np.uint32)
     values_b = np.random.randn(n_nonzero).astype(np.float32)
-    sparse_b = hdb.SparseVector(indices_b, values_b, dim_b)
+    sparse_b = bsdb.SparseVector(indices_b, values_b, dim_b)
     
     with pytest.raises(ValueError, match="dimension mismatch"):
-        hdb.l2_sparse(sparse_a, sparse_b)
+        bsdb.l2_sparse(sparse_a, sparse_b)

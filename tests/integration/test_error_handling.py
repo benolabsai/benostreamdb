@@ -1,11 +1,11 @@
 """
-Error handling and edge case tests for HyperStreamDB.
+Error handling and edge case tests for BenoStreamDB.
 
 Tests various error scenarios including disk full, network failures,
 invalid data, schema mismatches, and resource exhaustion.
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pytest
 import os
@@ -25,14 +25,14 @@ def test_table_path(tmp_path):
 def test_invalid_uri():
     """Test error handling for invalid URIs."""
     with pytest.raises(Exception):
-        hdb.open_table("not://a/valid/uri")
+        bsdb.open_table("not://a/valid/uri")
 
 
 def test_nonexistent_table_read():
     """Test reading from a non-existent table."""
     # This should either create an empty table or raise a clear error
     try:
-        table = hdb.open_table("file:///tmp/nonexistent_table_12345")
+        table = bsdb.open_table("file:///tmp/nonexistent_table_12345")
         df = table.to_pandas()
         # If it succeeds, should return empty DataFrame
         assert len(df) == 0 or df is not None
@@ -44,7 +44,7 @@ def test_nonexistent_table_read():
 
 def test_schema_mismatch_write(test_table_path):
     """Test writing data with mismatched schema."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     # Write initial data with one schema
     schema1 = pa.schema([
@@ -83,7 +83,7 @@ def test_schema_mismatch_write(test_table_path):
 
 def test_empty_batch_write(test_table_path):
     """Test writing empty batches."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -106,7 +106,7 @@ def test_empty_batch_write(test_table_path):
 
 def test_null_values_handling(test_table_path):
     """Test handling of null values."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -129,7 +129,7 @@ def test_null_values_handling(test_table_path):
 
 def test_large_string_values(test_table_path):
     """Test handling of very large string values."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -155,7 +155,7 @@ def test_large_string_values(test_table_path):
 
 def test_invalid_filter_expression(test_table_path):
     """Test error handling for invalid filter expressions."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     # Write some data
     schema = pa.schema([
@@ -181,7 +181,7 @@ def test_invalid_filter_expression(test_table_path):
 
 def test_nonexistent_column_filter(test_table_path):
     """Test filtering on non-existent column."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -206,7 +206,7 @@ def test_nonexistent_column_filter(test_table_path):
 
 def test_corrupted_data_handling(test_table_path):
     """Test handling of corrupted data files."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     # Write valid data first
     schema = pa.schema([
@@ -241,7 +241,7 @@ def test_corrupted_data_handling(test_table_path):
 
 def test_concurrent_schema_changes(test_table_path):
     """Test handling of schema changes during concurrent operations."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     # Write initial data
     schema1 = pa.schema([
@@ -282,7 +282,7 @@ def test_concurrent_schema_changes(test_table_path):
 
 def test_resource_limits(test_table_path):
     """Test behavior when approaching resource limits."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),
@@ -313,7 +313,7 @@ def test_resource_limits(test_table_path):
 
 def test_special_characters_in_data(test_table_path):
     """Test handling of special characters in string data."""
-    table = hdb.open_table(test_table_path)
+    table = bsdb.open_table(test_table_path)
     
     schema = pa.schema([
         ('id', pa.int32()),

@@ -11,7 +11,7 @@ currently inert because written segments carry empty `column_stats`, so
 import pyarrow as pa
 import pytest
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 @pytest.fixture()
@@ -23,7 +23,7 @@ def partitioned(tmp_path):
             {"name": "cat", "transform": "identity", "source_id": 2, "field_id": 1000}
         ]
     }
-    t = hdb.Table.create_partitioned(uri, schema, spec)
+    t = bsdb.Table.create_partitioned(uri, schema, spec)
     for c in ["a", "b", "c"]:
         t.write(pa.table({
             "id": pa.array([1, 2], pa.int64()),
@@ -52,7 +52,7 @@ def test_explain_names_the_pruning_rule(partitioned):
 def ranged(tmp_path):
     """Five segments with disjoint id ranges, no partitioning involved."""
     uri = f"file://{tmp_path}/ranged"
-    t = hdb.Table.create(uri, pa.schema([("id", pa.int64()), ("v", pa.large_string())]))
+    t = bsdb.Table.create(uri, pa.schema([("id", pa.int64()), ("v", pa.large_string())]))
     for c in range(5):
         t.write(pa.table({
             "id": pa.array([c * 10 + i for i in range(10)], pa.int64()),

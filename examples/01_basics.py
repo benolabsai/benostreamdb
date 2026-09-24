@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 
@@ -16,7 +16,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def run_demo():
-    print("=== HyperStreamDB Basics Demo ===")
+    print("=== BenoStreamDB Basics Demo ===")
 
     # 1. Setup
     db_path = "news_db"
@@ -26,7 +26,7 @@ def run_demo():
     # Initialize the Intel GPU context (or CPU if not available)
     # Note: If "intel" fails, fallback to CPU
     try:
-        ctx = hdb.ComputeContext("intel")
+        ctx = bsdb.ComputeContext("intel")
         print("Using Intel GPU context")
     except Exception as e:
         print(f"Intel GPU not available ({e}), using CPU")
@@ -45,9 +45,9 @@ def run_demo():
     embeddings = model.encode(df["text"].tolist())
     df["embedding"] = [list(e) for e in embeddings]
 
-    # 4. Ingest into HyperStreamDB
-    print("\nIngesting into HyperStreamDB...")
-    table = hdb.Table(db_path, device=ctx)
+    # 4. Ingest into BenoStreamDB
+    print("\nIngesting into BenoStreamDB...")
+    table = bsdb.Table(db_path, device=ctx)
     
     # Enable Vector Indexing for the embedding column and Inverted Index for category
     # Note: Use add_index_columns for multiple columns

@@ -25,7 +25,7 @@ CREATE_PAYLOAD='{
   }
 }'
 echo "Creating table..."
-curl -s -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables \
+curl -s -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables \
   -H "Content-Type: application/json" \
   -d "$CREATE_PAYLOAD" > /dev/null
 
@@ -51,7 +51,7 @@ UPDATE_PAYLOAD='{
 }'
 
 echo "Updating table (schema evolution)..."
-curl -v -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables/test_update_table \
+curl -v -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables/test_update_table \
   -H "Content-Type: application/json" \
   -d "$UPDATE_PAYLOAD" 2>&1 | tee /tmp/update_response.txt
 

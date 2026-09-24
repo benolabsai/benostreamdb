@@ -4,12 +4,12 @@ Unit tests for GPU Context API
 Tests Requirements: 2.1, 2.2, 2.3, 2.6
 """
 import pytest
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 
 def test_auto_detect():
     """Test that auto_detect returns a valid ComputeContext"""
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     assert ctx is not None
     assert isinstance(ctx.backend, str)
     assert ctx.backend in ['cpu', 'cuda', 'rocm', 'mps', 'intel']
@@ -19,38 +19,38 @@ def test_auto_detect():
 
 def test_cpu_backend_creation():
     """Test creating a CPU backend context"""
-    ctx = hdb.ComputeContext('cpu')
+    ctx = bsdb.ComputeContext('cpu')
     assert ctx.backend == 'cpu'
     assert ctx.device_id == -1  # Default CPU index
 
 
 def test_cpu_backend_with_device_id():
     """Test creating a CPU backend with custom device_id"""
-    ctx = hdb.ComputeContext('cpu', index=-1)
+    ctx = bsdb.ComputeContext('cpu', index=-1)
     assert ctx.backend == 'cpu'
     assert ctx.device_id == -1
 
 
 def test_backend_property():
     """Test that backend property returns the correct backend name"""
-    ctx = hdb.ComputeContext('cpu')
+    ctx = bsdb.ComputeContext('cpu')
     assert ctx.backend == 'cpu'
     
     # Test with auto_detect
-    ctx2 = hdb.ComputeContext.auto_detect()
+    ctx2 = bsdb.ComputeContext.auto_detect()
     backend = ctx2.backend
     assert backend in ['cpu', 'cuda', 'rocm', 'mps', 'intel']
 
 
 def test_device_id_property():
     """Test that device_id property returns the correct device ID"""
-    ctx = hdb.ComputeContext('cpu', index=5)
+    ctx = bsdb.ComputeContext('cpu', index=5)
     assert ctx.device_id == 5
 
 
 def test_list_available_backends():
     """Test that list_available_backends returns a list of backend names"""
-    backends = hdb.ComputeContext.list_available_backends()
+    backends = bsdb.ComputeContext.list_available_backends()
     assert isinstance(backends, list)
     assert len(backends) > 0
     assert 'cpu' in backends  # CPU should always be available
@@ -65,7 +65,7 @@ def test_list_available_backends():
 
 def test_unavailable_backend_error():
     """Test that requesting an unavailable backend raises RuntimeError"""
-    backends = hdb.ComputeContext.list_available_backends()
+    backends = bsdb.ComputeContext.list_available_backends()
     
     # Try to create a context with a backend that's not available
     # ROCM and Intel use WGPU which does not always error on immediate creation but during execution
@@ -74,7 +74,7 @@ def test_unavailable_backend_error():
     
     for backend in unavailable:
         with pytest.raises(RuntimeError) as exc_info:
-            hdb.ComputeContext(backend)
+            bsdb.ComputeContext(backend)
         
         # Check that error message mentions available backends
         error_msg = str(exc_info.value)
@@ -85,7 +85,7 @@ def test_unavailable_backend_error():
 def test_invalid_backend_error():
     """Test that requesting an invalid backend raises ValueError"""
     with pytest.raises(ValueError) as exc_info:
-        hdb.ComputeContext('invalid_backend')
+        bsdb.ComputeContext('invalid_backend')
     
     error_msg = str(exc_info.value)
     assert 'unknown device type' in error_msg.lower()
@@ -94,7 +94,7 @@ def test_invalid_backend_error():
 
 def test_get_stats():
     """Test that get_stats returns a dictionary with performance metrics"""
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     stats = ctx.get_stats()
     
     assert isinstance(stats, dict)
@@ -123,7 +123,7 @@ def test_get_stats():
 
 def test_reset_stats():
     """Test that reset_stats clears all performance counters"""
-    ctx = hdb.ComputeContext.auto_detect()
+    ctx = bsdb.ComputeContext.auto_detect()
     
     # Get initial stats
     stats1 = ctx.get_stats()
@@ -142,7 +142,7 @@ def test_reset_stats():
 
 def test_repr():
     """Test that __repr__ returns a useful string representation"""
-    ctx = hdb.ComputeContext('cpu', index=-1)
+    ctx = bsdb.ComputeContext('cpu', index=-1)
     repr_str = repr(ctx)
     
     assert isinstance(repr_str, str)
@@ -155,13 +155,13 @@ def test_repr():
 
 def test_case_insensitive_backend():
     """Test that backend names are case-insensitive"""
-    ctx1 = hdb.ComputeContext('CPU')
+    ctx1 = bsdb.ComputeContext('CPU')
     assert ctx1.backend == 'cpu'
     
-    ctx2 = hdb.ComputeContext('Cpu')
+    ctx2 = bsdb.ComputeContext('Cpu')
     assert ctx2.backend == 'cpu'
     
-    ctx3 = hdb.ComputeContext('cpu')
+    ctx3 = bsdb.ComputeContext('cpu')
     assert ctx3.backend == 'cpu'
 
 

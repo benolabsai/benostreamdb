@@ -40,13 +40,13 @@ PAYLOAD='{
 }'
 
 echo "Sending CreateTable request..."
-curl -v -X POST http://127.0.0.1:8181/v1/hdb/namespaces/default/tables \
+curl -v -X POST http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD"
 
 echo ""
 echo "Verifying table exists..."
 # List tables
-curl -s http://127.0.0.1:8181/v1/hdb/namespaces/default/tables | grep "test_table_01"
+curl -s http://127.0.0.1:8181/v1/bsdb/namespaces/default/tables | grep "test_table_01"
 
 echo "Success!"

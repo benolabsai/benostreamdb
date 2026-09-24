@@ -3,7 +3,7 @@
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -67,7 +67,7 @@ async fn test_polars_naming_logic() -> anyhow::Result<()> {
 
     // 2. Open Table with Polars Naming Pattern
     let table = Table::builder(uri.clone())
-        .with_auto_label_columns(hyperstreamdb::core::table::LabelPattern::Polars)
+        .with_auto_label_columns(benostreamdb::core::table::LabelPattern::Polars)
         .build_async()
         .await?;
 

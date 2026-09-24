@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Profile HyperStreamDB ingest performance to identify bottlenecks
+Profile BenoStreamDB ingest performance to identify bottlenecks
 
 Compares:
 1. Raw Parquet write (baseline)
-2. HyperStreamDB write (with Iceberg overhead)
+2. BenoStreamDB write (with Iceberg overhead)
 3. Step-by-step timing of each operation
 """
 
@@ -18,9 +18,9 @@ import pstats
 from io import StringIO
 
 try:
-    import hyperstreamdb as hdb
+    import benostreamdb as bsdb
 except ImportError:
-    print("Error: hyperstreamdb not installed")
+    print("Error: benostreamdb not installed")
     print("Run: pip install -e .")
     exit(1)
 
@@ -66,17 +66,17 @@ def profile_raw_parquet(df: pd.DataFrame, tmpdir: str):
     return elapsed, throughput
 
 
-def profile_hyperstreamdb_detailed(df: pd.DataFrame, tmpdir: str):
-    """Detailed timing of HyperStreamDB operations"""
+def profile_benostreamdb_detailed(df: pd.DataFrame, tmpdir: str):
+    """Detailed timing of BenoStreamDB operations"""
     print("\n" + "="*80)
-    print("HYPERSTREAMDB: Detailed Timing")
+    print("BENOSTREAMDB: Detailed Timing")
     print("="*80)
     
     uri = f"file://{tmpdir}/test_table"
     
     # 1. Table creation
     t0 = time.time()
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     t_create = time.time() - t0
     print(f"1. Table creation: {t_create*1000:.1f}ms")
     
@@ -107,10 +107,10 @@ def profile_hyperstreamdb_detailed(df: pd.DataFrame, tmpdir: str):
     return total_time, throughput
 
 
-def profile_hyperstreamdb_with_profiler(df: pd.DataFrame, tmpdir: str):
+def profile_benostreamdb_with_profiler(df: pd.DataFrame, tmpdir: str):
     """Profile with cProfile to find hotspots"""
     print("\n" + "="*80)
-    print("HYPERSTREAMDB: cProfile Analysis")
+    print("BENOSTREAMDB: cProfile Analysis")
     print("="*80)
     
     uri = f"file://{tmpdir}/test_table_profile"
@@ -119,7 +119,7 @@ def profile_hyperstreamdb_with_profiler(df: pd.DataFrame, tmpdir: str):
     profiler.enable()
     
     # Run the ingest
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     table.write_pandas(df)
     table.commit()
     
@@ -151,7 +151,7 @@ def compare_with_without_vectors(n_rows: int):
     
     with tempfile.TemporaryDirectory() as tmpdir:
         uri = f"file://{tmpdir}/test_table"
-        table = hdb.Table(uri)
+        table = bsdb.Table(uri)
         
         start = time.time()
         table.write_pandas(df_no_vec)
@@ -168,7 +168,7 @@ def compare_with_without_vectors(n_rows: int):
     
     with tempfile.TemporaryDirectory() as tmpdir:
         uri = f"file://{tmpdir}/test_table"
-        table = hdb.Table(uri)
+        table = bsdb.Table(uri)
         
         start = time.time()
         table.write_pandas(df_with_vec)
@@ -196,8 +196,8 @@ def analyze_iceberg_overhead(n_rows: int):
         # 1. Raw Parquet
         parquet_time, parquet_throughput = profile_raw_parquet(df, tmpdir)
         
-        # 2. HyperStreamDB (with Iceberg)
-        hsdb_time, hsdb_throughput = profile_hyperstreamdb_detailed(df, tmpdir)
+        # 2. BenoStreamDB (with Iceberg)
+        hsdb_time, hsdb_throughput = profile_benostreamdb_detailed(df, tmpdir)
         
         # 3. Calculate overhead
         overhead_time = hsdb_time - parquet_time
@@ -207,19 +207,19 @@ def analyze_iceberg_overhead(n_rows: int):
         print("OVERHEAD SUMMARY")
         print("="*80)
         print(f"Raw Parquet: {parquet_throughput:,.0f} rows/sec")
-        print(f"HyperStreamDB: {hsdb_throughput:,.0f} rows/sec")
+        print(f"BenoStreamDB: {hsdb_throughput:,.0f} rows/sec")
         print(f"Slowdown: {parquet_throughput/hsdb_throughput:.1f}x")
         print(f"Overhead: {overhead_time:.3f}s ({overhead_pct:.1f}%)")
         
         # 4. Profile to find hotspots
-        profile_hyperstreamdb_with_profiler(df, tmpdir)
+        profile_benostreamdb_with_profiler(df, tmpdir)
 
 
 def main():
     """Run all profiling tests"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Profile HyperStreamDB ingest performance')
+    parser = argparse.ArgumentParser(description='Profile BenoStreamDB ingest performance')
     parser.add_argument('--rows', type=int, default=10000, help='Number of rows (default: 10000)')
     parser.add_argument('--quick', action='store_true', help='Quick test with 1K rows')
     
@@ -228,7 +228,7 @@ def main():
     n_rows = 1000 if args.quick else args.rows
     
     print("="*80)
-    print(f"HYPERSTREAMDB INGEST PROFILING ({n_rows:,} rows)")
+    print(f"BENOSTREAMDB INGEST PROFILING ({n_rows:,} rows)")
     print("="*80)
     
     # 1. Compare with/without vectors

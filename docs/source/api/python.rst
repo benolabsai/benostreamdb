@@ -1,12 +1,12 @@
 Python API Reference
 ====================
 
-The HyperStreamDB Python package provides a high-level, Pandas-compatible interface for managing tables, executing hybrid searches, and integrating with data catalogs.
+The BenoStreamDB Python package provides a high-level, Pandas-compatible interface for managing tables, executing hybrid searches, and integrating with data catalogs.
 
 Table
 -----
 
-.. autoclass:: hyperstreamdb.Table
+.. autoclass:: benostreamdb.Table
    :members:
    :undoc-members:
    :show-inheritance:
@@ -15,7 +15,7 @@ Table
 Query
 -----
 
-.. autoclass:: hyperstreamdb.Query
+.. autoclass:: benostreamdb.Query
    :members:
    :undoc-members:
    :show-inheritance:
@@ -24,7 +24,7 @@ Query
 Session
 -------
 
-.. autoclass:: hyperstreamdb.Session
+.. autoclass:: benostreamdb.Session
    :members:
    :undoc-members:
    :show-inheritance:
@@ -33,7 +33,7 @@ Session
 Embedding Registry
 ------------------
 
-.. automodule:: hyperstreamdb.embeddings
+.. automodule:: benostreamdb.embeddings
    :members:
    :undoc-members:
    :show-inheritance:

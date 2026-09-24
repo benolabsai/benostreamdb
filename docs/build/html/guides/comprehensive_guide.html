@@ -8,7 +8,7 @@
         <link rel="prefetch" href="../_static/logo.png" as="image">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>HyperStreamDB Comprehensive Guide - HyperStreamDB 0.5.5 documentation</title>
+        <title>BenoStreamDB Comprehensive Guide - BenoStreamDB 0.5.5 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -165,7 +165,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">HyperStreamDB 0.5.5 documentation</div></a>
+      <a href="../index.html"><div class="brand">BenoStreamDB 0.5.5 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -190,7 +190,7 @@
     <img class="sidebar-logo only-dark" src="../_static/logo.png" alt="Dark Logo"/>
   </div>
   
-  <span class="sidebar-brand-text">HyperStreamDB 0.5.5 documentation</span>
+  <span class="sidebar-brand-text">BenoStreamDB 0.5.5 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -211,12 +211,12 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html#vector-similarity-search-with-pgvector-operators-gpu-accelerated">Vector similarity search with pgvector operators (GPU-accelerated)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installation.html#joins-uses-index-nested-loop-join-optimization">Joins (uses Index Nested Loop Join optimization)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="installation.html#maintenance">Maintenance</a></li>
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">HyperStreamDB Comprehensive Guide</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">BenoStreamDB Comprehensive Guide</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">User Guides</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="python_vector_api.html">Python Vector Distance API Reference</a></li>
-<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for HyperStreamDB</a></li>
+<li class="toctree-l1"><a class="reference internal" href="gpu_setup_guide.html">GPU Setup Guide for BenoStreamDB</a></li>
 <li class="toctree-l1"><a class="reference internal" href="configuration.html">Configuration Guide</a></li>
 <li class="toctree-l1"><a class="reference internal" href="concurrency.html">Concurrency and Atomic Commits</a></li>
 </ul>
@@ -266,15 +266,15 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="hyperstreamdb-comprehensive-guide">
-<h1>HyperStreamDB Comprehensive Guide<a class="headerlink" href="#hyperstreamdb-comprehensive-guide" title="Link to this heading">¶</a></h1>
+          <section id="benostreamdb-comprehensive-guide">
+<h1>BenoStreamDB Comprehensive Guide<a class="headerlink" href="#benostreamdb-comprehensive-guide" title="Link to this heading">¶</a></h1>
 <p><strong>Version:</strong> 0.1.10 (Alpha)<br />
 <strong>Last Updated:</strong> 2026-04-03</p>
-<p>HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).</p>
+<p>BenoStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).</p>
 <hr class="docutils" />
 <section id="architecture-overview">
 <h2>1. Architecture Overview<a class="headerlink" href="#architecture-overview" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.</p>
+<p>BenoStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.</p>
 <ul class="simple">
 <li><p><strong>Storage-Native</strong>: Data and indices are stored as Parquet and custom index files in your object store.</p></li>
 <li><p><strong>Serverless</strong>: No long-running daemons required. Operations spin up, execute, and spin down.</p></li>
@@ -302,7 +302,7 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 </section>
 <section id="basic-usage-python">
 <h3>Basic Usage (Python)<a class="headerlink" href="#basic-usage-python" title="Link to this heading">¶</a></h3>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -316,7 +316,7 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
     <span class="p">(</span><span class="s1">&#39;embedding&#39;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">list_</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">float32</span><span class="p">(),</span> <span class="mi">384</span><span class="p">))</span> <span class="c1"># SBERT/all-MiniLM-L6-v2 size</span>
 <span class="p">])</span>
 
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;file:///tmp/ag_news&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;file:///tmp/ag_news&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">)</span>
 
 <span class="c1"># 2. Ingest Real Data (Example: AG News Sample)</span>
 <span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span>
@@ -349,10 +349,10 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 <h2>3. Key Features<a class="headerlink" href="#key-features" title="Link to this heading">¶</a></h2>
 <section id="sql-support">
 <h3>3.1 SQL Support<a class="headerlink" href="#sql-support" title="Link to this heading">¶</a></h3>
-<p>HyperStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.</p>
+<p>BenoStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.</p>
 <section id="basic-sql-queries">
 <h4>Basic SQL Queries<a class="headerlink" href="#basic-sql-queries" title="Link to this heading">¶</a></h4>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">session</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Session</span><span class="p">()</span>
 <span class="n">session</span><span class="o">.</span><span class="n">register_table</span><span class="p">(</span><span class="s2">&quot;my_table&quot;</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
 
 <span class="n">df</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
@@ -367,7 +367,7 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 </section>
 <section id="pgvector-sql-operators">
 <h4>pgvector SQL Operators<a class="headerlink" href="#pgvector-sql-operators" title="Link to this heading">¶</a></h4>
-<p>HyperStreamDB provides full pgvector compatibility for vector operations:</p>
+<p>BenoStreamDB provides full pgvector compatibility for vector operations:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># Vector similarity search with distance operators</span>
 <span class="n">results</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
 <span class="s2">    SELECT id, content,</span>
@@ -423,15 +423,15 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 </section>
 <section id="multi-catalog-support">
 <h2>3.3 Multi-Catalog Support<a class="headerlink" href="#multi-catalog-support" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.</p>
+<p>BenoStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.</p>
 <p>Below is a detailed example using the Hive Metastore, followed by short-form examples for other supported catalogs. Full integration guides for each will be provided in future updates.</p>
 <section id="hive-metastore-detailed-example">
 <h3>Hive Metastore (Detailed Example)<a class="headerlink" href="#hive-metastore-detailed-example" title="Link to this heading">¶</a></h3>
 <p>Connecting to a Hive Metastore allows you to resolve table names to storage locations automatically.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hyperstreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">hdb</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">benostreamdb</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">bsdb</span>
 
 <span class="c1"># Load a table from Hive Metastore</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_hive</span><span class="p">(</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_hive</span><span class="p">(</span>
     <span class="n">address</span><span class="o">=</span><span class="s2">&quot;thrift://localhost:9083&quot;</span><span class="p">,</span> 
     <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;default&quot;</span><span class="p">,</span> 
     <span class="n">table</span><span class="o">=</span><span class="s2">&quot;my_analytics_table&quot;</span>
@@ -444,18 +444,18 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 </section>
 <section id="aws-glue-nessie-and-rest-catalogs">
 <h3>AWS Glue, Nessie, and REST Catalogs<a class="headerlink" href="#aws-glue-nessie-and-rest-catalogs" title="Link to this heading">¶</a></h3>
-<p>HyperStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:</p>
+<p>BenoStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># AWS Glue (Native AWS Integration)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_glue</span><span class="p">(</span><span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;prod&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;users&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_glue</span><span class="p">(</span><span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;prod&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;users&quot;</span><span class="p">)</span>
 
 <span class="c1"># Project Nessie (Git-like Versioning)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_nessie</span><span class="p">(</span><span class="n">nessie_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;dev&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;experiments&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_nessie</span><span class="p">(</span><span class="n">nessie_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;dev&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;experiments&quot;</span><span class="p">)</span>
 
 <span class="c1"># Iceberg REST Catalog (Standard API)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_rest</span><span class="p">(</span><span class="n">rest_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;marketing&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;campaigns&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_rest</span><span class="p">(</span><span class="n">rest_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;marketing&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;campaigns&quot;</span><span class="p">)</span>
 
 <span class="c1"># Unity Catalog (Databricks Ecosystem)</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_unity</span><span class="p">(</span><span class="n">unity_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;gold_data&quot;</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_unity</span><span class="p">(</span><span class="n">unity_url</span><span class="p">,</span> <span class="n">namespace</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="s2">&quot;gold_data&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 <p>For more details on advanced configurations and authentication (Kerberos, SASL, IAM), see the <a class="reference internal" href="#./CONFIGURATION.md"><span class="xref myst">Configuration Guide</span></a> or the <a class="reference internal" href="#./catalog_usage.md"><span class="xref myst">Catalog Usage Guide</span></a>.</p>
@@ -464,17 +464,17 @@ pip<span class="w"> </span>install<span class="w"> </span>.<span class="w"> </sp
 <hr class="docutils" />
 <section id="operational-tooling">
 <h2>4. Operational Tooling<a class="headerlink" href="#operational-tooling" title="Link to this heading">¶</a></h2>
-<p>A dedicated CLI <code class="docutils literal notranslate"><span class="pre">hdb</span></code> is provided for management.</p>
+<p>A dedicated CLI <code class="docutils literal notranslate"><span class="pre">bsdb</span></code> is provided for management.</p>
 <section id="cli-commands">
 <h3>CLI Commands<a class="headerlink" href="#cli-commands" title="Link to this heading">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Inspect table metadata/stats</span>
-hdb<span class="w"> </span>table<span class="w"> </span>inspect<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table
+bsdb<span class="w"> </span>table<span class="w"> </span>inspect<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table
 
 <span class="c1"># Compaction (Merge small files)</span>
-hdb<span class="w"> </span>table<span class="w"> </span>compact<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table
+bsdb<span class="w"> </span>table<span class="w"> </span>compact<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table
 
 <span class="c1"># Vacuum (Cleanup old files)</span>
-hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table<span class="w"> </span>--older-than-days<span class="w"> </span><span class="m">7</span>
+bsdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> </span>--uri<span class="w"> </span>s3://bucket/table<span class="w"> </span>--older-than-days<span class="w"> </span><span class="m">7</span>
 </pre></div>
 </div>
 </section>
@@ -546,7 +546,7 @@ hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> <
 <hr class="docutils" />
 <section id="partitioning-strategy">
 <h2>7. Partitioning Strategy<a class="headerlink" href="#partitioning-strategy" title="Link to this heading">¶</a></h2>
-<p>HyperStreamDB supports coarse-grained pruning via table partitioning. This allows the query planner to skip entire directories of data without reading file headers.</p>
+<p>BenoStreamDB supports coarse-grained pruning via table partitioning. This allows the query planner to skip entire directories of data without reading file headers.</p>
 <section id="creating-a-partitioned-table">
 <h3>Creating a Partitioned Table<a class="headerlink" href="#creating-a-partitioned-table" title="Link to this heading">¶</a></h3>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">spec</span> <span class="o">=</span> <span class="p">{</span>
@@ -554,7 +554,7 @@ hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> <
         <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;category&quot;</span><span class="p">,</span> <span class="s2">&quot;transform&quot;</span><span class="p">:</span> <span class="s2">&quot;identity&quot;</span><span class="p">}</span>
     <span class="p">]</span>
 <span class="p">}</span>
-<span class="n">table</span> <span class="o">=</span> <span class="n">hdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">create_partitioned</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">spec</span><span class="p">)</span>
+<span class="n">table</span> <span class="o">=</span> <span class="n">bsdb</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">create_partitioned</span><span class="p">(</span><span class="s2">&quot;s3://bucket/table&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">spec</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -598,7 +598,7 @@ hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> <
         <div class="bottom-of-page">
           <div class="left-details">
             <div class="copyright">
-                Copyright &#169; 2026, HyperStream Team
+                Copyright &#169; 2026, BenoStream Team
             </div>
             Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
             
@@ -607,7 +607,7 @@ hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> <
           </div>
           <div class="right-details">
             <div class="icons">
-              <a class="muted-link " href="https://github.com/rla3rd/hyperstreamdb" aria-label="GitHub">
+              <a class="muted-link " href="https://github.com/benolabsai/benostreamdb" aria-label="GitHub">
                 <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 16 16">
                     <path fill-rule="evenodd" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"></path>
                 </svg>
@@ -631,7 +631,7 @@ hdb<span class="w"> </span>table<span class="w"> </span>vacuum<span class="w"> <
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">HyperStreamDB Comprehensive Guide</a><ul>
+<li><a class="reference internal" href="#">BenoStreamDB Comprehensive Guide</a><ul>
 <li><a class="reference internal" href="#architecture-overview">1. Architecture Overview</a></li>
 <li><a class="reference internal" href="#getting-started">2. Getting Started</a><ul>
 <li><a class="reference internal" href="#installation">Installation</a></li>

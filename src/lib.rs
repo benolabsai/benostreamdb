@@ -10,6 +10,19 @@
     clippy::needless_late_init,
     clippy::collapsible_match
 )]
+// No-panic policy for production paths (see NO_PANIC_POLICY.md).
+//
+// Staged behind the `no-panic` feature because `#![deny(warnings)]` above means
+// enabling these restriction lints as errors today would fail the build on every
+// not-yet-remediated site. Phase 1 remediation drives the count down (tracked by
+// `scripts/no_panic_check.sh`), after which CI turns the feature on permanently.
+//
+// `#[cfg(test)]` code and the separate `tests/` crates are exempt: tests are
+// allowed to unwrap freely.
+#![cfg_attr(
+    all(not(test), feature = "no-panic"),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 #[cfg(target_os = "linux")]
 #[global_allocator]
@@ -39,7 +52,7 @@ pub mod python_distance;
 
 // Re-export main types for convenience
 pub use crate::core::catalog::{create_catalog, create_catalog_async, Catalog, CatalogType};
-pub use crate::core::error::{HyperstreamError, Result};
+pub use crate::core::error::{BenoStreamError, Result};
 pub use crate::core::index::VectorMetric;
 pub use crate::core::table::{Table, VectorSearchParams};
 
@@ -95,9 +108,13 @@ fn check_jemalloc() -> PyResult<String> {
     #[cfg(target_env = "gnu")]
     {
         use tikv_jemalloc_ctl::epoch;
-        let e = epoch::mib().unwrap();
-        e.advance().unwrap();
-        return Ok(format!("jemalloc active and linked!"));
+        let mib = epoch::mib().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("jemalloc ctl unavailable: {e}"))
+        })?;
+        mib.advance().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("jemalloc epoch advance failed: {e}"))
+        })?;
+        return Ok("jemalloc active and linked!".to_string());
     }
     #[allow(unreachable_code)]
     Ok("jemalloc not enabled via target_env=gnu".to_string())
@@ -105,7 +122,7 @@ fn check_jemalloc() -> PyResult<String> {
 
 #[cfg(feature = "python")]
 #[pymodule]
-fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     tame_glibc_arenas();
     #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
     register_python_site_packages(m);
@@ -204,7 +221,7 @@ fn hyperstreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-/// A HyperStream Segment is a self-contained unit of data and aligned indexes.
+/// A BenoStream Segment is a self-contained unit of data and aligned indexes.
 #[derive(Clone)]
 pub struct SegmentConfig {
     pub base_path: String,

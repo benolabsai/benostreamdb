@@ -3,7 +3,7 @@ Utility functions for verifying index existence in benchmarks.
 """
 import time
 from typing import Optional
-from hyperstreamdb import Table
+from benostreamdb import Table
 import numpy as np
 
 

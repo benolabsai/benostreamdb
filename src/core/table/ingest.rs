@@ -42,8 +42,8 @@ pub struct IngestOptions {
     /// bounded at TB scale (chunked loads create many small segments by design).
     pub compact_after: bool,
     /// Return freed heap pages to the OS after a committed unit once RSS exceeds
-    /// this budget. `None` falls back to `HDB_INGEST_MEMORY_BUDGET_GB`; if
-    /// neither is set, trimming is disabled. See [`crate::core::memory`].
+    /// this budget. `None` falls back to `BSDB_INGEST_MEMORY_BUDGET_GB`, then to
+    /// the memory-derived default. See [`crate::core::memory`].
     pub memory_budget_bytes: Option<u64>,
 }
 
@@ -262,7 +262,7 @@ impl Table {
     }
 
     /// Ingest a single explicit row range — the serverless thin-runner entry
-    /// point (`hdb ingest --range …`). Each runner commits independently via CAS.
+    /// point (`bsdb ingest --range …`). Each runner commits independently via CAS.
     pub async fn ingest_range_async(
         &self,
         path: &str,
@@ -413,16 +413,17 @@ impl Table {
                 report.rows_ingested += rows;
                 report.segments.push(path);
 
-                if let Some(policy) = trim_policy.as_mut() {
-                    if policy.maybe_trim() {
-                        tracing::info!(
-                            rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
-                            budget_mb = policy.budget_bytes() / (1024 * 1024),
-                            trims = policy.trims(),
-                            released_mb = policy.released_bytes() / (1024 * 1024),
-                            "ingest: trimmed heap after unit (RSS over budget)"
-                        );
-                    }
+                if trim_policy.maybe_trim() {
+                    tracing::info!(
+                        rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
+                        budget_mb = trim_policy.budget_bytes() / (1024 * 1024),
+                        trims = trim_policy.trims(),
+                        released_mb = trim_policy.released_bytes() / (1024 * 1024),
+                        "ingest: trimmed heap after unit (RSS over budget)"
+                    );
+                    // A writer may be blocked on the ingest RAM high-water
+                    // mark; let it re-check RSS now.
+                    self.notify_memory_reclaimed();
                 }
             }
         }
@@ -538,16 +539,16 @@ impl Table {
             report.rows_ingested += rows;
             report.segments.push(path);
 
-            if let Some(policy) = trim_policy.as_mut() {
-                if policy.maybe_trim() {
-                    tracing::info!(
-                        rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
-                        budget_mb = policy.budget_bytes() / (1024 * 1024),
-                        trims = policy.trims(),
-                        released_mb = policy.released_bytes() / (1024 * 1024),
-                        "ingest: trimmed heap after unit (RSS over budget)"
-                    );
-                }
+            if trim_policy.maybe_trim() {
+                tracing::info!(
+                    rss_mb = crate::core::memory::rss_bytes().map(|b| b / (1024 * 1024)),
+                    budget_mb = trim_policy.budget_bytes() / (1024 * 1024),
+                    trims = trim_policy.trims(),
+                    released_mb = trim_policy.released_bytes() / (1024 * 1024),
+                    "ingest: trimmed heap after unit (RSS over budget)"
+                );
+                // A writer may be blocked on the ingest RAM high-water mark.
+                self.notify_memory_reclaimed();
             }
         }
 

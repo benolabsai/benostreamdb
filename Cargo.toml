@@ -1,11 +1,11 @@
 [package]
-name = "hyperstreamdb"
-version = "0.9.1"
+name = "benostreamdb"
+version = "0.10.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
-description = "HyperStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
-repository = "https://github.com/rla3rd/hyperstreamdb"
-homepage = "https://github.com/rla3rd/hyperstreamdb"
+description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
+repository = "https://github.com/benolabsai/benostreamdb"
+homepage = "https://github.com/benolabsai/benostreamdb"
 readme = "README.md"
 keywords = ["database", "vector-search", "iceberg", "parquet", "indexing"]
 categories = ["database-implementations", "data-structures", "concurrency"]
@@ -26,13 +26,13 @@ exclude = [
 ]
 
 [lib]
-name = "hyperstreamdb"
+name = "benostreamdb"
 crate-type = ["cdylib", "rlib"]
 
 [workspace]
 members = [
-    ".", "hyperstreamdb-flight",
-    "hyperstreamdb-search",
+    ".", "benostreamdb-flight",
+    "benostreamdb-search",
 ]
 
 
@@ -43,6 +43,10 @@ required-features = ["java"]
 
 [features]
 default = []
+# Turns the production-path no-panic restriction lints into hard errors (see
+# NO_PANIC_POLICY.md). Off during Phase 1 remediation; CI enables it once the
+# `scripts/no_panic_check.sh` baseline reaches the documented invariant set.
+no-panic = []
 enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
@@ -103,7 +107,10 @@ volo-thrift = "0.10"
 roaring = "0.10.2" # For scalar bitmaps
 dashmap = "6.0"      # Concurrent HashMaps
 # hnsw_rs removed and internalized to src/core/index/hnsw_rs
-bincode = "1.3"
+# bincode 2 with `config::legacy()` is byte-compatible with bincode 1.3, so
+# existing HNSW index dumps still load. bincode 1.3 is unmaintained
+# (RUSTSEC-2025-0141).
+bincode = { version = "2", features = ["serde"] }
 cpu-time = "1.0"
 env_logger = "0.10"
 log = "0.4"

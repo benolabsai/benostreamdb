@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::table::Table;
 use object_store::path::Path;
 use std::sync::Arc;
 

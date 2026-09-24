@@ -27,7 +27,7 @@ impl JdbcCatalogClient {
 
         let client = Self {
             pool,
-            warehouse: warehouse.unwrap_or_else(|| "/tmp/hyperstream_warehouse".to_string()),
+            warehouse: warehouse.unwrap_or_else(|| "/tmp/benostream_warehouse".to_string()),
             catalog_name,
         };
 

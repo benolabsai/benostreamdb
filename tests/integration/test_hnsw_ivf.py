@@ -1,7 +1,7 @@
 """
 Test HNSW-IVF implementation with a simple dataset
 """
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 import time
@@ -41,7 +41,7 @@ def test_hnsw_ivf_integration():
     if os.path.exists("/tmp/test_hnsw_ivf_default_pytest"):
         shutil.rmtree("/tmp/test_hnsw_ivf_default_pytest")
 
-    table_default = hdb.Table(table_path)
+    table_default = bsdb.Table(table_path)
     table_default.add_index_columns(["embedding"]) 
     start = time.time()
     table_default.write_pandas(df)

@@ -20,6 +20,7 @@ pub mod planner;
 pub mod puffin;
 pub mod query;
 pub mod reader;
+pub mod resources;
 pub mod segment;
 pub mod sql;
 pub mod storage;

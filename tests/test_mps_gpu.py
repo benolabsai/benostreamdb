@@ -1,16 +1,16 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 import time
 
 def test_mps_gpu():
     print("="*50)
-    print("HYPERSTREAMDB MPS GPU VALIDATION")
+    print("BENOSTREAMDB MPS GPU VALIDATION")
     print("="*50)
     
     # 1. Detect GPU Context
     print("\n[1] Detecting GPU Context...")
     try:
-        ctx = hdb.ComputeContext.auto_detect()
+        ctx = bsdb.ComputeContext.auto_detect()
         print(f"Detected backend: {ctx.backend}")
         print(f"Device ID: {ctx.device_id}")
         
@@ -31,9 +31,9 @@ def test_mps_gpu():
     
     # 3. Compute on CPU (Baseline)
     print("\n[3] Computing distances on CPU...")
-    cpu_ctx = hdb.ComputeContext("cpu")
+    cpu_ctx = bsdb.ComputeContext("cpu")
     start_time = time.time()
-    cpu_distances = hdb.l2_batch(query, vectors, device=cpu_ctx)
+    cpu_distances = bsdb.l2_batch(query, vectors, device=cpu_ctx)
     cpu_time = time.time() - start_time
     print(f"CPU Time: {cpu_time*1000:.2f}ms")
 
@@ -43,7 +43,7 @@ def test_mps_gpu():
     ctx.reset_stats()
     
     start_time = time.time()
-    gpu_distances = hdb.l2_batch(query, vectors, device=ctx)
+    gpu_distances = bsdb.l2_batch(query, vectors, device=ctx)
     gpu_time = time.time() - start_time
     
     stats = ctx.get_stats()

@@ -36,9 +36,11 @@ pub async fn compute_connected_components(
     ) -> Result<String> {
         let df = ctx.sql(sql).await?;
         let path = run_dir.join(format!("{name}.parquet"));
-        df.write_parquet(path.to_str().unwrap(), Default::default(), None)
-            .await?;
-        ctx.register_parquet(name, path.to_str().unwrap(), ParquetReadOptions::default())
+        let path_str = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("algorithm run dir path is not valid UTF-8"))?;
+        df.write_parquet(path_str, Default::default(), None).await?;
+        ctx.register_parquet(name, path_str, ParquetReadOptions::default())
             .await?;
         Ok(name.to_string())
     }

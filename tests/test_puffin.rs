@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-use hyperstreamdb::core::puffin::{PuffinReader, PuffinWriter};
+use benostreamdb::core::puffin::{PuffinReader, PuffinWriter};
 use std::collections::HashMap;
 use std::io::Cursor;
 

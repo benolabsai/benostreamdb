@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
-// Modified by Richard Albright / HyperStreamDB on 2026-03-29 to add pre-filtering support and better integration with Iceberg manifests.
+// Modified by Richard Albright / BenoStreamDB on 2026-03-29 to add pre-filtering support and better integration with Iceberg manifests.
 // This file contains derivative work from the Apache 2.0 licensed project(s).
 
 /// HNSW-IVF Hybrid Index Implementation
@@ -631,11 +631,11 @@ impl HnswIvfIndex {
         }
 
         let num_cpus = num_cpus::get();
-        // `HDB_HNSW_N_LISTS` overrides the IVF list count for tuning without a
+        // `BSDB_HNSW_N_LISTS` overrides the IVF list count for tuning without a
         // rebuild (more lists = smaller, faster-to-build buckets).
         let n_lists = n_lists
             .or_else(|| {
-                std::env::var("HDB_HNSW_N_LISTS")
+                std::env::var("BSDB_HNSW_N_LISTS")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
             })
@@ -652,10 +652,10 @@ impl HnswIvfIndex {
             .min(n_vectors / 10)
             .max(1);
 
-        // `HDB_HNSW_M` overrides the per-node neighbour count.
+        // `BSDB_HNSW_M` overrides the per-node neighbour count.
         let hnsw_m = hnsw_m
             .or_else(|| {
-                std::env::var("HDB_HNSW_M")
+                std::env::var("BSDB_HNSW_M")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
             })
@@ -774,8 +774,8 @@ impl HnswIvfIndex {
         // (~n_vectors / n_lists), so at most `num_threads` buckets are resident
         // at once. This was previously a sequential loop and dominated the
         // whole out-of-core build.
-        // `HDB_HNSW_EF_CONSTRUCTION` overrides the build beam width.
-        let ef_construction = std::env::var("HDB_HNSW_EF_CONSTRUCTION")
+        // `BSDB_HNSW_EF_CONSTRUCTION` overrides the build beam width.
+        let ef_construction = std::env::var("BSDB_HNSW_EF_CONSTRUCTION")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or((hnsw_m * 2).max(40));

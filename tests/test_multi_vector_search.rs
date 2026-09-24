@@ -4,9 +4,9 @@ use anyhow::Result;
 use arrow::array::{FixedSizeListArray, Float32Array, Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::index::VectorValue;
-use hyperstreamdb::core::table::VectorSearchParams;
-use hyperstreamdb::Table;
+use benostreamdb::core::index::VectorValue;
+use benostreamdb::core::table::VectorSearchParams;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -103,8 +103,8 @@ async fn test_multi_vector_search_rrf_scoring() -> Result<()> {
     assert_eq!(id_col.value(last_idx), 4);
     assert_eq!(name_col.value(last_idx), "match_neither");
 
-    // Also test via HyperStreamSession SQL execution
-    let session = hyperstreamdb::core::sql::session::HyperStreamSession::new(None);
+    // Also test via BenoStreamSession SQL execution
+    let session = benostreamdb::core::sql::session::BenoStreamSession::new(None);
     session.register_table("documents", Arc::new(table.clone()))?;
 
     let sql_results = session

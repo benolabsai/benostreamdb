@@ -32,32 +32,42 @@ impl crate::core::segment::HybridSegmentWriter {
                     continue;
                 }
 
+                // The `data_type()` checks above guarantee the downcast; skip the
+                // row instead of panicking if the invariant is ever violated.
                 let src_id = if *src_array.data_type() == arrow::datatypes::DataType::UInt64 {
-                    src_array
+                    match src_array
                         .as_any()
                         .downcast_ref::<arrow::array::UInt64Array>()
-                        .unwrap()
-                        .value(i)
+                    {
+                        Some(a) => a.value(i),
+                        None => continue,
+                    }
                 } else {
-                    src_array
+                    match src_array
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap()
-                        .value(i) as u64
+                    {
+                        Some(a) => a.value(i) as u64,
+                        None => continue,
+                    }
                 };
 
                 let dst_id = if *dst_array.data_type() == arrow::datatypes::DataType::UInt64 {
-                    dst_array
+                    match dst_array
                         .as_any()
                         .downcast_ref::<arrow::array::UInt64Array>()
-                        .unwrap()
-                        .value(i)
+                    {
+                        Some(a) => a.value(i),
+                        None => continue,
+                    }
                 } else {
-                    dst_array
+                    match dst_array
                         .as_any()
                         .downcast_ref::<arrow::array::Int64Array>()
-                        .unwrap()
-                        .value(i) as u64
+                    {
+                        Some(a) => a.value(i) as u64,
+                        None => continue,
+                    }
                 };
 
                 edges.push((src_id, dst_id, (row_offset + i) as u32));

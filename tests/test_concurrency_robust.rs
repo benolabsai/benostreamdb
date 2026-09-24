@@ -4,8 +4,8 @@ use anyhow::Result;
 use arrow::array::{FixedSizeListArray, Float32Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::table::VectorSearchParams;
-use hyperstreamdb::Table;
+use benostreamdb::core::table::VectorSearchParams;
+use benostreamdb::Table;
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
@@ -89,7 +89,7 @@ async fn test_high_concurrency_readers_writers() -> Result<()> {
                 let query_vec = vec![0.5; 4];
                 let vs_params = VectorSearchParams::new(
                     "embedding",
-                    hyperstreamdb::core::index::VectorValue::Float32(query_vec),
+                    benostreamdb::core::index::VectorValue::Float32(query_vec),
                     5,
                 );
                 let _ = t

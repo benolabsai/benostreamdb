@@ -1,7 +1,7 @@
-use hyperstreamdb::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw;
-use hyperstreamdb::core::index::hnsw_rs::arrow_ipc::dump_arrow_ipc;
-use hyperstreamdb::core::index::hnsw_rs::dist::DistL2;
-use hyperstreamdb::core::index::hnsw_rs::hnsw::Hnsw;
+use benostreamdb::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw;
+use benostreamdb::core::index::hnsw_rs::arrow_ipc::dump_arrow_ipc;
+use benostreamdb::core::index::hnsw_rs::dist::DistL2;
+use benostreamdb::core::index::hnsw_rs::hnsw::Hnsw;
 
 #[test]
 fn scratch_test() {

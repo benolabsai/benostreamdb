@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# HyperStreamDB Production Deployment
+# BenoStreamDB Production Deployment
 # Separate containers for each service (microservice architecture)
 #
 # Usage:
@@ -16,19 +16,26 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.search
-    image: hyperstreamdb/search:${HDB_VERSION:-latest}
-    container_name: hdb-search
+    image: benostreamdb/search:${BSDB_VERSION:-latest}
+    container_name: bsdb-search
     restart: unless-stopped
     ports:
-      - "${HYPERSEARCH_PORT:-9200}:9200"
+      - "${BENOSEARCH_PORT:-9200}:9200"
       - "${QDRANT_PORT:-6333}:6333"
     environment:
-      - HYPERSEARCH_BIND=0.0.0.0
-      - HYPERSEARCH_PORT=9200
+      - BENOSEARCH_BIND=0.0.0.0
+      - BENOSEARCH_PORT=9200
       - QDRANT_BIND=0.0.0.0
       - QDRANT_PORT=6333
-      - HYPERSEARCH_STORAGE_URI=${HYPERSEARCH_STORAGE_URI:-s3://hyperstream/}
-      - HYPERSEARCH_AUTO_REFRESH_SECS=${HYPERSEARCH_AUTO_REFRESH_SECS:-5}
+      - BENOSEARCH_STORAGE_URI=${BENOSEARCH_STORAGE_URI:-s3://benostream/}
+      - BENOSEARCH_AUTO_REFRESH_SECS=${BENOSEARCH_AUTO_REFRESH_SECS:-5}
+      # Resource limits are derived from the container's cgroup memory limit
+      # (see RESOURCE_LIMITS.md). Leave these empty to use the derived defaults;
+      # set them only to pin a value explicitly.
+      - BSDB_MAX_INGEST_RAM_GB=${BSDB_MAX_INGEST_RAM_GB:-}
+      - BSDB_INGEST_MEMORY_BUDGET_GB=${BSDB_INGEST_MEMORY_BUDGET_GB:-}
+      - BSDB_INDEX_BUILD_CONCURRENCY=${BSDB_INDEX_BUILD_CONCURRENCY:-}
+      - BSDB_MIN_FREE_DISK_GB=${BSDB_MIN_FREE_DISK_GB:-}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION:-us-east-1}
@@ -46,9 +53,9 @@ services:
           memory: ${SEARCH_MEMORY:-4G}
           cpus: "${SEARCH_CPUS:-2.0}"
     volumes:
-      - search-cache:/home/hyperstream/.hyperstreamdb
+      - search-cache:/home/benostream/.benostreamdb
     networks:
-      - hyperstream_net
+      - benostream_net
 
   # ---------------------
   # Flight SQL Service (Arrow Flight gRPC)
@@ -57,8 +64,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.flight
-    image: hyperstreamdb/flight:${HDB_VERSION:-latest}
-    container_name: hdb-flight
+    image: benostreamdb/flight:${BSDB_VERSION:-latest}
+    container_name: bsdb-flight
     restart: unless-stopped
     ports:
       - "${FLIGHT_PORT:-50051}:50051"
@@ -69,6 +76,11 @@ services:
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_ALLOW_HTTP=${AWS_ALLOW_HTTP:-false}
       - RUST_LOG=${RUST_LOG:-info}
+      # Derived from the container's cgroup memory limit; set to pin explicitly.
+      - BSDB_MAX_INGEST_RAM_GB=${BSDB_MAX_INGEST_RAM_GB:-}
+      - BSDB_INGEST_MEMORY_BUDGET_GB=${BSDB_INGEST_MEMORY_BUDGET_GB:-}
+      - BSDB_INDEX_BUILD_CONCURRENCY=${BSDB_INDEX_BUILD_CONCURRENCY:-}
+      - BSDB_MIN_FREE_DISK_GB=${BSDB_MIN_FREE_DISK_GB:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:50051/", "||", "exit", "0"]
       interval: 30s
@@ -80,9 +92,9 @@ services:
           memory: ${FLIGHT_MEMORY:-4G}
           cpus: "${FLIGHT_CPUS:-2.0}"
     volumes:
-      - flight-cache:/home/hyperstream/.hyperstreamdb
+      - flight-cache:/home/benostream/.benostreamdb
     networks:
-      - hyperstream_net
+      - benostream_net
 
 volumes:
   search-cache:
@@ -91,5 +103,5 @@ volumes:
     driver: local
 
 networks:
-  hyperstream_net:
+  benostream_net:
     driver: bridge

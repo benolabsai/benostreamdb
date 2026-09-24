@@ -4,9 +4,9 @@ from pyarrow.cffi import ffi as pa_ffi
 
 def test_ffi_vector():
     # Load the library
-    lib = ctypes.CDLL("./target/debug/libhyperstreamdb.so") # Adjust based on OS/build
+    lib = ctypes.CDLL("./target/debug/libbenostreamdb.so") # Adjust based on OS/build
 
-    # Define arguments for Java_com_hyperstreamdb_spark_jni_HyperStreamJNIBridge_vectorSearch
+    # Define arguments for Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_vectorSearch
     # Signature: JNIEnv, JClass, JString(table), JString(seg), JString(col), jint(k), jlong(ptr), jint(len), jlong(out_array), jlong(out_schema)
     
     # We won't actually pass valid JNI objects for strings, because the Rust code expects JNIEnv to decode them.

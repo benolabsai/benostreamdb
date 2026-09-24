@@ -69,9 +69,10 @@ impl HybridSearchCoordinator {
         }
 
         if ranked_lists.len() == 1 {
-            let mut list: Vec<ScoredResult> = ranked_lists.pop().unwrap();
-            list.truncate(limit);
-            return Ok(list);
+            if let Some(mut list) = ranked_lists.pop() {
+                list.truncate(limit);
+                return Ok(list);
+            }
         }
 
         if let Some(k) = rrf_k {

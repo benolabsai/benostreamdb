@@ -114,11 +114,11 @@ fn compute_single_distance(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 2.0, 3.0])
 /// >>> b = np.array([4.0, 5.0, 6.0])
-/// >>> distance = hdb.l2(a, b)
+/// >>> distance = bsdb.l2(a, b)
 /// >>> print(f"{distance:.3f}")
 /// 5.196
 #[pyfunction]
@@ -162,11 +162,11 @@ pub fn py_l2(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 0.0, 0.0])
 /// >>> b = np.array([0.0, 1.0, 0.0])
-/// >>> distance = hdb.cosine(a, b)
+/// >>> distance = bsdb.cosine(a, b)
 /// >>> print(distance)
 /// 1.0
 #[pyfunction]
@@ -209,11 +209,11 @@ pub fn py_cosine(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 2.0, 3.0])
 /// >>> b = np.array([4.0, 5.0, 6.0])
-/// >>> product = hdb.inner_product(a, b)
+/// >>> product = bsdb.inner_product(a, b)
 /// >>> print(product)
 /// 32.0
 #[pyfunction]
@@ -256,11 +256,11 @@ pub fn py_inner_product(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 2.0, 3.0])
 /// >>> b = np.array([4.0, 5.0, 6.0])
-/// >>> distance = hdb.l1(a, b)
+/// >>> distance = bsdb.l1(a, b)
 /// >>> print(distance)
 /// 9.0
 #[pyfunction]
@@ -303,11 +303,11 @@ pub fn py_l1(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 2.0, 3.0, 4.0])
 /// >>> b = np.array([1.0, 0.0, 3.0, 5.0])
-/// >>> distance = hdb.hamming(a, b)
+/// >>> distance = bsdb.hamming(a, b)
 /// >>> print(distance)
 /// 2.0
 #[pyfunction]
@@ -351,11 +351,11 @@ pub fn py_hamming(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array([1.0, 1.0, 0.0, 0.0])
 /// >>> b = np.array([1.0, 0.0, 1.0, 0.0])
-/// >>> distance = hdb.jaccard(a, b)
+/// >>> distance = bsdb.jaccard(a, b)
 /// >>> print(f"{distance:.3f}")
 /// 0.667
 #[pyfunction]
@@ -417,7 +417,8 @@ fn compute_batch_distances(
         // Update stats
         {
             let tracker = ctx.get_stats_tracker();
-            let mut stats = tracker.lock().unwrap();
+            // Recover from mutex poisoning rather than panicking.
+            let mut stats = tracker.lock().unwrap_or_else(|e| e.into_inner());
             if gpu_context.backend == ComputeBackend::Cpu {
                 stats.total_cpu_time_ms += duration.as_secs_f64() * 1000.0;
             } else {
@@ -487,11 +488,11 @@ fn compute_batch_distances(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> query = np.array([1.0, 2.0, 3.0])
 /// >>> vectors = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-/// >>> distances = hdb.l2_batch(query, vectors)
+/// >>> distances = bsdb.l2_batch(query, vectors)
 /// >>> print(distances)
 /// [0.0, 5.196...]
 #[pyfunction]
@@ -535,11 +536,11 @@ pub fn py_l2_batch<'py>(
 ///     TypeError: If inputs are not numeric arrays
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> query = np.array([1.0, 0.0, 0.0])
 ///     >>> vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-///     >>> distances = hdb.cosine_batch(query, vectors)
+///     >>> distances = bsdb.cosine_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 1.0, 1.0]
 #[pyfunction]
 #[pyo3(name = "cosine_batch", signature = (query, vectors, device=None))]
@@ -585,11 +586,11 @@ pub fn py_cosine_batch<'py>(
 ///     TypeError: If inputs are not numeric arrays
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> query = np.array([1.0, 2.0, 3.0])
 ///     >>> vectors = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-///     >>> products = hdb.inner_product_batch(query, vectors)
+///     >>> products = bsdb.inner_product_batch(query, vectors)
 ///     >>> print(products)  # [14.0, 32.0]
 #[pyfunction]
 #[pyo3(name = "inner_product_batch", signature = (query, vectors, device=None))]
@@ -635,11 +636,11 @@ pub fn py_inner_product_batch<'py>(
 ///     TypeError: If inputs are not numeric arrays
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> query = np.array([0.0, 0.0, 0.0])
 ///     >>> vectors = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-///     >>> distances = hdb.l1_batch(query, vectors)
+///     >>> distances = bsdb.l1_batch(query, vectors)
 ///     >>> print(distances)  # [6.0, 15.0]
 #[pyfunction]
 #[pyo3(name = "l1_batch", signature = (query, vectors, device=None))]
@@ -679,11 +680,11 @@ pub fn py_l1_batch<'py>(
 ///     TypeError: If inputs are not numeric arrays
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> query = np.array([1.0, 0.0, 1.0, 0.0])
 ///     >>> vectors = np.array([[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]])
-///     >>> distances = hdb.hamming_batch(query, vectors)
+///     >>> distances = bsdb.hamming_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 4.0]
 #[pyfunction]
 #[pyo3(name = "hamming_batch", signature = (query, vectors, device=None))]
@@ -728,11 +729,11 @@ pub fn py_hamming_batch<'py>(
 ///     TypeError: If inputs are not numeric arrays
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> query = np.array([1.0, 1.0, 0.0, 0.0])
 ///     >>> vectors = np.array([[1.0, 1.0, 0.0, 0.0], [1.0, 0.0, 1.0, 0.0]])
-///     >>> distances = hdb.jaccard_batch(query, vectors)
+///     >>> distances = bsdb.jaccard_batch(query, vectors)
 ///     >>> print(distances)  # [0.0, 0.667]
 #[pyfunction]
 #[pyo3(name = "jaccard_batch", signature = (query, vectors, device=None))]
@@ -785,10 +786,10 @@ pub fn py_jaccard_batch<'py>(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> # Create a sparse vector with non-zero values at indices 0, 5, 10
-/// >>> sparse = hdb.SparseVector([0, 5, 10], [1.0, 2.0, 3.0], 100)
+/// >>> sparse = bsdb.SparseVector([0, 5, 10], [1.0, 2.0, 3.0], 100)
 /// >>> print(sparse.dim)
 /// 100
 /// >>> dense = sparse.to_dense()  # Convert to dense representation
@@ -899,8 +900,8 @@ impl PySparseVector {
     ///
     /// Examples
     /// --------
-    /// >>> import hyperstreamdb as hdb
-    /// >>> sparse = hdb.SparseVector([0, 2], [1.0, 3.0], 5)
+    /// >>> import benostreamdb as bsdb
+    /// >>> sparse = bsdb.SparseVector([0, 2], [1.0, 3.0], 5)
     /// >>> dense = sparse.to_dense()
     /// >>> print(dense)
     /// [1.0, 0.0, 3.0, 0.0, 0.0]
@@ -967,10 +968,10 @@ fn validate_sparse_indices(indices: &[u32], dim: usize) -> PyResult<()> {
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
-/// >>> a = hdb.SparseVector([0, 5], [1.0, 2.0], 10)
-/// >>> b = hdb.SparseVector([0, 3], [1.0, 3.0], 10)
-/// >>> distance = hdb.l2_sparse(a, b)
+/// >>> import benostreamdb as bsdb
+/// >>> a = bsdb.SparseVector([0, 5], [1.0, 2.0], 10)
+/// >>> b = bsdb.SparseVector([0, 3], [1.0, 3.0], 10)
+/// >>> distance = bsdb.l2_sparse(a, b)
 /// >>> print(f"{distance:.3f}")
 /// 3.606
 #[pyfunction]
@@ -1017,12 +1018,12 @@ pub fn py_l2_sparse(
 ///     ValueError: If vectors have different dimensions
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> # Two sparse vectors in 1000-dimensional space
-///     >>> a = hdb.SparseVector([0, 100, 500], [1.0, 2.0, 3.0], 1000)
-///     >>> b = hdb.SparseVector([0, 200, 500], [1.0, 1.0, 3.0], 1000)
-///     >>> distance = hdb.cosine_sparse(a, b)
+///     >>> a = bsdb.SparseVector([0, 100, 500], [1.0, 2.0, 3.0], 1000)
+///     >>> b = bsdb.SparseVector([0, 200, 500], [1.0, 1.0, 3.0], 1000)
+///     >>> distance = bsdb.cosine_sparse(a, b)
 #[pyfunction]
 #[pyo3(name = "cosine_sparse", signature = (a, b, device=None))]
 pub fn py_cosine_sparse(
@@ -1076,12 +1077,12 @@ pub fn py_cosine_sparse(
 ///     ValueError: If vectors have different dimensions
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> # Sparse vectors with some overlapping non-zero indices
-///     >>> a = hdb.SparseVector([0, 2, 4], [1.0, 2.0, 3.0], 10)
-///     >>> b = hdb.SparseVector([0, 2, 5], [2.0, 3.0, 1.0], 10)
-///     >>> product = hdb.inner_product_sparse(a, b)
+///     >>> a = bsdb.SparseVector([0, 2, 4], [1.0, 2.0, 3.0], 10)
+///     >>> b = bsdb.SparseVector([0, 2, 5], [2.0, 3.0, 1.0], 10)
+///     >>> product = bsdb.inner_product_sparse(a, b)
 ///     >>> print(product)  # 8.0 (1*2 + 2*3 + 0)
 #[pyfunction]
 #[pyo3(name = "inner_product_sparse", signature = (a, b, device=None))]
@@ -1255,12 +1256,12 @@ fn pack_binary_vector(values: &[f32]) -> Vec<u8> {
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> # Two binary vectors: 10110101 and 10101100
 /// >>> a = np.array(\[0b10110101\], dtype=np.uint8)
 /// >>> b = np.array(\[0b10101100\], dtype=np.uint8)
-/// >>> distance = hdb.hamming_packed(a, b)
+/// >>> distance = bsdb.hamming_packed(a, b)
 /// >>> print(distance)
 /// 3
 #[pyfunction]
@@ -1393,12 +1394,12 @@ pub fn py_jaccard_distance_batch<'py>(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> # Unpacked binary vectors (will be auto-packed)
 /// >>> a = np.array([1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0])
 /// >>> b = np.array([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0])
-/// >>> distance = hdb.hamming_auto(a, b)
+/// >>> distance = bsdb.hamming_auto(a, b)
 /// >>> print(distance)
 /// 3
 #[pyfunction]
@@ -1458,11 +1459,11 @@ pub fn py_hamming_auto(
 ///
 /// Examples
 /// --------
-/// >>> import hyperstreamdb as hdb
+/// >>> import benostreamdb as bsdb
 /// >>> import numpy as np
 /// >>> a = np.array(\[0b10110101\], dtype=np.uint8)
 /// >>> b = np.array(\[0b10101100\], dtype=np.uint8)
-/// >>> distance = hdb.jaccard_packed(a, b)
+/// >>> distance = bsdb.jaccard_packed(a, b)
 /// >>> print(f"{distance:.3f}")
 /// 0.429
 #[pyfunction]
@@ -1523,12 +1524,12 @@ pub fn py_jaccard_packed(
 ///     ValueError: If vectors have different lengths or contain non-binary values
 ///
 /// Example:
-///     >>> import hyperstreamdb as hdb
+///     >>> import benostreamdb as bsdb
 ///     >>> import numpy as np
 ///     >>> # Unpacked binary vectors representing sets
 ///     >>> a = np.array([1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0])
 ///     >>> b = np.array([1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0])
-///     >>> distance = hdb.jaccard_auto(a, b)  # Auto-packs and computes
+///     >>> distance = bsdb.jaccard_auto(a, b)  # Auto-packs and computes
 ///     >>> print(distance)  # Jaccard distance based on set overlap
 #[pyfunction]
 #[pyo3(name = "jaccard_auto", signature = (a, b, device=None))]

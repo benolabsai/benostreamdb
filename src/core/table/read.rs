@@ -45,7 +45,7 @@ impl Table {
     #[tracing::instrument(skip(self))]
     pub async fn sql(&self, query: &str) -> Result<Vec<RecordBatch>> {
         use crate::core::sql::optimizer::VectorSearchConfig;
-        use crate::core::sql::HyperStreamTableProvider;
+        use crate::core::sql::BenoStreamTableProvider;
         use datafusion::prelude::{SessionConfig, SessionContext};
 
         // Apply any `/*+ ... */` optimizer hints to the session configuration
@@ -58,7 +58,7 @@ impl Table {
 
         let mut ctx = SessionContext::new_with_config(session_config);
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
-        let provider = Arc::new(HyperStreamTableProvider::new(Arc::new(self.clone())));
+        let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
         let df = ctx.sql(query).await?;
         Ok(df.collect().await?)
@@ -135,7 +135,7 @@ impl Table {
         let mut plan = Vec::new();
         let divider = "-".repeat(60);
         plan.push(divider.clone());
-        plan.push(format!("HYPERSTREAM QUERY PLAN [Table: {}]", self.uri));
+        plan.push(format!("BENOSTREAM QUERY PLAN [Table: {}]", self.uri));
 
         // 1. Initial Pruning (Partition & Stats)
         let expr = if let Some(f) = filter_str {
@@ -729,7 +729,7 @@ impl Table {
         let concurrency = config
             .max_parallel_readers
             .or_else(|| {
-                std::env::var("HYPERSTREAM_MAX_CONCURRENCY")
+                std::env::var("BENOSTREAM_MAX_CONCURRENCY")
                     .ok()
                     .and_then(|s| s.parse::<usize>().ok())
             })
@@ -1055,7 +1055,12 @@ impl Table {
             return Ok(batches);
         }
 
-        let expr = expr.unwrap();
+        // `expr.is_none()` returned above, so this is `Some`; the `None` arm is
+        // defensive only.
+        let expr = match expr {
+            Some(e) => e,
+            None => return Ok(Vec::new()),
+        };
         let and_filters = reader.rewrite_composite_filters(expr.extract_and_conditions());
 
         // Try to use index for the FIRST filter that has one

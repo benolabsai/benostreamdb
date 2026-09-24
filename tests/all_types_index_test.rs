@@ -6,7 +6,7 @@ use arrow::array::{
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
@@ -82,7 +82,7 @@ fn test_all_types_indexing() -> anyhow::Result<()> {
 
         // B. Time Index: time > 2500 (should be 3, 4, 5)
         // Note: Filter parser needs to support time literals or we pass explicit integer?
-        // HyperStream filter currently takes just simple string. Planner parses it.
+        // BenoStream filter currently takes just simple string. Planner parses it.
         // If we say "time > 2500" (integer), it should work against Time32 keys (which are i32).
         // Update: DataFusion is strict about Int32 > Int64. We cast time to bigint.
         let res = table

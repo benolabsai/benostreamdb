@@ -1,4 +1,4 @@
--- HyperStreamDB pgvector SQL Examples
+-- BenoStreamDB pgvector SQL Examples
 -- This file contains practical examples of pgvector-compatible SQL queries
 
 -- ============================================================================

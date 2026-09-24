@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# HyperStreamDB GPU Acceleration Override for Docker Compose
+# BenoStreamDB GPU Acceleration Override for Docker Compose
 #
 # Usage (NVIDIA):
 #   docker compose -f docker/docker-compose.quickstart.yml -f docker/docker-compose.gpu.yml up -d
@@ -11,13 +11,13 @@
 # ---------------------------------------------------------------------------
 
 services:
-  hyperstreamdb:
+  benostreamdb:
     build:
       context: ..
       dockerfile: docker/Dockerfile.gpu
-    image: hyperstreamdb/quickstart:gpu
+    image: benostreamdb/quickstart:gpu
     environment:
-      - HYPERSEARCH_DEVICE=auto
+      - BENOSEARCH_DEVICE=auto
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:

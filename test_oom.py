@@ -1,10 +1,10 @@
 import pyarrow as pa
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import time
 import os
 import psutil
 
-t = hdb.Table.create("file:///tmp/hdb_test_oom", pa.schema([("id", pa.int64()), ("embedding", pa.list_(pa.float32(), 768))]))
+t = bsdb.Table.create("file:///tmp/hdb_test_oom", pa.schema([("id", pa.int64()), ("embedding", pa.list_(pa.float32(), 768))]))
 t.add_index("embedding", {"type": "hnsw", "device": "cpu"})
 
 print("Starting writes...")

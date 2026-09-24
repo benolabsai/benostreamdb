@@ -6,7 +6,7 @@ import pyarrow as pa
 import pandas as pd
 import numpy as np
 import os
-import hyperstreamdb
+import benostreamdb
 
 @pytest.fixture
 def table_uri():
@@ -17,7 +17,7 @@ def table_uri():
 
 def test_connector_apis(table_uri):
     print(f"Creating table at {table_uri}")
-    table = hyperstreamdb.Table(table_uri)
+    table = benostreamdb.Table(table_uri)
     
     # 1. Create Data
     df = pd.DataFrame({

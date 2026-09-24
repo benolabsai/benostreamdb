@@ -1,10 +1,10 @@
-"""HyperStreamDB — full-site Wikipedia Graph RAG demo.
+"""BenoStreamDB — full-site Wikipedia Graph RAG demo.
 
 Runs against the WHOLE English-Wikipedia graph prepared by:
 
     python scripts/prepare_demo.py
 
-Two persistent HyperStreamDB tables are used:
+Two persistent BenoStreamDB tables are used:
   * data/wiki_graph_db/edges — (source, target) int64 + CSR graph index
   * data/wiki_graph_db/nodes — (id, title, summary, embedding) + HNSW-TQ
                                vector index (384-d article centroids) + BM25
@@ -29,24 +29,24 @@ import os
 # Serving default: the engine's 1 GB index-cache cannot hold whole-site segment
 # indexes (69 segments x ~300 MB TQ8 graphs), so every query would evict and
 # re-deserialize them. Size it to 40 GB unless the operator set it explicitly.
-# On smaller hosts lower it via HYPERSTREAM_CACHE_GB, or use the pruned dataset.
-os.environ.setdefault("HYPERSTREAM_CACHE_GB", "40")
+# On smaller hosts lower it via BENOSTREAM_CACHE_GB, or use the pruned dataset.
+os.environ.setdefault("BENOSTREAM_CACHE_GB", "40")
 
 import shutil
 
 import pandas as pd
 import streamlit as st
 
-import hyperstreamdb
+import benostreamdb
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DB = os.environ.get("HDB_DEMO_DB", os.path.join(REPO, "data", "wiki_graph_db"))
+DB = os.environ.get("BSDB_DEMO_DB", os.path.join(REPO, "data", "wiki_graph_db"))
 EDGES_URI = f"file://{os.path.join(DB, 'edges')}"
 NODES_URI = f"file://{os.path.join(DB, 'nodes')}"
-EMBED_MODEL = os.environ.get("HDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
+EMBED_MODEL = os.environ.get("BSDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
 
-st.set_page_config(page_title="HyperStreamDB — Wikipedia Graph RAG", layout="wide")
-st.title("HyperStreamDB — Wikipedia Graph RAG")
+st.set_page_config(page_title="BenoStreamDB — Wikipedia Graph RAG", layout="wide")
+st.title("BenoStreamDB — Wikipedia Graph RAG")
 
 
 # ── LLM (optional) ──────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ def llm_config():
 
 
 def llm_available() -> bool:
-    return os.environ.get("HDB_DEMO_LLM", "1") != "0"
+    return os.environ.get("BSDB_DEMO_LLM", "1") != "0"
 
 
 def llm_chat(messages, temperature: float = 0.0, json_mode: bool = False) -> str:
@@ -107,7 +107,7 @@ def embed_text(text: str):
 
 
 # ── Tables ──────────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Opening HyperStreamDB tables...")
+@st.cache_resource(show_spinner="Opening BenoStreamDB tables...")
 def open_tables():
     edges_dir = os.path.join(DB, "edges")
     nodes_dir = os.path.join(DB, "nodes")
@@ -131,8 +131,8 @@ def open_tables():
             "(idempotent — rerun to resume; see README.md)"
         )
         st.stop()
-    edges = hyperstreamdb.Table(EDGES_URI)
-    nodes = hyperstreamdb.Table(NODES_URI)
+    edges = benostreamdb.Table(EDGES_URI)
+    nodes = benostreamdb.Table(NODES_URI)
     return edges, nodes
 
 
@@ -386,7 +386,7 @@ with TAB_DRIFT:
                 st.write(f"Region: {len(region):,} edges")
                 import pyarrow as pa
                 schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
-                rt = hyperstreamdb.Table.create(f"file://{tmp_edges}", schema)
+                rt = benostreamdb.Table.create(f"file://{tmp_edges}", schema)
                 rt.insert(pa.Table.from_pandas(region.astype("int64"), schema=schema, preserve_index=False))
                 rt.commit(); rt.wait_for_background_tasks()
                 st.write("Summarizing communities (Louvain + text rollup)...")

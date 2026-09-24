@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Profile the hypersearch `_bulk` ingest path.
+"""Profile the bsdb-search `_bulk` ingest path.
 
-Launches the `hypersearch` release binary with `RUST_LOG=info`, sends a
+Launches the `bsdb-search` release binary with `RUST_LOG=info`, sends a
 realistic NDJSON `_bulk` payload (default 10,000 docs, 64-dim embeddings,
 ~2.9 KB/doc to match the competitive benchmark), and prints the per-phase
 timing lines the server logs (`bulk_core timing` / `write_index_docs timing`).
@@ -25,9 +25,9 @@ from pathlib import Path
 import requests
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BINARY = REPO_ROOT / "target" / "release" / "hypersearch"
+BINARY = REPO_ROOT / "target" / "release" / "bsdb-search"
 if not BINARY.exists():
-    BINARY = REPO_ROOT / "target" / "debug" / "hypersearch"
+    BINARY = REPO_ROOT / "target" / "debug" / "bsdb-search"
 
 
 def free_port() -> int:
@@ -75,14 +75,14 @@ def main() -> int:
     storage_uri = f"file://{tmp}"
     index = "prof-" + uuid.uuid4().hex[:8]
 
-    log_path = Path(tmp) / "hypersearch.log"
+    log_path = Path(tmp) / "bsdb-search.log"
     log_file = open(log_path, "wb")
 
     env = {
         **__import__("os").environ,
-        "HYPERSEARCH_BIND": "127.0.0.1",
-        "HYPERSEARCH_PORT": str(port),
-        "HYPERSEARCH_STORAGE_URI": storage_uri,
+        "BENOSEARCH_BIND": "127.0.0.1",
+        "BENOSEARCH_PORT": str(port),
+        "BENOSEARCH_STORAGE_URI": storage_uri,
         "RUST_LOG": "debug",
     }
     proc = subprocess.Popen(
@@ -105,7 +105,7 @@ def main() -> int:
             except requests.RequestException:
                 time.sleep(0.2)
         if not ready:
-            print("hypersearch did not become ready", file=sys.stderr)
+            print("bsdb-search did not become ready", file=sys.stderr)
             return 1
 
         docs = make_docs(args.docs, args.dim)

@@ -1,5 +1,5 @@
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -53,14 +53,14 @@ def test_read_split_with_projection(cleanup):
     
     # Let's interact via `read_split` manually first to test the API.
     
-    catalog = hdb.create_catalog("nessie", {"url": "http://localhost:19120"}) # Type doesn't matter for local file read if we use direct path
+    catalog = bsdb.create_catalog("nessie", {"url": "http://localhost:19120"}) # Type doesn't matter for local file read if we use direct path
     # Actually we don't have a specific `Table` python object exposed easily for direct `read_split` calls
     # except via the internal test wrapper or if we expose it on the Catalog?
     # Python binding `read_split` is on `PyTable`.
     
     # We need a `PyTable`.
     # `load_table` usually returns one. But we have a local file.
-    # Let's use `hdb.Table` (if exposed?) No.
+    # Let's use `bsdb.Table` (if exposed?) No.
     # But `PyRestCatalog` etc return `PyTable`.
     # Does `PyTable.new(uri)` exist? It is not exposed to Python as `__init__`.
     
@@ -71,7 +71,7 @@ def test_read_split_with_projection(cleanup):
     # And read_split(split) uses split.file_path.
     
     # Let's open the "Table" at the directory level.
-    table = hdb.open_table(table_uri)
+    table = bsdb.open_table(table_uri)
     
     # 4. Construct a Split manually (or via Python wrapper if exposed)
     # PySplit is exposed.
@@ -80,7 +80,7 @@ def test_read_split_with_projection(cleanup):
     # Let's use absolute path since we used absolute path in writer.
     
     # Row Group 1: 
-    split = hdb.PySplit(
+    split = bsdb.PySplit(
         file_path,
         0, 100, # offset/length ignored by current impl
         [1],    # row_group_ids

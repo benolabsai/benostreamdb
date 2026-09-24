@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 //! Pattern detection for vector search optimization.
-//! Detects `Limit -> Sort -> Filter -> HyperStreamExec` patterns
+//! Detects `Limit -> Sort -> Filter -> BenoStreamExec` patterns
 //! in the physical plan tree.
 
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 
 use crate::core::manifest::ManifestEntry;
-use crate::core::sql::physical_plan::HyperStreamExec;
+use crate::core::sql::physical_plan::BenoStreamExec;
 
 /// Detected KNN pattern from the plan tree.
 #[derive(Debug)]
@@ -27,16 +27,16 @@ pub struct DetectedKnnPattern {
         std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>,
         bool,
     )>,
-    /// Optional filter predicate found between Sort and HyperStreamExec
+    /// Optional filter predicate found between Sort and BenoStreamExec
     pub filter: Option<std::sync::Arc<dyn datafusion::physical_expr::PhysicalExpr>>,
-    /// The HyperStreamExec node at the base of the pattern
-    pub hyperstream_exec: HyperStreamExecRef,
+    /// The BenoStreamExec node at the base of the pattern
+    pub benostream_exec: BenoStreamExecRef,
 }
 
-/// A reference wrapper to hold the HyperStreamExec without consuming the Arc.
+/// A reference wrapper to hold the BenoStreamExec without consuming the Arc.
 /// Used to pass the detected node to the plan rewriter.
 #[derive(Debug, Clone)]
-pub struct HyperStreamExecRef {
+pub struct BenoStreamExecRef {
     /// Cloned reference to the table
     pub table: std::sync::Arc<crate::core::table::Table>,
     /// Cloned partitions
@@ -49,8 +49,8 @@ pub struct HyperStreamExecRef {
     pub schema: arrow::datatypes::SchemaRef,
 }
 
-impl HyperStreamExecRef {
-    fn from_exec(hs: &HyperStreamExec) -> Self {
+impl BenoStreamExecRef {
+    fn from_exec(hs: &BenoStreamExec) -> Self {
         Self {
             table: hs.table.clone(),
             partitions: hs.partitions.clone(),
@@ -63,7 +63,7 @@ impl HyperStreamExecRef {
 
 /// Try to detect a KNN pattern in the plan tree.
 ///
-/// Looks for: `GlobalLimitExec -> SortExec -> FilterExec? -> HyperStreamExec`
+/// Looks for: `GlobalLimitExec -> SortExec -> FilterExec? -> BenoStreamExec`
 ///
 /// Returns `Some(DetectedKnnPattern)` if the pattern is found, `None` otherwise.
 pub fn detect_knn_pattern(plan: &dyn ExecutionPlan) -> Option<DetectedKnnPattern> {
@@ -84,7 +84,7 @@ pub fn detect_knn_pattern(plan: &dyn ExecutionPlan) -> Option<DetectedKnnPattern
         return None;
     }
 
-    // Step 3: Drill down through optional FilterExec to find HyperStreamExec
+    // Step 3: Drill down through optional FilterExec to find BenoStreamExec
     let mut current = sort_exec.input().clone();
     let mut filter = None;
 
@@ -93,14 +93,14 @@ pub fn detect_knn_pattern(plan: &dyn ExecutionPlan) -> Option<DetectedKnnPattern
         current = filter_child.input().clone();
     }
 
-    // Step 4: Check for HyperStreamExec
-    let hs_exec = current.as_any().downcast_ref::<HyperStreamExec>()?;
+    // Step 4: Check for BenoStreamExec
+    let hs_exec = current.as_any().downcast_ref::<BenoStreamExec>()?;
 
     Some(DetectedKnnPattern {
         limit,
         offset,
         sort_exprs,
         filter,
-        hyperstream_exec: HyperStreamExecRef::from_exec(hs_exec),
+        benostream_exec: BenoStreamExecRef::from_exec(hs_exec),
     })
 }

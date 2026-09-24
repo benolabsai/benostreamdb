@@ -10,7 +10,7 @@ async fn test_integrity_validation() -> Result<()> {
     let temp_dir = tempdir()?;
     let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
 
-    let table = hyperstreamdb::Table::new_async(uri.clone()).await?;
+    let table = benostreamdb::Table::new_async(uri.clone()).await?;
 
     // 1. Write some data
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));

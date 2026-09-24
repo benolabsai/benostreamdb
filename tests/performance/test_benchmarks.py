@@ -1,5 +1,5 @@
 """
-Performance benchmarks for HyperStreamDB.
+Performance benchmarks for BenoStreamDB.
 
 Tests both in-memory and out-of-memory scenarios to validate performance
 characteristics under different memory pressure conditions.
@@ -12,7 +12,7 @@ import tempfile
 import shutil
 import numpy as np
 import pyarrow as pa
-from hyperstreamdb import Table
+from benostreamdb import Table
 
 
 def get_memory_usage_mb():

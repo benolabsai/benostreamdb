@@ -3,9 +3,9 @@
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::manifest::IndexAlgorithm;
-use hyperstreamdb::core::sql::session::HyperStreamSession;
-use hyperstreamdb::Table;
+use benostreamdb::core::manifest::IndexAlgorithm;
+use benostreamdb::core::sql::session::BenoStreamSession;
+use benostreamdb::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -35,7 +35,7 @@ async fn test_sql_bm25_pushdown() -> anyhow::Result<()> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![Arc::new(StringArray::from(vec![
-            "HyperStreamDB is a blazing fast vector database",
+            "BenoStreamDB is a blazing fast vector database",
             "DataFusion provides the SQL engine",
             "BM25 is used for keyword search",
         ]))],
@@ -46,7 +46,7 @@ async fn test_sql_bm25_pushdown() -> anyhow::Result<()> {
 
     // 3. Execute SQL Query with Equality Filter
     // This should trigger BM25 pushdown because 'text' has a BM25 index
-    let session = HyperStreamSession::new(None);
+    let session = BenoStreamSession::new(None);
     session.register_table("documents", table.clone())?;
 
     let (results, _) = session

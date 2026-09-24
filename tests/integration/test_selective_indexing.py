@@ -1,15 +1,15 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import shutil
 import os
 import glob
 import time
 
-TABLE_URI = "file:///tmp/hyperstream_test_selective_indexing"
+TABLE_URI = "file:///tmp/benostream_test_selective_indexing"
 
 def setup_module():
-    if os.path.exists("/tmp/hyperstream_test_selective_indexing"):
-        shutil.rmtree("/tmp/hyperstream_test_selective_indexing")
+    if os.path.exists("/tmp/benostream_test_selective_indexing"):
+        shutil.rmtree("/tmp/benostream_test_selective_indexing")
 
 def count_index_files(table_uri, extension):
     """Count files with specific extension in table directory."""
@@ -22,7 +22,7 @@ def get_files(table_uri):
 
 def test_selective_indexing():
     print("1. Creating Table and Ingesting Data (Default: NO INDEX)")
-    table = hdb.Table(TABLE_URI)
+    table = bsdb.Table(TABLE_URI)
     table.set_index_all(False) # Ensure we test selective indexing only
     table.autocommit = False # Prevent background flushes during investigation
     

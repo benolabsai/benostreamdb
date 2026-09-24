@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import os
 import shutil
@@ -24,13 +24,13 @@ class TestPgVectorCompatibility(unittest.TestCase):
             [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
         ]
         table = pa.Table.from_arrays(data, schema=schema)
-        # In 0.1.9, we register tables by wrapping them in HyperStreamTable
+        # In 0.1.9, we register tables by wrapping them in BenoStreamTable
         # For this test, we rewrite the test setup to use a REAL local table
         # instead of an in-memory arrow table to stay compatible with the registration logic.
-        hdb_table = hdb.Table(self.db_path)
+        hdb_table = bsdb.Table(self.db_path)
         hdb_table.write(table)
         
-        self.session = hdb.Session()
+        self.session = bsdb.Session()
         self.session.register("news", hdb_table)
 
     def tearDown(self):

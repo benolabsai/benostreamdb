@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
-//! Query optimizer rules for HyperStreamDB.
+//! Query optimizer rules for BenoStreamDB.
 //!
 //! Provides physical optimizer rules for DataFusion that detect and rewrite
 //! common patterns like vector search KNN queries and index joins.

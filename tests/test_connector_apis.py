@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pandas as pd
 import shutil
@@ -12,7 +12,7 @@ def test_connector_apis():
     if os.path.exists("/tmp/test_connector_api_table"):
         shutil.rmtree("/tmp/test_connector_api_table")
         
-    table = hdb.Table(uri)
+    table = bsdb.Table(uri)
     
     # Create test data
     df = pd.DataFrame({

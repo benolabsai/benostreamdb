@@ -262,7 +262,7 @@ impl Compactor {
             self.manifest
                 .commit(&all_new_entries, &all_old_paths, commit_meta)
                 .await?;
-            metrics::counter!("hyperstreamdb_data_files_compacted")
+            metrics::counter!("benostreamdb_data_files_compacted")
                 .increment(all_old_paths.len() as u64);
         }
 
@@ -281,7 +281,7 @@ impl Compactor {
 
         // A. Setup Local Temp Environment
         let temp_id = uuid::Uuid::new_v4();
-        let temp_dir_path = std::env::temp_dir().join(format!("hyperstream_compact_{}", temp_id));
+        let temp_dir_path = std::env::temp_dir().join(format!("benostream_compact_{}", temp_id));
         fs::create_dir_all(&temp_dir_path).await?;
         let temp_dir_str = temp_dir_path
             .to_str()
@@ -383,7 +383,8 @@ impl Compactor {
                 "compacted_{}_{}_{}",
                 chrono::Utc::now().format("%Y%m%d%H%M%S"),
                 temp_id,
-                uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
+                // `simple()` yields 32 hex chars, so `[..8]` is always in bounds.
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
             );
 
             // Preserve the Hive partition directory. Compaction re-partitions
@@ -499,7 +500,7 @@ impl Compactor {
                 if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
                     main_parquet_path = remote_path_str;
                     main_parquet_size = file_size;
-                    metrics::counter!("hyperstreamdb_compaction_bytes_written")
+                    metrics::counter!("benostreamdb_compaction_bytes_written")
                         .increment(file_size);
                 } else if file_name.ends_with(".inv.parquet") {
                     let parts: Vec<&str> = file_name.split('.').collect();

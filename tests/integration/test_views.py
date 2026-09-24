@@ -1,11 +1,11 @@
 import sys
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import time
 
 def test_view_creation():
     # 1. Initialize Catalog
     try:
-        catalog = hdb.PyNessieCatalog("http://localhost:19120")
+        catalog = bsdb.PyNessieCatalog("http://localhost:19120")
     except AttributeError:
         print("AttributeError: PyNessieCatalog not found in module.")
         sys.exit(1)

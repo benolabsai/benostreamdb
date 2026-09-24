@@ -1,6 +1,6 @@
 import pytest
 import pyarrow as pa
-from hyperstreamdb import Table
+from benostreamdb import Table
 import tempfile
 import os
 

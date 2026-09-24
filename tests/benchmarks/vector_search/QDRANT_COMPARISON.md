@@ -1,6 +1,6 @@
 # Side-by-Side Qdrant Comparison
 
-Direct performance comparison between HyperStreamDB and Qdrant using identical datasets.
+Direct performance comparison between BenoStreamDB and Qdrant using identical datasets.
 
 ## Legal & Ethical Note
 
@@ -29,7 +29,7 @@ Compares raw ingestion throughput on identical dataset.
 
 **Expected**:
 - Qdrant: 50-100K vectors/sec (in-memory, optimized)
-- HyperStreamDB: 30-50K vectors/sec (S3-based, durable)
+- BenoStreamDB: 30-50K vectors/sec (S3-based, durable)
 
 ### 2. Query Comparison
 **Test**: `test_query_comparison()`
@@ -42,7 +42,7 @@ Compares pure vector search latency.
 
 **Expected**:
 - Qdrant: Faster (in-memory HNSW)
-- HyperStreamDB: Slower (S3 I/O overhead)
+- BenoStreamDB: Slower (S3 I/O overhead)
 
 **Note**: This is expected - Qdrant optimized for in-memory speed.
 
@@ -53,10 +53,10 @@ Compares filtered vector search (our key advantage).
 
 - **Query**: "Find similar WHERE category='A'"
 - **Qdrant**: Post-filter (search all → filter)
-- **HyperStreamDB**: Pre-filter (filter → search subset)
+- **BenoStreamDB**: Pre-filter (filter → search subset)
 
 **Expected**:
-- **HyperStreamDB: 10-100x faster**
+- **BenoStreamDB: 10-100x faster**
 - Demonstrates pre-filtering advantage
 
 ## Running Comparisons
@@ -81,7 +81,7 @@ pytest tests/benchmarks/vector_search/test_qdrant_direct_comparison.py::TestQdra
 
 **Use case**: Real-time recommendation APIs, product search
 
-### When HyperStreamDB is Faster
+### When BenoStreamDB is Faster
 - **Filtered vector search** (pre-filter advantage)
 - **Large datasets** (doesn't fit in RAM)
 - **Cost-sensitive** (90% cheaper)
@@ -107,9 +107,9 @@ SIDE-BY-SIDE COMPARISON: Filtered Search (KEY ADVANTAGE)
 Searches ALL vectors, then filters by category
 Qdrant mean: 15.23ms
 
---- HyperStreamDB (Pre-Filter Approach) ---
+--- BenoStreamDB (Pre-Filter Approach) ---
 Filters FIRST to category='A', then searches subset
-HyperStreamDB mean: 2.45ms
+BenoStreamDB mean: 2.45ms
 
 ==================================================================
 COMPARISON RESULTS - FILTERED SEARCH
@@ -118,11 +118,11 @@ Query: Find top-10 similar WHERE category='A'
 Dataset: 10,000 vectors, ~20% match filter
 
 Qdrant (post-filter):       15.23ms
-HyperStreamDB (pre-filter):  2.45ms
+BenoStreamDB (pre-filter):  2.45ms
 
 Speedup: 6.2x faster with pre-filtering
 
-Why HyperStreamDB is faster:
+Why BenoStreamDB is faster:
 - Pre-filter reduces search space by ~80%
 - Only searches ~2K vectors instead of 10K
 - Qdrant must traverse full graph, then filter
@@ -137,7 +137,7 @@ Why HyperStreamDB is faster:
 - Great for real-time applications
 - Industry-leading query performance
 
-**HyperStreamDB**:
+**BenoStreamDB**:
 - S3-native vector + table format
 - Optimized for filtered searches
 - 90% cheaper for large datasets
@@ -148,6 +148,6 @@ Why HyperStreamDB is faster:
 Both systems have their place:
 
 - **Qdrant**: Real-time, in-memory, sub-ms latency
-- **HyperStreamDB**: Scalable, cost-effective, filtered searches
+- **BenoStreamDB**: Scalable, cost-effective, filtered searches
 
 Choose based on your use case!

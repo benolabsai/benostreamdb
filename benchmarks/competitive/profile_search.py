@@ -2,13 +2,13 @@ import cProfile
 import pstats
 import time
 import numpy as np
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import tempfile
 import sys
 
 def main():
     with tempfile.TemporaryDirectory() as tmpdir:
-        table = hdb.Table(f"file://{tmpdir}/test_table")
+        table = bsdb.Table(f"file://{tmpdir}/test_table")
         
         n_rows = 1000
         dim = 768

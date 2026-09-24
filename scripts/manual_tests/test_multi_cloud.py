@@ -5,7 +5,7 @@ Tests S3 (MinIO), Azure (Azurite), and GCP (fake-gcs-server) storage backends.
 These tests require the respective services to be running via docker-compose.
 """
 
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pytest
 import os
@@ -43,10 +43,10 @@ def test_s3_with_minio():
     
     import time
     # Create table on MinIO
-    table_uri = f"s3://test-bucket/hyperstream-test-{int(time.time())}"
+    table_uri = f"s3://test-bucket/benostream-test-{int(time.time())}"
     
     try:
-        table = hdb.Table(table_uri)
+        table = bsdb.Table(table_uri)
         
         # Write data
         schema = pa.schema([
@@ -85,10 +85,10 @@ def test_azure_with_azurite():
     
     import time
     # Create table on Azurite
-    table_uri = f"az://test-container/hyperstream-test-{int(time.time())}"
+    table_uri = f"az://test-container/benostream-test-{int(time.time())}"
     
     try:
-        table = hdb.Table(table_uri)
+        table = bsdb.Table(table_uri)
         
         # Write data
         schema = pa.schema([
@@ -125,7 +125,7 @@ def test_local_filesystem_comprehensive():
     with tempfile.TemporaryDirectory() as tmp_dir:
         table_uri = f"file://{tmp_dir}/test_table"
         
-        table = hdb.Table(table_uri)
+        table = bsdb.Table(table_uri)
         
         # Test 1: Basic write and read
         schema = pa.schema([
@@ -179,7 +179,7 @@ def test_http_storage():
     try:
         # This will likely fail without a real HTTP server, but shouldn't crash
         table_uri = "https://example.com/data/table"
-        result = hdb.Table(table_uri)
+        result = bsdb.Table(table_uri)
         # If it succeeds, that's fine
     except Exception as e:
         # Should fail gracefully with a clear error

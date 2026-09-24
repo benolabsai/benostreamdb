@@ -15,8 +15,11 @@ use regex::Regex;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-pub static SQL_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").unwrap());
+/// Pattern rewriting the Python-side helper `dist_l2(...)` to the native UDF
+/// call. A literal pattern cannot fail to compile; `None` exists only so this
+/// stays total (the query is returned unchanged) instead of unwrapping.
+pub static SQL_REGEX: Lazy<Option<Regex>> =
+    Lazy::new(|| Regex::new(r"(?i)dist_l2\(([^,]+),\s*\[([^\]]+)\]\)").ok());
 
 /// Sanitize SQL query by replacing Python-side helper function `dist_l2` with the
 /// native DataFusion UDF `l2_distance`. Additionally, validate the query for
@@ -39,15 +42,22 @@ pub fn sanitize_sql(query: &str) -> PyResult<String> {
         ));
     }
 
-    Ok(SQL_REGEX
-        .replace_all(query, "dist_l2($1, ARRAY[$2])")
-        .to_string())
+    Ok(match SQL_REGEX.as_ref() {
+        Some(re) => re.replace_all(query, "dist_l2($1, ARRAY[$2])").to_string(),
+        None => query.to_string(),
+    })
 }
 
 /// Module-level global Tokio runtime for all Python-bound operations.
 /// Sharing a single runtime prevents 'Cannot drop a runtime in a context where blocking is not allowed' panics.
+///
+/// `Runtime::new()` has no infallible form and fails only if the OS cannot give
+/// the process a reactor/worker threads. If that happens the binding layer is
+/// unusable, so surfacing it as a clear error at first use is correct — this is
+/// a documented residual invariant in NO_PANIC_POLICY.md.
+#[allow(clippy::expect_used)]
 pub static TOKIO_RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
-    Arc::new(Runtime::new().expect("Failed to create unified Tokio runtime for HyperStreamDB"))
+    Arc::new(Runtime::new().expect("Failed to create unified Tokio runtime for BenoStreamDB"))
 });
 
 /// Helper function to parse metric string to VectorMetric enum
@@ -311,7 +321,7 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
 pub fn init_logging(level: &str) -> PyResult<()> {
     crate::telemetry::tracing::update_log_level(level)
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-    let guard = crate::telemetry::tracing::init_tracing("hyperstreamdb")
+    let guard = crate::telemetry::tracing::init_tracing("benostreamdb")
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Box::leak(Box::new(guard));
     Ok(())
@@ -491,7 +501,7 @@ pub fn extract_schema(schema_obj: Bound<'_, PyAny>) -> PyResult<arrow::datatypes
     }
 
     Err(pyo3::exceptions::PyTypeError::new_err(
-        "Expected hyperstreamdb.Schema or pyarrow.Schema object",
+        "Expected benostreamdb.Schema or pyarrow.Schema object",
     ))
 }
 

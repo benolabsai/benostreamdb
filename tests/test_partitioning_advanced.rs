@@ -4,8 +4,8 @@ use anyhow::Result;
 use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::manifest::{PartitionField, PartitionSpec};
-use hyperstreamdb::core::table::Table;
+use benostreamdb::core::manifest::{PartitionField, PartitionSpec};
+use benostreamdb::core::table::Table;
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -79,7 +79,7 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     assert_eq!(entries.len(), 4, "Should have 4 partitioned segments");
 
     // 6. Test Pruning: Query by year=2022
-    let filter_year = hyperstreamdb::core::planner::QueryFilter {
+    let filter_year = benostreamdb::core::planner::QueryFilter {
         column: "year".to_string(),
         min: Some(serde_json::json!(2022)),
         min_inclusive: true,
@@ -96,7 +96,7 @@ async fn test_multi_column_null_partitioning() -> Result<()> {
     assert_eq!(total_rows_year, 2, "year=2022 should return 2 rows");
 
     // 7. Test Pruning: Query by category=A
-    let filter_cat = hyperstreamdb::core::planner::QueryFilter {
+    let filter_cat = benostreamdb::core::planner::QueryFilter {
         column: "category".to_string(),
         min: Some(serde_json::json!("A")),
         min_inclusive: true,

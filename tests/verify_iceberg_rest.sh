@@ -3,12 +3,12 @@ set -e
 
 # 1. Seed data
 echo "Seeding data..."
-export HYPERSTREAM_STORAGE_URI="file:///tmp/hdb_test/default/sample_table"
+export BENOSTREAM_STORAGE_URI="file:///tmp/hdb_test/default/sample_table"
 cargo run --bin setup_test_data
 
 # 2. Start REST server in background
 echo "Starting REST server..."
-export HYPERSTREAM_STORAGE_URI="file:///tmp/hdb_test"
+export BENOSTREAM_STORAGE_URI="file:///tmp/hdb_test"
 cargo run --bin iceberg_rest > /tmp/iceberg_rest.log 2>&1 &
 SERVER_PID=$!
 
@@ -29,11 +29,11 @@ done
 echo "Verifying /v1/config..."
 curl -s http://localhost:8181/v1/config | jq .
 
-echo "Verifying /v1/hdb/namespaces..."
-curl -s http://localhost:8181/v1/hdb/namespaces | jq .
+echo "Verifying /v1/bsdb/namespaces..."
+curl -s http://localhost:8181/v1/bsdb/namespaces | jq .
 
-echo "Verifying /v1/hdb/namespaces/default/tables..."
-curl -s http://localhost:8181/v1/hdb/namespaces/default/tables | jq .
+echo "Verifying /v1/bsdb/namespaces/default/tables..."
+curl -s http://localhost:8181/v1/bsdb/namespaces/default/tables | jq .
 
-echo "Verifying /v1/hdb/namespaces/default/tables/sample_table..."
-curl -s http://localhost:8181/v1/hdb/namespaces/default/tables/sample_table | jq .
+echo "Verifying /v1/bsdb/namespaces/default/tables/sample_table..."
+curl -s http://localhost:8181/v1/bsdb/namespaces/default/tables/sample_table | jq .

@@ -1,4 +1,4 @@
-# HyperStreamDB Codebase Line Count & Test Analysis
+# BenoStreamDB Codebase Line Count & Test Analysis
 
 *Generated: September 10, 2026*
 
@@ -45,13 +45,13 @@
 | Subsystem / Component | Files | SLOC (Code) | Comments | Blank | Total Lines | Primary Stack |
 |:---|---:|---:|---:|---:|---:|:---|
 | **Core Database Engine** (`src/`) | 169 | **45,356** | 5,748 | 6,193 | 57,297 | Rust, CUDA, Metal, OpenCL, WGSL |
-| **Search Engine** (`hyperstreamdb-search/`) | 17 | **5,657** | 575 | 626 | 6,858 | Rust |
-| **Arrow Flight Server** (`hyperstreamdb-flight/`) | 5 | **583** | 16 | 84 | 683 | Rust, Python |
-| **Trino Connector** (`trino-hyperstream/`) | 11 | **615** | 56 | 162 | 833 | Java |
-| **Spark Connector** (`spark-hyperstream/`) | 18 | **541** | 64 | 152 | 757 | Scala |
+| **Search Engine** (`benostreamdb-search/`) | 17 | **5,657** | 575 | 626 | 6,858 | Rust |
+| **Arrow Flight Server** (`benostreamdb-flight/`) | 5 | **583** | 16 | 84 | 683 | Rust, Python |
+| **Trino Connector** (`trino-benostream/`) | 11 | **615** | 56 | 162 | 833 | Java |
+| **Spark Connector** (`spark-benostream/`) | 18 | **541** | 64 | 152 | 757 | Scala |
 | **Python SDK & Client** (`python/`) | 2 | **506** | 251 | 142 | 899 | Python |
-| **dbt Adapter** (`dbt-hyperstreamdb/`) | 13 | **444** | 29 | 105 | 578 | Python, SQL |
-| **Enterprise Features** (`hyperstreamdb-enterprise/`) | 2 | **8** | 7 | 4 | 19 | Rust |
+| **dbt Adapter** (`dbt-benostreamdb/`) | 13 | **444** | 29 | 105 | 578 | Python, SQL |
+| **Enterprise Features** (`benostreamdb-enterprise/`) | 2 | **8** | 7 | 4 | 19 | Rust |
 | **↳ Subtotal: Production Code** | **237** | **53,710** | **6,746** | **7,468** | **67,924** | |
 | **Dedicated Test Suite** (`tests/`) | 156 | **13,940** | 2,885 | 3,586 | 20,411 | Python, Rust, Shell |
 | **Benchmarks** (`benchmarks/`, `benches/`) | 8 | **1,830** | 272 | 410 | 2,512 | Python, Rust, Shell |
@@ -84,7 +84,7 @@ Within the core database engine (`src/`), the 45,356 lines of code are distribut
 
 ## 5. Comprehensive Test Suite Breakdown
 
-Across all testing layers, HyperStreamDB contains **20,652 SLOC of test code**.
+Across all testing layers, BenoStreamDB contains **20,652 SLOC of test code**.
 
 ### A. Test Code Distribution
 
@@ -103,10 +103,10 @@ The 155 test files inside the dedicated `tests/` directory target specific funct
 
 #### 1. Vector Search & Hardware Acceleration (34 files | 4,158 SLOC)
 - **Multi-Hardware Parity**: Cross-platform verification ensuring numerical and recall parity across backends:
-  - CUDA: `test_hyperstream_cuda.py`
+  - CUDA: `test_benostream_cuda.py`
   - Apple Silicon Metal/MPS: `test_mps_gpu.py`
-  - Intel: `test_hyperstream_intel.py`
-  - AMD ROCm: `test_hyperstream_rocm.py`
+  - Intel: `test_benostream_intel.py`
+  - AMD ROCm: `test_benostream_rocm.py`
   - CPU SIMD: `test_hardware_parity.rs`
 - **Distance Metric Kernels**: Correctness benchmarks and edge cases for L1, L2, Inner Product, Cosine, Hamming, and Jaccard distances.
 - **Index Algorithms**: HNSW recall verification, layered index recovery, TurboQuant quantization, and GPU KMeans clustering.
@@ -148,7 +148,7 @@ Unit tests written directly alongside production Rust modules total **5,513 SLOC
 | Module / Component | Test Files | Unit Test SLOC | Production SLOC | Major Features Tested |
 |:---|---:|---:|---:|:---|
 | **SQL Engine** (`src/core/sql/`) | 9 | **1,840** | 1,827 | Literal parsers (1,269 lines), vector operators (257 lines), function evaluation |
-| **Search Engine** (`hyperstreamdb-search/`) | 7 | **1,081** | 2,307 | Query inference (387 lines), search handlers (312 lines), index caching, state |
+| **Search Engine** (`benostreamdb-search/`) | 7 | **1,081** | 2,307 | Query inference (387 lines), search handlers (312 lines), index caching, state |
 | **Vector Index** (`src/core/index/`) | 11 | **903** | 4,655 | HNSW IO serialization (220 lines), distance calculations, quantization |
 | **Execution Planner & Query Engine** | 2 | **305** | 1,546 | Plan generation and scoring in `query.rs` (302 lines) |
 | **Compaction & Table Merge** | 2 | **436** | 603 | Segment compaction (205 lines), merge conflict resolution (231 lines) |
@@ -163,13 +163,13 @@ Unit tests written directly alongside production Rust modules total **5,513 SLOC
 
 | Project / Sub-crate | File | SLOC | Total Lines | Purpose |
 |:---|:---|---:|---:|:---|
-| `hyperstreamdb-search` | `tests/test_search_api.py` | **589** | 775 | Python HTTP client testing hybrid search endpoints |
-| `trino-hyperstream` | `src/test/.../TrinoConnectorTest.java` | **225** | 306 | Trino SPI split generation and predicate pushdown |
-| `hyperstreamdb-flight` | `tests/test_flight_service.rs` | **113** | 134 | Native Rust Arrow Flight DoGet / DoPut integration |
-| `hyperstreamdb-flight` | `tests/test_flight_client.py` | **26** | 40 | Python pyarrow.flight client verification |
+| `benostreamdb-search` | `tests/test_search_api.py` | **589** | 775 | Python HTTP client testing hybrid search endpoints |
+| `trino-benostream` | `src/test/.../TrinoConnectorTest.java` | **225** | 306 | Trino SPI split generation and predicate pushdown |
+| `benostreamdb-flight` | `tests/test_flight_service.rs` | **113** | 134 | Native Rust Arrow Flight DoGet / DoPut integration |
+| `benostreamdb-flight` | `tests/test_flight_client.py` | **26** | 40 | Python pyarrow.flight client verification |
 | `scripts/manual_tests` | `test_multi_cloud.py` | **132** | 212 | S3, GCS, and Azure multi-cloud integration tests |
-| `spark-hyperstream` | `src/test/.../SparkMergeIntegrationTest.scala` | **76** | 101 | Spark DataFrame write/merge integration |
-| `dbt-hyperstreamdb` | `test_project/models/*.sql` | **38** | 43 | dbt incremental, macro, and vector models |
+| `spark-benostream` | `src/test/.../SparkMergeIntegrationTest.scala` | **76** | 101 | Spark DataFrame write/merge integration |
+| `dbt-benostreamdb` | `test_project/models/*.sql` | **38** | 43 | dbt incremental, macro, and vector models |
 | Standalone | `test_bloom.rs` | **6** | 6 | Bloom filter false-positive verification |
 | **TOTAL** | **11 files** | **1,205** | **1,617** | |
 

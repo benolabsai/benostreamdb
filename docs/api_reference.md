@@ -1,16 +1,16 @@
 # API Reference
 
-This page provides an overview of HyperStreamDB APIs across different languages and interfaces.
+This page provides an overview of BenoStreamDB APIs across different languages and interfaces.
 
 ## Python API
 
 ### Table Operations
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create/open table
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # Write data
 table.write_pandas(df)
@@ -78,23 +78,23 @@ table.expire_snapshots(retain_last=10)
 See [Python Vector API Documentation](PYTHON_VECTOR_API.md) for complete reference.
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # Single-pair distance
-distance = hdb.l2_distance(vec1, vec2)
-distance = hdb.cosine_distance(vec1, vec2)
+distance = bsdb.l2_distance(vec1, vec2)
+distance = bsdb.cosine_distance(vec1, vec2)
 
 # Batch operations with GPU acceleration
-ctx = hdb.GPUContext.auto_detect()
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+ctx = bsdb.GPUContext.auto_detect()
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Sparse vectors
-sparse = hdb.SparseVector(indices, values, dim)
-distance = hdb.l2_distance_sparse(sparse1, sparse2)
+sparse = bsdb.SparseVector(indices, values, dim)
+distance = bsdb.l2_distance_sparse(sparse1, sparse2)
 
 # Binary vectors
-distance = hdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_distance_packed(binary1, binary2)
 ```
 
 **Supported Distance Metrics:**
@@ -115,10 +115,10 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 ### SQL API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create session
-session = hdb.Session()
+session = bsdb.Session()
 session.register("my_table", table)
 
 # Execute SQL with pgvector operators
@@ -132,8 +132,8 @@ results = session.sql("""
 """)
 
 # Enable GPU acceleration for SQL
-ctx = hdb.GPUContext.auto_detect()
-hdb.set_thread_gpu_context(ctx)
+ctx = bsdb.GPUContext.auto_detect()
+bsdb.set_thread_gpu_context(ctx)
 ```
 
 See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for SQL syntax reference.
@@ -141,9 +141,9 @@ See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for SQL syntax reference.
 ### Iceberg V2/V3 API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 
 # Sort orders (V2)
 table.set_sort_order(["timestamp", "user_id"], ascending=[False, True])
@@ -170,13 +170,13 @@ See [Iceberg V2/V3 API Guide](ICEBERG_V2_V3_API.md) for complete reference.
 ```scala
 // Read
 val df = spark.read
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   .load()
 
 // Write
 df.write
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   .save()
 
@@ -195,13 +195,13 @@ spark.sql("""
 
 ```sql
 -- Query table
-SELECT * FROM hyperstream.default.my_table
+SELECT * FROM benostream.default.my_table
 WHERE id > 100;
 
 -- Vector search with pgvector operators
 SELECT id, content,
        embedding <-> ARRAY[0.1, 0.2, 0.3] AS distance
-FROM hyperstream.default.documents
+FROM benostream.default.documents
 WHERE category = 'science'
 ORDER BY distance
 LIMIT 10;
@@ -211,28 +211,28 @@ LIMIT 10;
 
 ### GPU Context Configuration
 
-HyperStreamDB supports GPU acceleration across NVIDIA CUDA, AMD ROCm, Apple Metal (MPS), and Intel XPU. You can configure execution devices using PyTorch-style strings (`"cuda:0"`) or explicit parameters (`device_id=0` / `index=0`).
+BenoStreamDB supports GPU acceleration across NVIDIA CUDA, AMD ROCm, Apple Metal (MPS), and Intel XPU. You can configure execution devices using PyTorch-style strings (`"cuda:0"`) or explicit parameters (`device_id=0` / `index=0`).
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # 1. Auto-detect best available GPU backend
-device = hdb.Device("auto")
+device = bsdb.Device("auto")
 print(f"Auto-selected: {device.backend}, device_id: {device.index}")
 
 # 2. Specify backend and device index explicitly
-device = hdb.Device("cuda:0")              # First NVIDIA GPU
-device = hdb.Device("cuda", index=1)       # Second NVIDIA GPU
-device = hdb.Device("rocm:0")              # AMD ROCm GPU
-device = hdb.Device("mps")                 # Apple Silicon (always index 0)
-device = hdb.Device("xpu:0")               # Intel discrete / integrated GPU
-device = hdb.Device("cpu")                 # Force CPU execution
+device = bsdb.Device("cuda:0")              # First NVIDIA GPU
+device = bsdb.Device("cuda", index=1)       # Second NVIDIA GPU
+device = bsdb.Device("rocm:0")              # AMD ROCm GPU
+device = bsdb.Device("mps")                 # Apple Silicon (always index 0)
+device = bsdb.Device("xpu:0")               # Intel discrete / integrated GPU
+device = bsdb.Device("cpu")                 # Force CPU execution
 
 # Or using GPUContext API
-ctx = hdb.GPUContext("cuda", device_id=0)
+ctx = bsdb.GPUContext("cuda", device_id=0)
 
 # 3. Query system availability & performance stats
-print("Available backends:", hdb.Device.list_available_backends())
+print("Available backends:", bsdb.Device.list_available_backends())
 
 stats = device.get_stats()
 print(f"GPU compute time: {stats['total_gpu_time_ms']}ms")
@@ -256,9 +256,9 @@ See [GPU Setup Guide](GPU_SETUP_GUIDE.md) for full driver prerequisites and kern
 ### Vector Index Configuration
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/table")
+table = bsdb.Table("s3://bucket/table")
 
 # TurboQuant 8-bit (4x compression)
 table.add_index("embedding", "hnsw_tq8")
@@ -279,13 +279,13 @@ table.add_index(
 
 See [Vector Configuration Guide](VECTOR_CONFIGURATION.md) for tuning parameters.
 
-## REST Search APIs (`hyperstreamdb-search`)
+## REST Search APIs (`benostreamdb-search`)
 
-HyperStreamDB provides a dual-protocol HTTP gateway exposing OpenSearch / Elasticsearch 7.10 compatibility alongside the Qdrant Vector API from a single server:
+BenoStreamDB provides a dual-protocol HTTP gateway exposing OpenSearch / Elasticsearch 7.10 compatibility alongside the Qdrant Vector API from a single server:
 
 ### Starting the Server
 ```bash
-cargo run -p hyperstreamdb-search --bin hypersearch
+cargo run -p benostreamdb-search --bin bsdb-search
 ```
 
 ### OpenSearch / Elasticsearch 7.10 Endpoints (Port 9200)
@@ -321,10 +321,10 @@ cargo run -p hyperstreamdb-search --bin hypersearch
 ### Python Exceptions
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 try:
-    distance = hdb.l2_distance(vec1, vec2)
+    distance = bsdb.l2_distance(vec1, vec2)
 except ValueError as e:
     # Dimension mismatch, NaN/inf values, invalid input
     print(f"Invalid input: {e}")
@@ -342,15 +342,15 @@ except MemoryError as e:
 ### GPU Fallback
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # GPU operations automatically fall back to CPU on error
-ctx = hdb.GPUContext.auto_detect()
+ctx = bsdb.GPUContext.auto_detect()
 try:
-    distances = hdb.l2_distance_batch(query, database, context=ctx)
+    distances = bsdb.l2_distance_batch(query, database, context=ctx)
 except RuntimeError as e:
     print(f"GPU error, falling back to CPU: {e}")
-    distances = hdb.l2_distance_batch(query, database)  # No context = CPU
+    distances = bsdb.l2_distance_batch(query, database)  # No context = CPU
 ```
 
 ## Performance Tips

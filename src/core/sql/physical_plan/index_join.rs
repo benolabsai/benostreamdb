@@ -27,7 +27,7 @@ use crate::core::table::Table;
 use serde_json::Value;
 
 #[derive(Debug)]
-pub struct HyperStreamIndexJoinExec {
+pub struct BenoStreamIndexJoinExec {
     pub left: Arc<dyn ExecutionPlan>,
     pub right_table: Arc<Table>,
     pub left_on: Vec<Arc<dyn PhysicalExpr>>,
@@ -36,7 +36,7 @@ pub struct HyperStreamIndexJoinExec {
     pub properties: PlanProperties,
 }
 
-impl HyperStreamIndexJoinExec {
+impl BenoStreamIndexJoinExec {
     pub fn new(
         left: Arc<dyn ExecutionPlan>,
         right_table: Arc<Table>,
@@ -61,7 +61,7 @@ impl HyperStreamIndexJoinExec {
     }
 }
 
-impl DisplayAs for HyperStreamIndexJoinExec {
+impl DisplayAs for BenoStreamIndexJoinExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let left_str = self
             .left_on
@@ -72,15 +72,15 @@ impl DisplayAs for HyperStreamIndexJoinExec {
         let right_str = self.right_cols.join(", ");
         write!(
             f,
-            "HyperStreamIndexJoinExec: on ({}) = ({})",
+            "BenoStreamIndexJoinExec: on ({}) = ({})",
             left_str, right_str
         )
     }
 }
 
-impl ExecutionPlan for HyperStreamIndexJoinExec {
+impl ExecutionPlan for BenoStreamIndexJoinExec {
     fn name(&self) -> &str {
-        "HyperStreamIndexJoinExec"
+        "BenoStreamIndexJoinExec"
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -103,7 +103,7 @@ impl ExecutionPlan for HyperStreamIndexJoinExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(HyperStreamIndexJoinExec::new(
+        Ok(Arc::new(BenoStreamIndexJoinExec::new(
             children[0].clone(),
             self.right_table.clone(),
             self.left_on.clone(),
@@ -238,7 +238,7 @@ async fn process_join_batch(
         .read_filter_async(filters, None, None)
         .await
         .map_err(|e| {
-            datafusion::error::DataFusionError::Execution(format!("HyperStream read error: {}", e))
+            datafusion::error::DataFusionError::Execution(format!("BenoStream read error: {}", e))
         })?;
 
     if right_batches.is_empty() {

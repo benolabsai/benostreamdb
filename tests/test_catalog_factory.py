@@ -1,23 +1,23 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import os
 import pytest
-from hyperstreamdb import PyNessieCatalog, PyHiveCatalog
+from benostreamdb import PyNessieCatalog, PyHiveCatalog
 
 def test_create_catalog_direct():
     print("Testing create_catalog (direct)...")
     # Nessie
-    catalog = hdb.create_catalog("nessie", {"url": "http://localhost:19120"})
+    catalog = bsdb.create_catalog("nessie", {"url": "http://localhost:19120"})
     assert isinstance(catalog, PyNessieCatalog)
     print("Direct Nessie creation passed.")
 
     # Hive (simulated)
-    catalog = hdb.create_catalog("hive", {"url": "thrift://localhost:9083"})
+    catalog = bsdb.create_catalog("hive", {"url": "thrift://localhost:9083"})
     assert isinstance(catalog, PyHiveCatalog)
     print("Direct Hive creation passed.")
     
     # Error case
     with pytest.raises(ValueError):
-        hdb.create_catalog("unknown", {})
+        bsdb.create_catalog("unknown", {})
     print("Error handling passed.")
 
 def test_create_catalog_from_config():
@@ -27,7 +27,7 @@ def test_create_catalog_from_config():
     # Ensure file exists
     assert os.path.exists(config_path)
     
-    catalog = hdb.create_catalog_from_config(config_path)
+    catalog = bsdb.create_catalog_from_config(config_path)
     assert isinstance(catalog, PyNessieCatalog)
     print("TOML Nessie creation passed.")
 

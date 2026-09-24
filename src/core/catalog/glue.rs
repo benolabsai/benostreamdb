@@ -57,9 +57,11 @@ impl Catalog for GlueCatalogClient {
                     .name(f.name())
                     .r#type(f.data_type().to_string())
                     .build()
-                    .unwrap() // Glue Column build is usually infallible for simple cases
+                    .map_err(|e| {
+                        anyhow::anyhow!("Glue column build failed for '{}': {e}", f.name())
+                    })
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
 
         // Create storage descriptor
         let storage_descriptor = StorageDescriptor::builder()

@@ -3,21 +3,23 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=.git/HEAD");
 
     // Get git tag version for version injection
     let version = get_git_version();
-    println!("cargo:rustc-env=HYPERSTREAMDB_VERSION={}", version);
+    println!("cargo:rustc-env=BENOSTREAMDB_VERSION={}", version);
 
-    // Write version constant to version.rs for use in code
-    let out_dir = env::var("OUT_DIR").unwrap();
+    // Write version constant to version.rs for use in code. Propagate the error
+    // rather than panicking: a build-script failure surfaces as a normal cargo
+    // error either way, but `?` keeps this file on the no-panic policy.
+    let out_dir = env::var("OUT_DIR")?;
     let version_file = Path::new(&out_dir).join("version.rs");
     fs::write(
         &version_file,
         format!(r#"pub const VERSION: &str = "{}";"#, version),
-    )
-    .expect("Failed to write version.rs");
+    )?;
+    Ok(())
 }
 
 fn get_git_version() -> String {

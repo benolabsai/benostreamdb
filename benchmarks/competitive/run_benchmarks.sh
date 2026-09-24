@@ -6,7 +6,7 @@
 set -e
 
 echo "=================================="
-echo "HyperStreamDB Competitive Benchmarks"
+echo "BenoStreamDB Competitive Benchmarks"
 echo "=================================="
 echo ""
 
@@ -24,8 +24,8 @@ echo "Installing dependencies..."
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 
-# Install HyperStreamDB from repo root
-echo "Installing HyperStreamDB..."
+# Install BenoStreamDB from repo root
+echo "Installing BenoStreamDB..."
 pip install -q -e ../../
 
 echo ""

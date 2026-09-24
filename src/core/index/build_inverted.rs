@@ -1119,7 +1119,7 @@ impl crate::core::segment::HybridSegmentWriter {
             self.config.base_path.contains("://") && !self.config.base_path.starts_with("file://");
         let (inv_path, _staging_dir) = if is_remote {
             let temp_dir = std::env::temp_dir()
-                .join("hyperstream_staging")
+                .join("benostream_staging")
                 .join(uuid::Uuid::new_v4().to_string());
             std::fs::create_dir_all(&temp_dir)?;
             let filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);

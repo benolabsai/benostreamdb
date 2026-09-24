@@ -3,12 +3,12 @@
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let uri = std::env::var("HYPERSTREAM_STORAGE_URI")
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI")
         .unwrap_or_else(|_| "file:///tmp/test_table".to_string());
 
     // Clean up previous run

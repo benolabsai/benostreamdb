@@ -1,6 +1,6 @@
-# Contributing to HyperStreamDB
+# Contributing to BenoStreamDB
 
-Thank you for your interest in contributing! HyperStreamDB is a serverless index-streaming database built in Rust with Python and Java bindings. This document outlines how to set up your development environment and the conventions we follow.
+Thank you for your interest in contributing! BenoStreamDB is a serverless index-streaming database built in Rust with Python and Java bindings. This document outlines how to set up your development environment and the conventions we follow.
 
 ## Project Principles
 
@@ -25,8 +25,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install maturin
 
 # Clone and build
-git clone https://github.com/rla3rd/hyperstreamdb.git
-cd hyperstreamdb
+git clone https://github.com/benolabsai/benostreamdb.git
+cd benostreamdb
 cargo build --release
 ```
 
@@ -246,7 +246,7 @@ Releases are tagged and published by the maintainer. The process involves:
 
 ## Questions or Issues?
 
-- Open a [GitHub Issue](https://github.com/rla3rd/hyperstreamdb/issues) for bugs or feature requests
+- Open a [GitHub Issue](https://github.com/benolabsai/benostreamdb/issues) for bugs or feature requests
 - For discussions, use the Discussions tab or reach out directly
 
 ---

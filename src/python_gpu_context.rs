@@ -203,7 +203,9 @@ impl PyDevice {
     }
 
     fn get_stats(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let stats = self.stats.lock().unwrap();
+        // Recover from mutex poisoning rather than panicking: the stats struct
+        // is plain data, so a previously panicked holder cannot leave it invalid.
+        let stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         let dict = pyo3::types::PyDict::new(py);
         dict.set_item("total_kernel_launches", stats.total_kernel_launches)?;
         dict.set_item("total_gpu_time_ms", stats.total_gpu_time_ms)?;
@@ -214,7 +216,7 @@ impl PyDevice {
     }
 
     fn reset_stats(&self) {
-        let mut stats = self.stats.lock().unwrap();
+        let mut stats = self.stats.lock().unwrap_or_else(|e| e.into_inner());
         *stats = GPUStats::default();
     }
 

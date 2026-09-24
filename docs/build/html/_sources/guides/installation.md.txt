@@ -2,8 +2,8 @@
 
 ```bash
 # Install from source
-git clone https://github.com/rla3rd/hyperstreamdb
-cd hyperstreamdb
+git clone https://github.com/benolabsai/benostreamdb
+cd benostreamdb
 
 # Build Python bindings (CPU + AMD/Intel/Apple GPU backends)
 pip install maturin
@@ -13,10 +13,10 @@ maturin develop
 maturin develop --features cuda
 
 # Or install from PyPI (coming soon)
-pip install hyperstreamdb
+pip install benostreamdb
 
 # Windows Users
-# HyperStreamDB is optimized for Linux/POSIX environments.
+# BenoStreamDB is optimized for Linux/POSIX environments.
 # Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
 
@@ -27,7 +27,7 @@ For GPU-accelerated vector operations, install the appropriate backend:
 **GPU Support (NVIDIA/AMD/Intel/Apple):**
 Hardware acceleration is now part of the base package.
 ```bash
-pip install hyperstreamdb
+pip install benostreamdb
 # Verify: nvidia-smi / rocm-smi / clinfo
 ```
 
@@ -55,7 +55,7 @@ See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GP
 
 ### pgvector SQL Compatibility
 
-HyperStreamDB provides full pgvector-compatible SQL syntax for vector operations:
+BenoStreamDB provides full pgvector-compatible SQL syntax for vector operations:
 
 ```sql
 -- Use familiar pgvector operators
@@ -81,10 +81,10 @@ See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation.
 ### Basic Usage
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Create table
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # Write data (Pandas/PyArrow)
 import pandas as pd
@@ -117,14 +117,14 @@ results = table.to_pandas(
 
 ## 🔄 Fluent Query API
 
-HyperStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:
+BenoStreamDB features a modern fluent query API that supports method chaining for both Python and Rust:
 
 ### Python Fluent API
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
-table = hdb.Table("s3://bucket/my-table")
+table = bsdb.Table("s3://bucket/my-table")
 
 # Method chaining with filters
 results = (table.query()
@@ -159,7 +159,7 @@ results = (table.query()
 The same fluent interface is available in native Rust:
 
 ```rust
-use hyperstreamdb::{Table, VectorValue};
+use benostreamdb::{Table, VectorValue};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -189,14 +189,14 @@ async fn main() -> anyhow::Result<()> {
 
 ### Python Vector Distance API with GPU Acceleration
 
-HyperStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
+BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import numpy as np
 
 # GPU-accelerated batch distance computation
-ctx = hdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
+ctx = bsdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
 print(f"Using GPU backend: {ctx.backend}")
 
 # Create query and database vectors
@@ -204,7 +204,7 @@ query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
 # Compute distances on GPU (10x+ faster for large databases)
-distances = hdb.l2_distance_batch(query, database, context=ctx)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Find top-k nearest neighbors
 k = 10
@@ -213,25 +213,25 @@ top_k_indices = np.argsort(distances)[:k]
 # Single-pair distance computation
 vec1 = np.array([1.0, 2.0, 3.0])
 vec2 = np.array([4.0, 5.0, 6.0])
-distance = hdb.cosine_distance(vec1, vec2)
+distance = bsdb.cosine_distance(vec1, vec2)
 
 # Sparse vector support for high-dimensional sparse data
-sparse1 = hdb.SparseVector(
+sparse1 = bsdb.SparseVector(
     indices=np.array([0, 5, 100], dtype=np.int32),
     values=np.array([1.0, 2.5, 0.8], dtype=np.float32),
     dim=1000
 )
-sparse2 = hdb.SparseVector(
+sparse2 = bsdb.SparseVector(
     indices=np.array([5, 50, 100], dtype=np.int32),
     values=np.array([2.0, 1.5, 0.9], dtype=np.float32),
     dim=1000
 )
-distance = hdb.l2_distance_sparse(sparse1, sparse2)
+distance = bsdb.l2_distance_sparse(sparse1, sparse2)
 
 # Binary vector operations (bit-packed for efficiency)
 binary1 = np.packbits(np.random.randint(0, 2, 128))
 binary2 = np.packbits(np.random.randint(0, 2, 128))
-distance = hdb.hamming_distance_packed(binary1, binary2)
+distance = bsdb.hamming_distance_packed(binary1, binary2)
 ```
 
 **Supported GPU Backends:**
@@ -247,13 +247,13 @@ distance = hdb.hamming_distance_packed(binary1, binary2)
 See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
 
 # SQL queries (full DataFusion support with pgvector syntax)
-import hyperstreamdb as hdb
-session = hdb.Session()
+import benostreamdb as bsdb
+session = bsdb.Session()
 session.register("users", table)
 
 # Optional: Enable GPU acceleration for SQL queries
-ctx = hdb.GPUContext.auto_detect()
-hdb.set_thread_gpu_context(ctx)
+ctx = bsdb.GPUContext.auto_detect()
+bsdb.set_thread_gpu_context(ctx)
 
 # Simple SQL
 results = table.sql("SELECT * FROM t WHERE id > 100")
@@ -348,7 +348,7 @@ python tests/integration/test_nyc_taxi.py
 - [ ] Schema evolution support
 - [ ] Partition evolution
 - [ ] Cloud-agnostic distributed locking (FileBasedLock)
-- [ ] CLI tools (`hyperstream compact`, `vacuum`)
+- [ ] CLI tools (`benostream compact`, `vacuum`)
 - [ ] Prometheus metrics
 - [ ] Error handling & retries
 
@@ -356,7 +356,7 @@ python tests/integration/test_nyc_taxi.py
 
 ### Overlay Indexing
 
-HyperStreamDB stores indexes as **sidecar files** alongside Parquet data:
+BenoStreamDB stores indexes as **sidecar files** alongside Parquet data:
 
 ```
 s3://bucket/table/
@@ -409,29 +409,29 @@ s3://bucket/table/
 ```scala
 // Read
 val df = spark.read
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   .load()
 
 // Write
 df.write
-  .format("hyperstream")
+  .format("benostream")
   .option("path", "s3://bucket/table")
   .save()
 ```
 
 ### Trino
 ```sql
-SELECT * FROM hyperstream.default.my_table
+SELECT * FROM benostream.default.my_table
 WHERE id > 100;  -- Uses scalar index
 ```
 
 ### Python (Direct)
 ```python
 # No Spark needed for local/notebook work
-import hyperstreamdb as hdb
-df = hdb.Table("s3://bucket/table").query().execute()
-# Or using traditional API: df = hdb.Table("s3://bucket/table").to_pandas()
+import benostreamdb as bsdb
+df = bsdb.Table("s3://bucket/table").query().execute()
+# Or using traditional API: df = bsdb.Table("s3://bucket/table").to_pandas()
 ```
 
 ## 🔨 Building Connectors
@@ -481,7 +481,7 @@ pytest tests/
 ### Project Structure
 
 ```
-hyperstreamdb/
+benostreamdb/
 ├── src/
 │   ├── lib.rs              # Main library
 │   ├── segment.rs          # Hybrid segment writer
@@ -491,8 +491,8 @@ hyperstreamdb/
 │   ├── maintenance.rs      # Vacuum/GC
 │   ├── python_binding.rs   # PyO3 bindings
 │   └── storage.rs          # Multi-cloud storage
-├── spark-hyperstream/      # Spark connector (Java)
-├── trino-hyperstream/      # Trino connector (Java)
+├── spark-benostream/      # Spark connector (Java)
+├── trino-benostream/      # Trino connector (Java)
 ├── tests/
 │   ├── data/               # Test datasets
 │   ├── integration/        # Integration tests
@@ -529,7 +529,7 @@ hyperstreamdb/
 
 ### 📋 Planned
 - [ ] Cloud-agnostic distributed locking (FileBasedLock)
-- [ ] CLI tools (`hyperstream admin`)
+- [ ] CLI tools (`benostream admin`)
 - [ ] Prometheus metrics
 - [ ] **REST Gateway** (OpenAPI for JS/Frontend RAG integration)
 
@@ -542,7 +542,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 The Python wrapper is licensed under the **MIT License**.
 The underlying Rust engine and core database logic is licensed under the **Apache License 2.0**.
 
-This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. HyperStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
+This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. BenoStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
 
 ## 🙏 Acknowledgments
 

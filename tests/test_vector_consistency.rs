@@ -4,9 +4,9 @@ use anyhow::Result;
 use arrow::array::{FixedSizeListArray, Float32Array, Int32Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::query::QueryConfig;
-use hyperstreamdb::core::table::VectorSearchParams;
-use hyperstreamdb::Table;
+use benostreamdb::core::query::QueryConfig;
+use benostreamdb::core::table::VectorSearchParams;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 async fn create_vector_batch(
@@ -69,7 +69,7 @@ async fn test_parallel_vs_sequential_consistency() -> Result<()> {
     let query_vec = vec![0.1; dim];
     let vs_params = VectorSearchParams::new(
         "embedding",
-        hyperstreamdb::core::index::VectorValue::Float32(query_vec),
+        benostreamdb::core::index::VectorValue::Float32(query_vec),
         10,
     );
 

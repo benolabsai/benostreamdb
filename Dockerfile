@@ -1,10 +1,10 @@
 # ---------------------------------------------------------------------------
-# HyperStreamDB Quickstart (All-in-One)
+# BenoStreamDB Quickstart (All-in-One)
 # Runs Search (ES 7.10 + Qdrant) and Flight SQL in a single container
 #
 # Usage:
-#   docker build -t hyperstreamdb .
-#   docker run -p 9200:9200 -p 6333:6333 -p 50051:50051 hyperstreamdb
+#   docker build -t benostreamdb .
+#   docker run -p 9200:9200 -p 6333:6333 -p 50051:50051 benostreamdb
 #
 # Ports:
 #   9200  — Elasticsearch 7.10 compatible REST API
@@ -25,40 +25,40 @@ WORKDIR /app
 
 # Copy workspace manifests for dependency caching
 COPY Cargo.toml Cargo.lock ./
-COPY hyperstreamdb-search/Cargo.toml hyperstreamdb-search/Cargo.toml
-COPY hyperstreamdb-flight/Cargo.toml hyperstreamdb-flight/Cargo.toml
+COPY benostreamdb-search/Cargo.toml benostreamdb-search/Cargo.toml
+COPY benostreamdb-flight/Cargo.toml benostreamdb-flight/Cargo.toml
 
 # Create stub sources for dependency layer caching and manifest validation
 RUN mkdir -p src \
     && echo "pub fn stub() {}" > src/lib.rs \
     && echo "fn main() {}" > build.rs \
-    && mkdir -p hyperstreamdb-search/src \
-    && echo "fn main() {}" > hyperstreamdb-search/src/main.rs \
-    && echo "pub fn stub() {}" > hyperstreamdb-search/src/lib.rs \
-    && mkdir -p hyperstreamdb-flight/src \
-    && echo "fn main() {}" > hyperstreamdb-flight/src/main.rs \
+    && mkdir -p benostreamdb-search/src \
+    && echo "fn main() {}" > benostreamdb-search/src/main.rs \
+    && echo "pub fn stub() {}" > benostreamdb-search/src/lib.rs \
+    && mkdir -p benostreamdb-flight/src \
+    && echo "fn main() {}" > benostreamdb-flight/src/main.rs \
     && mkdir -p tests/bin benches \
     && echo "fn main() {}" > tests/test_connector_ffi.rs \
     && echo "fn main() {}" > tests/bin/generate_iceberg_manifests.rs \
     && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
     && echo "fn main() {}" > benches/performance.rs \
     && echo "fn main() {}" > benches/bench_table.rs \
-    && cargo build --release -p hyperstreamdb-search -p hyperstreamdb-flight \
-    && rm -rf target/release/.fingerprint/hyperstreamdb* \
-              target/release/deps/*hyperstreamdb* \
-              target/release/deps/libhyperstreamdb* \
-              target/release/build/hyperstreamdb* \
-              target/release/hypersearch* \
-              target/release/hyperstreamdb-flight*
+    && cargo build --release -p benostreamdb-search -p benostreamdb-flight \
+    && rm -rf target/release/.fingerprint/benostreamdb* \
+              target/release/deps/*benostreamdb* \
+              target/release/deps/libbenostreamdb* \
+              target/release/build/benostreamdb* \
+              target/release/bsdb-search* \
+              target/release/benostreamdb-flight*
 
 # Copy actual source
 COPY build.rs ./
 COPY src ./src
-COPY hyperstreamdb-search/src ./hyperstreamdb-search/src
-COPY hyperstreamdb-flight/src ./hyperstreamdb-flight/src
+COPY benostreamdb-search/src ./benostreamdb-search/src
+COPY benostreamdb-flight/src ./benostreamdb-flight/src
 
 # Build both binaries
-RUN cargo build --release -p hyperstreamdb-search -p hyperstreamdb-flight
+RUN cargo build --release -p benostreamdb-search -p benostreamdb-flight
 
 
 # ---------------------------------------------------------------------------
@@ -73,20 +73,20 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r hyperstream && useradd -r -g hyperstream -m hyperstream
+RUN groupadd -r benostream && useradd -r -g benostream -m benostream
 
 WORKDIR /app
 
 # Copy both service binaries
-COPY --from=builder /app/target/release/hypersearch /usr/local/bin/
-COPY --from=builder /app/target/release/hyperstreamdb-flight /usr/local/bin/
+COPY --from=builder /app/target/release/bsdb-search /usr/local/bin/
+COPY --from=builder /app/target/release/benostreamdb-flight /usr/local/bin/
 
 # Copy entrypoint
 COPY docker/quickstart-entrypoint.sh /usr/local/bin/quickstart-entrypoint.sh
 
 # Create default data directory
-RUN mkdir -p /home/hyperstream/.hyperstreamdb/search \
-    && chown -R hyperstream:hyperstream /home/hyperstream/.hyperstreamdb
+RUN mkdir -p /home/benostream/.benostreamdb/search \
+    && chown -R benostream:benostream /home/benostream/.benostreamdb
 
 # ES 7.10 API + Qdrant API + Flight SQL gRPC + Prometheus metrics
 EXPOSE 9200 6333 50051 9090
@@ -95,14 +95,14 @@ EXPOSE 9200 6333 50051 9090
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:9200/_cluster/health || exit 1
 
-USER hyperstream
+USER benostream
 
 # Default environment
-ENV HYPERSEARCH_BIND=0.0.0.0
-ENV HYPERSEARCH_PORT=9200
+ENV BENOSEARCH_BIND=0.0.0.0
+ENV BENOSEARCH_PORT=9200
 ENV QDRANT_BIND=0.0.0.0
 ENV QDRANT_PORT=6333
-ENV HYPERSEARCH_AUTO_REFRESH_SECS=5
+ENV BENOSEARCH_AUTO_REFRESH_SECS=5
 ENV RUST_LOG=info
 
 ENTRYPOINT ["quickstart-entrypoint.sh"]

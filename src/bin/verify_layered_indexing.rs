@@ -4,7 +4,7 @@ use anyhow::Result;
 use apache_avro::{types::Value as AvroValue, Schema as AvroSchema, Writer};
 use arrow::array::{FixedSizeListArray, Float32Array, Int32Array};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
         serde_json::to_string_pretty(&metadata_json)?,
     )?;
 
-    println!("3. Registering external table in HyperStreamDB...");
+    println!("3. Registering external table in BenoStreamDB...");
     let hdb_uri = "file:///tmp/hdb_shadow";
     let _ = std::fs::remove_dir_all("/tmp/hdb_shadow");
 
@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
     }
     assert!(
         found_idx,
-        "Sidecar index file was not created in local HDB directory"
+        "Sidecar index file was not created in local BSDB directory"
     );
 
     println!("7. Verifying Query using sidecar index...");

@@ -11,10 +11,10 @@ use datafusion::prelude::*;
 /// use GPU acceleration when a GPU context is configured.
 ///
 /// Requirements: 7.6, 7.7
-use hyperstreamdb::core::index::gpu::{
+use benostreamdb::core::index::gpu::{
     get_thread_gpu_context, set_thread_gpu_context, ComputeContext,
 };
-use hyperstreamdb::core::sql::vector_udf::all_vector_udfs;
+use benostreamdb::core::sql::vector_udf::all_vector_udfs;
 use std::sync::Arc;
 
 lazy_static::lazy_static! {

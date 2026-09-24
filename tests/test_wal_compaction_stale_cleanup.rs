@@ -2,7 +2,7 @@ use anyhow::Result;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::core::wal::{WalConfig, WriteAheadLog};
+use benostreamdb::core::wal::{WalConfig, WriteAheadLog};
 use std::sync::Arc;
 use tempfile::tempdir;
 

@@ -8,7 +8,7 @@ use super::table::PyTable;
 
 #[pyclass(name = "Session")]
 pub struct PySession {
-    inner: Arc<crate::core::sql::session::HyperStreamSession>,
+    inner: Arc<crate::core::sql::session::BenoStreamSession>,
 }
 
 #[pymethods]
@@ -18,7 +18,7 @@ impl PySession {
     pub fn new(memory_mb: Option<usize>) -> PyResult<Self> {
         let limit_bytes = memory_mb.map(|mb| mb * 1024 * 1024);
         Ok(Self {
-            inner: Arc::new(crate::core::sql::session::HyperStreamSession::new(
+            inner: Arc::new(crate::core::sql::session::BenoStreamSession::new(
                 limit_bytes,
             )),
         })

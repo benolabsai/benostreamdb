@@ -4,7 +4,7 @@
 set -e
 
 echo "=========================================="
-echo "HyperStreamDB Public Benchmark Suite"
+echo "BenoStreamDB Public Benchmark Suite"
 echo "=========================================="
 echo ""
 
@@ -66,7 +66,7 @@ echo "Generating Summary Report"
 echo "=========================================="
 
 cat > "${RESULTS_DIR}/SUMMARY.md" << EOF
-# HyperStreamDB Benchmark Results
+# BenoStreamDB Benchmark Results
 
 **Date**: $(date)
 **Hardware**: [TODO: Document your hardware specs]
@@ -110,8 +110,8 @@ To reproduce these benchmarks:
 
 \`\`\`bash
 # Clone repository
-git clone https://github.com/rla3rd/hyperstreamdb
-cd hyperstreamdb
+git clone https://github.com/benolabsai/benostreamdb
+cd benostreamdb
 
 # Install dependencies
 pip install -e ".[dev]"

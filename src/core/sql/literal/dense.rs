@@ -23,7 +23,7 @@ use std::sync::Arc;
 ///
 /// # Examples
 /// ```
-/// use hyperstreamdb::core::sql::literal::dense::parse_vector_literal;
+/// use benostreamdb::core::sql::literal::dense::parse_vector_literal;
 ///
 /// let result = parse_vector_literal("[1,2,3]").unwrap();
 /// let result = parse_vector_literal("[1.0, 2.0, 3.0]").unwrap();

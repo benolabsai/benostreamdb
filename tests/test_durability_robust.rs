@@ -4,7 +4,7 @@ use anyhow::Result;
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use hyperstreamdb::Table;
+use benostreamdb::Table;
 use std::sync::Arc;
 
 async fn create_simple_batch(start_id: i32, num_rows: usize) -> RecordBatch {

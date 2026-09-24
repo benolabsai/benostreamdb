@@ -1,5 +1,5 @@
 """
-Vector search benchmarks comparing HyperStreamDB against Qdrant-style workloads.
+Vector search benchmarks comparing BenoStreamDB against Qdrant-style workloads.
 
 Tests ingestion and query performance with 1M OpenAI embeddings.
 """
@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'common'))
 from utils import BenchmarkMetrics, generate_openai_embeddings, save_results
 from minio_setup import setup_minio_for_benchmarks
 from index_verification import wait_for_index_built
-from hyperstreamdb import Table
+from benostreamdb import Table
 import tempfile
 import shutil
 import time

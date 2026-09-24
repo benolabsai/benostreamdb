@@ -128,7 +128,7 @@ volumes:
   nessie-data:
   nessie-postgres-data:
     external: true
-    name: hyperstreamdb_postgres_data
+    name: benostreamdb_postgres_data
 
 networks:
   nessie_network:

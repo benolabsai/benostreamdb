@@ -1,15 +1,15 @@
-# HyperStreamDB Comprehensive Guide
+# BenoStreamDB Comprehensive Guide
 
 **Version:** 0.1.10 (Alpha)  
 **Last Updated:** 2026-04-03
 
-HyperStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
+BenoStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
 
 ---
 
 ## 1. Architecture Overview
 
-HyperStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.
+BenoStreamDB decouples compute from storage, allowing for infinite scaling and zero-copy integration with data lakes.
 
 *   **Storage-Native**: Data and indices are stored as Parquet and custom index files in your object store.
 *   **Serverless**: No long-running daemons required. Operations spin up, execute, and spin down.
@@ -35,7 +35,7 @@ pip install .
 ### Basic Usage (Python)
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pyarrow as pa
 import pandas as pd
 import numpy as np
@@ -49,7 +49,7 @@ schema = pa.schema([
     ('embedding', pa.list_(pa.float32(), 384)) # SBERT/all-MiniLM-L6-v2 size
 ])
 
-table = hdb.Table.create("file:///tmp/ag_news", schema)
+table = bsdb.Table.create("file:///tmp/ag_news", schema)
 
 # 2. Ingest Real Data (Example: AG News Sample)
 df = pd.DataFrame({
@@ -80,12 +80,12 @@ print(results.to_pandas()[['title', 'description']])
 ## 3. Key Features
 
 ### 3.1 SQL Support
-HyperStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.
+BenoStreamDB integrates with Apache DataFusion to support full SQL queries with pgvector-compatible syntax.
 
 #### Basic SQL Queries
 
 ```python
-session = hdb.Session()
+session = bsdb.Session()
 session.register_table("my_table", table)
 
 df = session.sql("""
@@ -99,7 +99,7 @@ df = session.sql("""
 
 #### pgvector SQL Operators
 
-HyperStreamDB provides full pgvector compatibility for vector operations:
+BenoStreamDB provides full pgvector compatibility for vector operations:
 
 ```python
 # Vector similarity search with distance operators
@@ -154,7 +154,7 @@ Enable via `Cargo.toml` features or environment detection.
 
 ## 3.3 Multi-Catalog Support
 
-HyperStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.
+BenoStreamDB is designed to integrate seamlessly with standard data catalogs to provide discovery, cross-table atomicity, and consistent metadata across the enterprise. We support a variety of industry-standard protocols.
 
 Below is a detailed example using the Hive Metastore, followed by short-form examples for other supported catalogs. Full integration guides for each will be provided in future updates.
 
@@ -163,10 +163,10 @@ Below is a detailed example using the Hive Metastore, followed by short-form exa
 Connecting to a Hive Metastore allows you to resolve table names to storage locations automatically.
 
 ```python
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # Load a table from Hive Metastore
-table = hdb.Table.from_hive(
+table = bsdb.Table.from_hive(
     address="thrift://localhost:9083", 
     namespace="default", 
     table="my_analytics_table"
@@ -178,20 +178,20 @@ df = table.to_pandas(filter="status = 'active'")
 
 ### AWS Glue, Nessie, and REST Catalogs
 
-HyperStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:
+BenoStreamDB also provides native support for cloud-modern catalogs. These can be configured similarly to the Hive example:
 
 ```python
 # AWS Glue (Native AWS Integration)
-table = hdb.Table.from_glue(namespace="prod", table="users")
+table = bsdb.Table.from_glue(namespace="prod", table="users")
 
 # Project Nessie (Git-like Versioning)
-table = hdb.Table.from_nessie(nessie_url, namespace="dev", table="experiments")
+table = bsdb.Table.from_nessie(nessie_url, namespace="dev", table="experiments")
 
 # Iceberg REST Catalog (Standard API)
-table = hdb.Table.from_rest(rest_url, namespace="marketing", table="campaigns")
+table = bsdb.Table.from_rest(rest_url, namespace="marketing", table="campaigns")
 
 # Unity Catalog (Databricks Ecosystem)
-table = hdb.Table.from_unity(unity_url, namespace="main", table="gold_data")
+table = bsdb.Table.from_unity(unity_url, namespace="main", table="gold_data")
 ```
 
 For more details on advanced configurations and authentication (Kerberos, SASL, IAM), see the [Configuration Guide](./CONFIGURATION.md) or the [Catalog Usage Guide](./catalog_usage.md).
@@ -200,18 +200,18 @@ For more details on advanced configurations and authentication (Kerberos, SASL, 
 
 ## 4. Operational Tooling
 
-A dedicated CLI `hdb` is provided for management.
+A dedicated CLI `bsdb` is provided for management.
 
 ### CLI Commands
 ```bash
 # Inspect table metadata/stats
-hdb table inspect --uri s3://bucket/table
+bsdb table inspect --uri s3://bucket/table
 
 # Compaction (Merge small files)
-hdb table compact --uri s3://bucket/table
+bsdb table compact --uri s3://bucket/table
 
 # Vacuum (Cleanup old files)
-hdb table vacuum --uri s3://bucket/table --older-than-days 7
+bsdb table vacuum --uri s3://bucket/table --older-than-days 7
 ```
 
 ### Metrics & Tracing
@@ -248,7 +248,7 @@ hdb table vacuum --uri s3://bucket/table --older-than-days 7
 
 ## 7. Partitioning Strategy
 
-HyperStreamDB supports coarse-grained pruning via table partitioning. This allows the query planner to skip entire directories of data without reading file headers.
+BenoStreamDB supports coarse-grained pruning via table partitioning. This allows the query planner to skip entire directories of data without reading file headers.
 
 ### Creating a Partitioned Table
 ```python
@@ -257,7 +257,7 @@ spec = {
         {"name": "category", "transform": "identity"}
     ]
 }
-table = hdb.Table.create_partitioned("s3://bucket/table", schema, spec)
+table = bsdb.Table.create_partitioned("s3://bucket/table", schema, spec)
 ```
 
 ### Benefits

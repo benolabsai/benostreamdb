@@ -1,7 +1,7 @@
-use hyperstreamdb::core::index::hnsw_ivf::HnswIvfIndex;
-use hyperstreamdb::core::index::VectorMetric;
-use hyperstreamdb::core::index::VectorValue;
-use hyperstreamdb::core::manifest::IndexAlgorithm;
+use benostreamdb::core::index::hnsw_ivf::HnswIvfIndex;
+use benostreamdb::core::index::VectorMetric;
+use benostreamdb::core::index::VectorValue;
+use benostreamdb::core::manifest::IndexAlgorithm;
 
 fn main() {
     let dim = 16;
@@ -25,10 +25,10 @@ fn main() {
     )
     .unwrap();
 
-    std::fs::create_dir_all("/tmp/hyperstreamdb_test_graph").unwrap();
-    index.save("/tmp/hyperstreamdb_test_graph").unwrap();
+    std::fs::create_dir_all("/tmp/benostreamdb_test_graph").unwrap();
+    index.save("/tmp/benostreamdb_test_graph").unwrap();
 
-    let loaded_index = HnswIvfIndex::load("/tmp/hyperstreamdb_test_graph").unwrap();
+    let loaded_index = HnswIvfIndex::load("/tmp/benostreamdb_test_graph").unwrap();
 
     let mut query = vec![0.0; dim];
     query[0] = 50.0 / 1000.0;

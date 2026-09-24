@@ -24,7 +24,7 @@ class MinIOManager:
         self.secret_key = secret_key
         self.data_dir = data_dir or "/tmp/minio-benchmark-data"
         self.process = None
-        self.container_name = "hyperstreamdb-benchmark-minio"
+        self.container_name = "benostreamdb-benchmark-minio"
     
     def start(self, use_docker: bool = True):
         """Start MinIO server."""
@@ -148,7 +148,7 @@ class MinIOManager:
             print(f"  Bucket already exists: {bucket_name}")
 
 
-def setup_minio_for_benchmarks(bucket_name: str = "hyperstreamdb-benchmarks") -> MinIOManager:
+def setup_minio_for_benchmarks(bucket_name: str = "benostreamdb-benchmarks") -> MinIOManager:
     """
     Setup MinIO for benchmark tests.
     
@@ -161,7 +161,7 @@ def setup_minio_for_benchmarks(bucket_name: str = "hyperstreamdb-benchmarks") ->
     minio.start(use_docker=True)
     minio.create_bucket(bucket_name)
     
-    # Set environment variables for HyperStreamDB
+    # Set environment variables for BenoStreamDB
     os.environ["AWS_ENDPOINT_URL"] = minio.get_endpoint()
     os.environ["AWS_ACCESS_KEY_ID"] = minio.access_key
     os.environ["AWS_SECRET_ACCESS_KEY"] = minio.secret_key

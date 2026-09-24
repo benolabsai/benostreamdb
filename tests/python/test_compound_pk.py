@@ -1,4 +1,4 @@
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
 import os
@@ -11,7 +11,7 @@ if os.path.exists(db_path):
 
 # 1. Create a table with Compound Primary Key
 # We'll use 'user_id' and 'timestamp' as the identity
-table = hdb.Table(f"file://{db_path}", primary_key=["user_id", "timestamp"])
+table = bsdb.Table(f"file://{db_path}", primary_key=["user_id", "timestamp"])
 
 # 2. Ingest some data
 data = pd.DataFrame({

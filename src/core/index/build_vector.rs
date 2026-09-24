@@ -107,8 +107,11 @@ impl crate::core::segment::HybridSegmentWriter {
                 }
 
                 {
+                    let tmp_path_str = tmp_path.to_str().ok_or_else(|| {
+                        anyhow::anyhow!("temporary vector path is not valid UTF-8")
+                    })?;
                     let mut v_data = self.vector_data.lock();
-                    v_data.insert(col_name.to_string(), tmp_path.to_str().unwrap().to_string());
+                    v_data.insert(col_name.to_string(), tmp_path_str.to_string());
                 }
             } else {
                 tracing::info!(

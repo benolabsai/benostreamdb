@@ -3,7 +3,7 @@ import time
 import pandas as pd
 import numpy as np
 import pytest
-import hyperstreamdb as hdb
+import benostreamdb as bsdb
 
 # We will connect to the local Hive Metastore service exposed on port 9083
 HIVE_METASTORE_URL = "thrift://localhost:9083"
@@ -33,15 +33,15 @@ def test_hive_s3_catalog_integration():
     
     # 1. Initialize Hive Metastore Catalog
     try:
-        catalog = hdb.create_catalog("hive", {"url": HIVE_METASTORE_URL})
+        catalog = bsdb.create_catalog("hive", {"url": HIVE_METASTORE_URL})
     except Exception as e:
         pytest.skip(f"Hive Metastore not available: {e}")
 
     # 2. Define schema
-    schema = hdb.Schema([
-        hdb.Field("id", hdb.DataType.int64()),
-        hdb.Field("name", hdb.DataType.string()),
-        hdb.Field("value", hdb.DataType.float64())
+    schema = bsdb.Schema([
+        bsdb.Field("id", bsdb.DataType.int64()),
+        bsdb.Field("name", bsdb.DataType.string()),
+        bsdb.Field("value", bsdb.DataType.float64())
     ])
 
     # 3. Create a unique table in Hive Metastore on MinIO S3 storage
