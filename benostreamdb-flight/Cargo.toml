@@ -1,0 +1,29 @@
+[package]
+name = "benostreamdb-flight"
+version = "0.7.0"
+edition = "2021"
+license = "MIT AND Apache-2.0"
+description = "BenoStreamDB Flight SQL - Arrow Flight SQL gateway over BenoStreamDB"
+repository = "https://github.com/benolabsai/benostreamdb"
+homepage = "https://github.com/benolabsai/benostreamdb"
+keywords = ["database", "arrow", "flight-sql", "vector-search", "iceberg"]
+categories = ["database-implementations"]
+
+[dependencies]
+arrow = "57.2.0"
+arrow-flight = { version = "57.2.0", features = ["flight-sql-experimental"] }
+datafusion = "52.0.0"
+futures = "0.3.34"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tonic = "0.14"
+benostreamdb = { path = ".." }
+
+[features]
+default = []
+cuda = ["benostreamdb/cuda"]
+wgpu = ["benostreamdb/wgpu", "benostreamdb/pollster"]
+rocm = ["wgpu"]
+intel = ["wgpu"]
+all-gpu = ["cuda", "wgpu"]

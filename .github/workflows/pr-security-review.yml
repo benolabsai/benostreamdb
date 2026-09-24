@@ -1,0 +1,29 @@
+name: PR Security Checks
+
+# Free, deterministic scanners on every pull request. No secrets required.
+#
+# The AI diff review is a *local* tool (scripts/ai_pr_review.py) that reads your
+# shell's OPENAI_* environment variables — it is intentionally not run in CI.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Static security checks
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: cargo-deny (advisories, bans, licenses, sources)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

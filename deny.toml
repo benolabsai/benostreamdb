@@ -1,0 +1,63 @@
+# cargo-deny configuration for BenoStreamDB
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+targets = []
+all-features = true
+no-dev-dependencies = false
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# Notify about yanked crates in Cargo.lock
+yanked = "warn"
+
+# Ignore specific advisories that have been reviewed and deemed low-risk in transitive dependencies
+ignore = [
+    "RUSTSEC-2026-0258",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2025-0134",
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0221",
+    "RUSTSEC-2026-0204",
+    # `paste` is unmaintained (RUSTSEC-2024-0436) but is pulled in transitively
+    # by datafusion-common 52.x; it cannot be removed without forking DataFusion.
+    # It is a compile-time proc-macro with no runtime attack surface.
+    "RUSTSEC-2024-0436",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+
+[licenses]
+version = 2
+private = { ignore = true }
+confidence-threshold = 0.9
+
+# Licenses that are automatically approved
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "OpenSSL",
+    "Zlib",
+    "Unicode-DFS-2016",
+]
+
+# Skim the license text for keywords to approve unclear licenses
+[[licenses.clarify]]
+name = "webpki"
+expression = "ISC"
+license-files = [{ path = "LICENSE", hash = 0xe106d6a3 }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

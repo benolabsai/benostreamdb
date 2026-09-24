@@ -1,0 +1,1228 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+/// Query execution engine for multi-segment queries
+use anyhow::Result;
+use arrow::record_batch::RecordBatch;
+use object_store::ObjectStore;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+
+use crate::core::index::VectorMetric;
+use crate::core::manifest::ManifestEntry;
+use crate::core::planner::FilterExpr;
+use crate::core::reader::HybridReader;
+use crate::SegmentConfig;
+
+/// Configuration for query execution
+#[derive(Clone, Debug, Default)]
+pub struct QueryConfig {
+    /// Maximum number of parallel segment readers.
+    ///
+    /// If None, auto-detected based on available system memory.
+    /// Each HNSW load uses: num_vectors × embedding_dim × 4 bytes
+    ///
+    /// Auto-detection reserves 50% of available RAM for HNSW loads.
+    pub max_parallel_readers: Option<usize>,
+
+    /// Maximum number of parallel segment writers during flush.
+    ///
+    /// If None, defaults to the number of available CPUs.
+    pub max_parallel_segments: Option<usize>,
+
+    /// Maximum parallelism for HNSW index loading.
+    ///
+    /// If None, defaults to `max_parallel_readers`.
+    pub hnsw_max_load_parallelism: Option<usize>,
+
+    /// Constant for Reciprocal Rank Fusion (RRF). Defaults to 60.0.
+    pub rrf_k: Option<f32>,
+
+    /// Query execution timeout in seconds. If None, queries run indefinitely.
+    pub query_timeout_secs: Option<u64>,
+
+    /// Maximum number of rows to return in a result set. If None, no limit is enforced.
+    pub max_result_rows: Option<usize>,
+}
+
+impl QueryConfig {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Manually set max parallel readers (overrides auto-detection)
+    pub fn with_max_parallel_readers(mut self, max: usize) -> Self {
+        self.max_parallel_readers = Some(max.max(1)); // At least 1
+        self
+    }
+
+    /// Set rrf_k for hybrid search fusion
+    pub fn with_rrf_k(mut self, k: f32) -> Self {
+        self.rrf_k = Some(k);
+        self
+    }
+
+    /// Set max parallel segments for write/flush path
+    pub fn with_max_parallel_segments(mut self, max: usize) -> Self {
+        self.max_parallel_segments = Some(max.max(1));
+        self
+    }
+
+    /// Set max parallelism for HNSW index loading
+    pub fn with_hnsw_max_load_parallelism(mut self, max: usize) -> Self {
+        self.hnsw_max_load_parallelism = Some(max.max(1));
+        self
+    }
+
+    /// Set query execution timeout in seconds
+    pub fn with_query_timeout_secs(mut self, secs: u64) -> Self {
+        self.query_timeout_secs = Some(secs);
+        self
+    }
+
+    /// Set maximum number of rows to return in a result set
+    pub fn with_max_result_rows(mut self, max: usize) -> Self {
+        self.max_result_rows = Some(max);
+        self
+    }
+
+    /// Calculate optimal parallel readers based on available memory and segment size
+    ///
+    /// Formula: max_parallel = (available_ram * 0.5) / memory_per_segment
+    /// where memory_per_segment ≈ num_vectors × embedding_dim × 4 bytes × 1.5 (HNSW overhead)
+    pub fn auto_detect_parallel_readers(
+        &self,
+        num_vectors_per_segment: usize,
+        embedding_dim: usize,
+    ) -> usize {
+        let manual_readers = self.max_parallel_readers.or_else(|| {
+            std::env::var("BENOSTREAM_MAX_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse::<usize>().ok())
+        });
+        if let Some(manual) = manual_readers {
+            return manual;
+        }
+
+        // Get available system memory (fallback to 8GB if unavailable)
+        let available_ram = get_available_memory_bytes().unwrap_or(8 * 1024 * 1024 * 1024);
+
+        // Reserve 50% of RAM for HNSW loading
+        let ram_for_hnsw = available_ram / 2;
+
+        // Memory per segment: vectors × dims × 4 bytes + (vectors × 20,000 bytes HNSW overhead)
+        let bytes_per_vector = embedding_dim * 4;
+        let memory_per_segment = num_vectors_per_segment * (bytes_per_vector + 20_000);
+
+        if memory_per_segment == 0 {
+            return 4; // Fallback
+        }
+
+        // Calculate max parallel, bounded by CPU count and minimum of 2
+        let cpus = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+
+        let max_by_memory = ram_for_hnsw / memory_per_segment;
+        // At least 2, at most 2x CPUs
+
+        max_by_memory.min(cpus * 2).max(2)
+    }
+}
+
+/// Get available system memory in bytes
+fn get_available_memory_bytes() -> Option<usize> {
+    // Try to read from /proc/meminfo on Linux
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+            for line in contents.lines() {
+                if line.starts_with("MemAvailable:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        if let Ok(kb) = parts[1].parse::<usize>() {
+                            return Some(kb * 1024); // Convert KB to bytes
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: use sysinfo crate if available, or return None
+    None
+}
+
+/// Merge and rerank vector search results from multiple segments
+/// Takes results with distances from each segment and returns top-k globally
+pub fn merge_and_rerank_vector_results(
+    results_with_distances: Vec<(String, RecordBatch, Vec<f32>)>,
+    k: usize,
+    offset: usize,
+) -> Result<Vec<(String, RecordBatch)>> {
+    // Flatten all rows with their distances
+    let mut all_rows: Vec<(usize, usize, f32)> = Vec::new(); // (batch_idx, row_idx, distance)
+
+    for (batch_idx, (_seg_id, _batch, distances)) in results_with_distances.iter().enumerate() {
+        for (row_idx, &distance) in distances.iter().enumerate() {
+            all_rows.push((batch_idx, row_idx, distance));
+        }
+    }
+
+    // Sort by distance (ascending - lower is better for L2 distance)
+    // For identical distances, use (batch_idx, row_idx) as tiebreaker for deterministic ordering
+    all_rows.sort_by(|a, b| {
+        match a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal) {
+            std::cmp::Ordering::Equal => {
+                // Tiebreak by batch_idx, then row_idx for deterministic ordering
+                match a.0.cmp(&b.0) {
+                    std::cmp::Ordering::Equal => a.1.cmp(&b.1),
+                    other => other,
+                }
+            }
+            other => other,
+        }
+    });
+
+    // Apply OFFSET: skip first n results
+    if offset > 0 {
+        if offset >= all_rows.len() {
+            // OFFSET exceeds total rows, return empty result
+            return Ok(vec![]);
+        }
+        all_rows.drain(0..offset);
+    }
+
+    // Take top-k after offset
+    all_rows.truncate(k);
+
+    if all_rows.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Group contiguous runs of the same batch to minimize slicing operations
+    // while strictly preserving global distance ordering across emitted batches.
+    let mut result_batches = Vec::new();
+    let mut i = 0;
+    while i < all_rows.len() {
+        let current_batch_idx = all_rows[i].0;
+        let mut j = i + 1;
+        while j < all_rows.len() && all_rows[j].0 == current_batch_idx {
+            j += 1;
+        }
+        let chunk = &all_rows[i..j];
+        let (seg_id, batch, _distances) = &results_with_distances[current_batch_idx];
+
+        // Extract row indices and distances
+        let row_indices: Vec<u32> = chunk.iter().map(|(_, idx, _)| *idx as u32).collect();
+        let distances: Vec<f32> = chunk.iter().map(|(_, _, dist)| *dist).collect();
+
+        // Create indices array for take operation
+        let indices = arrow::array::UInt32Array::from(row_indices);
+
+        // Use Arrow's take kernel to extract rows
+        let mut columns: Vec<Arc<dyn arrow::array::Array>> = batch
+            .columns()
+            .iter()
+            .map(|col| {
+                arrow::compute::take(col.as_ref(), &indices, None)
+                    .map_err(|e| anyhow::anyhow!("Take error: {}", e))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut fields: Vec<arrow::datatypes::Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+
+        // Add distance column only if it doesn't already exist
+        if batch.schema().column_with_name("distance").is_none() {
+            columns.push(Arc::new(arrow::array::Float32Array::from(distances)));
+            fields.push(arrow::datatypes::Field::new(
+                "distance",
+                arrow::datatypes::DataType::Float32,
+                false,
+            ));
+        }
+
+        let schema_with_distance = Arc::new(arrow::datatypes::Schema::new(fields));
+
+        let result_batch = RecordBatch::try_new(schema_with_distance, columns)?;
+        result_batches.push((seg_id.clone(), result_batch));
+
+        i = j;
+    }
+
+    Ok(result_batches)
+}
+
+/// Merge results using Reciprocal Rank Fusion (RRF)
+///
+/// RRF formula: Score(d) = sum_{r in R} 1 / (k + rank(d, r))
+/// where k is a constant (usually 60) and rank is 1-indexed.
+///
+/// NOTE: This function is superseded by the RRF in src/core/hybrid.rs
+/// which uses ScoredResult with real (segment_id, row_id) tuples.
+/// Kept for backward compatibility with the old query path.
+pub fn merge_and_rank_fusion(
+    vector_results: Vec<(String, RecordBatch, Vec<f32>)>,
+    keyword_results: Vec<(String, RecordBatch, Vec<f32>)>,
+    k_out: usize,
+    rrf_k: usize,
+) -> Result<Vec<(String, RecordBatch)>> {
+    // Delegate to merge_and_rerank_vector_results for the vector path.
+    // The new RRF in hybrid.rs handles proper (segment_id, row_id) correlation.
+    let _ = (keyword_results, rrf_k); // keyword_results handled by hybrid.rs path
+    merge_and_rerank_vector_results(vector_results, k_out, 0)
+}
+
+/// Execute a vector search query across multiple segments IN PARALLEL
+///
+/// Parameters for vector search execution
+#[derive(Clone, Debug)]
+pub struct VectorSearchRequest {
+    pub column: String,
+    pub query: crate::core::index::VectorValue,
+    pub k: usize,
+    pub filter: Option<FilterExpr>,
+    pub metric: VectorMetric,
+    pub config: QueryConfig,
+    pub ef_search: Option<usize>,
+    pub columns: Option<Vec<String>>,
+    pub use_mmap: bool,
+}
+
+impl VectorSearchRequest {
+    pub fn new(
+        column: String,
+        query: crate::core::index::VectorValue,
+        k: usize,
+        metric: VectorMetric,
+        use_mmap: bool,
+    ) -> Self {
+        Self {
+            column,
+            query,
+            k,
+            filter: None,
+            metric,
+            config: QueryConfig::default(),
+            ef_search: None,
+            columns: None,
+            use_mmap,
+        }
+    }
+
+    pub fn with_filter(mut self, filter: Option<FilterExpr>) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    pub fn with_config(mut self, config: QueryConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub fn with_ef_search(mut self, ef_search: Option<usize>) -> Self {
+        self.ef_search = ef_search;
+        self
+    }
+
+    pub fn with_columns(mut self, columns: Option<Vec<String>>) -> Self {
+        self.columns = columns;
+        self
+    }
+}
+
+/// Each segment's HNSW index is loaded and searched concurrently,
+/// bounded by `config.max_parallel_readers` to prevent resource exhaustion.
+///
+/// Results are merged and reranked to return global top-k.
+/// Each element is `(segment_id, RecordBatch)` to support RRF fusion.
+///
+/// Performance: Wall-clock time ≈ (num_segments / max_parallel) * max(segment_times)
+pub async fn execute_vector_search(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    base_uri: &str,
+    request: VectorSearchRequest,
+) -> Result<Vec<(String, RecordBatch)>> {
+    execute_vector_search_with_config(entries, store, None, base_uri, request).await
+}
+
+/// Execute vector search with custom configuration across multiple vector requests using RRF fusion
+pub async fn execute_multi_vector_search_with_config(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+    base_uri: &str,
+    mut requests: Vec<VectorSearchRequest>,
+) -> Result<Vec<(String, RecordBatch)>> {
+    if requests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if requests.len() == 1 {
+        // `len() == 1` guarantees `remove(0)` yields the sole request.
+        let first = requests.remove(0);
+        return execute_vector_search_with_config(entries, store, data_store, base_uri, first)
+            .await;
+    }
+
+    // Multi-Vector Search: execute each vector search request concurrently and fuse with RRF
+    let rrf_k = requests
+        .first()
+        .and_then(|r| r.config.rrf_k)
+        .unwrap_or(60.0);
+    let max_k = requests.iter().map(|r| r.k).max().unwrap_or(10);
+
+    let mut search_handles = Vec::new();
+    for req in requests {
+        let entries_c = entries.clone();
+        let store_c = store.clone();
+        let data_store_c = data_store.clone();
+        let base_uri_c = base_uri.to_string();
+        search_handles.push(tokio::spawn(async move {
+            execute_vector_search_with_config(entries_c, store_c, data_store_c, &base_uri_c, req)
+                .await
+        }));
+    }
+
+    let mut ranked_lists = Vec::new();
+    for handle in search_handles {
+        match handle.await {
+            Ok(Ok(results)) => ranked_lists.push(results),
+            Ok(Err(e)) => return Err(e),
+            Err(e) => anyhow::bail!("Multi-vector search task panicked: {}", e),
+        }
+    }
+
+    fn row_key(batch: &RecordBatch, row: usize) -> String {
+        if let Some(col) = batch
+            .column_by_name("id")
+            .or_else(|| batch.column_by_name("_id"))
+            .or_else(|| batch.column_by_name("pk"))
+        {
+            crate::core::manifest::ManifestValue::from_array(col, row).to_string()
+        } else {
+            let mut key = String::new();
+            for (i, field) in batch.schema().fields().iter().enumerate() {
+                if field.name() == "distance" {
+                    continue;
+                }
+                if !key.is_empty() {
+                    key.push('\0');
+                }
+                let val = crate::core::manifest::ManifestValue::from_array(batch.column(i), row);
+                key.push_str(&val.to_string());
+            }
+            key
+        }
+    }
+
+    let mut fused_map: std::collections::HashMap<String, (f32, RecordBatch, String)> =
+        std::collections::HashMap::new();
+
+    for req_results in ranked_lists {
+        let mut req_rows = Vec::new();
+        for (seg_id, batch) in req_results {
+            let dist_col = batch
+                .column_by_name("distance")
+                .and_then(|c| c.as_any().downcast_ref::<arrow::array::Float32Array>());
+            for row_idx in 0..batch.num_rows() {
+                let dist = dist_col.map(|d| d.value(row_idx)).unwrap_or(0.0);
+                let key = row_key(&batch, row_idx);
+                let single_row = batch.slice(row_idx, 1);
+                req_rows.push((dist, key, single_row, seg_id.clone()));
+            }
+        }
+        // Lower distance is higher rank
+        req_rows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        for (rank, (_dist, key, single_row, seg_id)) in req_rows.into_iter().enumerate() {
+            let rrf_score = 1.0 / (rrf_k + (rank as f32 + 1.0));
+            let entry = fused_map
+                .entry(key)
+                .or_insert_with(|| (0.0f32, single_row, seg_id));
+            entry.0 += rrf_score;
+        }
+    }
+
+    if fused_map.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut sorted_fused: Vec<(String, f32, RecordBatch, String)> = fused_map
+        .into_iter()
+        .map(|(key, (score, batch, seg_id))| (key, score, batch, seg_id))
+        .collect();
+    sorted_fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    sorted_fused.truncate(max_k);
+
+    let row_batches: Vec<&RecordBatch> = sorted_fused.iter().map(|(_, _, b, _)| b).collect();
+    let first_batch = row_batches[0];
+    let schema = first_batch.schema();
+    let concatenated = arrow::compute::concat_batches(&schema, row_batches)?;
+    let scores: Vec<f32> = sorted_fused.iter().map(|(_, s, _, _)| *s).collect();
+
+    let mut columns = concatenated.columns().to_vec();
+    let mut fields = concatenated.schema().fields().to_vec();
+
+    if let Ok(idx) = concatenated.schema().index_of("distance") {
+        columns[idx] = Arc::new(arrow::array::Float32Array::from(scores));
+    } else {
+        fields.push(Arc::new(arrow::datatypes::Field::new(
+            "distance",
+            arrow::datatypes::DataType::Float32,
+            false,
+        )));
+        columns.push(Arc::new(arrow::array::Float32Array::from(scores)));
+    }
+    let final_schema = Arc::new(arrow::datatypes::Schema::new(fields));
+    let final_batch = RecordBatch::try_new(final_schema, columns)?;
+    let primary_seg_id = sorted_fused[0].3.clone();
+    Ok(vec![(primary_seg_id, final_batch)])
+}
+
+pub async fn execute_vector_search_with_config(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+    base_uri: &str,
+    request: VectorSearchRequest,
+) -> Result<Vec<(String, RecordBatch)>> {
+    use futures::future::join_all;
+
+    let total_start = std::time::Instant::now();
+    let num_segments = entries.len();
+
+    // Planning phase: auto-detect parallelism
+    let planning_start = std::time::Instant::now();
+
+    // Auto-detect parallelism from query vector dimension and segment row counts
+    let embedding_dim = match &request.query {
+        crate::core::index::VectorValue::Float32(v) => v.len(),
+        crate::core::index::VectorValue::Float16(v) => v.len(),
+        crate::core::index::VectorValue::Binary(v) => v.len() * 8, // Approx bits
+        crate::core::index::VectorValue::Sparse(s) => s.dim,
+        crate::core::index::VectorValue::Keyword(_) => 0, // Keyword search doesn't have a fixed vector dimension
+    };
+    let avg_rows_per_segment = if !entries.is_empty() {
+        entries
+            .iter()
+            .map(|e| e.record_count as usize)
+            .sum::<usize>()
+            / entries.len()
+    } else {
+        10_000 // Default assumption
+    };
+
+    let max_parallel = request
+        .config
+        .auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
+
+    tracing::debug!(
+        "Vector search: {} segments (~{}K vectors each, {}D), {} parallel readers (auto-detected)",
+        num_segments,
+        avg_rows_per_segment / 1000,
+        embedding_dim,
+        max_parallel
+    );
+
+    // Record planning duration
+    metrics::histogram!("benostreamdb.query.planning_duration")
+        .record(planning_start.elapsed().as_secs_f64());
+
+    // Semaphore to limit concurrent HNSW loads
+    let semaphore = Arc::new(Semaphore::new(max_parallel));
+
+    // Spawn bounded parallel search tasks for each segment
+    let search_futures: Vec<_> = entries
+        .into_iter()
+        .map(|entry| {
+            let store = store.clone();
+            let base_uri = base_uri.to_string();
+            let column = request.column.clone();
+            let query_clone = request.query.clone();
+            let semaphore = semaphore.clone();
+            let filter_ref = request.filter.clone();
+            let ef_search_val = request.ef_search;
+            let metric = request.metric;
+
+            let columns_clone = request.columns.clone();
+
+            let data_store_clone = data_store.clone();
+
+            async move {
+                // Acquire semaphore permit (blocks if max_parallel reached)
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+
+                let file_path_str = entry.file_path.clone();
+                let segment_id = file_path_str
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&file_path_str)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&file_path_str)
+                    .to_string();
+
+                tracing::info!(
+                    "Query execution: Entry {} has index files: {:?}",
+                    entry.file_path,
+                    entry.index_files
+                );
+                // Resolve partition-aware path for vector search
+                let path = std::path::Path::new(&file_path_str);
+                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+                let full_base_uri = if rel_parent.is_empty() {
+                    base_uri.clone()
+                } else {
+                    format!("{}/{}", base_uri, rel_parent)
+                };
+
+                let config = SegmentConfig::new(&full_base_uri, &segment_id)
+                    .with_parquet_path(entry.file_path.clone())
+                    .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
+                    .with_delete_files(entry.delete_files.clone())
+                    .with_index_files(entry.index_files.clone());
+
+                let reader = HybridReader::new(config, store.clone(), &base_uri);
+
+                let target_schema = if let Some(cols) = &columns_clone {
+                    let full_schema = reader.get_arrow_schema().await.unwrap_or_else(|_| {
+                        Arc::new(arrow::datatypes::Schema::new(
+                            Vec::<arrow::datatypes::Field>::new(),
+                        ))
+                    });
+                    let fields: Vec<arrow::datatypes::Field> = cols
+                        .iter()
+                        .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                        .collect();
+                    // An empty projection means the caller named only
+                    // synthesised columns (e.g. a score-only `["distance"]`).
+                    // Keep it as `Some(empty)`: the reader uses that signal to
+                    // skip Parquet entirely. Passing it straight to Parquet
+                    // would fail with "must either specify a row count or at
+                    // least one column".
+                    Some(Arc::new(arrow::datatypes::Schema::new(fields)))
+                } else {
+                    None
+                };
+
+                let results = reader
+                    .vector_search_index(
+                        &column,
+                        &query_clone,
+                        request.k,
+                        filter_ref.as_ref(),
+                        metric,
+                        ef_search_val,
+                        target_schema,
+                        request.use_mmap,
+                    )
+                    .await?;
+                // Tag each result batch with its segment ID
+                let tagged: Vec<(String, RecordBatch, Vec<f32>)> = results
+                    .into_iter()
+                    .map(|(batch, dists)| (segment_id.clone(), batch, dists))
+                    .collect();
+                Ok(tagged)
+                // _permit dropped here, releasing the semaphore slot
+            }
+        })
+        .collect();
+
+    // Execute all searches (bounded by semaphore)
+    let search_futures_count = search_futures.len();
+    tracing::info!("Vector search starting on {} entries", search_futures_count);
+    let search_start = std::time::Instant::now();
+    let results: Vec<anyhow::Result<Vec<(String, RecordBatch, Vec<f32>)>>> =
+        join_all(search_futures).await;
+    metrics::histogram!("benostreamdb.query.segment_search_duration")
+        .record(search_start.elapsed().as_secs_f64());
+
+    // Collect successful results, failing if any segment search fails
+    // (the index layer already fell back to flat scan; unrecoverable failure must not silently drop rows).
+    let mut all_results_with_distances = Vec::new();
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(tagged_batches) => all_results_with_distances.extend(tagged_batches),
+            Err(e) => {
+                tracing::error!(
+                    segment = i,
+                    error = %e,
+                    "Segment vector search failed — aborting query to prevent incomplete results"
+                );
+                return Err(anyhow::anyhow!(
+                    "Vector search failed on segment {}: {}",
+                    i,
+                    e
+                ));
+            }
+        }
+    }
+
+    tracing::info!(
+        "Vector search found {} total batches across all segments",
+        all_results_with_distances.len()
+    );
+    metrics::histogram!("benostreamdb.query.execution_duration")
+        .record(total_start.elapsed().as_secs_f64());
+    merge_and_rerank_vector_results(all_results_with_distances, request.k, 0)
+}
+
+pub async fn execute_vector_search_raw_with_config(
+    entries: Vec<ManifestEntry>,
+    store: Arc<dyn ObjectStore>,
+    data_store: Option<Arc<dyn ObjectStore>>,
+    base_uri: &str,
+    request: VectorSearchRequest,
+) -> Result<Vec<crate::core::search::ScoredResult>> {
+    use futures::future::join_all;
+
+    let embedding_dim = match &request.query {
+        crate::core::index::VectorValue::Float32(v) => v.len(),
+        crate::core::index::VectorValue::Float16(v) => v.len(),
+        crate::core::index::VectorValue::Binary(v) => v.len() * 8,
+        crate::core::index::VectorValue::Sparse(s) => s.dim,
+        crate::core::index::VectorValue::Keyword(_) => 0,
+    };
+    let avg_rows_per_segment = if !entries.is_empty() {
+        entries
+            .iter()
+            .map(|e| e.record_count as usize)
+            .sum::<usize>()
+            / entries.len()
+    } else {
+        10_000
+    };
+    let max_parallel = request
+        .config
+        .auto_detect_parallel_readers(avg_rows_per_segment, embedding_dim);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_parallel));
+
+    let search_futures: Vec<_> = entries
+        .into_iter()
+        .map(|entry| {
+            let store = store.clone();
+            let base_uri = base_uri.to_string();
+            let column = request.column.clone();
+            let query_clone = request.query.clone();
+            let semaphore = semaphore.clone();
+            let ef_search_val = request.ef_search;
+            let metric = request.metric;
+            let data_store_clone = data_store.clone();
+            async move {
+                let _permit = semaphore
+                    .acquire()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Semaphore error: {}", e))?;
+                let file_path_str = entry.file_path.clone();
+                let segment_id = file_path_str
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&file_path_str)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&file_path_str)
+                    .to_string();
+                let path = std::path::Path::new(&file_path_str);
+                let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+                let full_base_uri = if rel_parent.is_empty() {
+                    base_uri.clone()
+                } else {
+                    format!("{}/{}", base_uri, rel_parent)
+                };
+                let config = crate::SegmentConfig::new(&full_base_uri, &segment_id)
+                    .with_parquet_path(entry.file_path.clone())
+                    .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
+                    .with_delete_files(entry.delete_files.clone())
+                    .with_index_files(entry.index_files.clone());
+                let reader =
+                    crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
+                let results = reader
+                    .vector_search_index_raw(
+                        &column,
+                        &query_clone,
+                        request.k,
+                        metric,
+                        ef_search_val,
+                        request.use_mmap,
+                    )
+                    .await?;
+                let tagged: Vec<crate::core::search::ScoredResult> = results
+                    .into_iter()
+                    .map(|(row_id, score)| crate::core::search::ScoredResult {
+                        segment_id: segment_id.clone(),
+                        row_id: row_id as u32,
+                        score,
+                    })
+                    .collect();
+                Ok(tagged)
+            }
+        })
+        .collect();
+
+    let results: Vec<anyhow::Result<Vec<crate::core::search::ScoredResult>>> =
+        join_all(search_futures).await;
+    let mut all_results = Vec::new();
+    for (i, result) in results.into_iter().enumerate() {
+        match result {
+            Ok(tagged) => all_results.extend(tagged),
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Vector search raw failed on segment {}: {}",
+                    i,
+                    e
+                ))
+            }
+        }
+    }
+    all_results.sort_by(|a, b| {
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    all_results.truncate(request.k);
+    Ok(all_results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_config_default() {
+        let config = QueryConfig::default();
+        assert!(config.max_parallel_readers.is_none());
+    }
+
+    #[test]
+    fn test_query_config_with_max_parallel_readers() {
+        let config = QueryConfig::new().with_max_parallel_readers(8);
+        assert_eq!(config.max_parallel_readers, Some(8));
+
+        // Test minimum of 1
+        let config_zero = QueryConfig::new().with_max_parallel_readers(0);
+        assert_eq!(config_zero.max_parallel_readers, Some(1));
+    }
+
+    #[test]
+    fn test_auto_detect_parallel_readers_small_segments() {
+        let config = QueryConfig::new();
+
+        // Small segments (1K vectors, 128D)
+        let max_parallel = config.auto_detect_parallel_readers(1_000, 128);
+
+        // Should allow many parallel readers for small segments
+        assert!(
+            max_parallel >= 4,
+            "Expected at least 4 parallel readers for small segments, got {}",
+            max_parallel
+        );
+    }
+
+    #[test]
+    fn test_auto_detect_parallel_readers_large_segments() {
+        let config = QueryConfig::new();
+
+        // Large segments (1M vectors, 1536D - like OpenAI embeddings)
+        let max_parallel = config.auto_detect_parallel_readers(1_000_000, 1536);
+
+        // Should limit parallel readers for large segments
+        assert!(max_parallel >= 1, "Should allow at least 1 reader");
+        assert!(
+            max_parallel <= 16,
+            "Should not exceed reasonable limit for large segments, got {}",
+            max_parallel
+        );
+    }
+
+    #[test]
+    fn test_auto_detect_respects_manual_override() {
+        let config = QueryConfig::new().with_max_parallel_readers(2);
+
+        // Even with small segments, should respect manual override
+        let max_parallel = config
+            .max_parallel_readers
+            .unwrap_or_else(|| config.auto_detect_parallel_readers(1_000, 128));
+
+        assert_eq!(max_parallel, 2);
+    }
+
+    #[test]
+    fn test_query_config_clone() {
+        let config1 = QueryConfig::new().with_max_parallel_readers(4);
+        let config2 = config1.clone();
+
+        assert_eq!(config1.max_parallel_readers, config2.max_parallel_readers);
+    }
+
+    #[test]
+    fn test_auto_detect_respects_env_var() {
+        std::env::set_var("BENOSTREAM_MAX_CONCURRENCY", "12");
+        let config = QueryConfig::new();
+        let readers = config.auto_detect_parallel_readers(1_000, 128);
+        assert_eq!(readers, 12);
+        std::env::remove_var("BENOSTREAM_MAX_CONCURRENCY");
+    }
+
+    #[test]
+    fn test_manual_override_precedes_env_var() {
+        std::env::set_var("BENOSTREAM_MAX_CONCURRENCY", "12");
+        let config = QueryConfig::new().with_max_parallel_readers(5);
+        let readers = config.auto_detect_parallel_readers(1_000, 128);
+        assert_eq!(readers, 5);
+        std::env::remove_var("BENOSTREAM_MAX_CONCURRENCY");
+    }
+
+    #[test]
+    fn test_merge_and_rerank_vector_results() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        // Batch 1: ids [1, 2], distances [0.5, 0.1]
+        let batch1 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let dist1 = vec![0.5, 0.1];
+
+        // Batch 2: ids [3, 4], distances [0.3, 0.2]
+        let batch2 =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3, 4]))])?;
+        let dist2 = vec![0.3, 0.2];
+
+        let results = vec![
+            ("seg1".to_string(), batch1, dist1),
+            ("seg2".to_string(), batch2, dist2),
+        ];
+
+        // Top 3 should be: id 2 (0.1), id 4 (0.2), id 3 (0.3)
+        let merged = merge_and_rerank_vector_results(results, 3, 0)?;
+
+        // Count total rows across all batches
+        let total_rows: usize = merged.iter().map(|(_, b)| b.num_rows()).sum();
+        assert_eq!(total_rows, 3);
+
+        // Verify schema includes distance column
+        for (_sid, batch) in &merged {
+            assert_eq!(
+                batch.schema().fields().len(),
+                2,
+                "Schema should have id and distance columns"
+            );
+            assert_eq!(batch.schema().field(1).name(), "distance");
+        }
+
+        // Collect all IDs and sort them to verify we have exactly [2, 3, 4]
+        let mut all_ids = Vec::new();
+        for (_sid, batch) in merged {
+            let id_col = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for i in 0..batch.num_rows() {
+                all_ids.push(id_col.value(i));
+            }
+        }
+        all_ids.sort();
+        assert_eq!(all_ids, vec![2, 3, 4]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_and_rerank_empty() -> Result<()> {
+        let results: Vec<(String, RecordBatch, Vec<f32>)> = vec![];
+        let merged = merge_and_rerank_vector_results(results, 5, 0)?;
+        assert!(merged.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_and_rerank_low_k() -> Result<()> {
+        use arrow::array::Int32Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]))],
+        )?;
+        let dist = vec![0.5, 0.4, 0.3, 0.2, 0.1];
+
+        let results = vec![("seg1".to_string(), batch, dist)];
+
+        // k=2 should return ids 5 and 4
+        let merged = merge_and_rerank_vector_results(results, 2, 0)?;
+        let total_rows: usize = merged.iter().map(|(_, b)| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
+
+        let mut ids = Vec::new();
+        for (_sid, b) in merged {
+            let id_col = b.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+            for i in 0..b.num_rows() {
+                ids.push(id_col.value(i));
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, vec![4, 5]);
+
+        Ok(())
+    }
+
+    // Feature: pgvector-sql-support, Property 24: KNN Result Ordering
+    // Property: For any KNN query, the results should be ordered by ascending distance,
+    // meaning for all adjacent result pairs (i, i+1), distance[i] <= distance[i+1].
+    #[cfg(test)]
+    mod property_tests {
+        use super::*;
+        use arrow::array::{Float32Array, Int32Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use proptest::prelude::*;
+        use std::sync::Arc;
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(100))]
+
+            #[test]
+            fn test_knn_result_ordering(
+                // Generate random batches with distances
+                num_batches in 1..5usize,
+                rows_per_batch in 1..20usize,
+                k in 1..50usize,
+            ) {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                ]));
+
+                let mut results = Vec::new();
+                let mut id_counter = 0;
+
+                for _ in 0..num_batches {
+                    let mut ids = Vec::new();
+                    let mut distances = Vec::new();
+
+                    for _ in 0..rows_per_batch {
+                        ids.push(id_counter);
+                        id_counter += 1;
+                        // Generate random distances between 0.0 and 10.0
+                        distances.push((id_counter as f32) * 0.1);
+                    }
+
+                    let batch = RecordBatch::try_new(
+                        schema.clone(),
+                        vec![Arc::new(Int32Array::from(ids))],
+                    ).unwrap();
+
+                    results.push(("seg".to_string(), batch, distances));
+                }
+
+                // Merge and rerank
+                let merged = merge_and_rerank_vector_results(results, k, 0).unwrap();
+
+                // Collect all distances in order across all batches
+                let mut all_distances = Vec::new();
+                for (_sid, batch) in &merged {
+                    let dist_col = batch
+                        .column_by_name("distance")
+                        .expect("distance column must be present in result batch")
+                        .as_any()
+                        .downcast_ref::<Float32Array>()
+                        .expect("distance column must be Float32Array");
+                    for i in 0..dist_col.len() {
+                        all_distances.push(dist_col.value(i));
+                    }
+                }
+
+                // Verify monotonically non-decreasing distance ordering
+                for i in 1..all_distances.len() {
+                    prop_assert!(
+                        all_distances[i - 1] <= all_distances[i],
+                        "Distances should be monotonically ascending: {} > {}",
+                        all_distances[i - 1],
+                        all_distances[i]
+                    );
+                }
+
+                // Verify total rows <= k
+                let total_rows: usize = merged.iter().map(|(_, b)| b.num_rows()).sum();
+                prop_assert!(total_rows <= k, "Expected at most {} rows, got {}", k, total_rows);
+
+                // Verify all IDs are unique
+                let mut all_ids = Vec::new();
+                for (_sid, batch) in merged {
+                    let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                    for i in 0..batch.num_rows() {
+                        all_ids.push(id_col.value(i));
+                    }
+                }
+                let unique_ids: std::collections::HashSet<_> = all_ids.iter().collect();
+                prop_assert_eq!(unique_ids.len(), all_ids.len(), "All IDs should be unique");
+            }
+
+            // Feature: pgvector-sql-support, Property 26: Deterministic Tiebreaking
+            // Property: For any KNN query executed multiple times with identical parameters,
+            // if multiple rows have identical distances, they should appear in the same order
+            // across executions.
+            #[test]
+            fn test_deterministic_tiebreaking(
+                num_rows in 5..20usize,
+                k in 1..10usize,
+            ) {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                ]));
+
+                // Create a batch where all rows have the same distance (to force tiebreaking)
+                let ids: Vec<i32> = (0..num_rows as i32).collect();
+                let distances = vec![1.0; num_rows]; // All identical distances
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from(ids))],
+                ).unwrap();
+
+                let results = vec![("seg".to_string(), batch, distances)];
+
+                // Execute merge twice with same inputs
+                let merged1 = merge_and_rerank_vector_results(results.clone(), k, 0).unwrap();
+                let merged2 = merge_and_rerank_vector_results(results, k, 0).unwrap();
+
+                // Collect IDs from both executions
+                let mut ids1 = Vec::new();
+                for (_sid, batch) in &merged1 {
+                    let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                    for i in 0..batch.num_rows() {
+                        ids1.push(id_col.value(i));
+                    }
+                }
+
+                let mut ids2 = Vec::new();
+                for (_sid, batch) in &merged2 {
+                    let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                    for i in 0..batch.num_rows() {
+                        ids2.push(id_col.value(i));
+                    }
+                }
+
+                // Verify both executions produced the same order
+                prop_assert_eq!(ids1, ids2, "Tiebreaking should be deterministic");
+            }
+
+            // Feature: pgvector-sql-support, Property 25: LIMIT and OFFSET Correctness
+            // Property: For any KNN query with LIMIT k and OFFSET n, the system should return
+            // exactly k results starting from position n in the distance-ordered result set.
+            #[test]
+            fn test_limit_and_offset_correctness(
+                num_rows in 10..30usize,
+                k in 1..10usize,
+                offset in 0..15usize,
+            ) {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                ]));
+
+                // Create a batch with sequential IDs and distances
+                let ids: Vec<i32> = (0..num_rows as i32).collect();
+                let distances: Vec<f32> = (0..num_rows).map(|i| i as f32 * 0.1).collect();
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from(ids.clone()))],
+                ).unwrap();
+
+                let results = vec![("seg".to_string(), batch, distances)];
+
+                // Get results with LIMIT and OFFSET
+                let merged = merge_and_rerank_vector_results(results, k, offset).unwrap();
+
+                // Collect IDs from result
+                let mut result_ids = Vec::new();
+                for (_sid, batch) in &merged {
+                    let id_col = batch.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+                    for i in 0..batch.num_rows() {
+                        result_ids.push(id_col.value(i));
+                    }
+                }
+
+                // Expected IDs: starting from offset, take k items (or until end of data)
+                let expected_count = if offset >= num_rows {
+                    0
+                } else {
+                    std::cmp::min(k, num_rows - offset)
+                };
+
+                prop_assert_eq!(result_ids.len(), expected_count,
+                    "Expected {} results (k={}, offset={}, total={}), got {}",
+                    expected_count, k, offset, num_rows, result_ids.len());
+
+                // Verify IDs are in correct order (starting from offset)
+                if !result_ids.is_empty() {
+                    let expected_ids: Vec<i32> = (offset as i32..(offset + result_ids.len()) as i32).collect();
+                    prop_assert_eq!(result_ids, expected_ids,
+                        "IDs should be sequential starting from offset {}", offset);
+                }
+            }
+
+            // Feature: pgvector-sql-support, Property 27: Distance Column in Results
+            // Property: For any query that computes vector distances, if the distance expression
+            // is in the SELECT list, the output schema should include a column with the computed
+            // distance values.
+            #[test]
+            fn test_distance_column_in_results(
+                num_rows in 5..20usize,
+                k in 1..10usize,
+            ) {
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("id", DataType::Int32, false),
+                ]));
+
+                // Create a batch with sequential IDs and distances
+                let ids: Vec<i32> = (0..num_rows as i32).collect();
+                let distances: Vec<f32> = (0..num_rows).map(|i| i as f32 * 0.1).collect();
+
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![Arc::new(Int32Array::from(ids))],
+                ).unwrap();
+
+                let results = vec![("seg".to_string(), batch, distances.clone())];
+
+                // Get results
+                let merged = merge_and_rerank_vector_results(results, k, 0).unwrap();
+
+                // Verify schema includes distance column
+                for (_sid, batch) in &merged {
+                    prop_assert_eq!(batch.schema().fields().len(), 2,
+                        "Schema should have 2 columns (id and distance)");
+                    let schema = batch.schema();
+                    prop_assert_eq!(schema.field(1).name(), "distance",
+                        "Second column should be named 'distance'");
+                    prop_assert_eq!(schema.field(1).data_type(), &DataType::Float32,
+                        "Distance column should be Float32");
+                }
+
+                // Verify distance values are correct and in ascending order
+                let mut prev_distance = -1.0f32;
+                for (_sid, batch) in &merged {
+                    let distance_col = batch.column(1).as_any().downcast_ref::<arrow::array::Float32Array>().unwrap();
+                    for i in 0..batch.num_rows() {
+                        let distance = distance_col.value(i);
+                        prop_assert!(distance >= prev_distance,
+                            "Distances should be in ascending order: {} >= {}", distance, prev_distance);
+                        prev_distance = distance;
+                    }
+                }
+            }
+        }
+    }
+}

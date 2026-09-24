@@ -1,0 +1,12 @@
+# Summary
+
+- [Introduction](index.md)
+- [Architecture](architecture.md)
+- [Catalog Usage](catalog_usage.md)
+- [Integrations](integrations/README.md)
+    - [Python Bindings](integrations/python.md)
+    - [Java JNI](integrations/java_jni.md)
+    - [Trino Connector](integrations/trino.md)
+    - [Spark Connector](integrations/spark.md)
+- [API Reference](api_reference.md)
+- [Benchmarking & Performance](BENCHMARKING.md)

@@ -1,0 +1,346 @@
+#![deny(warnings)]
+#![allow(
+    unknown_lints,
+    clippy::needless_range_loop,
+    clippy::single_match,
+    clippy::ptr_arg,
+    clippy::while_let_loop,
+    clippy::question_mark,
+    clippy::non_canonical_partial_ord_impl,
+    clippy::needless_late_init,
+    clippy::collapsible_match
+)]
+// No-panic policy for production paths (see NO_PANIC_POLICY.md).
+//
+// Staged behind the `no-panic` feature because `#![deny(warnings)]` above means
+// enabling these restriction lints as errors today would fail the build on every
+// not-yet-remediated site. Phase 1 remediation drives the count down (tracked by
+// `scripts/no_panic_check.sh`), after which CI turns the feature on permanently.
+//
+// `#[cfg(test)]` code and the separate `tests/` crates are exempt: tests are
+// allowed to unwrap freely.
+#![cfg_attr(
+    all(not(test), feature = "no-panic"),
+    deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
+)]
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+#[cfg(target_os = "linux")]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+use std::sync::Arc;
+extern crate log;
+pub mod core;
+
+pub mod enterprise;
+
+pub mod telemetry;
+
+// Include the generated version from build.rs
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
+
+#[cfg(feature = "python")]
+pub mod python;
+#[cfg(feature = "python")]
+pub use python as python_binding;
+
+#[cfg(feature = "python")]
+pub mod python_gpu_context;
+
+#[cfg(feature = "python")]
+pub mod python_distance;
+
+// Re-export main types for convenience
+pub use crate::core::catalog::{create_catalog, create_catalog_async, Catalog, CatalogType};
+pub use crate::core::error::{BenoStreamError, Result};
+pub use crate::core::index::VectorMetric;
+pub use crate::core::table::{Table, VectorSearchParams};
+
+#[cfg(feature = "python")]
+use pyo3::prelude::*;
+
+/// glibc gives each thread its own malloc arena (up to 8 × cores) and keeps
+/// freed memory in the arena that released it. With dozens of worker threads
+/// doing heavy small-allocation churn (e.g. in-process index builds), RSS
+/// ratchets toward the sum of every arena's high-water mark — measured 82 GB
+/// vs 18 GB live during the whole-site Wikipedia node load — while threads
+/// also contend on their own fragmented heaps. Capping to 2 arenas forces
+/// shared reuse of freed memory. No-ops when the user explicitly sets
+/// `MALLOC_ARENA_MAX`; musl/macOS use different allocators entirely.
+#[cfg(all(feature = "python", target_os = "linux", target_env = "gnu"))]
+fn tame_glibc_arenas() {
+    const M_ARENA_MAX: i32 = -8; // glibc mallopt param (not exported by libc crate)
+    extern "C" {
+        fn mallopt(param: i32, value: i32) -> i32;
+    }
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        unsafe {
+            mallopt(M_ARENA_MAX, 2);
+        }
+    }
+}
+
+#[cfg(all(feature = "python", not(all(target_os = "linux", target_env = "gnu"))))]
+fn tame_glibc_arenas() {}
+
+/// Tell the nvrtc resolver where this interpreter's `site-packages` is, so
+/// pip-installed `nvidia-*-cuXX` wheels are discoverable without env vars.
+#[cfg(all(feature = "python", not(target_os = "macos"), feature = "cuda"))]
+fn register_python_site_packages(m: &Bound<'_, PyModule>) {
+    let py = m.py();
+    let Ok(sysconfig) = py.import("sysconfig") else {
+        return;
+    };
+    let Ok(paths) = sysconfig.call_method0("get_paths") else {
+        return;
+    };
+    let Ok(purelib) = paths.get_item("purelib") else {
+        return;
+    };
+    if let Ok(s) = purelib.extract::<String>() {
+        crate::core::index::nvrtc::set_python_site_packages(std::path::PathBuf::from(s));
+    }
+}
+
+#[cfg(feature = "python")]
+#[pyfunction]
+fn check_jemalloc() -> PyResult<String> {
+    #[cfg(target_env = "gnu")]
+    {
+        use tikv_jemalloc_ctl::epoch;
+        let mib = epoch::mib().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("jemalloc ctl unavailable: {e}"))
+        })?;
+        mib.advance().map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("jemalloc epoch advance failed: {e}"))
+        })?;
+        return Ok("jemalloc active and linked!".to_string());
+    }
+    #[allow(unreachable_code)]
+    Ok("jemalloc not enabled via target_env=gnu".to_string())
+}
+
+#[cfg(feature = "python")]
+#[pymodule]
+fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    tame_glibc_arenas();
+    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    register_python_site_packages(m);
+    m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::create_catalog_from_config,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(python_binding::load_default_catalog, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::open_table, m)?)?;
+    m.add_class::<python_binding::PyTable>()?;
+    m.add_class::<python_binding::PyMergeMode>()?;
+    m.add_class::<python_binding::PyNessieCatalog>()?;
+    m.add_class::<python_binding::PyRestCatalog>()?;
+    m.add_class::<python_binding::PyGlueCatalog>()?;
+    m.add_class::<python_binding::PyHiveCatalog>()?;
+    m.add_class::<python_binding::PyUnityCatalog>()?;
+    m.add_class::<python_binding::PyJdbcCatalog>()?;
+    m.add_class::<python_binding::PySession>()?;
+    m.add_class::<python_binding::PyGraphAPI>()?;
+
+    m.add_class::<python_binding::PyDataFileInfo>()?;
+    m.add_class::<python_binding::PySplit>()?;
+    m.add_class::<python_binding::PyTableStatistics>()?;
+    m.add_class::<python_binding::PyIndexCoverage>()?;
+
+    m.add_class::<python_binding::PyDataType>()?;
+    m.add_class::<python_binding::PyField>()?;
+    m.add_class::<python_binding::PyPartitionField>()?;
+    m.add_class::<python_binding::PySchema>()?;
+
+    m.add_class::<python_binding::PyManifest>()?;
+    m.add_class::<python_binding::PyManifestEntry>()?;
+
+    // Device API
+    m.add_function(wrap_pyfunction!(check_jemalloc, m)?)?;
+    m.add_class::<python_gpu_context::PyDevice>()?;
+
+    // Distance API - Single-pair functions
+    m.add_function(wrap_pyfunction!(python_distance::py_l2, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_cosine, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_inner_product, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_l1, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_hamming, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_jaccard, m)?)?;
+
+    // Distance API - Batch functions
+    m.add_function(wrap_pyfunction!(python_distance::py_l2_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_cosine_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_inner_product_batch,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_l1_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_hamming_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_jaccard_batch, m)?)?;
+
+    // Sparse Vector API
+    m.add_class::<python_distance::PySparseVector>()?;
+    m.add_function(wrap_pyfunction!(python_distance::py_l2_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_cosine_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_inner_product_sparse,
+        m
+    )?)?;
+    // Batched sparse (dense-conversion GPU path)
+    m.add_function(wrap_pyfunction!(python_distance::py_sparse_l2_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_sparse_cosine_batch,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_sparse_inner_product_batch,
+        m
+    )?)?;
+
+    // Binary Vector API
+    m.add_function(wrap_pyfunction!(python_distance::py_hamming_packed, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_jaccard_packed, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_hamming_auto, m)?)?;
+    m.add_function(wrap_pyfunction!(python_distance::py_jaccard_auto, m)?)?;
+    // Batched packed-binary (GPU-accelerated where a packed kernel exists)
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_hamming_distance_batch,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_distance::py_jaccard_distance_batch,
+        m
+    )?)?;
+
+    // Add version constant from build.rs
+    m.add("__version__", VERSION)?;
+
+    Ok(())
+}
+
+/// A BenoStream Segment is a self-contained unit of data and aligned indexes.
+#[derive(Clone)]
+pub struct SegmentConfig {
+    pub base_path: String,
+    pub segment_id: String,
+    /// Explicit path to the data file (optional, used for external tables)
+    pub parquet_path: Option<String>,
+    /// Optional separate store for data files (e.g. for external Iceberg tables)
+    pub data_store: Option<Arc<dyn object_store::ObjectStore>>,
+    pub delete_files: Vec<crate::core::manifest::DeleteFile>,
+    pub index_files: Vec<crate::core::manifest::IndexFile>,
+    pub file_size: Option<u64>,
+    pub record_count: Option<u64>,
+    /// Build indexes for ALL columns (overrides columns_to_index if true)
+    pub index_all: bool,
+    /// Columns to build indexes for. If None or empty, no indexes are built.
+    pub columns_to_index: Option<Vec<String>>,
+    /// Partition values for this segment
+    pub partition_values: std::collections::HashMap<String, serde_json::Value>,
+    /// Per-column device override (e.g. "cpu", "gpu", "mps")
+    pub column_devices: std::collections::HashMap<String, String>,
+    pub default_device: Option<String>,
+    pub column_algorithms:
+        std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
+}
+
+impl SegmentConfig {
+    pub fn new(base_path: &str, segment_id: &str) -> Self {
+        Self {
+            base_path: base_path.to_string(),
+            segment_id: segment_id.to_string(),
+            parquet_path: None,
+            data_store: None,
+            delete_files: Vec::new(),
+            index_files: Vec::new(),
+            file_size: None,
+            record_count: None,
+            index_all: false,
+            columns_to_index: None,
+            partition_values: std::collections::HashMap::new(),
+            column_devices: std::collections::HashMap::new(),
+            default_device: None,
+            column_algorithms: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_parquet_path(mut self, path: String) -> Self {
+        self.parquet_path = Some(path);
+        self
+    }
+
+    pub fn with_data_store(mut self, store: Arc<dyn object_store::ObjectStore>) -> Self {
+        self.data_store = Some(store);
+        self
+    }
+
+    pub fn with_delete_files(
+        mut self,
+        delete_files: Vec<crate::core::manifest::DeleteFile>,
+    ) -> Self {
+        self.delete_files = delete_files;
+        self
+    }
+
+    pub fn with_index_files(mut self, index_files: Vec<crate::core::manifest::IndexFile>) -> Self {
+        self.index_files = index_files;
+        self
+    }
+
+    pub fn with_partition_values(
+        mut self,
+        partition_values: std::collections::HashMap<String, serde_json::Value>,
+    ) -> Self {
+        self.partition_values = partition_values;
+        self
+    }
+
+    pub fn with_file_size(mut self, size: u64) -> Self {
+        self.file_size = Some(size);
+        self
+    }
+
+    pub fn with_record_count(mut self, count: u64) -> Self {
+        self.record_count = Some(count);
+        self
+    }
+
+    pub fn with_index_all(mut self, index_all: bool) -> Self {
+        self.index_all = index_all;
+        self
+    }
+
+    pub fn with_default_device(mut self, device: Option<String>) -> Self {
+        self.default_device = device;
+        self
+    }
+
+    pub fn with_column_devices(
+        mut self,
+        column_devices: std::collections::HashMap<String, String>,
+    ) -> Self {
+        self.column_devices = column_devices;
+        self
+    }
+
+    pub fn with_columns_to_index(mut self, cols: Vec<String>) -> Self {
+        // If cols is empty, set to None instead of Some([]) to avoid triggering indexing path
+        if cols.is_empty() {
+            self.columns_to_index = None;
+        } else {
+            self.columns_to_index = Some(cols);
+        }
+        self
+    }
+
+    pub fn with_column_algorithms(
+        mut self,
+        algos: std::collections::HashMap<String, Vec<crate::core::manifest::IndexAlgorithm>>,
+    ) -> Self {
+        self.column_algorithms = algos;
+        self
+    }
+}

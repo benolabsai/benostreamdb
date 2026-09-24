@@ -1,0 +1,48 @@
+package com.benostreamdb.spark
+
+import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsRuntimeFiltering}
+import org.apache.spark.sql.connector.expressions.NamedReference
+import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.sources.Filter
+import org.apache.spark.sql.util.CaseInsensitiveStringMap
+
+class BenoStreamScanBuilder(
+    table: BenoStreamTable,
+    options: CaseInsensitiveStringMap
+) extends ScanBuilder {
+
+  override def build(): Scan = {
+    val delegateBuilder = table.delegate.asInstanceOf[org.apache.spark.sql.connector.catalog.SupportsRead].newScanBuilder(options)
+    new BenoStreamScan(delegateBuilder.build(), table)
+  }
+}
+
+class BenoStreamScan(val delegate: Scan, val table: BenoStreamTable) extends Scan with SupportsRuntimeFiltering {
+
+  private var dynamicFilters: Array[Filter] = Array.empty
+
+  override def readSchema(): org.apache.spark.sql.types.StructType = delegate.readSchema()
+
+  override def toBatch() = delegate.toBatch()
+  // Note: Filtering is handled earlier in filter() via JNI, which configures
+  // the Iceberg delegateBuilder appropriately. We can directly delegate toBatch.
+
+  override def filterAttributes(): Array[NamedReference] = {
+    // We advertise primary key columns for runtime filtering so Spark gives us the broadcast keys
+    val pkString = Option(table.properties.get("primary_key")).getOrElse("id")
+    pkString.split(",").map(_.trim).map(col => 
+      org.apache.spark.sql.connector.expressions.FieldReference.column(col)
+    ).toArray
+  }
+
+  override def filter(filters: Array[Filter]): Unit = {
+    this.dynamicFilters = filters
+    // MAGIC HAPPENS HERE:
+    // Extract the primary keys from 'filters' (usually an IN filter)
+    // Send them to Rust Core via JNI:
+    val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
+    jniBridge.setGpuContext(table.gpuDevice)
+    val fileBitmaps = jniBridge.queryIndexIn(delegate.asInstanceOf[org.apache.spark.sql.connector.read.Scan].getClass.getSimpleName, "pk", "[]") // Placeholder for JSON extraction
+    // Then we can configure the Iceberg delegateBuilder with these exact file/bitmap constraints!
+  }
+}

@@ -1,0 +1,2388 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+use crate::core::compaction::CompactionOptions;
+use crate::core::table::{Table, VectorSearchParams};
+use arrow::record_batch::RecordBatch;
+use pyo3::ffi::Py_uintptr_t;
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use super::helpers::*;
+use super::schema::{PyPartitionField, PySchema};
+use super::stats::{PyDataFileInfo, PyIndexCoverage, PyMergeMode, PySplit, PyTableStatistics};
+use crate::core::manifest::IndexAlgorithm;
+use crate::python_gpu_context::PyDevice;
+
+/// High-level Table API - Pandas-compatible interface
+/// This is a thin Python wrapper around the core Rust Table struct
+#[pyclass(name = "Table")]
+pub struct PyTable {
+    pub table: Table,
+    device: Option<Py<PyDevice>>,
+}
+
+impl PyTable {
+    pub fn new_internal(
+        uri: &str,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut builder = Table::builder(uri.to_string()).with_runtime(TOKIO_RUNTIME.clone());
+        if let Some(secs) = streaming_flush_interval_secs {
+            builder = builder.with_streaming_flush_interval(std::time::Duration::from_secs(secs));
+        }
+        let mut table = TOKIO_RUNTIME.block_on(builder.build_async())?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable { table, device })
+    }
+
+    pub fn load_from_catalog(
+        uri: &str,
+        catalog: Arc<dyn crate::core::catalog::Catalog>,
+        namespace: &str,
+        table_name: &str,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut builder = Table::builder(uri.to_string())
+            .with_runtime(TOKIO_RUNTIME.clone())
+            .with_catalog(catalog, namespace, table_name);
+        if let Some(secs) = streaming_flush_interval_secs {
+            builder = builder.with_streaming_flush_interval(std::time::Duration::from_secs(secs));
+        }
+        let mut table = TOKIO_RUNTIME.block_on(builder.build_async())?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable { table, device })
+    }
+
+    pub fn create_internal(
+        uri: &str,
+        schema: arrow::datatypes::SchemaRef,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut table = TOKIO_RUNTIME.block_on(Table::create_async(uri.to_string(), schema))?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        if let Some(secs) = streaming_flush_interval_secs {
+            table.start_streaming_flush_task(std::time::Duration::from_secs(secs));
+        }
+        Ok(PyTable { table, device })
+    }
+}
+
+#[pymethods]
+#[allow(deprecated)]
+impl PyTable {
+    #[new]
+    #[pyo3(signature = (uri, device=None, streaming_flush_interval_secs=None))]
+    fn new(
+        uri: &str,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> PyResult<Self> {
+        Self::new_internal(uri, device, streaming_flush_interval_secs)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Create a new table with an explicit schema
+    #[staticmethod]
+    #[pyo3(signature = (uri, schema, device=None, streaming_flush_interval_secs=None))]
+    fn create(
+        uri: &str,
+        schema: Bound<'_, PyAny>,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> PyResult<Self> {
+        let rust_schema = extract_schema(schema)?;
+        Self::create_internal(uri, rust_schema, device, streaming_flush_interval_secs)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (uri, schema, partition_spec, device=None, streaming_flush_interval_secs=None))]
+    fn create_partitioned(
+        uri: &str,
+        schema: Bound<'_, PyAny>,
+        partition_spec: Bound<'_, PyAny>,
+        device: Option<Py<PyDevice>>,
+        streaming_flush_interval_secs: Option<u64>,
+    ) -> PyResult<Self> {
+        let rust_schema = extract_schema(schema)?;
+        let rust_spec = extract_partition_spec(partition_spec)?;
+
+        let mut table = TOKIO_RUNTIME
+            .block_on(Table::create_partitioned_async(
+                uri.to_string(),
+                rust_schema,
+                rust_spec,
+            ))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        // CRITICAL: Attach the runtime to the table so sync methods don't panic
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        tracing::debug!("Rust Table created with global runtime");
+
+        if let Some(secs) = streaming_flush_interval_secs {
+            table.start_streaming_flush_task(std::time::Duration::from_secs(secs));
+        }
+
+        Ok(PyTable { table, device })
+    }
+
+    /// Register an existing Iceberg table
+    #[staticmethod]
+    #[pyo3(signature = (uri, iceberg_metadata_uri))]
+    fn register_external(uri: &str, iceberg_metadata_uri: &str) -> PyResult<Self> {
+        let mut table = TOKIO_RUNTIME
+            .block_on(Table::register_external(
+                uri.to_string(),
+                iceberg_metadata_uri,
+            ))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        // CRITICAL: Attach the runtime to the table
+        table.rt = Some(TOKIO_RUNTIME.clone());
+
+        Ok(PyTable {
+            table,
+            device: None,
+        })
+    }
+
+    /// Override parallel readers for vector search (disables auto-detection)
+    ///
+    /// By default, parallelism is AUTO-DETECTED based on:
+    /// - Available system memory
+    /// - Segment size (num_vectors × embedding_dim × 4 bytes)
+    ///
+    /// Only call this if auto-detection doesn't work for your use case.
+    ///
+    /// Example:
+    ///     table.set_max_parallel_readers(4)  # Force 4 parallel readers
+    fn set_max_parallel_readers(&mut self, max_readers: usize) {
+        self.table.set_max_parallel_readers(max_readers);
+    }
+
+    /// Reset to auto-detect parallel readers based on system memory
+    ///
+    /// Example:
+    ///     table.auto_detect_parallel_readers()  # Let the system decide
+    fn auto_detect_parallel_readers(&mut self) {
+        self.table.auto_detect_parallel_readers();
+    }
+
+    /// Start a background observer to watch an external Iceberg table for changes
+    fn spawn_iceberg_observer(
+        &self,
+        py: Python<'_>,
+        iceberg_metadata_uri: &str,
+        interval_seconds: u64,
+    ) -> PyResult<()> {
+        py.allow_threads(|| {
+            TOKIO_RUNTIME.block_on(self.table.spawn_iceberg_observer(
+                iceberg_metadata_uri.to_string(),
+                std::time::Duration::from_secs(interval_seconds),
+            ))
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Get current max parallel readers setting
+    /// Returns None if auto-detecting, or the manual override value
+    fn get_max_parallel_readers(&self) -> Option<usize> {
+        self.table.get_max_parallel_readers()
+    }
+
+    fn set_index_all(&mut self, enabled: bool) {
+        self.table.set_index_all(enabled);
+    }
+
+    fn get_index_all(&self) -> bool {
+        self.table.get_index_all()
+    }
+
+    fn set_primary_key(&mut self, columns: Vec<String>) {
+        self.table.set_primary_key(columns);
+    }
+
+    fn get_primary_key(&self) -> Vec<String> {
+        self.table.get_primary_key()
+    }
+
+    /// Access graph algorithms and graph manipulation APIs
+    #[getter]
+    fn graph(&self) -> super::graph::PyGraphAPI {
+        super::graph::PyGraphAPI {
+            table: self.table.clone(),
+        }
+    }
+
+    /// Return the table schema as a PyArrow Schema.
+    #[getter]
+    fn schema(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let schema = self.table.arrow_schema();
+        super::helpers::arrow_schema_to_pyarrow(py, schema)
+    }
+
+    /// Return the list of column names in the table.
+    #[getter]
+    fn columns(&self) -> Vec<String> {
+        self.table
+            .arrow_schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    /// Add a column to the primary key.
+    fn add_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_primary_key(column)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Remove a column from the primary key.
+    fn drop_primary_key(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.drop_primary_key(column)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Update indexing specifications for multiple columns at once.
+    fn set_index_columns(&mut self, py: Python<'_>, config: Bound<'_, PyDict>) -> PyResult<()> {
+        let mut rust_config = HashMap::new();
+        for (col, val) in config.into_iter() {
+            let col_name: String = col.extract()?;
+            let mut algs = Vec::new();
+
+            if let Ok(list) = val.downcast::<pyo3::types::PyList>() {
+                for item in list {
+                    algs.push(parse_index_algorithm(item)?);
+                }
+            } else {
+                algs.push(parse_index_algorithm(val)?);
+            }
+            rust_config.insert(col_name, algs);
+        }
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.set_index_columns(rust_config)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Add an indexing strategy to a column.
+    #[pyo3(signature = (column, algorithm = None))]
+    fn add_index(
+        &mut self,
+        py: Python<'_>,
+        column: String,
+        algorithm: Option<Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let rust_alg = if let Some(algo_obj) = algorithm {
+            parse_index_algorithm(algo_obj)?
+        } else {
+            // Smart Default based on Column Type (if available)
+            let schema = self.table.arrow_schema();
+            if let Ok(field) = schema.field_with_name(&column) {
+                match field.data_type() {
+                    arrow::datatypes::DataType::List(_)
+                    | arrow::datatypes::DataType::FixedSizeList(_, _) => IndexAlgorithm::Hnsw {
+                        metric: "l2".into(),
+                        complexity: 16,
+                        quality: 200,
+                        build_device: None,
+                        search_device: None,
+                    },
+                    _ => IndexAlgorithm::Bitmap,
+                }
+            } else {
+                // Fallback for empty schema or unknown column: default to Bitmap
+                // The actual type check will happen during index build.
+                IndexAlgorithm::Bitmap
+            }
+        };
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_index(column, rust_alg)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Explicitly quantize a vector column using TurboQuant (TQ8/TQ4) or Product Quantization (PQ).
+    /// TurboQuant is built directly into the free community core engine, offering 4x (TQ8)
+    /// to 8x (TQ4) memory compression with outlier-robust Fast Walsh-Hadamard Transforms.
+    #[pyo3(signature = (column, type_ = "TQ8", metric = "l2", complexity = 16, quality = 200))]
+    fn quantize(
+        &mut self,
+        py: Python<'_>,
+        column: String,
+        type_: &str,
+        metric: &str,
+        complexity: usize,
+        quality: usize,
+    ) -> PyResult<()> {
+        let algo = match type_.to_lowercase().as_str() {
+            "tq8" | "hnsw_tq8" => IndexAlgorithm::HnswTq8 {
+                metric: metric.to_string(),
+                complexity,
+                quality,
+            },
+            "tq4" | "hnsw_tq4" => IndexAlgorithm::HnswTq4 {
+                metric: metric.to_string(),
+                complexity,
+                quality,
+            },
+            "pq" | "hnsw_pq" => IndexAlgorithm::HnswPq {
+                metric: metric.to_string(),
+                complexity,
+                quality,
+                compression: 8,
+            },
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Unsupported quantization type: {}. Use TQ8, TQ4, or PQ.",
+                    type_
+                )))
+            }
+        };
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_index(column, algo)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Remove all indexing strategies from a column.
+    fn drop_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.drop_index(column)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Set default device for all future indexes in this table
+    #[pyo3(signature = (device=None))]
+    fn set_default_device(&mut self, device: Option<String>) {
+        self.table.set_default_device(device);
+    }
+
+    /// Get current default device
+    fn get_default_device(&self) -> Option<String> {
+        self.table.get_default_device()
+    }
+
+    /// Register a Python-based embedding function into the Rust core.
+    /// This allows the Rust core to trigger vectorization even without Python GIL
+    /// by re-acquiring it only during the callback.
+    fn register_python_embedding(
+        &self,
+        py: Python<'_>,
+        name: String,
+        dim: usize,
+        callback: Py<PyAny>,
+    ) -> PyResult<()> {
+        let callback_clone = callback.clone_ref(py);
+        let wrapper = move |texts: Vec<String>| -> anyhow::Result<Vec<Vec<f32>>> {
+            Python::with_gil(|py| {
+                let args = (texts,);
+                let res = callback_clone
+                    .call1(py, args)
+                    .map_err(|e| anyhow::anyhow!("Python callback error: {}", e))?;
+
+                // Convert back to Vec<Vec<f32>>
+                let list: Vec<Vec<f32>> = res.extract(py).map_err(|e| {
+                    anyhow::anyhow!("Failed to extract embeddings from Python: {}", e)
+                })?;
+                Ok(list)
+            })
+        };
+
+        crate::core::embeddings::register_embedded_func(
+            name.clone(),
+            Arc::new(crate::core::embeddings::PythonCallbackFunction::new(
+                name, dim, wrapper,
+            )),
+        );
+        Ok(())
+    }
+
+    /// Add columns to indexing configuration
+    #[pyo3(signature = (columns, tokenizer=None))]
+    fn add_index_columns(
+        &mut self,
+        columns: Vec<String>,
+        tokenizer: Option<String>,
+    ) -> PyResult<()> {
+        self.table
+            .add_index_columns(columns, tokenizer)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Add a Product Quantization (PQ) index for a vector column
+    #[pyo3(signature = (column, compression=8))]
+    fn add_pq_index(&mut self, column: String, compression: usize) -> PyResult<()> {
+        let algo = crate::core::manifest::IndexAlgorithm::HnswPq {
+            metric: "l2".to_string(),
+            compression,
+            complexity: 16,
+            quality: 128,
+        };
+        self.table
+            .runtime()
+            .block_on(self.table.add_index(column, algo))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Remove columns from indexing configuration
+    fn remove_index_columns(&mut self, columns: Vec<String>) {
+        self.table.remove_index_columns(columns);
+    }
+
+    /// Remove all columns from indexing configuration
+    fn remove_all_index_columns(&mut self) {
+        self.table.remove_all_index_columns();
+    }
+
+    /// Index all columns (triggers backfill)
+    fn index_all_columns(&mut self) -> PyResult<()> {
+        self.table
+            .index_all_columns()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Read table to PyArrow Table with optional filtering and column projection
+    ///
+    /// Args:
+    ///     filter: Optional SQL-like filter string (e.g., "age > 25 AND city = 'NYC'")
+    ///     vector_filter: Optional dict for vector search:
+    ///         - column: str (required) - vector column name
+    ///         - query: list (required) - query vector
+    ///         - k: int (required) - number of results
+    ///         - metric: str (optional) - 'l2'|'cosine'|'innerproduct'|'l1'|'hamming'|'jaccard' (default: l2)
+    ///         - ef_search: int (optional) - HNSW ef parameter for search quality tuning
+    ///         - probes: int (optional) - IVF probes parameter for search speed tuning
+    ///         - use_mmap: bool (optional) - Whether to use zero-copy memory mapping for graphs (default: True)
+    ///     columns: Optional list of column names to read (skips others like embeddings)
+    ///
+    /// Returns:
+    ///     PyArrow Table (via Arrow C Data Interface)
+    ///
+    /// Example:
+    ///     # Vector search with cosine metric
+    ///     df = table.to_pandas(vector_filter={"column": "embedding", "query": [1.0, 2.0], "k": 3, "metric": "cosine"})
+
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None, **kwargs))]
+    fn to_pandas(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+        kwargs: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        // Use streaming API under the hood to stabilize memory usage
+        let reader = self.to_arrow_stream(py, filter, vector_filter, columns, device)?;
+
+        // Convert to Table first, then to Pandas
+        let arrow_table = reader.call_method0(py, "read_all")?;
+
+        // Convert to Pandas via PyArrow, passing through kwargs
+        arrow_table.call_method(py, "to_pandas", (), kwargs.as_ref())
+    }
+
+    /// Read table to PyArrow Table
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
+    fn to_arrow(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        // Use streaming API under the hood to stabilize memory usage
+        let reader = self.to_arrow_stream(py, filter, vector_filter, columns, device)?;
+        reader.call_method0(py, "read_all")
+    }
+
+    /// Read table to PyArrow RecordBatchReader (Streaming)
+    ///
+    /// This is the recommended way to read large datasets that don't fit in memory.
+    ///
+    /// Args:
+    ///     filter: Optional SQL-like filter string
+    ///     vector_filter: Optional dict for vector search
+    ///     columns: List of columns to read
+    ///     device: Optional ComputeContext for GPU acceleration
+    ///
+    /// Returns:
+    ///     pyarrow.RecordBatchReader
+    #[pyo3(signature = (filter=None, vector_filter=None, columns=None, device=None))]
+    fn to_arrow_stream(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        let columns_clone = columns.clone();
+
+        let vs_params_combined = if let Some(ref vf) = vector_filter {
+            let column: String = vf
+                .get_item("column")?
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("vector_filter requires 'column' key")
+                })?
+                .extract()?;
+            let k: usize = vf
+                .get_item("k")?
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("vector_filter requires 'k' key")
+                })?
+                .extract()?;
+            let query_obj = vf.get_item("query")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key")
+            })?;
+            let vec_val = if let Ok(q_str) = query_obj.extract::<String>() {
+                crate::core::index::VectorValue::Keyword(q_str)
+            } else if let Ok(query) = query_obj.extract::<Vec<f32>>() {
+                crate::core::index::VectorValue::Float32(query)
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "vector_filter 'query' must be a List[float] for vector search or a str for BM25 text search",
+                ));
+            };
+            let mut params = VectorSearchParams::new(&column, vec_val, k);
+
+            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
+                if let Ok(metric_str) = metric_obj.extract::<String>() {
+                    params = params.with_metric(parse_metric(&metric_str)?);
+                }
+            }
+
+            let rrf_k = if let Ok(Some(rrf_obj)) = vf.get_item("rrf_k") {
+                rrf_obj.extract::<usize>().ok()
+            } else {
+                None
+            };
+
+            Some((params, rrf_k))
+        } else {
+            None
+        };
+
+        let filter_str = filter.clone();
+        let table_schema = self.table.arrow_schema();
+        let mut projected_schema = if let Some(cols) = &columns {
+            let mut fields = Vec::new();
+            for c in cols {
+                if let Some((_, field)) = table_schema.column_with_name(c) {
+                    fields.push(std::sync::Arc::new(field.clone()));
+                }
+            }
+            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
+        } else {
+            table_schema
+        };
+
+        if vs_params_combined.is_some() && projected_schema.column_with_name("distance").is_none() {
+            let mut fields = projected_schema.fields().to_vec();
+            fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+                "distance",
+                arrow::datatypes::DataType::Float32,
+                true,
+            )));
+            projected_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(fields));
+        }
+
+        let ctx = device
+            .as_ref()
+            .or(self.device.as_ref())
+            .map(|c| c.clone_ref(py));
+        let rust_context = if let Some(py_ctx) = ctx {
+            let ctx_borrow = py_ctx.bind(py).borrow();
+            Some(ctx_borrow.context.clone())
+        } else {
+            None
+        };
+
+        let stream_res = py
+            .allow_threads(move || {
+                if let Some(c) = rust_context {
+                    crate::core::index::gpu::set_thread_gpu_context(Some(c));
+                }
+
+                let mut config = self.table.query_config().clone();
+                let vs_params = if let Some((p, k)) = vs_params_combined {
+                    if let Some(val) = k {
+                        config = config.with_rrf_k(val as f32);
+                    }
+                    Some(p)
+                } else {
+                    None
+                };
+
+                TOKIO_RUNTIME.block_on(
+                    self.table.read_with_config_stream_async(
+                        filter_str.as_deref(),
+                        vs_params.map(|p| vec![p]),
+                        columns_clone
+                            .as_ref()
+                            .map(|c| c.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+                            .as_deref(),
+                        config,
+                    ),
+                )
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        arrow_stream_to_pyarrow(py, stream_res, projected_schema)
+    }
+
+    /// Write data to table.
+    /// Supports:
+    /// - List of PyArrow RecordBatches
+    /// - PyArrow Table
+    /// - Pandas DataFrame
+    #[pyo3(signature = (data, device=None))]
+    fn write(
+        &self,
+        py: Python<'_>,
+        data: Bound<'_, PyAny>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<()> {
+        let ctx = device
+            .as_ref()
+            .or(self.device.as_ref())
+            .map(|c| c.clone_ref(py));
+        let rust_context = if let Some(py_ctx) = ctx {
+            let ctx_borrow = py_ctx.bind(py).borrow();
+            Some(ctx_borrow.context.clone())
+        } else {
+            None
+        };
+
+        // 1. Check if it's a list (List[RecordBatch])
+        if let Ok(list) = data.downcast::<pyo3::types::PyList>() {
+            let mut batches = Vec::new();
+            for item in list {
+                // Validate type before FFI export - prevents silent failures
+                validate_record_batch(&item)?;
+
+                // Export PyArrow RecordBatch to C Interface
+                let mut array = arrow::ffi::FFI_ArrowArray::empty();
+                let mut schema = arrow::ffi::FFI_ArrowSchema::empty();
+
+                let array_ptr = &mut array as *mut _ as Py_uintptr_t;
+                let schema_ptr = &mut schema as *mut _ as Py_uintptr_t;
+
+                item.call_method1("_export_to_c", (array_ptr, schema_ptr))?;
+
+                // Import as Rust RecordBatch
+                // Safety: We just exported it from PyArrow, so it should be valid.
+                let batch = unsafe { import_record_batch_from_c(array, &schema) }.map_err(
+                    |e: arrow::error::ArrowError| {
+                        pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),))
+                    },
+                )?;
+
+                batches.push(batch);
+            }
+
+            // Call core Table API, releasing the GIL
+            py.allow_threads(move || {
+                if let Some(c) = rust_context {
+                    crate::core::index::gpu::set_thread_gpu_context(Some(c));
+                }
+                self.table.write(batches)
+            })
+            .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+        } else {
+            // Fallback to Table/DataFrame handling
+            let obj: Py<PyAny> = data.unbind();
+
+            let context_clone = device.as_ref().map(|c| c.clone_ref(py));
+            // Let's try arrow first as it's lighter
+            if self
+                .write_arrow(
+                    py,
+                    obj.clone_ref(py),
+                    context_clone.as_ref().map(|c| c.clone_ref(py)),
+                )
+                .is_ok()
+            {
+                Ok(())
+            } else {
+                // Try pandas
+                self.write_pandas(py, obj, context_clone)
+            }
+        }
+    }
+
+    /// Flush write buffer to disk (triggers vector shuffling and index building)
+    fn flush(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.flush_async()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    #[getter]
+    fn index_columns(&self) -> Vec<String> {
+        self.table.get_index_columns()
+    }
+
+    /// Read table to Pandas DataFrame (Alias for to_pandas)
+    #[pyo3(signature = (filter=None, columns=None, device=None))]
+    fn read(
+        &self,
+        py: Python<'_>,
+        filter: Option<String>,
+        columns: Option<Vec<String>>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.to_pandas(py, filter, None, columns, device, None)
+    }
+
+    /// Vector search on the table
+    #[pyo3(signature = (column, query, k=10, filter=None, device=None))]
+    fn search(
+        &self,
+        py: Python<'_>,
+        column: String,
+        query: Vec<f32>,
+        k: usize,
+        filter: Option<String>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        let vf_dict = PyDict::new(py);
+        vf_dict.set_item("column", column)?;
+        vf_dict.set_item("query", query)?;
+        vf_dict.set_item("k", k)?;
+
+        self.to_pandas(py, filter, Some(vf_dict), None, device, None)
+    }
+
+    /// Vector search returning only `(segment_id, row_id, score)`.
+    ///
+    /// This reads nothing but the HNSW/BM25 index — no Parquet I/O at all. Use
+    /// it for seed discovery, RRF fusion, or candidate reranking where payload
+    /// columns are not needed; fetch the rows afterwards only for the winners.
+    ///
+    /// Args:
+    ///     column: vector column to search
+    ///     query: query vector
+    ///     k: number of neighbours
+    ///     metric: optional distance metric name ("l2", "cosine", "inner_product",
+    ///             "l1", "hamming", "jaccard"); defaults to L2
+    ///
+    /// Returns:
+    ///     PyArrow Table with columns `segment_id`, `row_id`, `score`
+    #[pyo3(signature = (column, query, k, metric=None))]
+    fn vector_search_scored(
+        &self,
+        py: Python<'_>,
+        column: String,
+        query: Vec<f32>,
+        k: usize,
+        metric: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        use crate::core::index::{VectorMetric, VectorValue};
+        use crate::core::planner::VectorSearchParams;
+
+        let metric = match metric {
+            Some(m) => crate::python::helpers::parse_metric(&m)?,
+            None => VectorMetric::L2,
+        };
+
+        let params =
+            VectorSearchParams::new(&column, VectorValue::Float32(query), k).with_metric(metric);
+
+        let results = py
+            .allow_threads(|| {
+                TOKIO_RUNTIME.block_on(self.table.execute_vector_search_as_scored(params))
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let segments: Vec<&str> = results.iter().map(|r| r.segment_id.as_str()).collect();
+        let row_ids: Vec<u32> = results.iter().map(|r| r.row_id).collect();
+        let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("segment_id", arrow::datatypes::DataType::Utf8, false),
+            arrow::datatypes::Field::new("row_id", arrow::datatypes::DataType::UInt32, false),
+            arrow::datatypes::Field::new("score", arrow::datatypes::DataType::Float32, false),
+        ]));
+
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(arrow::array::StringArray::from(segments))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::UInt32Array::from(row_ids))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::Float32Array::from(scores))
+                    as std::sync::Arc<dyn arrow::array::Array>,
+            ],
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        arrow_batches_to_pyarrow(py, vec![batch], schema)
+    }
+
+    /// Parallel vector search - runs multiple queries in parallel in Rust (bypasses Python GIL)
+    ///
+    /// This method submits all queries to a dedicated Rust thread pool, allowing
+    /// true parallelism that bypasses Python's GIL limitations.
+    ///
+    /// Args:
+    ///     queries: List of tuples (column, query_vector, k, filter_optional)
+    ///              Each tuple is (str, List[float], int, Optional[str])
+    ///
+    /// Returns:
+    ///     List of PyArrow Tables (one per query)
+    ///
+    /// Example:
+    ///     queries = [
+    ///         ("embedding", [0.1, 0.2, ...], 10, None),
+    ///         ("embedding", [0.3, 0.4, ...], 10, "user_id < 100"),
+    ///     ]
+    ///     results = table.search_parallel(queries)
+    ///     # All queries run in parallel in Rust - no GIL blocking!
+    #[pyo3(signature = (queries))]
+    fn search_parallel(
+        &self,
+        py: Python<'_>,
+        queries: Vec<(String, Vec<f32>, usize, Option<String>)>,
+    ) -> PyResult<Py<PyAny>> {
+        use futures::future::join_all;
+
+        let table = Arc::new(self.table.clone());
+
+        // Release GIL and run all queries in parallel in Rust
+        let results: Result<Vec<Vec<RecordBatch>>, anyhow::Error> = py.allow_threads(move || {
+            TOKIO_RUNTIME.block_on(async {
+                // Spawn all queries as concurrent tasks
+                let tasks: Vec<_> = queries
+                    .into_iter()
+                    .map(
+                        |(column, query, k, filter): (String, Vec<f32>, usize, Option<String>)| {
+                            let table_clone = table.clone();
+                            tokio::spawn(async move {
+                                let vf_params = VectorSearchParams::new(
+                                    &column,
+                                    crate::core::index::VectorValue::Float32(query),
+                                    k,
+                                );
+                                table_clone
+                                    .read_async(filter.as_deref(), Some(vec![vf_params]), None)
+                                    .await
+                            })
+                        },
+                    )
+                    .collect();
+
+                // Wait for all queries to complete in parallel
+                let join_results = join_all(tasks).await;
+
+                // Collect results, handling errors
+                let mut all_results = Vec::new();
+                for result in join_results {
+                    match result {
+                        Ok(Ok(batches)) => all_results.push(batches),
+                        Ok(Err(e)) => return Err(anyhow::anyhow!("Query failed: {}", e)),
+                        Err(e) => return Err(anyhow::anyhow!("Task join failed: {}", e)),
+                    }
+                }
+                Ok(all_results)
+            })
+        });
+
+        // Convert results to PyArrow tables
+        match results {
+            Ok(batch_vecs) => {
+                let schema = self.table.arrow_schema();
+                let mut py_tables = Vec::new();
+                for batches in batch_vecs {
+                    // Convert RecordBatches to Py<PyAny> (PyArrow Table)
+                    let py_table = arrow_batches_to_pyarrow(py, batches, schema.clone())?;
+                    py_tables.push(py_table);
+                }
+                // Manually convert to PyList to avoid PyO3 ambiguity
+                let list = pyo3::types::PyList::new(py, py_tables)?;
+                Ok(list.into())
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                Err(pyo3::exceptions::PyRuntimeError::new_err(msg))
+            }
+        }
+    }
+
+    /// Wait for all background tasks (like index building) to complete
+    fn wait_for_background_tasks(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.wait_for_background_tasks_async()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Write Pandas DataFrame to table
+    #[pyo3(signature = (df, device=None))]
+    fn write_pandas(
+        &self,
+        py: Python<'_>,
+        df: Py<PyAny>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<()> {
+        // Provide current table schema to PyArrow for correct type inference (especially for vectors)
+        let pyarrow = py.import("pyarrow")?;
+        let schema = self.table.arrow_schema();
+        let table_class = pyarrow.getattr("Table")?;
+        let arrow_table = if schema.fields().is_empty() {
+            table_class
+                .call_method1("from_pandas", (df.bind(py),))?
+                .unbind()
+        } else {
+            let py_schema = arrow_schema_to_pyarrow(py, schema)?;
+            table_class
+                .call_method1("from_pandas", (df.bind(py), py_schema))?
+                .unbind()
+        };
+        self.write_arrow(py, arrow_table, device)
+    }
+
+    /// Write PyArrow Table to table
+    #[pyo3(signature = (table, device=None))]
+    fn write_arrow(
+        &self,
+        py: Python<'_>,
+        table: Py<PyAny>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<()> {
+        // Convert PyArrow Table to RecordBatches
+        let batches = pyarrow_to_arrow_batches(py, table)?;
+
+        let ctx = device
+            .as_ref()
+            .or(self.device.as_ref())
+            .map(|c| c.clone_ref(py));
+        let rust_context = if let Some(py_ctx) = ctx {
+            let ctx_borrow = py_ctx.bind(py).borrow();
+            Some(ctx_borrow.context.clone())
+        } else {
+            None
+        };
+
+        // Call core Table API, releasing the GIL
+        py.allow_threads(move || {
+            if let Some(c) = rust_context {
+                crate::core::index::gpu::set_thread_gpu_context(Some(c));
+            }
+            self.table.write(batches)
+        })
+        .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Commit buffered writes to disk (automatically flushes first, then finalizes metadata)
+    fn commit(&self, py: Python<'_>) -> PyResult<()> {
+        // Flush write buffer to disk and commit metadata
+        // Note: Vector indexing continues in background tasks
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.flush_async()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Wait for any background indexing or maintenance tasks to complete.
+    fn wait_for_indexes(&self, py: Python<'_>) -> PyResult<()> {
+        self.wait_for_background_tasks(py)
+    }
+
+    /// Async commit (flushes then finalizes metadata asynchronously)
+    fn commit_async(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(async { self.table.flush_async().await }))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Compact the WAL (consolidate log entries into single batch)
+    fn checkpoint(&self, py: Python<'_>) -> PyResult<()> {
+        // Release GIL during checkpoint to allow other Python threads to run
+        py.allow_threads(|| self.table.checkpoint())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Remove orphaned files
+    fn remove_orphan_files(&self, older_than_days: i64) -> PyResult<()> {
+        self.table
+            .remove_orphan_files(older_than_days as u64)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Delete rows matching the filter (Merge-on-Read)
+    fn delete(&self, filter: String) -> PyResult<()> {
+        let rt =
+            self.table.rt.as_ref().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Runtime not initialized")
+            })?;
+        rt.block_on(self.table.delete_async(&filter))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Truncate the table (metadata-only operation)
+    fn truncate(&self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| self.table.truncate())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Physically delete unreferenced data and manifest files
+    fn vacuum(&self, py: Python<'_>, retention_versions: usize) -> PyResult<usize> {
+        py.allow_threads(|| self.table.vacuum(retention_versions))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Get autocommit setting
+    #[getter]
+    fn get_autocommit(&self) -> bool {
+        self.table.get_autocommit()
+    }
+
+    /// Set autocommit setting
+    #[setter]
+    fn set_autocommit(&self, enabled: bool) {
+        self.table.set_autocommit(enabled)
+    }
+
+    /// Merge Pandas DataFrame into the table (Upsert)
+    ///
+    /// Args:
+    ///     df: Pandas DataFrame
+    ///     key_column: Column name to merge on
+    ///     mode: Optional PyMergeMode (MergeOnRead or MergeOnWrite)
+    ///     device: Optional ComputeContext for GPU acceleration
+    #[pyo3(signature = (df, key_column, mode=None, device=None))]
+    fn merge_pandas(
+        &self,
+        py: Python<'_>,
+        df: Py<PyAny>,
+        key_column: String,
+        mode: Option<PyMergeMode>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<()> {
+        // 1. Convert Pandas -> Arrow RecordBatch
+        let pyarrow = py.import("pyarrow")?;
+        let table_class = pyarrow.getattr("Table")?;
+
+        let schema = self.table.arrow_schema();
+        let arrow_table = if schema.fields().is_empty() {
+            table_class.call_method1("from_pandas", (df,))?.unbind()
+        } else {
+            let py_schema = arrow_schema_to_pyarrow(py, schema)?;
+            table_class
+                .call_method1("from_pandas", (df, py_schema))?
+                .unbind()
+        };
+
+        let batches = pyarrow_to_arrow_batches(py, arrow_table)?;
+
+        let ctx = device
+            .as_ref()
+            .or(self.device.as_ref())
+            .map(|c| c.clone_ref(py));
+        let rust_context = if let Some(py_ctx) = ctx {
+            let ctx_borrow = py_ctx.bind(py).borrow();
+            Some(ctx_borrow.context.clone())
+        } else {
+            None
+        };
+
+        // 2. Call core Table API, releasing the GIL
+        let merge_mode = mode.unwrap_or(PyMergeMode::MergeOnRead).into();
+        py.allow_threads(move || {
+            if let Some(c) = rust_context {
+                crate::core::index::gpu::set_thread_gpu_context(Some(c));
+            }
+            self.table.merge(batches, &key_column, merge_mode)
+        })
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Run Compaction to generate Manifest and optimize files
+    #[pyo3(signature = (min_file_size_bytes=None))]
+    fn rewrite_data_files(&self, min_file_size_bytes: Option<i64>) -> PyResult<()> {
+        let mut options = CompactionOptions::default();
+        if let Some(min_size) = min_file_size_bytes {
+            options.min_file_size_bytes = min_size;
+            options.target_file_size_bytes = min_size * 2;
+        }
+
+        self.table
+            .rewrite_data_files(Some(options))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Legacy alias for rewrite_data_files
+    #[pyo3(signature = (min_file_size_bytes=None))]
+    fn compact(&self, min_file_size_bytes: Option<i64>) -> PyResult<()> {
+        self.rewrite_data_files(min_file_size_bytes)
+    }
+
+    /// Replace the table's sort order
+    fn replace_sort_order(&self, columns: Vec<String>, ascending: Vec<bool>) -> PyResult<()> {
+        let col_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+        self.table
+            .replace_sort_order(&col_refs, &ascending)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Update the table's partition specification
+    fn update_spec(&self, py: Python<'_>, fields: Vec<PyPartitionField>) -> PyResult<()> {
+        let rust_fields: Vec<crate::core::manifest::PartitionField> = fields
+            .into_iter()
+            .map(|f| {
+                crate::core::manifest::PartitionField::new_multi(
+                    f.source_ids,
+                    f.field_id,
+                    f.name,
+                    f.transform,
+                )
+            })
+            .collect();
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.update_spec(&rust_fields)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Update table schema (Evolution)
+    fn update_schema(&self, py: Python<'_>, schema: PySchema) -> PyResult<()> {
+        let hdb_schema = crate::core::manifest::Schema::from_arrow(&schema.inner, 1);
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.update_schema(hdb_schema)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Add a new column to the table schema
+    #[pyo3(signature = (name, py_schema))]
+    fn add_column(
+        &self,
+        py: Python<'_>,
+        name: String,
+        py_schema: Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let arrow_schema = super::helpers::extract_schema(py_schema)?;
+        if arrow_schema.fields().is_empty() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Provided schema is empty",
+            ));
+        }
+        let data_type = arrow_schema.field(0).data_type().clone();
+
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.add_column(&name, data_type)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Drop a column from the table schema
+    fn drop_column(&self, py: Python<'_>, name: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.drop_column(&name)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Rename a column
+    fn rename_column(&self, py: Python<'_>, old_name: String, new_name: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rename_column(&old_name, &new_name)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Update column type (e.g. int -> long)
+    fn update_column_type(&self, py: Python<'_>, name: String, new_type: String) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.update_column_type(&name, &new_type)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Move column to a new index
+    fn move_column(&self, py: Python<'_>, name: String, new_index: usize) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.move_column(&name, new_index)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Rollback to a specific snapshot
+    fn rollback_to_snapshot(&self, py: Python<'_>, snapshot_id: i64) -> PyResult<()> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.rollback_to_snapshot(snapshot_id)))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
+    }
+
+    /// Execute SQL query against the table.
+    /// The table is registered as 't'.
+    ///
+    /// Example:
+    ///     table.sql("SELECT * FROM t WHERE id > 10")
+
+    #[pyo3(signature = (damping=0.85, iterations=30))]
+    fn pagerank(&self, py: Python<'_>, damping: f64, iterations: u32) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(pagerank(source, target, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (seeds, damping=0.85, iterations=30, directed=false, seed_weights=None))]
+    fn personalized_pagerank(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        damping: f64,
+        iterations: u32,
+        directed: bool,
+        seed_weights: Option<Vec<f64>>,
+    ) -> PyResult<Py<PyAny>> {
+        let seed_sql = if seeds.is_empty() {
+            "make_array()".to_string()
+        } else {
+            format!(
+                "make_array({})",
+                seeds
+                    .iter()
+                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let query = if let Some(weights) = seed_weights {
+            let weights_sql = if weights.is_empty() {
+                "make_array()".to_string()
+            } else {
+                format!(
+                    "make_array({})",
+                    weights
+                        .iter()
+                        .map(|w| format!("arrow_cast({}, 'Float64')", w))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
+            format!(
+                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
+                seed_sql, damping, iterations, directed, weights_sql
+            )
+        } else {
+            format!(
+                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
+                seed_sql, damping, iterations, directed
+            )
+        };
+        self.execute_sql(py, query)
+    }
+
+    fn shortest_path(&self, py: Python<'_>, start_node: u64, end_node: u64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(shortest_path(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
+        self.execute_sql(py, query)
+    }
+
+    fn strongly_connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let query = "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) FROM t";
+        self.execute_sql(py, query.to_string())
+    }
+
+    #[pyo3(signature = (src_column, dst_column, max_iterations=100))]
+    fn connected_components(
+        &self,
+        py: Python<'_>,
+        src_column: &str,
+        dst_column: &str,
+        max_iterations: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let src_col = src_column.to_string();
+        let dst_col = dst_column.to_string();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                // Register table as 't'
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/benostream_cc");
+                let final_table =
+                    crate::core::algorithms::connected_components::compute_connected_components(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                        &src_col,
+                        &dst_col,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id AS node, component_id AS component FROM {}",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
+    }
+
+    #[pyo3(signature = (max_iterations=100))]
+    fn topological_sort(&self, py: Python<'_>, max_iterations: usize) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/benostream_ts");
+                let final_table =
+                    crate::core::algorithms::topological_sort::compute_topological_sort(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                // Sort by level ascending to get topological order
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id as node FROM {} ORDER BY level ASC",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
+    }
+
+    #[pyo3(signature = (node, hops=1))]
+    fn graph_neighbors(&self, py: Python<'_>, node: u64, hops: u32) -> PyResult<Py<PyAny>> {
+        // Frontier-based BFS: bounded, parquet-spilling intermediate state
+        // instead of buffering the entire edge set in a UDAF accumulator.
+        let rt = self.table.runtime();
+        let visited = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+                let res = crate::core::algorithms::frontier::bfs_visited(
+                    &ctx,
+                    "t",
+                    &[node],
+                    hops,
+                    true,
+                    "source",
+                    "target",
+                    &tmp,
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = std::fs::remove_dir_all(&tmp);
+                res
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        let neighbors: Vec<u64> = visited.into_iter().filter(|&n| n != node).collect();
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("neighbor", arrow::datatypes::DataType::UInt64, false),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![std::sync::Arc::new(arrow::array::UInt64Array::from(
+                neighbors,
+            ))],
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        crate::python::helpers::arrow_batches_to_pyarrow(py, vec![batch], schema)
+    }
+
+    #[pyo3(signature = (seeds, hops=1, directed=false))]
+    fn subgraph(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        hops: u32,
+        directed: bool,
+    ) -> PyResult<Py<PyAny>> {
+        // Frontier-based BFS (bounded, spilling intermediates), then join the
+        // induced node set back against the table so payload columns (e.g.
+        // `weight`) survive in the result.
+        let rt = self.table.runtime();
+        let result = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+                let visited_res = crate::core::algorithms::frontier::bfs_visited(
+                    &ctx, "t", &seeds, hops, directed, "source", "target", &tmp,
+                )
+                .await
+                .map_err(|e| e.to_string());
+                let _ = std::fs::remove_dir_all(&tmp);
+                let visited = visited_res?;
+
+                let visited_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+                    arrow::datatypes::Field::new("id", arrow::datatypes::DataType::UInt64, false),
+                ]));
+                let visited_batch = arrow::record_batch::RecordBatch::try_new(
+                    visited_schema,
+                    vec![std::sync::Arc::new(arrow::array::UInt64Array::from(
+                        visited,
+                    ))],
+                )
+                .map_err(|e| e.to_string())?;
+                ctx.register_batch("hdb_visited", visited_batch)
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(
+                        "SELECT DISTINCT t.* FROM t \
+                         JOIN hdb_visited vs ON arrow_cast(t.source, 'UInt64') = vs.id \
+                         JOIN hdb_visited vt ON arrow_cast(t.target, 'UInt64') = vt.id",
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result.0, result.1)
+    }
+
+    #[pyo3(signature = (seeds, directed=false))]
+    fn connecting_paths(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        directed: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let seed_sql = if seeds.is_empty() {
+            "make_array()".to_string()
+        } else {
+            format!(
+                "make_array({})",
+                seeds
+                    .iter()
+                    .map(|s| format!("arrow_cast({}, 'UInt64')", s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let query = format!(
+            "SELECT unnest(connecting_paths(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, {})) FROM t",
+            seed_sql, directed
+        );
+        self.execute_sql(py, query)
+    }
+
+    fn degree_centrality(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let query = "
+            SELECT node, COUNT(*) as degree 
+            FROM (
+                SELECT source as node FROM t
+                UNION ALL
+                SELECT target as node FROM t
+            )
+            GROUP BY node
+        "
+        .to_string();
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (resolution=1.0))]
+    fn louvain_communities(&self, py: Python<'_>, resolution: f64) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT unnest(louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t", resolution);
+        self.execute_sql(py, query)
+    }
+
+    #[pyo3(signature = (max_iterations=100))]
+    fn label_propagation_communities(
+        &self,
+        py: Python<'_>,
+        max_iterations: usize,
+    ) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let result_df = rt
+            .block_on(async {
+                use datafusion::prelude::SessionContext;
+                let ctx = SessionContext::new();
+
+                // Register table as 't'
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let temp_dir = std::path::Path::new("/tmp/benostream_lp");
+                let final_table =
+                    crate::core::algorithms::label_propagation::compute_label_propagation(
+                        &ctx,
+                        "t",
+                        temp_dir,
+                        max_iterations,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                let df = ctx
+                    .sql(&format!(
+                        "SELECT id AS node, label AS community FROM {}",
+                        final_table
+                    ))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
+                let batches = df.collect().await.map_err(|e| e.to_string())?;
+                Ok::<_, String>((batches, schema))
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
+    }
+
+    fn modularity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.execute_sql(py, "SELECT modularity(source, target, source_community, target_community) AS modularity FROM t".to_string())
+    }
+
+    fn adamic_adar(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!(
+            "
+            SELECT COALESCE(SUM(1.0 / LN(CAST(deg.degree AS DOUBLE))), 0.0) as score
+            FROM (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) start_neighbors
+            JOIN (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) end_neighbors
+            ON start_neighbors.neighbor = end_neighbors.neighbor
+            JOIN (
+                SELECT node_id, COUNT(*) as degree FROM (
+                    SELECT source as node_id FROM t
+                    UNION ALL
+                    SELECT target as node_id FROM t
+                ) GROUP BY node_id
+            ) deg
+            ON start_neighbors.neighbor = deg.node_id
+            WHERE deg.degree > 1
+        ",
+            node1, node1, node2, node2
+        );
+        self.execute_sql(py, query)
+    }
+
+    fn preferential_attachment(
+        &self,
+        py: Python<'_>,
+        node1: u64,
+        node2: u64,
+    ) -> PyResult<Py<PyAny>> {
+        let query = format!("SELECT preferential_attachment(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        self.execute_sql(py, query)
+    }
+
+    fn resource_allocation(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!(
+            "
+            SELECT COALESCE(SUM(1.0 / CAST(deg.degree AS DOUBLE)), 0.0) as score
+            FROM (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) start_neighbors
+            JOIN (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION
+                SELECT source AS neighbor FROM t WHERE target = {}
+            ) end_neighbors
+            ON start_neighbors.neighbor = end_neighbors.neighbor
+            JOIN (
+                SELECT node_id, COUNT(*) as degree FROM (
+                    SELECT source as node_id FROM t
+                    UNION ALL
+                    SELECT target as node_id FROM t
+                ) GROUP BY node_id
+            ) deg
+            ON start_neighbors.neighbor = deg.node_id
+            WHERE deg.degree > 0
+        ",
+            node1, node1, node2, node2
+        );
+        self.execute_sql(py, query)
+    }
+
+    fn resource_allocation_index(
+        &self,
+        py: Python<'_>,
+        node1: u64,
+        node2: u64,
+    ) -> PyResult<Py<PyAny>> {
+        self.resource_allocation(py, node1, node2)
+    }
+
+    fn jaccard_coefficient(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
+        let query = format!(
+            "
+            WITH start_n AS (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION SELECT source AS neighbor FROM t WHERE target = {}
+            ),
+            end_n AS (
+                SELECT target AS neighbor FROM t WHERE source = {}
+                UNION SELECT source AS neighbor FROM t WHERE target = {}
+            ),
+            intersection_cnt AS (
+                SELECT COUNT(*) as cnt FROM start_n JOIN end_n ON start_n.neighbor = end_n.neighbor
+            ),
+            union_cnt AS (
+                SELECT COUNT(*) as cnt FROM (
+                    SELECT neighbor FROM start_n UNION SELECT neighbor FROM end_n
+                )
+            )
+            SELECT CAST(i.cnt AS DOUBLE) / NULLIF(CAST(u.cnt AS DOUBLE), 0.0) as score
+            FROM intersection_cnt i, union_cnt u
+        ",
+            node1, node1, node2, node2
+        );
+        self.execute_sql(py, query)
+    }
+
+    fn clustering_coefficient(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let query = "
+            WITH undirected_edges AS (
+                SELECT source, target FROM t
+                UNION
+                SELECT target AS source, source AS target FROM t
+            ),
+            degrees AS (
+                SELECT source AS node_id, COUNT(*) AS degree
+                FROM undirected_edges
+                GROUP BY source
+            ),
+            triangles AS (
+                SELECT e1.source AS node_id, CAST(COUNT(*) AS DOUBLE) AS num_triangles
+                FROM undirected_edges e1
+                JOIN undirected_edges e2 ON e1.target = e2.source
+                JOIN undirected_edges e3 ON e2.target = e3.source AND e3.target = e1.source
+                GROUP BY e1.source
+            )
+            SELECT 
+                d.node_id as node,
+                COALESCE(t.num_triangles / CAST(d.degree * (d.degree - 1) AS DOUBLE), 0.0) AS clustering_coefficient
+            FROM degrees d
+            LEFT JOIN triangles t ON d.node_id = t.node_id
+        ".to_string();
+        self.execute_sql(py, query)
+    }
+
+    fn to_graphviz(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let result_string = rt
+            .block_on(async {
+                use arrow::array::{Array, UInt64Array};
+                use datafusion::prelude::SessionContext;
+
+                let ctx = SessionContext::new();
+                let provider =
+                    std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                        std::sync::Arc::new(self.table.clone()),
+                    ));
+                ctx.register_table("t", provider)
+                    .map_err(|e| e.to_string())?;
+
+                let df_nodes = ctx
+                    .sql("SELECT source as node FROM t UNION SELECT target as node FROM t")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let node_batches = df_nodes.collect().await.map_err(|e| e.to_string())?;
+
+                let mut dot = String::from("digraph {\n");
+
+                for batch in node_batches {
+                    let array = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| "expected UInt64Array for graph nodes".to_string())?;
+                    for i in 0..array.len() {
+                        if !array.is_null(i) {
+                            let node = array.value(i);
+                            dot.push_str(&format!("    {} [ label = \"{}\" ]\n", node, node));
+                        }
+                    }
+                }
+
+                let df_edges = ctx
+                    .sql("SELECT source, target FROM t")
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let edge_batches = df_edges.collect().await.map_err(|e| e.to_string())?;
+
+                for batch in edge_batches {
+                    let src_array = batch
+                        .column(0)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| "expected UInt64Array for graph sources".to_string())?;
+                    let tgt_array = batch
+                        .column(1)
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| "expected UInt64Array for graph targets".to_string())?;
+                    for i in 0..src_array.len() {
+                        if !src_array.is_null(i) && !tgt_array.is_null(i) {
+                            let src = src_array.value(i);
+                            let tgt = tgt_array.value(i);
+                            dot.push_str(&format!("    {} -> {} [ ]\n", src, tgt));
+                        }
+                    }
+                }
+                dot.push_str("}\n");
+
+                Ok::<_, String>(dot)
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        Ok(pyo3::types::PyString::new(py, &result_string).into())
+    }
+
+    #[pyo3(signature = (query, community_map, top_communities, graph_column=None, follow_up_fn=None, n_depth=2, k_followups=3, top_k=5, hops=2, confidence_threshold=0.0))]
+    #[allow(clippy::too_many_arguments)]
+    fn drift_search(
+        &self,
+        py: Python<'_>,
+        query: String,
+        community_map: HashMap<u64, u64>,
+        top_communities: Vec<u64>,
+        graph_column: Option<String>,
+        follow_up_fn: Option<Py<PyAny>>,
+        n_depth: u32,
+        k_followups: usize,
+        top_k: usize,
+        hops: u32,
+        confidence_threshold: f64,
+    ) -> PyResult<Py<PyAny>> {
+        let params = crate::core::sql::graph_udf::drift_search::DriftSearchParams {
+            n_depth,
+            k_followups,
+            top_k,
+            hops,
+            alpha: 0.85,
+            confidence_threshold,
+        };
+
+        // If graph_column is provided, use MmapCsrGraph. Otherwise fallback to DiGraphMap
+        let result = if let Some(col) = graph_column {
+            let (_manifest, segments) = crate::python::helpers::TOKIO_RUNTIME
+                .block_on(async {
+                    let manifest = self.table.manifest().await.map_err(|e| e.to_string())?;
+                    let mut segments = Vec::new();
+                    let cache = crate::core::cache::DiskCache::new(self.table.store.clone());
+
+                    for entry in &manifest.entries {
+                        for idx in &entry.index_files {
+                            if idx.index_type == "graph"
+                                && idx.column_name.as_deref() == Some(col.as_str())
+                            {
+                                let offsets_str = format!("{}.graph.csr.offsets", idx.file_path);
+                                let edges_str = format!("{}.graph.csr.edges", idx.file_path);
+                                let dict_str = format!("{}.graph.csr.dict", idx.file_path);
+
+                                if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
+                                    cache.get_mmap(&offsets_str).await,
+                                    cache.get_mmap(&edges_str).await,
+                                    cache.get_mmap(&dict_str).await,
+                                ) {
+                                    let mmap_graph =
+                                        crate::core::index::csr_graph::MmapCsrGraph::from_mmaps(
+                                            offsets_mmap,
+                                            edges_mmap,
+                                            dict_mmap,
+                                        );
+                                    segments.push(mmap_graph);
+                                }
+                            }
+                        }
+                    }
+                    Ok::<_, String>((manifest, segments))
+                })
+                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+            let multi_graph = crate::core::index::csr_graph::MultiSegmentCsrGraph::new(segments);
+
+            #[allow(deprecated)]
+            py.allow_threads(move || {
+                let generator: Box<
+                    dyn crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
+                        + Send
+                        + Sync,
+                > = if let Some(cb) = follow_up_fn {
+                    Box::new(
+                        crate::python::drift_bindings::PythonCallbackFollowUpGenerator {
+                            callback: cb,
+                        },
+                    )
+                } else {
+                    Box::new(
+                        crate::core::sql::graph_udf::drift_search::HeuristicFollowUpGenerator {
+                            graph: &multi_graph,
+                            community_map: &community_map,
+                        },
+                    )
+                };
+
+                crate::core::sql::graph_udf::drift_search::execute_drift_search(
+                    &query,
+                    &multi_graph,
+                    &top_communities,
+                    generator.as_ref(),
+                    &params,
+                )
+            })
+        } else {
+            // Fallback to in-memory graph
+            let (batches, _) = self
+                .execute_sql_internal("SELECT source, target FROM t".to_string())
+                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+            let mut graph = crate::core::sql::graph_udf::drift_search::SimpleGraph {
+                adjacency: std::collections::HashMap::new(),
+            };
+
+            use arrow::array::Array;
+            for batch in batches {
+                let sources_casted =
+                    arrow::compute::cast(batch.column(0), &arrow::datatypes::DataType::UInt64)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                let targets_casted =
+                    arrow::compute::cast(batch.column(1), &arrow::datatypes::DataType::UInt64)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+                let sources = sources_casted
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "graph build: expected UInt64Array for sources",
+                        )
+                    })?;
+                let targets = targets_casted
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt64Array>()
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "graph build: expected UInt64Array for targets",
+                        )
+                    })?;
+
+                for i in 0..batch.num_rows() {
+                    if sources.is_valid(i) && targets.is_valid(i) {
+                        let s = sources.value(i);
+                        let t = targets.value(i);
+                        graph.adjacency.entry(s).or_default().push(t);
+                    }
+                }
+            }
+
+            #[allow(deprecated)]
+            py.allow_threads(move || {
+                let generator: Box<
+                    dyn crate::core::sql::graph_udf::drift_search::DriftFollowUpGenerator
+                        + Send
+                        + Sync,
+                > = if let Some(cb) = follow_up_fn {
+                    Box::new(
+                        crate::python::drift_bindings::PythonCallbackFollowUpGenerator {
+                            callback: cb,
+                        },
+                    )
+                } else {
+                    Box::new(
+                        crate::core::sql::graph_udf::drift_search::HeuristicFollowUpGenerator {
+                            graph: &graph,
+                            community_map: &community_map,
+                        },
+                    )
+                };
+
+                crate::core::sql::graph_udf::drift_search::execute_drift_search(
+                    &query,
+                    &graph,
+                    &top_communities,
+                    generator.as_ref(),
+                    &params,
+                )
+            })
+        };
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("all_discovered_nodes", result.all_discovered_nodes)?;
+
+        let actions_list = pyo3::types::PyList::empty(py);
+        for action in result.actions {
+            let action_dict = pyo3::types::PyDict::new(py);
+            action_dict.set_item("action_id", action.action_id)?;
+            action_dict.set_item("query", action.query)?;
+            action_dict.set_item("query_seeds", action.query_seeds)?;
+            action_dict.set_item("score", action.score)?;
+            action_dict.set_item("nodes_discovered", action.nodes_discovered)?;
+            action_dict.set_item("is_complete", action.is_complete)?;
+            action_dict.set_item("parent_id", action.parent_id)?;
+            action_dict.set_item("round_num", action.round_num)?;
+            action_dict.set_item("children", action.children)?;
+            actions_list.append(action_dict)?;
+        }
+        dict.set_item("actions", actions_list)?;
+
+        Ok(dict.into())
+    }
+
+    fn execute_sql(&self, py: Python<'_>, query: String) -> PyResult<Py<PyAny>> {
+        match self.execute_sql_internal(query) {
+            Ok((batches, schema)) => arrow_batches_to_pyarrow(py, batches, schema),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e)),
+        }
+    }
+
+    fn manifest(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        // Load manifest info from table
+        let rt = self.table.runtime();
+        let manifest_result =
+            rt.block_on(async { self.table.get_snapshot_segments_with_version().await });
+
+        match manifest_result {
+            Ok((manifest, _version)) => {
+                // Return as a dictionary for subscription support (manifest["schemas"])
+                pythonize::pythonize(py, &manifest)
+                    .map(|b| b.unbind())
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            }
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+        }
+    }
+
+    /// MVCC snapshot version: the latest committed manifest version.
+    ///
+    /// Monotonically increasing; a reader can pin it and later read exactly
+    /// that snapshot. Useful for multi-writer coordination and cache keys.
+    fn snapshot_version(&self) -> PyResult<u64> {
+        let rt = self.table.runtime();
+        rt.block_on(async { self.table.snapshot_version().await })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Native bulk ingest of parquet files: plan → bounded parallel execute →
+    /// OCC commit. Returns a report dict with `units_total`, `units_skipped`,
+    /// `units_committed`, `rows_ingested`, `segments`.
+    #[pyo3(signature = (paths, chunk_rows=None, parallelism=None, index_all=false, resume=true, compact_after=false, memory_budget_gb=None, coordinate=false, lease_ttl_secs=300))]
+    #[allow(clippy::too_many_arguments)]
+    fn ingest(
+        &self,
+        py: Python<'_>,
+        paths: Vec<String>,
+        chunk_rows: Option<usize>,
+        parallelism: Option<usize>,
+        index_all: bool,
+        resume: bool,
+        compact_after: bool,
+        memory_budget_gb: Option<f64>,
+        coordinate: bool,
+        lease_ttl_secs: u64,
+    ) -> PyResult<Py<PyAny>> {
+        let opts = crate::core::table::IngestOptions {
+            chunk_rows: chunk_rows.unwrap_or(1_000_000),
+            parallelism: parallelism.unwrap_or(4),
+            index_all,
+            resume,
+            compact_after,
+            memory_budget_bytes: memory_budget_gb
+                .filter(|gb| *gb > 0.0)
+                .map(|gb| (gb * 1024.0 * 1024.0 * 1024.0) as u64),
+        };
+        let report = py
+            .allow_threads(|| {
+                let rt = self.table.runtime();
+                rt.block_on(async {
+                    if coordinate {
+                        let coordinator = self.table.object_store_coordinator(
+                            &paths,
+                            opts.chunk_rows,
+                            std::time::Duration::from_secs(lease_ttl_secs.max(1)),
+                        )?;
+                        self.table.ingest_coordinated_async(opts, coordinator).await
+                    } else {
+                        self.table.ingest_async(&paths, opts).await
+                    }
+                })
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("units_total", report.units_total)?;
+        dict.set_item("units_skipped", report.units_skipped)?;
+        dict.set_item("units_committed", report.units_committed)?;
+        dict.set_item("rows_ingested", report.rows_ingested)?;
+        dict.set_item("segments", report.segments)?;
+        Ok(dict.into())
+    }
+
+    // ============================================================================
+    // Connector APIs (Spark/Trino)
+    // ============================================================================
+
+    /// List all data files with index metadata (for Spark/Trino)
+    fn list_data_files(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let files = self
+            .table
+            .list_data_files()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        let py_files: Vec<PyDataFileInfo> = files
+            .into_iter()
+            .map(|f| PyDataFileInfo {
+                file_path: f.file_path,
+                row_count: f.row_count,
+                file_size_bytes: f.file_size_bytes,
+                min_values: f.min_values,
+                max_values: f.max_values,
+                has_scalar_indexes: f.has_scalar_indexes,
+                has_vector_indexes: f.has_vector_indexes,
+                indexed_columns: f.indexed_columns,
+            })
+            .collect();
+
+        let list = pyo3::types::PyList::new(py, py_files)?;
+        Ok(list.into())
+    }
+
+    /// Read specific file with optional filter (index-accelerated)
+    #[pyo3(signature = (file_path, filter=None, columns=None))]
+    fn read_file(
+        &self,
+        py: Python<'_>,
+        file_path: String,
+        filter: Option<String>,
+        columns: Option<Vec<String>>,
+    ) -> PyResult<Py<PyAny>> {
+        let table_schema = self.table.arrow_schema();
+        let projected_schema = if let Some(cols) = &columns {
+            let mut fields = Vec::new();
+            for c in cols {
+                if let Some((_, field)) = table_schema.column_with_name(c) {
+                    fields.push(std::sync::Arc::new(field.clone()));
+                }
+            }
+            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
+        } else {
+            table_schema
+        };
+
+        let batches = self
+            .table
+            .runtime()
+            .block_on(async {
+                use futures::StreamExt;
+                let mut stream = self
+                    .table
+                    .read_file_async(&file_path, columns, filter.as_deref())
+                    .await?;
+                let mut result = Vec::new();
+                while let Some(batch) = stream.next().await {
+                    result.push(batch?);
+                }
+                Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(result)
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        arrow_batches_to_pyarrow(py, batches, projected_schema)
+    }
+
+    /// Get splits for parallel reading (Trino)
+    #[pyo3(signature = (max_split_size, filter=None))]
+    fn get_splits(
+        &self,
+        py: Python<'_>,
+        max_split_size: usize,
+        filter: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let splits = self
+            .table
+            .get_splits(max_split_size, filter.as_deref())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        let py_splits: Vec<PySplit> = splits
+            .into_iter()
+            .map(|s| PySplit {
+                file_path: s.file_path,
+                start_offset: s.start_offset,
+                length: s.length,
+                row_group_ids: s.row_group_ids,
+                index_file_path: s.index_file_path,
+                can_use_indexes: s.can_use_indexes,
+            })
+            .collect();
+
+        let list = pyo3::types::PyList::new(py, py_splits)?;
+        Ok(list.into())
+    }
+
+    /// Read specific split with column projection
+    fn read_split(
+        &self,
+        py: Python<'_>,
+        split: &PySplit,
+        columns: Vec<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let table_schema = self.table.arrow_schema();
+        let projected_schema = {
+            let mut fields = Vec::new();
+            for c in &columns {
+                if let Some((_, field)) = table_schema.column_with_name(c) {
+                    fields.push(std::sync::Arc::new(field.clone()));
+                }
+            }
+            std::sync::Arc::new(arrow::datatypes::Schema::new(fields))
+        };
+
+        let rust_split = crate::core::table::Split {
+            file_path: split.file_path.clone(),
+            start_offset: split.start_offset,
+            length: split.length,
+            row_group_ids: split.row_group_ids.clone(),
+            index_file_path: split.index_file_path.clone(),
+            can_use_indexes: split.can_use_indexes,
+        };
+
+        let batches = self
+            .table
+            .runtime()
+            .block_on(async {
+                use futures::StreamExt;
+                let mut stream = self
+                    .table
+                    .read_split_async(&rust_split, columns, None)
+                    .await?;
+                let mut result = Vec::new();
+                while let Some(batch) = stream.next().await {
+                    result.push(batch?);
+                }
+                Ok::<Vec<arrow::record_batch::RecordBatch>, anyhow::Error>(result)
+            })
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        arrow_batches_to_pyarrow(py, batches, projected_schema)
+    }
+
+    /// Get table statistics with index coverage
+    fn get_table_statistics(&self) -> PyResult<PyTableStatistics> {
+        let stats = self
+            .table
+            .get_table_statistics()
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))?;
+
+        Ok(PyTableStatistics {
+            row_count: stats.row_count,
+            file_count: stats.file_count,
+            total_size_bytes: stats.total_size_bytes,
+            index_coverage: PyIndexCoverage {
+                scalar_indexed_columns: stats.index_coverage.scalar_indexed_columns,
+                vector_indexed_columns: stats.index_coverage.vector_indexed_columns,
+                inverted_indexed_columns: stats.index_coverage.inverted_indexed_columns,
+                total_index_size_bytes: stats.index_coverage.total_index_size_bytes,
+            },
+        })
+    }
+
+    fn table_uri(&self) -> String {
+        self.table.table_uri().to_string()
+    }
+
+    /// Explain query plan showing index usage and execution strategy
+    ///
+    /// Args:
+    ///     filter: Optional SQL-like filter string
+    ///     vector_filter: Optional dict for vector search (see to_arrow for parameter details)
+    ///
+    /// Returns:
+    ///     String explaining the query execution plan with index coverage
+    #[pyo3(signature = (filter=None, vector_filter=None))]
+    fn explain(
+        &self,
+        filter: Option<String>,
+        vector_filter: Option<Bound<'_, PyDict>>,
+    ) -> PyResult<String> {
+        let vs_params = if let Some(ref vf) = vector_filter {
+            let column: String = vf
+                .get_item("column")?
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("vector_filter requires 'column' key")
+                })?
+                .extract()?;
+            let k: usize = vf
+                .get_item("k")?
+                .ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("vector_filter requires 'k' key")
+                })?
+                .extract()?;
+            let query_obj = vf.get_item("query")?.ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("vector_filter requires 'query' key")
+            })?;
+            let vec_val = if let Ok(q_str) = query_obj.extract::<String>() {
+                crate::core::index::VectorValue::Keyword(q_str)
+            } else if let Ok(query) = query_obj.extract::<Vec<f32>>() {
+                crate::core::index::VectorValue::Float32(query)
+            } else {
+                return Err(pyo3::exceptions::PyTypeError::new_err(
+                    "vector_filter 'query' must be a List[float] for vector search or a str for BM25 text search",
+                ));
+            };
+            let mut params = VectorSearchParams::new(&column, vec_val, k);
+
+            // Parse optional metric parameter
+            if let Ok(Some(metric_obj)) = vf.get_item("metric") {
+                if let Ok(metric_str) = metric_obj.extract::<String>() {
+                    params = params.with_metric(parse_metric(&metric_str)?);
+                }
+            }
+
+            // Parse optional ef_search parameter (for HNSW)
+            if let Ok(Some(ef_obj)) = vf.get_item("ef_search") {
+                if let Ok(ef_search) = ef_obj.extract::<usize>() {
+                    params = params.with_ef_search(ef_search);
+                }
+            }
+
+            // Parse optional probes parameter (for IVF)
+            if let Ok(Some(probes_obj)) = vf.get_item("probes") {
+                if let Ok(probes) = probes_obj.extract::<usize>() {
+                    params = params.with_probes(probes);
+                }
+            }
+
+            // Parse optional use_mmap parameter
+            if let Ok(Some(mmap_obj)) = vf.get_item("use_mmap") {
+                if let Ok(use_mmap) = mmap_obj.extract::<bool>() {
+                    params.use_mmap = use_mmap;
+                }
+            }
+
+            Some(params)
+        } else {
+            None
+        };
+
+        Ok(TOKIO_RUNTIME.block_on(
+            self.table
+                .explain(filter.as_deref(), vs_params.map(|p| vec![p])),
+        ))
+    }
+}
+
+impl PyTable {
+    pub(crate) fn execute_sql_internal(
+        &self,
+        query: String,
+    ) -> Result<(Vec<RecordBatch>, arrow::datatypes::SchemaRef), String> {
+        let query = sanitize_sql(&query).map_err(|e| e.to_string())?;
+        let rt = self.table.runtime();
+
+        rt.block_on(async {
+            use datafusion::prelude::SessionContext;
+            let mut ctx = SessionContext::new();
+
+            // Register standard functions and aggregates
+            datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;
+            datafusion_functions_aggregate::register_all(&mut ctx).map_err(|e| e.to_string())?;
+
+            let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+
+            // Register table as 't' (short alias, safe from keywords)
+            let provider = Arc::new(crate::core::sql::BenoStreamTableProvider::new(Arc::new(
+                self.table.clone(),
+            )));
+            ctx.register_table("t", provider)
+                .map_err(|e| e.to_string())?;
+
+            // Register vector UDFs (dist_l2, dist_cosine, etc.)
+            for udf in crate::core::sql::vector_udf::all_vector_udfs() {
+                ctx.register_udf(udf);
+            }
+
+            // Register Vector Aggregate functions (Additive in DF 52)
+            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
+                ctx.register_udaf(udf);
+            }
+
+            // Register Graph Aggregate functions
+            for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+                ctx.register_udaf(udf);
+            }
+
+            // Execute
+            let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
+            let mut schema: arrow::datatypes::SchemaRef =
+                std::sync::Arc::new(df.schema().as_arrow().clone());
+            let batches = df.collect().await.map_err(|e| e.to_string())?;
+
+            let mut final_batches = Vec::new();
+            if !batches.is_empty() && batches[0].num_columns() == 1 {
+                if let arrow::datatypes::DataType::Struct(fields) = batches[0].column(0).data_type()
+                {
+                    let new_fields: Vec<Arc<arrow::datatypes::Field>> = fields.to_vec();
+                    schema = Arc::new(arrow::datatypes::Schema::new(new_fields.clone()));
+
+                    for b in &batches {
+                        if let Some(struct_arr) = b
+                            .column(0)
+                            .as_any()
+                            .downcast_ref::<arrow::array::StructArray>()
+                        {
+                            let mut cols = Vec::new();
+                            for i in 0..new_fields.len() {
+                                cols.push(struct_arr.column(i).clone());
+                            }
+                            if let Ok(unpacked) = RecordBatch::try_new(schema.clone(), cols) {
+                                final_batches.push(unpacked);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if final_batches.is_empty() {
+                final_batches = batches;
+            }
+
+            Ok((final_batches, schema))
+        })
+    }
+}
