@@ -11,7 +11,6 @@ on:
       - "Cargo.lock"
       - "pyproject.toml"
       - "README.md"
-      - "ROADMAP.md"
       - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
   workflow_dispatch:

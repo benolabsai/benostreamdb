@@ -47,6 +47,14 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    # Serverless sizing: the engine derives every limit from this container's
+    # cgroup memory limit (see RESOURCE_LIMITS.md) — the ingest high-water mark
+    # and heap-trim budget are 0.8 x the limit, and segment index-build
+    # concurrency is clamp(limit / 8 GiB, 1, nproc). The default is deliberately
+    # small so the same image is safe scaled to zero in a tiny container; raise
+    # the container limit per deployment to scale up, with no engine config
+    # change. (CPUs cap build parallelism, so a larger ingest box wants more of
+    # them too.)
     deploy:
       resources:
         limits:
@@ -86,6 +94,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    # Same serverless derivation as `search` above.
     deploy:
       resources:
         limits:

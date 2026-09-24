@@ -219,13 +219,6 @@ path = "tests/bin/generate_iceberg_manifests.rs"
 name = "verify_iceberg_read_check"
 path = "tests/bin/verify_iceberg_read_check.rs"
 
-[[bench]]
-name = "performance"
-harness = false
-
-[[bench]]
-name = "bench_table"
-harness = false
 
 [profile.dev]
 debug = 0

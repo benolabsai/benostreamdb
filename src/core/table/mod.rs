@@ -114,14 +114,24 @@ pub struct Table {
 }
 
 /// Durability level for WAL writes.
+///
+/// Contract (implemented in `core::wal::WriteAheadLog::spawn_worker`):
+/// - [`WalDurability::Sync`] — **the default**. A write returns only after its
+///   WAL record has been `fdatasync`'d (falling back to `fsync`) to stable
+///   storage, and a failed fsync is reported as an error rather than a
+///   successful commit.
+/// - [`WalDurability::Async`] — a write returns once the batch is handed to the
+///   WAL worker channel; the worker syncs on a batch/interval boundary
+///   (`BENOSTREAM_WAL_SYNC_BATCH_SIZE` / `BENOSTREAM_WAL_SYNC_INTERVAL_MS`,
+///   default 10 batches / 100 ms). Higher throughput, but writes inside that
+///   un-synced window can be lost on process failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum WalDurability {
-    /// Synchronous durability: Each write waits for the WAL record to be fsynced to disk.
-    /// Recommended for database correctness and crash recovery guarantees.
+    /// Each write waits for its WAL record to be fsynced before returning.
     #[default]
     Sync,
-    /// Asynchronous durability: Writes are handed off to the WAL worker channel without blocking for fsync.
-    /// Higher throughput, but un-synced writes in the worker window (default 100ms) may be lost on process failure.
+    /// Writes are handed to the WAL worker without blocking for fsync; the
+    /// worker syncs on a batch/interval boundary.
     Async,
 }
 
@@ -553,6 +563,9 @@ impl Table {
         Ok(RecordBatch::try_new(batch.schema(), sorted_columns)?)
     }
 
+    // Iceberg v3 row-lineage metadata. Implemented but not yet wired into the
+    // write path; tracked as tech debt — either integrate (emit `_row_id` /
+    // `_last_updated_sequence_number` on v3 tables) or remove.
     #[allow(dead_code)]
     pub(crate) fn has_v3_metadata_columns(schema: &arrow::datatypes::SchemaRef) -> bool {
         schema.column_with_name("_row_id").is_some()
@@ -632,10 +645,25 @@ impl Table {
             }
         }
 
+        // Last-resort fallback: infer the schema from any data file. The manifest
+        // paths above are the normal case; this only runs for a table whose
+        // manifest is missing or schema-less. `list(None)` is a lazy recursive
+        // listing, so bound how many entries we examine — otherwise a large table
+        // with the first data file late in the listing would scan unboundedly.
         use futures::StreamExt;
+        const MAX_LIST_ENTRIES: usize = 10_000;
+        tracing::warn!(
+            "load_initial_schema: no manifest schema/entries for '{}'; falling back to a bounded directory listing",
+            _uri
+        );
         let mut stream = store.list(None);
         let mut first_file = None;
+        let mut examined = 0usize;
         while let Some(res) = stream.next().await {
+            examined += 1;
+            if examined > MAX_LIST_ENTRIES {
+                break;
+            }
             if let Ok(meta) = res {
                 let p = meta.location.to_string();
                 if p.ends_with(".parquet") && !p.contains(".inv.parquet") && !p.contains(".hnsw.") {

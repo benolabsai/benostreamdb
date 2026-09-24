@@ -1,7 +1,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use futures::StreamExt;
 use benostreamdb::Table;
+use futures::StreamExt;
 use std::sync::Arc;
 use tempfile::tempdir;
 

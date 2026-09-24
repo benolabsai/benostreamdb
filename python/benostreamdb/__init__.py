@@ -467,6 +467,23 @@ class Table:
         """Return the table schema as PyArrow Schema."""
         return self._inner.schema
 
+    @property
+    def index_columns(self) -> List[str]:
+        """Return the columns that currently have an index configured.
+
+        Populated from the manifest on open, so a reopened table reports the
+        indexes its segments were built with.
+        """
+        return list(self._inner.index_columns)
+
+    def set_default_device(self, device: Optional[str]) -> None:
+        """Set the default device for index builds (e.g. ``"cpu"`` or ``"cuda"``).
+
+        Applies to columns without an explicit per-index device, including
+        configs restored from the manifest on reopen.
+        """
+        self._inner.set_default_device(device)
+
     def __len__(self) -> int:
         """Return the number of rows in the table."""
         try:

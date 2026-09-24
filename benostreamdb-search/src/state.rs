@@ -4,9 +4,9 @@
 //! Prometheus collectors behind plan-5.2.2 telemetry.
 
 use arrow::datatypes::SchemaRef;
-use futures::TryStreamExt;
 use benostreamdb::core::table::WalDurability;
 use benostreamdb::{BenoStreamError, Table};
+use futures::TryStreamExt;
 use object_store::ObjectStore;
 use prometheus::core::Collector;
 use prometheus::{
@@ -293,9 +293,9 @@ impl AppState {
         let uri = self.index_uri(index);
         let store: Arc<dyn ObjectStore> = benostreamdb::core::storage::create_object_store(&uri)
             .map_err(|e| BenoStreamError::InvalidUri {
-            uri: uri.clone(),
-            reason: e.to_string(),
-        })?;
+                uri: uri.clone(),
+                reason: e.to_string(),
+            })?;
         let location = object_store::path::Path::from(object_path);
         let get = store.get(&location).await.map_err(|e| {
             BenoStreamError::internal(format!("failed to fetch index file '{object_path}': {e}"))

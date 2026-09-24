@@ -21,11 +21,11 @@ use arrow::datatypes::DataType;
 use axum::extract::{Path, State};
 use axum::response::Response;
 use axum::Json;
-use chrono::{DateTime, NaiveDate, SecondsFormat};
 use benostreamdb::core::index::VectorValue;
 use benostreamdb::core::planner::{FilterExpr, QueryPlanner};
 use benostreamdb::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
 use benostreamdb::{BenoStreamError, Table, VectorSearchParams};
+use chrono::{DateTime, NaiveDate, SecondsFormat};
 use serde_json::{Map, Value};
 
 use crate::es_types::{CountResponse, SearchHit, SearchHits, SearchResponse, TotalHits};
@@ -248,18 +248,14 @@ fn bad_request(reason: impl Into<String>) -> BenoStreamError {
 fn translate_search_error(err: anyhow::Error) -> BenoStreamError {
     if let Some(he) = err.downcast_ref::<BenoStreamError>() {
         return match he {
-            BenoStreamError::TableNotFound { namespace, name } => {
-                BenoStreamError::TableNotFound {
-                    namespace: namespace.clone(),
-                    name: name.clone(),
-                }
-            }
-            BenoStreamError::ColumnNotFound { column, table } => {
-                BenoStreamError::ColumnNotFound {
-                    column: column.clone(),
-                    table: table.clone(),
-                }
-            }
+            BenoStreamError::TableNotFound { namespace, name } => BenoStreamError::TableNotFound {
+                namespace: namespace.clone(),
+                name: name.clone(),
+            },
+            BenoStreamError::ColumnNotFound { column, table } => BenoStreamError::ColumnNotFound {
+                column: column.clone(),
+                table: table.clone(),
+            },
             BenoStreamError::InvalidUri { uri, reason } => BenoStreamError::InvalidUri {
                 uri: uri.clone(),
                 reason: reason.clone(),
@@ -269,11 +265,9 @@ fn translate_search_error(err: anyhow::Error) -> BenoStreamError {
                     column: column.clone(),
                 }
             }
-            BenoStreamError::SchemaIncompatible { reason } => {
-                BenoStreamError::SchemaIncompatible {
-                    reason: reason.clone(),
-                }
-            }
+            BenoStreamError::SchemaIncompatible { reason } => BenoStreamError::SchemaIncompatible {
+                reason: reason.clone(),
+            },
             _ => BenoStreamError::internal(he.to_string()),
         };
     }

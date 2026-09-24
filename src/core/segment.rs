@@ -26,7 +26,13 @@ pub struct HybridSegmentWriter {
     pub store: Option<Arc<dyn ObjectStore>>,
     pub primary_key: Vec<String>,
     pub index_configs: HashMap<String, crate::core::table::ColumnIndexConfig>,
-    // Add additive buffers for multi-batch indexing
+    // Add additive buffers for multi-batch indexing. These `Mutex`es are
+    // uncontended in practice: the writer is constructed per-flush, driven from
+    // a single task, and `parking_lot::Mutex` is nearly free when uncontended.
+    // TODO(perf): if profiling ever shows contention on `inverted_data` under
+    // high-cardinality multi-column indexing, replace it with a per-thread
+    // accumulator merged in `finish_indexing` (or a lock-free map) rather than
+    // widening this lock.
     pub(crate) inverted_data:
         parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,

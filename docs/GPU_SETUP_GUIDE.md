@@ -463,5 +463,5 @@ Expected speedups for batch operations (100,000 vectors, 768 dimensions):
 ## See Also
 
 - [Python Vector API Documentation](PYTHON_VECTOR_API.md) - Complete API reference
-- [Vector Configuration Guide](VECTOR_CONFIGURATION.md) - Index tuning
+- [Vector Configuration Guide](CONFIGURATION.md) - Index tuning
 - [Benchmarking Guide](BENCHMARKING.md) - Performance testing

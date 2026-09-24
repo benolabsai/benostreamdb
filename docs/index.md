@@ -14,4 +14,4 @@ BenoStreamDB is a high-performance, indexed streaming lakehouse built in Rust. I
 
 ## Getting Started
 
-Check out the [Architecture](architecture.md) guide to understand how BenoStreamDB works, the [Comprehensive Guide](COMPREHENSIVE_GUIDE.md) for feature overviews, or the [Benchmarking Guide](BENCHMARKING.md) for competitive performance analysis.
+Check out the [Architecture](architecture.md) guide to understand how BenoStreamDB works, the [Comprehensive Guide](architecture.md) for feature overviews, or the [Benchmarking Guide](BENCHMARKING.md) for competitive performance analysis.
