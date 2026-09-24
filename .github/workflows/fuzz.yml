@@ -1,10 +1,17 @@
 name: Fuzz
 
-# Coverage-guided fuzzing of the untrusted-input parsers. Runs on push (and
-# manual dispatch); a useful run needs minutes of wall time and a nightly
-# toolchain (libFuzzer). See fuzz/README.md.
+# Coverage-guided fuzzing of the untrusted-input parsers. A useful run needs
+# minutes of wall time and a nightly toolchain (libFuzzer requires `-Z` flags
+# that do not exist on stable — see the RUSTUP_TOOLCHAIN env below).
+#
+# Scheduled weekly (plus manual dispatch), like the Renovate workflow. Fuzzing
+# is expensive — five matrix jobs of several minutes each — so it does NOT run
+# on every push; an unfiltered `on: push` previously fired it on every branch
+# and tag push for no signal.
 on:
-  push:
+  schedule:
+    # Run weekly on Mondays at 6 AM UTC
+    - cron: '0 6 * * 1'
   workflow_dispatch:
 
 permissions:
