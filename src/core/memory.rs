@@ -58,6 +58,10 @@ pub fn rss_bytes() -> Option<u64> {
 }
 
 /// macOS has no `/proc`; ask the Mach kernel for the task's resident size.
+// `libc::mach_task_self` is deprecated in favour of the `mach2` crate, but it is
+// still the correct, stable entry point for `task_info` here. The crate denies
+// warnings, so opt this call site out rather than pulling in another dependency.
+#[allow(deprecated)]
 #[cfg(target_os = "macos")]
 pub fn rss_bytes() -> Option<u64> {
     unsafe {
