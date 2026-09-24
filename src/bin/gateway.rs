@@ -25,8 +25,13 @@ async fn main() {
     }));
 
     // Task 3: Use proper telemetry init
-    let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("gateway")
-        .expect("Failed to initialize tracing");
+    let _telemetry_guard = match benostreamdb::telemetry::tracing::init_tracing("gateway") {
+        Ok(guard) => guard,
+        Err(e) => {
+            eprintln!("Failed to initialize tracing: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Task 5: Track start time for uptime
     let start_time = SystemTime::now();
@@ -93,23 +98,38 @@ async fn metrics_handler() -> impl IntoResponse {
         .status(StatusCode::OK)
         .header("Content-Type", "text/plain; version=0.0.4")
         .body(axum::body::Body::from(result))
-        .unwrap()
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "failed to build metrics response");
+            axum::response::Response::new(axum::body::Body::empty())
+        })
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "failed to install Ctrl+C handler");
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to install SIGTERM handler");
+                    return;
+                }
+            };
         sigterm.recv().await;
-        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
-            .expect("failed to install SIGINT handler");
+        let mut sigint =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to install SIGINT handler");
+                    return;
+                }
+            };
         sigint.recv().await;
     };
 
@@ -146,8 +166,7 @@ async fn query_handler(Json(payload): Json<QueryRequest>) -> impl IntoResponse {
     // Demonstrate the "Index-First" Read
     // Use factory to support s3://, az://, etc.
     // Ideally this comes from payload or config. defaulting to /tmp for local PoC
-    let uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     println!("Connecting to storage: {}", uri);
     let store = match benostreamdb::core::storage::create_object_store(&uri) {
         Ok(s) => s,

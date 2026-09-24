@@ -134,18 +134,39 @@ Reference hardware: **32-core x86-64 Linux, 121 GB RAM, NVMe** (`/tmp` is a
 pages / 498M raw links → **51.8M live pages / 383M clean int64 edges** after
 redirect filtering and endpoint resolution.
 
-> ⏳ The **load (nodes)** row below is mid-measurement (HNSW-TQ8 build over
-> 51.8M vectors); it will be finalized when the run completes. Everything else
-> in this table is measured.
+> The **load (nodes)** row and the per-chunk table below are measured on a
+> **from-scratch reload** (all 51.8M rows) after the idempotent-backfill fix
+> (`add_index` no longer re-indexes every prior segment on each fresh chunk
+> process). Before the fix, per-chunk time grew 293 s → 885 s → 2071 s and the
+> run was OOM-killed partway through.
 
 | Stage | Wall time | Peak memory | Notes |
 |---|---|---|---|
 | download (19 chunks, ~48 GB) | ~2 h | <1 GB | 3 parallel streams; Wikimedia returns HTTP 429 beyond ~3 — the downloader is 429-aware and resumes via `.part` |
 | parse (streaming Rust) | ~2.6 h | **< 2 GB** | 66.1M pages + 498M edges; the old accumulate-then-write design OOM-killed at ~110 GB — streaming per-chunk flushes fixed it |
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
-| embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **< 4 GB RAM**, ~7 GB VRAM | fp16, batch 512, 256-char leads; **6,750 sent/s avg** → 11 shards / 36 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
-| load — edges (383M + CSR) | **529 s** | ~6 GB | 15 GB table incl. CSR sidecars |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | ~1.5 h (in progress) | ~30 GB per 10M-row chunk (auto-sized: MemAvailable/2 ÷ 4.5 GB per M rows) | **12.6k rows/s sustained** — builds overlap writes inside the chunk; shards deleted after all chunks commit |
+| embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **8.3 GB peak RSS**, 5.9 GB VRAM reserved | fp16, batch 512, 256-char leads; **~6,300 sent/s avg** (measured 6,606 → 6,189) → 11 shards / ~40 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
+| load — edges (383M + CSR) | **271 s** | ~6 GB | 15 GB table incl. CSR sidecars |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | **41 min** | **14.6–18.0 GB/chunk** (measured peak RSS, ~2.0 GB/M rows) | **~21k rows/s sustained**, flat ~34–53 s per M rows; the auto-sizer *estimated* ~36 GB/chunk (its `4.5 GB/M` constant is ~2.2× conservative) — builds overlap writes inside the chunk; shards deleted after all chunks commit |
+
+Per-chunk node-load timings (from-scratch reload, post-fix) — note the flat rate
+and the real peak RSS vs the ~36 GB the auto-sizer predicted:
+
+| Chunk | Rows | Wall time | Peak RSS | s / M rows |
+|---|---|---|---|---|
+| [0, 8.0M) | 8,000,000 | 269 s | 14.6 GB | 33.6 |
+| [8.0M, 16.0M) | 8,000,000 | 336 s | 15.2 GB | 42.0 |
+| [16.0M, 24.0M) | 8,000,000 | 355 s | 15.3 GB | 44.4 |
+| [24.0M, 32.0M) | 8,000,000 | 346 s | 17.4 GB | 43.3 |
+| [32.0M, 40.0M) | 8,000,000 | 421 s | 17.0 GB | 52.6 |
+| [40.0M, 48.0M) | 8,000,000 | 404 s | 16.3 GB | 50.5 |
+| [48.0M, 51.79M) | 3,793,809 | 337 s | 18.0 GB | 88.9 |
+| **total** | **51,793,809** | **2,468 s (41 min)** | **max 18.0 GB** | **47.6** |
+
+Before the fix the same chunks escalated (37 → 110 → 259 s / M rows) and the
+process was killed. The real peak (~2.0 GB/M rows) is ~2.2× below the
+`4.5 GB/M` sizing constant, so the chunk could be roughly doubled for the same
+memory budget.
 
 ### Engine benchmarks (91.7M-edge graph, debug build)
 

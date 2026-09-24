@@ -1,1 +1,0 @@
-../../VECTOR_CONFIGURATION.md
