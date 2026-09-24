@@ -1,0 +1,10 @@
+[book]
+authors = ["BenoStream Team"]
+language = "en"
+multilingual = false
+src = "docs"
+title = "BenoStreamDB Documentation"
+
+[output.html]
+git-repository-url = "https://github.com/benolabsai/benostreamdb"
+edit-url-template = "https://github.com/benolabsai/benostreamdb/edit/main/{path}"

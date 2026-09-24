@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BenoStreamDB | GPU-Accelerated Hybrid Vector Database for the Lakehouse</title>
+    <meta name="description" content="BenoStreamDB is the high-performance Rust vector database engine featuring GPU-accelerated SIMD kernels, native Iceberg integration, and smart hybrid query optimization.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <header class="header">
+        <div class="container header-container">
+            <a href="#" class="logo-wrapper">
+                <div class="logo-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" fill="url(#logo-grad)" stroke="url(#logo-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <defs>
+                            <linearGradient id="logo-grad" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse">
+                                <stop stop-color="#3b82f6" />
+                                <stop offset="1" stop-color="#8b5cf6" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </div>
+                <span class="logo-text">BenoStream<span>DB</span></span>
+            </a>
+            <nav class="nav">
+                <a href="#features" class="nav-link">Features</a>
+                <a href="#benchmarks" class="nav-link">Performance</a>
+                <a href="#architecture" class="nav-link">Architecture</a>
+                <a href="#pricing" class="nav-link">Enterprise</a>
+            </nav>
+            <div class="header-actions">
+                <a href="#docs" class="btn btn-secondary">Documentation</a>
+                <a href="#contact" class="btn btn-primary">Get Started</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-bg-glow"></div>
+        <div class="container hero-container">
+            <div class="hero-content">
+                <div class="badge">v0.7.0 Now Available</div>
+                <h1 class="hero-title">The Speed of In-Memory.<br><span class="gradient-text">The Scale of the Lakehouse.</span></h1>
+                <p class="hero-subtitle">
+                    BenoStreamDB is a ultra-fast, Rust-native hybrid vector database built directly for Iceberg tables. 
+                    Harness GPU-accelerated SIMD kernels and intelligent query optimization to build real-time AI search at petabyte scale.
+                </p>
+                <div class="hero-actions-group">
+                    <a href="#contact" class="btn btn-lg btn-primary">Request a Demo</a>
+                    <a href="#benchmarks" class="btn btn-lg btn-secondary">View Benchmarks</a>
+                </div>
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <div class="stat-value">10x</div>
+                        <div class="stat-label">Faster than pgvector</div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-item">
+                        <div class="stat-value">&lt;1.2ms</div>
+                        <div class="stat-label">Query Latency</div>
+                    </div>
+                    <div class="stat-divider"></div>
+                    <div class="stat-item">
+                        <div class="stat-value">Zero</div>
+                        <div class="stat-label">Data Duplication</div>
+                    </div>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="code-terminal-card">
+                    <div class="terminal-header">
+                        <div class="terminal-dots">
+                            <span class="dot red"></span>
+                            <span class="dot yellow"></span>
+                            <span class="dot green"></span>
+                        </div>
+                        <div class="terminal-title">benostreamdb.rs</div>
+                    </div>
+                    <div class="terminal-body">
+                        <pre><code><span class="keyword">use</span> benostreamdb::{Database, Query, Metric};
+
+<span class="comment">// 1. Connect to Iceberg catalog directly</span>
+<span class="keyword">let</span> db = Database::connect(<span class="string">"thrift://localhost:9083"</span>).<span class="keyword">await</span>?;
+
+<span class="comment">// 2. Build hybrid query with automatic pushdowns</span>
+<span class="keyword">let</span> results = db.query(<span class="string">"kb_embeddings"</span>)
+    .vector_search(<span class="string">"embedding"</span>, &[<span class="number">0.12</span>, -<span class="number">0.43</span>, <span class="number">0.87</span>])
+    .metric(Metric::Cosine)
+    .filter(<span class="string">"category = 'commercial' AND active = true"</span>)
+    .limit(<span class="number">5</span>)
+    .explain() <span class="comment">// Returns visual plan with CUDA execution</span>
+    .execute()
+    .<span class="keyword">await</span>?;
+
+println!(<span class="string">"Query completed in: {:?}"</span>, results.latency());</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Commercial Benefits Section -->
+    <section id="features" class="section features-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Built for Enterprise Scale and Efficiency</h2>
+                <p class="section-subtitle">Stop paying the "vector tax". Move away from proprietary, isolated vector databases that force complex ETL pipelines and duplicate your core business datasets.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-zap"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    </div>
+                    <h3 class="feature-title">GPU-Accelerated SIMD Kernels</h3>
+                    <p class="feature-description">
+                        Utilize hand-optimized CUDA backends and SIMD assembly pipelines (AVX-512, NEON) to search millions of high-dimensional vectors in sub-millisecond latencies.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-database"><path d="M3 5V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19V5C21 3.9 20.1 3 19 3H5C3.9 3 3 3.9 3 5Z"/><path d="M3 9H21"/><path d="M3 15H21"/><path d="M9 3V21"/></svg>
+                    </div>
+                    <h3 class="feature-title">Native Apache Iceberg Integration</h3>
+                    <p class="feature-description">
+                        Search vectors directly in Iceberg V2/V3 datasets. Write metadata caches to your catalog and leverage partition and row-group pruning for highly targeted lookups.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-cpu"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9" rx="1"/><path d="M9 1v3"/><path d="M15 1v3"/><path d="M9 20v3"/><path d="M15 20v3"/><path d="M20 9h3"/><path d="M20 15h3"/><path d="M1 9h3"/><path d="M1 15h3"/></svg>
+                    </div>
+                    <h3 class="feature-title">Smart Hybrid Query Optimizer</h3>
+                    <p class="feature-description">
+                        Automatically pushes scalar predicate filters down below the vector search layer, executing combined filters efficiently rather than scanning the entire space post-query.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shield-check"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 11 2 2 4-4"/></svg>
+                    </div>
+                    <h3 class="feature-title">Enterprise Security & ACID WAL</h3>
+                    <p class="feature-description">
+                        Rest assured with a native Write-Ahead Log (WAL), crash-consistent state recovery, TLS transport encryption, and granular role-based access control (RBAC).
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-git-branch"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                    </div>
+                    <h3 class="feature-title">Unified Connectors</h3>
+                    <p class="feature-description">
+                        Deploy integrations out of the box for Apache Spark, Trino, and native Python runtimes, unifying batch ingestion and real-time inference in a single database.
+                    </p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-coins"><circle cx="8" cy="8" r="6"/><circle cx="18" cy="18" r="6"/><path d="M12 18a6 6 0 0 0-6-6"/><path d="M18 12a6 6 0 0 0-6-6"/></svg>
+                    </div>
+                    <h3 class="feature-title">75% Storage Cost Savings</h3>
+                    <p class="feature-description">
+                        By avoiding proprietary schemas and using parquet-backed column-optimized storage, BenoStreamDB drops vector DB operations costs to an absolute fraction of alternatives.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Performance & Benchmarks Section -->
+    <section id="benchmarks" class="section benchmarks-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Unrivaled Vector Benchmark Performance</h2>
+                <p class="section-subtitle">Comparing search latencies and infrastructure footprint under heavy loads (Cohere 1M vector dataset, 768 dimensions).</p>
+            </div>
+            
+            <div class="benchmarks-container">
+                <div class="benchmark-panel">
+                    <h3 class="panel-title">Query Latency (ms) - Lower is Better</h3>
+                    <div class="bar-chart">
+                        <div class="chart-row">
+                            <span class="bar-name">pgvector (HNSW)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-pg" style="width: 85%;">12.4ms</div>
+                            </div>
+                        </div>
+                        <div class="chart-row">
+                            <span class="bar-name">Milvus (GPU)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-milvus" style="width: 25%;">3.1ms</div>
+                            </div>
+                        </div>
+                        <div class="chart-row active">
+                            <span class="bar-name">BenoStreamDB (CUDA)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-hs" style="width: 8%;">0.95ms</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="benchmark-panel">
+                    <h3 class="panel-title">Monthly Hosting Infrastructure Cost ($)</h3>
+                    <div class="bar-chart">
+                        <div class="chart-row">
+                            <span class="bar-name">Pinecone (Standard)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-pg" style="width: 90%;">$1,850</div>
+                            </div>
+                        </div>
+                        <div class="chart-row">
+                            <span class="bar-name">Milvus (Dedicated)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-milvus" style="width: 60%;">$1,200</div>
+                            </div>
+                        </div>
+                        <div class="chart-row active">
+                            <span class="bar-name">BenoStreamDB (Lakehouse)</span>
+                            <div class="bar-wrapper">
+                                <div class="bar bar-hs" style="width: 15%;">$280</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Architecture Section -->
+    <section id="architecture" class="section architecture-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Zero-Copy Architecture</h2>
+                <p class="section-subtitle">How BenoStreamDB embeds into your data lakehouse without duplicating data.</p>
+            </div>
+            
+            <div class="arch-visual-container">
+                <div class="arch-node">
+                    <div class="node-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M21 12H3"/></svg>
+                    </div>
+                    <h4>1. Apache Iceberg Table</h4>
+                    <p>Standard data file assets stored in cloud object storage (S3/MinIO) in Parquet format.</p>
+                </div>
+                <div class="arch-arrow">
+                    <svg width="40" height="24" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M0 12H38M38 12L28 4M38 12L28 20" stroke="#4b5563" stroke-width="2"/>
+                    </svg>
+                </div>
+                <div class="arch-node active">
+                    <div class="node-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                    </div>
+                    <h4>2. BenoStream Optimizer</h4>
+                    <p>Performs limit pushdowns, predicate evaluation, metadata caching, and row-group skipping.</p>
+                </div>
+                <div class="arch-arrow">
+                    <svg width="40" height="24" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M0 12H38M38 12L28 4M38 12L28 20" stroke="#3b82f6" stroke-width="2"/>
+                    </svg>
+                </div>
+                <div class="arch-node active premium">
+                    <div class="node-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z"/></svg>
+                    </div>
+                    <h4>3. GPU SIMD Execution</h4>
+                    <p>Applies parallel quantized distance calculation directly on pruned partitions via CUDA.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Pricing Section -->
+    <section id="pricing" class="section pricing-section">
+        <div class="container">
+            <div class="section-header">
+                <h2 class="section-title">Deployment Options</h2>
+                <p class="section-subtitle">Choose the perfect tier for your workloads, from open source developer instances to scale-out enterprise architectures.</p>
+            </div>
+            
+            <div class="pricing-grid">
+                <div class="pricing-card">
+                    <h3 class="tier-name">Developer (OSS)</h3>
+                    <div class="tier-price">Free<span>/forever</span></div>
+                    <ul class="tier-features">
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Single-Node In-Memory Engine</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> SIMD CPU Vector Kernels</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Apache Iceberg Integration</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Python & Spark Connectors</li>
+                    </ul>
+                    <a href="#" class="btn btn-secondary pricing-btn">Get Community Edition</a>
+                </div>
+
+                <div class="pricing-card highlighted">
+                    <div class="card-badge">Most Popular</div>
+                    <h3 class="tier-name">Enterprise Scale</h3>
+                    <div class="tier-price">Custom Pricing</div>
+                    <ul class="tier-features">
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> GPU / CUDA Kernel Support</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> ACID WAL & Crash Recovery</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> Distributed Query Planning</li>
+                        <li><svg class="check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> 24/7 Enterprise Support SLA</li>
+                    </ul>
+                    <a href="#contact" class="btn btn-primary pricing-btn">Contact Sales</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section id="contact" class="section contact-section">
+        <div class="container contact-container">
+            <div class="contact-info">
+                <h3>Ready to accelerate your lakehouse?</h3>
+                <p>Speak to an engineer today to learn how BenoStreamDB can integrate into your existing Spark, Trino, and Iceberg pipelines.</p>
+                <div class="contact-details">
+                    <div class="detail-item">
+                        <strong>Email:</strong> sales@benostreamdb.org
+                    </div>
+                    <div class="detail-item">
+                        <strong>Enterprise Licensing:</strong> compliance@benostreamdb.org
+                    </div>
+                </div>
+            </div>
+            <form class="contact-form" onsubmit="event.preventDefault(); alert('Thank you for your interest! We will contact you shortly.');">
+                <div class="form-group">
+                    <label for="name">Name</label>
+                    <input type="text" id="name" placeholder="John Doe" required>
+                </div>
+                <div class="form-group">
+                    <label for="email">Work Email</label>
+                    <input type="email" id="email" placeholder="john@company.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="message">Message</label>
+                    <textarea id="message" rows="4" placeholder="Tell us about your database scale and CPU/GPU requirements..." required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">Request Demo</button>
+            </form>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container footer-container">
+            <div class="footer-left">
+                <span class="logo-text">BenoStream<span>DB</span></span>
+                <p class="copyright">&copy; 2026 BenoStreamDB. Dual-licensed under Apache 2.0 and MIT.</p>
+            </div>
+            <div class="footer-links">
+                <a href="#features">Features</a>
+                <a href="#benchmarks">Benchmarks</a>
+                <a href="#architecture">Architecture</a>
+                <a href="https://github.com/benolabsai/benostreamdb" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

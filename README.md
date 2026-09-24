@@ -1,0 +1,767 @@
+<p align="center">
+  <img src="BenoStreamDB.png" alt="BenoStreamDB Logo" width="300">
+</p>
+
+# BenoStreamDB
+**Serverless Index-Streaming Database with Overlay Indexing**
+
+An indexed lakehouse storage and search engine designed for production workloads, combining the transactional guarantees of Apache Iceberg with reconstructible persistent index overlays (scalar bitmaps, BM25 Okapi, and HNSW vector search) for blazing-fast queries directly on object storage.
+
+## 🎯 Architecture: The Indexed Lakehouse
+
+BenoStreamDB implements an indexed, compute-disaggregated lakehouse storage architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer:
+
+```text
+               Iceberg Table
+                     │
+       ┌─────────────┴──────────────┐
+       │                            │
+Authoritative Storage        Advisory Index Overlay
+       │                            │
+  Parquet Files              Bitmap / Bloom / BM25 / HNSW / TQ
+```
+
+> ### Core Architecture Invariants
+> 1. **The Overlay Invariant**: Index files are derived, reconstructible state. They may be absent, stale, or deleted without compromising snapshot correctness. Queries may degrade to Parquet scanning or background recovery, but never return incorrect results.
+> 2. **Publication Invariant**: A published manifest may reference only immutable artifacts that have already been successfully uploaded and verified to storage.
+> 3. **Durability Invariant**: WAL truncation is permitted only after the corresponding data is durably represented by a committed manifest snapshot.
+> 4. **Maintenance Invariant**: Maintenance operations may delete an artifact only if it is neither referenced by any active snapshot nor currently in-flight.
+
+| Feature | Iceberg/Delta | BenoStreamDB |
+|---------|---------------|---------------|
+| **Transactional Updates** | ✅ Yes | ✅ Yes |
+| **Time Travel** | ✅ Yes | ✅ Yes |
+| **Scalar Indexes** | ❌ No | ✅ RoaringBitmap |
+| **Boolean Indexes** | ❌ No | ✅ Native Boolean |
+| **TurboQuant** | ❌ No | ✅ TQ8 & TQ4 (8-bit/4-bit) |
+| **Fluent Indexing API** | ❌ No | ✅ Method Chaining |
+| **Hybrid Queries** | ❌ No | ✅ Scalar + Vector |
+| **Native SQL** | ❌ No | ✅ DataFusion |
+| **Index-Optimized Joins** | ❌ No | ✅ Index Nested Loop |
+| **Graph RAG & Analytics** | ❌ No | ✅ Native Edge Tables & UDFs |
+| **Query Engines** | Spark/Trino | Rust/Python/Spark/Trino |
+
+## ⚡ Iceberg V2/V3 Compatibility
+
+BenoStreamDB implements **100% of the core required Apache Iceberg table format V2 and V3 specifications**:
+
+| Feature | V1 | V2 | V3 | BenoStreamDB |
+|---------|----|----|----|--------------| 
+| **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ HyperLogLog |
+| **Row Lineage** | ❌ | ❌ | ✅ | ✅ `_row_id`, `_last_updated_sequence_number`, `next-row-id`, `first-row-id` |
+| **Default Values** | ❌ | ❌ | ✅ | ✅ `initial-default` & `write-default` |
+| **Deletion Vectors** | ❌ | ❌ | ✅ | ✅ Puffin Format Integrated |
+| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality Deletes |
+| **Nanosecond Timestamps** | ❌ | ❌ | ✅ | ✅ `timestamp_ns` & `timestamptz_ns` |
+
+### New APIs
+
+```python
+import benostreamdb as bsdb
+
+# Create table with sort order (V2)
+table = bsdb.Table("s3://bucket/table")
+table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
+
+# V3 tables automatically include row lineage
+# _row_id (UUID) and _last_updated_sequence_number are added when format_version >= 3
+```
+
+### Migration Guide: V2 → V3
+
+Upgrading to V3 enables row-level operations and enhanced tracking:
+
+1. **Automatic**: V3 metadata columns added transparently when `format_version >= 3`
+2. **No Data Rewrite**: Existing data remains compatible
+3. **New Columns**: `_row_id` (UUID v4), `_last_updated_sequence_number` (i64)
+
+
+## 🌐 REST APIs (OpenSearch & Qdrant)
+
+BenoStreamDB includes a highly optimized HTTP frontend (`benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
+
+- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search. (e.g., connect Kibana or Grafana directly).
+- **Qdrant Vector API (Port 6333)**: Native vector database emulation. Fully compatible with Qdrant's unstructured JSON payloads, which are dynamically inferred and converted into highly compressed Arrow columns on write.
+
+Both APIs are hosted concurrently from a single binary, completely share the exact same underlying `AppState` and data files, and require zero data duplication. You can write a collection of embeddings via the Qdrant API and instantly query it via the OpenSearch API!
+
+To start the dual-API server:
+```bash
+# Uses BENOSEARCH_PORT=9200 and BENOSEARCH_QDRANT_PORT=6333 by default
+cargo run -p benostreamdb-search
+```
+
+## 🚀 Quick Start
+
+### 🐳 Docker Quickstart (3 Minutes to First Query)
+
+Run the full BenoStreamDB gateway stack with one command:
+
+```bash
+# Standalone All-in-One Container (Local storage)
+docker run -d --name benostreamdb \
+  -p 9200:9200 \
+  -p 6333:6333 \
+  -p 50051:50051 \
+  benostreamdb/quickstart:latest
+
+# Or Full-Stack Compose (MinIO S3 + Nessie Catalog + BenoStreamDB)
+docker compose -f docker/docker-compose.quickstart.yml up -d
+```
+
+| Service | Protocol | Port | Description |
+| :--- | :--- | :--- | :--- |
+| **Elasticsearch 7.10** | REST / JSON | `9200` | Text indexing, BM25, and hybrid search |
+| **Qdrant Vector** | REST / JSON | `6333` | Point upsert and vector similarity queries |
+| **Arrow Flight SQL** | gRPC / Flight | `50051` | Zero-copy SQL for DuckDB, Polars, BI tools |
+
+Verify cluster health:
+```bash
+curl http://localhost:9200/_cluster/health
+```
+
+#### GPU-Accelerated Docker (NVIDIA CUDA, AMD ROCm, Intel XPU)
+Run with hardware acceleration across NVIDIA, AMD, or Intel GPUs:
+```bash
+# Launch with GPU override:
+docker compose -f docker/docker-compose.quickstart.yml -f docker/docker-compose.gpu.yml up -d
+
+# Verify compute engine reported by the Search API:
+curl -s http://localhost:9200/
+```
+Output:
+```json
+{
+  "name": "bsdb-search-1",
+  "cluster_name": "bsdb-search",
+  "version": { "number": "7.10.2", ... },
+  "compute": {
+    "backend": "cuda",
+    "device_id": 0,
+    "gpu_accelerated": true,
+    "available": true
+  },
+  "tagline": "You know, you search"
+}
+```
+
+
+### Python Installation
+
+**Standard Install (CPU + WGPU/Vulkan):**
+The default package includes automatic high-performance hardware detection for NVIDIA CUDA, Apple Metal, Intel Graphics/XPU, and AMD ROCm.
+
+```bash
+pip install benostreamdb
+```
+
+**Windows Users:**
+BenoStreamDB is optimized for Linux/POSIX. Windows users should use **WSL2**.
+
+
+### GPU Acceleration (Optional)
+
+For GPU-accelerated vector operations, install the appropriate backend:
+
+**NVIDIA CUDA:**
+```bash
+# Ubuntu/Debian
+sudo apt-get install cuda-toolkit-12-3
+# Verify: nvidia-smi
+```
+
+**AMD ROCm:**
+ROCm support is now native on Linux via WGPU/Vulkan.
+```bash
+# Verify Vulkan support (standard in modern ROCm drivers)
+vulkaninfo | grep vendor
+# Verify: rocm-smi
+```
+
+**Apple Metal:**
+- Included with macOS 12.3+ on Apple Silicon (M1, M2, M3, M4, M5)
+- No additional installation required
+
+**Intel XPU / Graphics:**
+Intel Arc and Data Center GPUs are supported natively on Linux.
+```bash
+# Verify intel-media-va-driver or similar is present
+clinfo | grep Intel
+```
+
+See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
+
+### pgvector SQL Compatibility
+
+BenoStreamDB provides full pgvector-compatible SQL syntax for vector operations:
+
+```sql
+-- Use familiar pgvector operators
+SELECT id, content, 
+       embedding <-> '[0.1, 0.2, 0.3]'::vector AS l2_distance,
+       embedding <=> '[0.1, 0.2, 0.3]'::vector AS cosine_distance
+FROM documents
+WHERE category = 'science'
+ORDER BY l2_distance
+LIMIT 10;
+
+-- All six distance operators supported
+-- <->  L2 (Euclidean)
+-- <=>  Cosine  
+-- <#>  Inner Product
+-- <+>  L1 (Manhattan)
+-- <~>  Hamming (direct on ::vector)
+-- <%>  Jaccard (direct on ::vector)
+```
+
+> **💡 pgvector Compatibility Note on `<~>` (Hamming) & `<%>` (Jaccard):**  
+> In BenoStreamDB, `<~>` and `<%>` operate directly on standard float `::vector` embeddings (evaluating binary indicator sets and quantized vectors) for developer convenience. In upstream PostgreSQL `pgvector`, these two operators are restricted exclusively to the `bit` data type.  
+> 
+> **PostgreSQL Conversion Equivalent:**
+> ```sql
+> -- BenoStreamDB:
+> SELECT * FROM documents ORDER BY embedding <~> '[1, 0, 1]'::vector LIMIT 10;
+> 
+> -- PostgreSQL (pgvector 0.7.0+): requires binary_quantize() to produce bit types
+> SELECT * FROM documents ORDER BY binary_quantize(embedding) <~> binary_quantize('[1, 0, 1]'::vector) LIMIT 10;
+> ```
+
+See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation and conversion guide.
+
+### Basic Usage
+
+```python
+import benostreamdb as bsdb
+
+# Create table
+table = bsdb.Table("s3://bucket/my-table")
+
+# Write data (Pandas/PyArrow)
+import pandas as pd
+df = pd.DataFrame({
+    "id": [1, 2, 3],
+    "embedding": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+})
+table.write_pandas(df)
+table.commit()
+
+# Create high-performance vector index (TQ8 - 4x compression)
+table.add_index("embedding", "hnsw_tq8")
+
+# Query with filters (uses indexes!)
+results = table.to_pandas(filter="id > 1")
+
+# Vector search
+query_vec = [0.15, 0.25]
+results = table.to_pandas(
+    vector_filter={"column": "embedding", "query": query_vec, "k": 10}
+)
+
+# Hybrid query (scalar + vector)
+results = table.to_pandas(
+    filter="category = 'science'",
+    vector_filter={"column": "embedding", "query": query_vec, "k": 10}
+)
+```
+
+## 🔄 Fluent Query API
+
+BenoStreamDB features a fluent query API in Rust with method chaining. Python uses the `to_pandas()` API with filter and vector_filter arguments.
+
+### Rust Fluent API
+
+The same fluent interface is available in native Rust:
+
+```rust
+use benostreamdb::{Table, VectorValue};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let table = Table::new("s3://bucket/my-table")?;
+    
+    // Method chaining
+    let results = table
+        .query()
+        .filter("age > 25")
+        .vector_search("embedding", VectorValue::Float32(query_vec), 10)
+        .select(vec!["name".to_string(), "score".to_string()])
+        .to_batches()
+        .await?;
+    
+    println!("Found {} result batches", results.len());
+    Ok(())
+}
+```
+
+### Benefits
+
+- **Method Chaining**: Intuitive, readable query construction  
+- **Type Safe**: Compile-time validation in Rust, runtime validation in Python
+- **Performance**: Same underlying optimized execution as traditional APIs
+- **Interoperable**: Mix with SQL queries and traditional `to_pandas()` calls
+- **GPU Acceleration**: Automatic GPU context propagation for vector operations
+- **TurboQuant Optimized**: Seamless integration with 8-bit/4-bit quantization
+
+### TurboQuant Quantization (TQ8 / TQ4)
+
+BenoStreamDB features **TurboQuant**, an optimized quantization engine that reduces vector storage costs while maintaining high search accuracy:
+
+- **TQ8 (8-bit)**: 4x compression vs. float32. Near-lossless accuracy (typically >99% recall retention). Ideal for general-purpose RAG.
+- **TQ4 (4-bit)**: 8x compression vs. float32. Maximum efficiency for massive datasets where storage cost is the primary bottleneck.
+
+```python
+# High-performance community default (HNSW-TQ8)
+table.add_index("embedding", "hnsw_tq8")
+
+# High-compression mode
+table.add_index("embedding", "hnsw_tq4")
+
+# Custom HNSW-PQ configuration
+table.add_index("embedding", {
+    "type": "hnsw_pq",
+    "complexity": 32,
+    "quality": 300,
+    "compression": 32 # PQ subspaces
+})
+```
+
+### Python Vector Distance API with GPU Acceleration
+
+BenoStreamDB provides a comprehensive Python API for vector distance computations with GPU acceleration:
+
+```python
+import benostreamdb as bsdb
+import numpy as np
+
+# GPU-accelerated batch distance computation
+ctx = bsdb.GPUContext.auto_detect()  # Auto-detect CUDA/ROCm/Metal/XPU
+print(f"Using GPU backend: {ctx.backend}")
+
+# Create query and database vectors
+query = np.random.randn(768).astype(np.float32)
+database = np.random.randn(100000, 768).astype(np.float32)
+
+# Compute distances on GPU (10x+ faster for large databases)
+distances = bsdb.l2_distance_batch(query, database, context=ctx)
+
+# Find top-k nearest neighbors
+k = 10
+top_k_indices = np.argsort(distances)[:k]
+
+# Single-pair distance computation
+vec1 = np.array([1.0, 2.0, 3.0])
+vec2 = np.array([4.0, 5.0, 6.0])
+distance = bsdb.cosine_distance(vec1, vec2)
+
+# Sparse vector support for high-dimensional sparse data
+sparse1 = bsdb.SparseVector(
+    indices=np.array([0, 5, 100], dtype=np.int32),
+    values=np.array([1.0, 2.5, 0.8], dtype=np.float32),
+    dim=1000
+)
+sparse2 = bsdb.SparseVector(
+    indices=np.array([5, 50, 100], dtype=np.int32),
+    values=np.array([2.0, 1.5, 0.9], dtype=np.float32),
+    dim=1000
+)
+distance = bsdb.l2_distance_sparse(sparse1, sparse2)
+
+# Binary vector operations (bit-packed for efficiency)
+binary1 = np.packbits(np.random.randint(0, 2, 128))
+binary2 = np.packbits(np.random.randint(0, 2, 128))
+distance = bsdb.hamming_distance_packed(binary1, binary2)
+```
+
+**Supported GPU Backends:**
+- **CUDA** - NVIDIA GPUs (Linux, Windows via WSL2)
+- **ROCm** - AMD GPUs (Native Linux via WGPU)
+- **Intel XPU** - Intel Graphics (Native Linux via WGPU)
+- **Metal (MPS)** - Apple Silicon (macOS)
+- **Torch Alignment** - Automatically aliases `cuda` to `rocm` on AMD hardware if `torch.version.hip` is detected.
+- **CPU** - Fallback for all platforms
+
+**Supported Distance Metrics:**
+- L2 (Euclidean), Cosine, Inner Product, L1 (Manhattan), Hamming, Jaccard
+
+See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
+
+### SQL queries (full DataFusion support with pgvector syntax)
+
+```python
+import benostreamdb as bsdb
+session = bsdb.Session()
+session.register("users", table)
+
+# Optional: Enable GPU acceleration for SQL queries
+device = bsdb.Device.auto_detect()
+device.activate()
+
+# Simple SQL (via table — registers as table 't')
+results = table.execute_sql("SELECT * FROM t WHERE id > 100")
+
+# Vector similarity search with pgvector operators (GPU-accelerated)
+results = session.sql("""
+    SELECT id, content,
+           embedding <-> '[0.1, 0.2, 0.3]'::vector AS distance
+    FROM documents
+    WHERE category = 'science'
+    ORDER BY distance
+    LIMIT 10
+""")
+
+# Joins (uses Index Nested Loop Join optimization)
+results = session.sql("""
+    SELECT u.name, o.amount
+    FROM users u
+    JOIN orders o ON u.id = o.user_id
+    WHERE u.category = 'premium'
+""")
+
+# Maintenance
+table.compact()
+```
+
+## 📊 Production Benchmarks & Verification
+
+BenoStreamDB performance has been validated across large-scale synthetic, real-world datasets, and head-to-head competitive benchmarks against industry-standard engines like **OpenSearch 2.11**:
+
+### 🚀 Competitive Benchmarks: BenoStreamDB vs. OpenSearch 2.11 (4 CPUs, 4GB RAM)
+
+Conducted under identical, strictly constrained container environments (4 CPU cores, 4GB RAM, 64-dimensional float32 vectors, Wikipedia text payloads):
+
+| Benchmark Scale | Metric / Operation | BenoStreamDB (p50) | BenoStreamDB (p99) | OpenSearch 2.11 (p50) | OpenSearch 2.11 (p99) | Advantage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **100K Documents** | `knn` HNSW Vector Search | **1.94 ms** | **4.26 ms** | 4.29 ms | 62.58 ms | **14.7x faster p99** |
+| **100K Documents** | Total Storage Required | **~26.0 MB** | — | ~185.4 MB | — | **7.1x less disk space** |
+| **100K Documents** | `match` BM25 Search | 3.96 ms | 4.75 ms | **2.91 ms** | **4.33 ms** | Competitive (<5ms) |
+| **1M Documents** | `knn` HNSW Vector Search | **1.91 ms** | **3.74 ms** | 8.26 ms | 478.77 ms | **128x faster p99 (zero tail spikes)** |
+| **1M Documents** | Total Storage Required | **~280 MB** | — | ~1,852 MB (1.85 GB) | — | **6.6x less disk space** |
+| **1M Documents** | Ingestion Rate | 4,613 docs/s | — | **9,221 docs/s** | — | OpenSearch defers merges |
+
+> **Key Architectural Takeaways:**
+> - **Ironclad Vector Latency Stability**: At 1M vectors, OpenSearch tail latency collapses to **478.77 ms** due to JVM garbage collection pauses and Lucene segment merging. BenoStreamDB query latency stays completely flat (**1.91 ms p50 / 3.74 ms p99**) thanks to its Hot Row Cache bypassing disk I/O on scattered row lookups.
+> - **Zero Data Duplication (6.6x–7x Storage Savings)**: OpenSearch requires maintaining a separate primary data lake *plus* duplicating all vectors into amplified Lucene index files (~1.85 GB total). BenoStreamDB **is** the data lake, writing compressed Parquet files with compact `.hnsw` sidecar files (~280 MB total).
+> - **Instant Stateless Cold Starts**: BenoStreamDB eliminates the JVM boot, translog replay, and Lucene warmup delays of clustered search engines—memory mapping Parquet and `.hnsw` sidecars directly from the OS page cache for immediate query readiness.
+>
+> 📖 *For complete test methodology, memory safety metrics, and replication scripts, see the [Benchmarking Guide](docs/BENCHMARKING.md).*
+
+### Workload & Engine Baselines
+
+| Dataset / Workload | Metric | Performance | Notes |
+| :--- | :--- | :--- | :--- |
+| **NYC Taxi (3M rows)** | Ingest Throughput | **753,782 rows/sec** | Single-node Parquet write & manifest commit |
+| **NYC Taxi (3M rows)** | Query Latency (p99) | **85ms** | Selective ID filter via Inverted Index |
+| **NYC Taxi (3M rows)** | Compaction | **4.91s** | 3M rows compacted across segments |
+| **Wikipedia (100K docs)** | Scalar Projected Filter | **14ms** | 142x speedup by skipping embedding columns |
+| **Vectors (100K 768-dim)** | Parallel Vector Search | **5.0s** | 10 segments, 16 auto-detected parallel readers |
+| **Vectors (100K 768-dim)** | Index Build Time | **62s** | HNSW graph generation |
+| **Vectors (100K 768-dim)** | Recall@10 | **100%** | Exact match vs. exhaustive scan |
+
+To run the integration and benchmark suite:
+```bash
+# Criterion micro-benchmarks
+cargo bench
+
+# Competitive 100k/1M OpenSearch benchmarks
+./run_comparison.sh
+./run_1m_comparison.sh
+
+# Integration benchmarks
+python tests/integration/test_nyc_taxi.py
+python tests/benchmarks/benchmark_vs_iceberg.py
+```
+
+## 🏗️ Architecture
+
+### Overlay Indexing
+
+BenoStreamDB stores indexes as **sidecar files** alongside Parquet data:
+
+```
+s3://bucket/table/
+├── data/
+│   ├── segment_001.parquet                   # Main Data (Parquet)
+│   ├── segment_001.id.inv.parquet           # Scalar index (Inverted Parquet)
+│   ├── segment_001.emb.centroids.parquet    # Vector index centroids
+│   └── segment_001.emb.cluster_0.hnsw.graph # Vector index graph (HNSW)
+├── _manifest/
+│   ├── v1.avro                              # Manifest (Iceberg/Avro)
+│   └── v2.avro
+└── _metadata/
+    └── v1.metadata.json
+```
+
+### Manifest Format
+
+**Apache Iceberg V2/V3 compliant** (Avro encoding):
+
+```json
+{
+  "version": 2,
+  "timestamp_ms": 1705512000000,
+  "entries": [
+    {
+      "file_path": "segment_001.parquet",
+      "file_size_bytes": 104857600,
+      "record_count": 1000000,
+      "index_files": [
+        {
+          "file_path": "segment_001.id.inv.parquet",
+          "index_type": "scalar",
+          "column_name": "id"
+        },
+        {
+          "file_path": "segment_001.embedding.cluster_0.hnsw.graph",
+          "index_type": "vector",
+          "column_name": "embedding"
+        }
+      ]
+    }
+  ],
+  "prev_version": 1
+}
+```
+
+## 🔌 Connectors
+
+> [!NOTE]
+> **MERGE INTO Support**
+> While Apache DataFusion's native SQL engine does not currently support `MERGE INTO` syntax out-of-the-box, **you can seamlessly use `MERGE INTO` with BenoStreamDB via the Spark and Trino connectors**. Spark and Trino parse the SQL statements using their respective query engines, determine the row-level changes, and send standard Iceberg Position Deletes and Data Appends to the BenoStreamDB core via our optimized JNI bridges.
+
+### Spark
+The Spark connector supports **Spark 3.5, 4.0, and 4.1** via a shared JNI FFI bridge. It intercepts row-level operations (like `MERGE INTO`) to take advantage of BenoStreamDB's fast indexing and supports configuring GPU backends.
+
+```scala
+// Read
+val df = spark.read
+  .format("benostream")
+  .option("path", "s3://bucket/table")
+  // Optionally configure the GPU device (cuda, mps, intel, rocm, auto, or cpu)
+  .option("benostream.gpu_device", "cuda")
+  .load()
+
+// Write
+df.write
+  .format("benostream")
+  .option("path", "s3://bucket/table")
+  .save()
+```
+
+You can also globally configure the GPU for Spark stored procedures (e.g. index building):
+```scala
+spark.conf.set("spark.benostream.gpu.device", "cuda")
+```
+
+### Trino
+The Trino connector intercepts reads to natively push down scalar and vector filtering to the BenoStreamDB core, drastically reducing IO.
+
+```sql
+SELECT * FROM benostream.default.my_table
+WHERE id > 100;  -- Uses scalar index natively via JNI pushdown
+```
+
+You can configure the GPU backend for Trino globally or per-catalog using the properties file (e.g. `etc/catalog/benostream.properties`):
+```properties
+connector.name=benostreamdb
+benostream.gpu-device=cuda
+```
+
+### Arrow Flight SQL Gateway
+BenoStreamDB provides a high-performance Arrow Flight SQL server (`benostreamdb-flight`) running over gRPC (port 50051). This enables any JDBC, ODBC, ADBC, or Arrow-native client (including BI tools and distributed query engines) to query BenoStreamDB with zero-copy Arrow serialization and native index pushdown.
+
+```bash
+cargo run -p benostreamdb-flight
+```
+
+### dbt (`dbt-benostreamdb`)
+Official dbt adapter for BenoStreamDB over Arrow Flight SQL. Provides native vector search macros and custom materializations:
+
+- **Vector Macros**: `vector_distance(...)`, `knn_search(...)`, `vector_avg(...)`, `type_vector(...)`, `type_sparsevec(...)` with pgvector-compatible operators.
+- **Custom Materializations**: Table and incremental materialization with support for `append`, `delete+insert`, and partition-looping `insert_overwrite`.
+- **DDL Support**: Iceberg-compatible `PARTITIONED BY` syntax.
+
+```bash
+cd dbt-benostreamdb
+pip install -e .
+```
+
+### Python (Direct)
+```python
+# No Spark needed for local/notebook work
+import benostreamdb as bsdb
+df = bsdb.Table("s3://bucket/table").query().execute()
+# Or using traditional API: df = bsdb.Table("s3://bucket/table").to_pandas()
+```
+
+## 🔨 Building Connectors
+
+The Spark and Trino connectors require building shaded "fat" JARs that bundle the native Rust core.
+
+### Matrix Build
+We provide a script to build a full matrix of connectors (Java 17/21, Spark 3.5/4.0):
+```bash
+./build-connectors.sh
+```
+
+### Hardware Acceleration
+- **Standard**: Build with CPU + Intel Graphics/XPU support (default).
+- **CUDA**: Build for NVIDIA GPUs:
+  ```bash
+  ./build-connectors.sh --cuda
+  ```
+
+### Portable Toolchain
+The build script automatically downloads a project-local Maven and JDK 21 if they are missing from your system, ensuring a consistent build environment.
+
+### Artifacts
+Final JARs and ZIPs are collected in the `connector-artifacts/` directory.
+
+## 🧪 Development
+
+### Build & Test
+
+```bash
+# Build Rust library
+cargo build --release
+
+# Run tests
+cargo test
+
+# Run benchmarks
+cargo bench
+
+# Build Python bindings
+maturin develop
+
+# Python tests
+pytest tests/
+```
+
+### Project Structure
+
+```
+benostreamdb/
+├── src/
+│   ├── lib.rs                  # Main library & PyO3 module registration
+│   ├── core/
+│   │   ├── table/              # Table API (read, write, schema, fluent query)
+│   │   ├── reader/             # Index-aware Parquet reader
+│   │   ├── manifest/           # Manifest management (Iceberg/Avro)
+│   │   ├── index/              # HNSW, inverted, bitmap indexes
+│   │   ├── catalog/            # REST, Nessie, Glue, Hive, Unity catalogs
+│   │   ├── sql/                # DataFusion integration & pgvector operators
+│   │   ├── planner/            # Query planner & optimizer
+│   │   ├── iceberg/            # Iceberg V2/V3 metadata & schema
+│   │   ├── lock.rs             # Vendor-neutral distributed locking (FileBasedLock via object store CAS)
+│   │   ├── compaction.rs       # Compaction engine
+│   │   ├── maintenance.rs      # Vacuum/GC
+│   │   ├── storage.rs          # Multi-cloud storage (S3, GCS, Azure, local)
+│   │   ├── wal.rs              # Write-Ahead Log
+│   │   ├── ffi.rs              # JNI bindings (Spark/Trino)
+│   │   └── error.rs            # Structured error types
+│   ├── telemetry/              # Structured tracing (OpenTelemetry) & Prometheus metrics
+│   ├── python_binding.rs       # PyO3 bindings
+│   ├── python_distance.rs      # Vector distance API
+│   └── python_gpu_context.rs   # GPU device management
+├── benostreamdb-flight/        # Arrow Flight SQL gRPC server
+├── benostreamdb-search/        # OpenSearch 7.10 & Qdrant REST search gateway
+├── dbt-benostreamdb/           # Official dbt adapter (Arrow Flight SQL)
+├── benostreamdb-enterprise/    # Enterprise extensions (Continuous Indexing, Enterprise Security)
+├── spark-benostream/          # Spark connector (Java)
+├── trino-benostream/          # Trino connector (Java)
+├── tests/
+│   ├── integration/            # Infrastructure integration tests
+│   ├── benchmarks/             # Performance benchmarks
+│   └── python/                 # Python binding tests
+└── benches/                    # Criterion benchmarks
+```
+
+## 🔎 Search API (OpenSearch / Elasticsearch 7.10-compatible)
+
+BenoStreamDB ships an optional add-on, **`bsdb-search`** (`benostreamdb-search`),
+that serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API on top of
+the engine — plus a **Qdrant**-compatible API for vector workloads. It is built for
+website search, document catalogs, and knowledge bases where a 50–200 ms query latency
+envelope is acceptable and object-storage-native, scale-to-zero hosting is desired.
+
+```bash
+cargo build --release -p benostreamdb-search --bin bsdb-search
+BENOSEARCH_BIND=127.0.0.1 BENOSEARCH_PORT=9200 ./target/release/bsdb-search
+
+# Index + search (ES 7.10 wire format)
+curl -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
+     -d '{"title":"Hello","body":"Welcome to BenoStreamDB"}'
+curl -X POST localhost:9200/articles/_refresh
+curl -X POST localhost:9200/articles/_search -H 'content-type: application/json' \
+     -d '{"query":{"match":{"body":"BenoStreamDB"}}}'
+```
+
+**Running as a Background Service**
+
+For production deployments on Linux and macOS, you can easily install `benostream-search` as a native background daemon (`systemd` or `launchd`) so it runs continuously and starts on boot:
+
+```bash
+# Ensure the binary is built and available at /usr/local/bin/benostream-search
+sudo benostreamdb install-service
+```
+This will automatically generate the configuration file and start the service. See [scripts/services/README.md](scripts/services/README.md) for full configuration and uninstallation details.
+
+**Supported:** cluster/health/cat/stats, index CRUD, mapping GET/PUT, `_doc`, `_bulk`,
+`_refresh`, `_search` (`match` BM25, `knn` HNSW, hybrid RRF, `filter`/`bool` with
+`term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering,
+`from`/`size`, and Prometheus `/metrics`.
+
+**Not supported (v1):** per-document delete (501, append-only), aggregations, aliases,
+reindex, ILM, snapshots, auth, multi-node. See
+[OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) for the full matrix and
+[GETTING_STARTED.md](GETTING_STARTED.md) for a complete quickstart.
+
+## 📈 Roadmap
+
+### ✅ Completed (Core Foundation & Scale Testing)
+- [x] **Core Storage**: Hybrid segment format (Parquet + indexes) & Iceberg V2/V3 Manifest management.
+- [x] **Operations**: Compaction engine, Maintenance operations, Cloud-agnostic distributed locking, & Optimistic Concurrency Control (OCC).
+- [x] **Query Engine**: Native SQL support (DataFusion), Index Nested Loop Join, pgvector-compatible operators.
+- [x] **Catalog**: Multi-catalog support (Nessie, REST, AWS Glue, Hive Metastore, Unity, Polaris, Lakekeeper).
+- [x] **Vector Search**: Multi-backend GPU support (CUDA, ROCm, Metal, XPU), TurboQuant™ (TQ4/TQ8), Multi-vector search (RRF).
+- [x] **Advanced Search & Query**: Zero-Copy Arrow IPC Vector Index traversal, HNSW Hot Cache Optimization, Async Ingest Memory Buffer & WAL.
+- [x] **Graph RAG & Analytics**: Native graph analytics on Iceberg edge tables (PageRank, Community Detection, NetworkX interop).
+- [x] **APIs & Gateways**: OpenSearch 7.10 & Qdrant REST APIs (`benostreamdb-search`), Arrow Flight SQL Gateway (`benostreamdb-flight`).
+- [x] **Connectors**: Spark (V2) & Trino (SPI) connectors, Python Vector Distance API, Official dbt adapter.
+- [x] **Benchmarking & Validation**: 100k / 1M doc competitive benchmarks vs OpenSearch 2.11, Resource-Constrained Vector Benchmarking (4 GB RAM Matrix).
+- [x] **Lifecycle Verification**: Streaming Commit & Delete Lifecycle Verification (Iceberg V2 position delete masking in vector graph scans).
+
+### 🔄 Active & In Progress
+- [ ] **Codebase Intelligence**: MCP Server Implementation, Git-Diff Incremental CI Indexer.
+
+### 📋 Planned
+- [ ] **Client Ecosystem & Packaged Distribution**: LangChain & LlamaIndex integrations.
+- [ ] **Enterprise Features [Paid]**: Row-Level Security (RLS), Dynamic Column Masking, Customer-Managed Encryption Keys (CMEK), SIEM Export, Fused SIMD Kernels.
+
+*For a detailed breakdown of all phases, see [ROADMAP.md](ROADMAP.md).*
+
+## 🤝 Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 📄 License
+
+The Python wrapper is licensed under the **MIT License**.
+The underlying Rust engine and core database logic is licensed under the **Apache License 2.0**.
+
+This project contains modified source code from various upstream open-source projects (including `hnsw_rs` for pre-filtering support), which were originally licensed under Apache 2.0. BenoStreamDB maintains compliance by retaining all original copyright notices and providing prominent notice of modifications in the relevant source files.
+
+## 🙏 Acknowledgments
+
+- **Apache Iceberg** - Inspiration for manifest design
+- **Apache Arrow** - Columnar format
+- **hnsw_rs** - Vector indexing
+- **RoaringBitmap** - Scalar indexing
+
+---
+
+**Built with ❤️ in Rust**
+
+

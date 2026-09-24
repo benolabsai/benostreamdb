@@ -1,0 +1,16 @@
+[Unit]
+Description=BenoStreamDB Search Node
+After=network.target
+
+[Service]
+Type=simple
+# Load the configuration file
+EnvironmentFile=/etc/benostreamdb/benostream-search.conf
+
+# Execute the binary
+ExecStart=/usr/local/bin/benostream-search
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

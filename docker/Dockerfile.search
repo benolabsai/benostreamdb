@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# BenoStreamDB Search Service
+# Elasticsearch 7.10 (Port 9200) + Qdrant (Port 6333) compatible REST API
+# ---------------------------------------------------------------------------
+FROM rust:1.93-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    protobuf-compiler \
+    python3 \
+    libpython3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace manifests for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY benostreamdb-search/Cargo.toml benostreamdb-search/Cargo.toml
+COPY benostreamdb-flight/Cargo.toml benostreamdb-flight/Cargo.toml
+
+# Create stub sources for dependency layer caching and manifest validation
+RUN mkdir -p src \
+    && echo "pub fn stub() {}" > src/lib.rs \
+    && echo "fn main() {}" > build.rs \
+    && mkdir -p benostreamdb-search/src \
+    && echo "fn main() {}" > benostreamdb-search/src/main.rs \
+    && echo "pub fn stub() {}" > benostreamdb-search/src/lib.rs \
+    && mkdir -p benostreamdb-flight/src \
+    && echo "fn main() {}" > benostreamdb-flight/src/main.rs \
+    && mkdir -p tests/bin benches \
+    && echo "fn main() {}" > tests/test_connector_ffi.rs \
+    && echo "fn main() {}" > tests/bin/generate_iceberg_manifests.rs \
+    && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
+    && echo "fn main() {}" > benches/performance.rs \
+    && echo "fn main() {}" > benches/bench_table.rs \
+    && cargo build --release -p benostreamdb-search \
+    && rm -rf target/release/.fingerprint/benostreamdb* \
+              target/release/deps/*benostreamdb* \
+              target/release/deps/libbenostreamdb* \
+              target/release/build/benostreamdb* \
+              target/release/bsdb-search*
+
+# Copy actual source
+COPY build.rs ./
+COPY src ./src
+COPY benostreamdb-search/src ./benostreamdb-search/src
+
+# Build the bsdb-search binary
+RUN cargo build --release -p benostreamdb-search
+
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y \
+    libssl3t64 \
+    ca-certificates \
+    curl \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r benostream && useradd -r -g benostream benostream
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/bsdb-search /usr/local/bin/
+
+# ES 7.10 API + Qdrant API + Prometheus metrics
+EXPOSE 9200 6333 9090
+
+# Health check against ES cluster health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:9200/_cluster/health || exit 1
+
+USER benostream
+
+# Default: bind to 0.0.0.0 for container networking
+ENV BENOSEARCH_BIND=0.0.0.0
+ENV BENOSEARCH_PORT=9200
+ENV QDRANT_BIND=0.0.0.0
+ENV QDRANT_PORT=6333
+ENV RUST_LOG=info
+
+ENTRYPOINT ["bsdb-search"]
+CMD []

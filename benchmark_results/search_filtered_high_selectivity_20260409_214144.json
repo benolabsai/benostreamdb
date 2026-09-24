@@ -1,0 +1,14 @@
+[
+  {
+    "name": "search_filtered_high_selectivity",
+    "throughput": null,
+    "latency_p50_ms": 59.92448329925537,
+    "latency_p95_ms": 77.80650854110716,
+    "latency_p99_ms": 107.2591257095338,
+    "latency_mean_ms": 63.153064250946045,
+    "latency_min_ms": 54.52466011047363,
+    "latency_max_ms": 130.09262084960938,
+    "elapsed_sec": 6.637589931488037,
+    "memory_delta_mb": 20.09765625
+  }
+]

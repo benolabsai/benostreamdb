@@ -1,0 +1,6 @@
+catalog_type = "rest"
+
+[config]
+url = "https://catalog.example.com/api/v1"
+prefix = "my_namespace"
+token = "bearer-token-here"

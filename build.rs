@@ -1,0 +1,54 @@
+use std::env;
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+
+    // Get git tag version for version injection
+    let version = get_git_version();
+    println!("cargo:rustc-env=BENOSTREAMDB_VERSION={}", version);
+
+    // Write version constant to version.rs for use in code. Propagate the error
+    // rather than panicking: a build-script failure surfaces as a normal cargo
+    // error either way, but `?` keeps this file on the no-panic policy.
+    let out_dir = env::var("OUT_DIR")?;
+    let version_file = Path::new(&out_dir).join("version.rs");
+    fs::write(
+        &version_file,
+        format!(r#"pub const VERSION: &str = "{}";"#, version),
+    )?;
+    Ok(())
+}
+
+fn get_git_version() -> String {
+    // Try to get the latest git tag
+    if let Ok(output) = Command::new("git")
+        .args(["describe", "--tags", "--abbrev=0"])
+        .output()
+    {
+        if output.status.success() {
+            let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // Remove 'v' prefix if present (e.g., v0.1.2 -> 0.1.2)
+            if let Some(stripped) = tag.strip_prefix('v') {
+                return stripped.to_string();
+            }
+            return tag;
+        }
+    }
+
+    // Fall back to getting current commit hash
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+    {
+        if output.status.success() {
+            let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return format!("0.1.0-{}", hash);
+        }
+    }
+
+    // Final fallback to Cargo.toml version
+    "0.1.0".to_string()
+}

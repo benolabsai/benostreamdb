@@ -1,0 +1,257 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+use super::*;
+use arrow::array::{Int32Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use std::sync::Arc;
+use tempfile::tempdir;
+
+#[test]
+fn index_build_gate_is_bounded_and_releases_permits() {
+    // The gate exists so the runtime cannot fan out `nproc` multi-GB index
+    // builds at once (the Wikipedia load OOM-killed at 105 GB RSS).
+    let gate = new_index_build_gate();
+    let n = gate.available_permits();
+    assert!(n >= 1, "gate must admit at least one build, got {n}");
+
+    // Exhaust it: no more than `n` concurrent holders.
+    let held: Vec<_> = (0..n)
+        .map(|_| gate.clone().try_acquire_owned().expect("permit available"))
+        .collect();
+    assert_eq!(gate.available_permits(), 0);
+    assert!(gate.clone().try_acquire_owned().is_err());
+
+    // Dropping a holder returns its permit.
+    drop(held);
+    assert_eq!(gate.available_permits(), n);
+}
+
+#[tokio::test]
+async fn memory_reclaimed_notification_wakes_blocked_writer() {
+    // The ingest RAM back-pressure wait (`write_with_durability_async`) is woken
+    // by `notify_memory_reclaimed`. A missing notification would hang a writer
+    // forever once RSS is over the limit, so guard the wiring: register a
+    // waiter, notify, and confirm it completes.
+    let dir = tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri).await.expect("table");
+
+    let mut waiter = std::pin::pin!(table.memory_reclaimed.notified());
+    // Poll once so the waiter registers before the notification is sent.
+    assert!(
+        futures::FutureExt::now_or_never(waiter.as_mut()).is_none(),
+        "waiter should be pending before the notification"
+    );
+    table.notify_memory_reclaimed();
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+        .await
+        .expect("notify_memory_reclaimed should wake a registered waiter");
+}
+
+#[tokio::test]
+async fn test_table_lifecycle() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    // Use local file system uri
+    let uri = format!("file://{}", path);
+
+    // 1. Create Table (async)
+    let table = Table::new_async(uri.clone()).await?;
+
+    // 2. Write Data
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ],
+    )?;
+
+    // Use write_async since table was created with new_async
+    table.write_async(vec![batch.clone()]).await?;
+    table.commit_async().await?;
+
+    // 3. Read Data
+    let batches = table.read_async(None, None, None).await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_multi_column_bucketing() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    let uri = format!("file://{}", path);
+    let _table = Table::new_async(uri.clone()).await?;
+
+    // 1. Setup schema with metadata IDs
+    let mut fields = Vec::new();
+    let mut id_meta = std::collections::HashMap::new();
+    id_meta.insert("iceberg.id".to_string(), "1".to_string());
+    fields.push(Field::new("col1", DataType::Int32, false).with_metadata(id_meta));
+
+    let mut type_meta = std::collections::HashMap::new();
+    type_meta.insert("iceberg.id".to_string(), "2".to_string());
+    fields.push(Field::new("col2", DataType::Utf8, false).with_metadata(type_meta));
+
+    let schema = Arc::new(Schema::new(fields));
+
+    // 2. Define multi-column bucket partition spec
+    let spec = crate::core::manifest::PartitionSpec {
+        spec_id: 0,
+        fields: vec![crate::core::manifest::PartitionField::new_multi(
+            vec![1, 2],
+            Some(1000),
+            "combined_bucket".to_string(),
+            "bucket[10]".to_string(),
+        )],
+    };
+
+    // 3. Create batch
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int32Array::from(vec![1, 1, 2])),
+            Arc::new(StringArray::from(vec!["a", "b", "a"])),
+        ],
+    )?;
+
+    // 4. Split by partition
+    let results = spec.partition_batch(&batch)?;
+
+    // Each uniquely combined (col1, col2) should have a stable hash
+    // (1, "a"), (1, "b"), (2, "a") are all different, so they should return 3 partitions
+    // unless there's a hash collision (unlikely with only 10 buckets and these values)
+    assert!(results.len() >= 2);
+
+    for (key, sub_batch) in results {
+        assert!(key.contains_key("combined_bucket"));
+        assert!(sub_batch.num_rows() >= 1);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_admin_ops() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    let uri = format!("file://{}", path);
+    let table = Table::new_async(uri.clone()).await?;
+
+    // 1. Initial State: Autocommit is now false by default (opt-in)
+    assert!(!table.get_autocommit());
+
+    // 2. Write Data with explicit autocommit enabled
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+
+    table.set_autocommit(true);
+    table.write_async(vec![batch.clone()]).await?;
+
+    // Should be committed automatically
+    let batches = table.read_async(None, None, None).await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
+
+    // 3. Truncate
+    table.truncate_async().await?;
+    let batches = table.read_async(None, None, None).await?;
+    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    tracing::info!(
+        "After truncate, read {} records in {} batches",
+        total_rows,
+        batches.len()
+    );
+    assert!(
+        total_rows == 0,
+        "Table should be empty after truncate, but found {} rows!",
+        total_rows
+    );
+
+    // 4. Manual commit (autocommit=false)
+    table.set_autocommit(false);
+    table.write_async(vec![batch.clone()]).await?;
+
+    // Visible in read (from buffer)
+    let batches = table.read_async(None, None, None).await?;
+    assert!(!batches.is_empty(), "Should see data in buffer");
+
+    let manifest_manager = ManifestManager::new(table.store.clone(), "", &table.uri);
+    let (_, _, ver_pre) = manifest_manager
+        .load_latest_full()
+        .await
+        .unwrap_or_default();
+    assert_eq!(ver_pre, 2, "Should still be v2 before manual commit");
+
+    table.commit_async().await?;
+    let (_, _, ver_post) = manifest_manager
+        .load_latest_full()
+        .await
+        .unwrap_or_default();
+    assert_eq!(ver_post, 3, "Should be v3 after manual commit");
+
+    // 5. Vacuum
+    // Note: vacuum_async might not delete anything if within retention, but let's test it works
+    table.vacuum_async(1).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_streaming_flush_interval() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().to_str().unwrap().to_string();
+    let uri = format!("file://{}", path);
+
+    // Create a table using the builder directly to configure streaming flush
+    let table = TableBuilder::new(uri.clone())
+        .with_streaming_flush_interval(std::time::Duration::from_millis(500))
+        .build_async()
+        .await?;
+
+    let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+    )?;
+
+    // Write data WITHOUT explicitly calling commit_async()
+    table.write_async(vec![batch]).await?;
+
+    // The data should be in the write buffer, not on disk yet.
+    {
+        let buffer = table.write_buffer.read();
+        assert!(!buffer.is_empty(), "Data should be buffered");
+    }
+
+    // Wait for the background task to trigger the flush (interval is 500ms)
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+
+    // The buffer should now be empty because the background task committed it
+    {
+        let buffer = table.write_buffer.read();
+        assert!(
+            buffer.is_empty(),
+            "Buffer should be empty after streaming flush"
+        );
+    }
+
+    // The data should be readable from disk
+    let batches = table.read_async(None, None, None).await?;
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].num_rows(), 3);
+
+    Ok(())
+}
