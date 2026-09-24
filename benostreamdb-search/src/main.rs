@@ -57,17 +57,31 @@ async fn main() {
         tracing::error!(panic = ?info, "bsdb-search panicked");
     }));
 
-    let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("bsdb-search")
-        .expect("Failed to initialize tracing");
+    let _telemetry_guard = match benostreamdb::telemetry::tracing::init_tracing("bsdb-search") {
+        Ok(guard) => guard,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to initialize tracing");
+            std::process::exit(1);
+        }
+    };
 
     let bind = std::env::var("BENOSEARCH_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port: u16 = std::env::var("BENOSEARCH_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(9200);
-    let addr: SocketAddr = format!("{bind}:{port}")
-        .parse()
-        .expect("Invalid BENOSEARCH_BIND/BENOSEARCH_PORT");
+    let addr: SocketAddr = match format!("{bind}:{port}").parse() {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                bind = %bind,
+                port,
+                "Invalid BENOSEARCH_BIND/BENOSEARCH_PORT"
+            );
+            std::process::exit(1);
+        }
+    };
 
     let cluster_uuid = uuid::Uuid::new_v4().to_string();
 
