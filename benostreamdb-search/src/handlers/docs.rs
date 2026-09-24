@@ -164,11 +164,10 @@ pub(crate) async fn index_document_core(
     // result and whether we install the `_id` primary key.
     let existed_before = table_exists(&state.index_uri(index)).await;
 
-    let doc_schema = infer::infer_schema(&doc).map_err(|e: InferError| {
-        BenoStreamError::SchemaIncompatible {
+    let doc_schema =
+        infer::infer_schema(&doc).map_err(|e: InferError| BenoStreamError::SchemaIncompatible {
             reason: e.to_string(),
-        }
-    })?;
+        })?;
 
     // The table is only created when it does not exist yet; the schema is
     // cloned (not moved) because it is reused below for the merge.

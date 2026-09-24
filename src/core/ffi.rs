@@ -9,12 +9,19 @@ use crate::core::storage::create_object_store;
 use crate::core::table::Table;
 use crate::SegmentConfig;
 use futures::StreamExt;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 use tokio::runtime::Runtime;
 
-lazy_static! {
-    static ref RUNTIME: Runtime = Runtime::new().unwrap();
-}
+/// Shared Tokio runtime for the JNI entry points.
+///
+/// `Runtime::new()` has no infallible form and fails only if the OS cannot hand
+/// the process a reactor/worker threads, which is unrecoverable for the JNI
+/// bridge anyway. Mirrors `python::helpers::TOKIO_RUNTIME` (same justification,
+/// and the same no-panic exemption).
+#[allow(clippy::expect_used)]
+static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
+    Runtime::new().expect("Failed to create Tokio runtime for the JNI bridge")
+});
 
 pub struct BenoStreamSession {
     reader: Option<HybridReader>, // Used if no filter
@@ -742,6 +749,20 @@ fn vector_search_impl(
         tracing::error!("FFI({}): vectorSearch called with null pointers", engine);
         return -1;
     }
+    // Trust boundary: `query_vector_len` is JNI-supplied and is used as a slice
+    // length below. A non-positive value would cast to a huge `usize`, so reject
+    // it, and reject an obviously-corrupt length (no real embedding exceeds the
+    // cap) rather than trusting it blindly.
+    const MAX_QUERY_DIMS: jint = 1 << 20;
+    if query_vector_len <= 0 || query_vector_len > MAX_QUERY_DIMS {
+        tracing::error!(
+            "FFI({}): vectorSearch called with invalid vector_len={} (must be 1..={})",
+            engine,
+            query_vector_len,
+            MAX_QUERY_DIMS
+        );
+        return -1;
+    }
 
     let uri: String = env
         .get_string(&table_uri)
@@ -756,6 +777,12 @@ fn vector_search_impl(
         .map(|s| s.into())
         .unwrap_or_default();
 
+    // SAFETY: `query_vector_ptr` is a JNI `jlong` holding a pointer to a
+    // `jfloatArray`'s elements and `query_vector_len` is that array's length
+    // (JNI `GetFloatArrayElements` contract) — the JVM owns the allocation and
+    // keeps it valid for the duration of this call. The length was validated
+    // positive and capped above; the data is copied into a `Vec` immediately, so
+    // the borrow never outlives the JNI frame.
     let query_slice = unsafe {
         std::slice::from_raw_parts(query_vector_ptr as *const f32, query_vector_len as usize)
     };

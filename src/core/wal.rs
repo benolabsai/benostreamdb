@@ -12,6 +12,25 @@ use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 
+/// Flush the WAL writer's buffered bytes to stable storage.
+///
+/// Prefers `fdatasync` (`File::sync_data`); if that fails, falls back to a full
+/// `fsync` (`File::sync_all`). Returns `Err` only when *both* fail — the caller
+/// must then acknowledge the write as **failed**, never as durable, so a failed
+/// fsync can never be reported as a successful commit.
+fn sync_wal(writer: &mut StreamWriter<File>) -> Result<()> {
+    match writer.get_ref().sync_data() {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            tracing::warn!("WAL sync_data failed ({e}); falling back to sync_all");
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|e2| anyhow::anyhow!("WAL fsync failed — sync_data: {e}; sync_all: {e2}"))
+        }
+    }
+}
+
 /// Write-Ahead Log for durability of in-memory writes.
 /// Uses Arrow IPC Stream format for append-only logging.
 /// Supports multiple processes by using unique log files in a shared directory.
@@ -223,16 +242,21 @@ impl WriteAheadLog {
 
                                         // Sync if we've reached batch size threshold
                                         if batch_count >= sync_batch_size {
-                                            // Use fdatasync for better performance (only syncs data, not metadata)
-                                            if let Err(e) = writer.get_ref().sync_data() {
-                                                tracing::error!("WAL sync_data failed: {}", e);
-                                                // Fallback to sync_all if fdatasync not available
-                                                let _ = writer.get_ref().sync_all();
-                                            }
-
-                                            // Reply to all pending syncs
-                                            for tx in pending_syncs.drain(..) {
-                                                let _ = tx.send(Ok(()));
+                                            match sync_wal(writer) {
+                                                Ok(()) => {
+                                                    // Reply to all pending syncs
+                                                    for tx in pending_syncs.drain(..) {
+                                                        let _ = tx.send(Ok(()));
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    // A failed fsync must never be
+                                                    // acknowledged as durable.
+                                                    let msg = e.to_string();
+                                                    for tx in pending_syncs.drain(..) {
+                                                        let _ = tx.send(Err(anyhow::anyhow!("{msg}")));
+                                                    }
+                                                }
                                             }
                                             batch_count = 0;
                                         }
@@ -282,30 +306,46 @@ impl WriteAheadLog {
                                     if let Err(e) = writer.write(&batch) {
                                         let _ = reply_tx.send(Err(anyhow::anyhow!("WAL write failed: {}", e)));
                                     } else {
-                                        if let Err(e) = writer.get_ref().sync_data() {
-                                            tracing::error!("WAL sync_data failed: {}", e);
-                                            let _ = writer.get_ref().sync_all();
-                                        }
-                                        let _ = reply_tx.send(Ok(()));
-                                        for tx in pending_syncs.drain(..) {
-                                            let _ = tx.send(Ok(()));
+                                        match sync_wal(writer) {
+                                            Ok(()) => {
+                                                let _ = reply_tx.send(Ok(()));
+                                                for tx in pending_syncs.drain(..) {
+                                                    let _ = tx.send(Ok(()));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                // A failed fsync must never be
+                                                // acknowledged as durable.
+                                                let msg = e.to_string();
+                                                let _ = reply_tx.send(Err(anyhow::anyhow!("{msg}")));
+                                                for tx in pending_syncs.drain(..) {
+                                                    let _ = tx.send(Err(anyhow::anyhow!("{msg}")));
+                                                }
+                                            }
                                         }
                                         batch_count = 0;
                                     }
                                 }
                             }
                             Some(LogOp::Flush(reply_tx)) => {
-                                if let Some(writer) = &mut writer_opt {
-                                    if let Err(e) = writer.get_ref().sync_data() {
-                                        tracing::error!("WAL sync_data failed: {}", e);
-                                        let _ = writer.get_ref().sync_all();
+                                match writer_opt.as_mut().map(sync_wal).unwrap_or(Ok(())) {
+                                    Ok(()) => {
+                                        for tx in pending_syncs.drain(..) {
+                                            let _ = tx.send(Ok(()));
+                                        }
+                                        let _ = reply_tx.send(Ok(()));
+                                    }
+                                    Err(e) => {
+                                        // A failed fsync must never be
+                                        // acknowledged as durable.
+                                        let msg = e.to_string();
+                                        for tx in pending_syncs.drain(..) {
+                                            let _ = tx.send(Err(anyhow::anyhow!("{msg}")));
+                                        }
+                                        let _ = reply_tx.send(Err(anyhow::anyhow!("{msg}")));
                                     }
                                 }
-                                for tx in pending_syncs.drain(..) {
-                                    let _ = tx.send(Ok(()));
-                                }
                                 batch_count = 0;
-                                let _ = reply_tx.send(Ok(()));
                             }
                             None => break, // Channel closed
                         }
@@ -313,15 +353,20 @@ impl WriteAheadLog {
                     _ = timeout => {
                         // Periodic sync - sync any pending writes
                         if !pending_syncs.is_empty() {
-                            if let Some(writer) = &mut writer_opt {
-                                // Use fdatasync for better performance
-                                if let Err(e) = writer.get_ref().sync_data() {
-                                    tracing::error!("WAL sync_data failed: {}", e);
-                                    let _ = writer.get_ref().sync_all();
+                            match writer_opt.as_mut().map(sync_wal).unwrap_or(Ok(())) {
+                                Ok(()) => {
+                                    for tx in pending_syncs.drain(..) {
+                                        let _ = tx.send(Ok(()));
+                                    }
                                 }
-                            }
-                            for tx in pending_syncs.drain(..) {
-                                let _ = tx.send(Ok(()));
+                                Err(e) => {
+                                    // A failed fsync must never be acknowledged
+                                    // as durable.
+                                    let msg = e.to_string();
+                                    for tx in pending_syncs.drain(..) {
+                                        let _ = tx.send(Err(anyhow::anyhow!("{msg}")));
+                                    }
+                                }
                             }
                             batch_count = 0;
                         }
@@ -370,10 +415,8 @@ impl WriteAheadLog {
                         let _ = reply_tx.send(Ok(()));
                     }
                     LogOp::Flush(reply_tx) => {
-                        if let Some(writer) = &mut writer_opt {
-                            let _ = writer.get_ref().sync_data();
-                        }
-                        let _ = reply_tx.send(Ok(()));
+                        let res = writer_opt.as_mut().map(sync_wal).unwrap_or(Ok(()));
+                        let _ = reply_tx.send(res);
                     }
                 }
             }

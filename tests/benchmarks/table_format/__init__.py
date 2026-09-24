@@ -1,1 +1,0 @@
-# Table format benchmarks

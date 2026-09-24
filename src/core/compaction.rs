@@ -500,8 +500,7 @@ impl Compactor {
                 if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
                     main_parquet_path = remote_path_str;
                     main_parquet_size = file_size;
-                    metrics::counter!("benostreamdb_compaction_bytes_written")
-                        .increment(file_size);
+                    metrics::counter!("benostreamdb_compaction_bytes_written").increment(file_size);
                 } else if file_name.ends_with(".inv.parquet") {
                     let parts: Vec<&str> = file_name.split('.').collect();
                     let column_name = if parts.len() >= 4 {
