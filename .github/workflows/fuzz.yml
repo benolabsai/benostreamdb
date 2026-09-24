@@ -14,6 +14,11 @@ jobs:
   fuzz:
     name: Fuzz ${{ matrix.target }}
     runs-on: ubuntu-22.04
+    env:
+      # rust-toolchain.toml pins `stable`, which takes precedence over the
+      # installed default toolchain. cargo-fuzz builds with libFuzzer -Z flags,
+      # so force nightly for every step in this job.
+      RUSTUP_TOOLCHAIN: nightly
     strategy:
       fail-fast: false
       matrix:
