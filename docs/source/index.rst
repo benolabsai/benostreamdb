@@ -24,23 +24,27 @@ Key Features
    :maxdepth: 2
    :caption: Getting Started
 
-   guides/INSTALLATION
-   guides/COMPREHENSIVE_GUIDE
+   guides/installation
+   guides/architecture
 
 .. toctree::
    :maxdepth: 2
    :caption: User Guides
 
-   guides/PYTHON_VECTOR_API
-   guides/GPU_SETUP_GUIDE
-   guides/CONFIGURATION
-   guides/CONCURRENCY
+   guides/python_vector_api
+   guides/gpu_setup_guide
+   guides/configuration
+   guides/concurrency
+   guides/catalog_usage
+   guides/monitoring
+   guides/admin_cli
    guides/graph_rag_edge_tables
-   guides/ICEBERG_V2_V3_API
-   guides/PGVECTOR_SQL_GUIDE
-   guides/SNOWFLAKE_POLARIS_GUIDE
-   guides/DORIS_OPTIMIZATION_PATTERNS
-   guides/BENCHMARKING
+   guides/iceberg_v2_v3_api
+   guides/pgvector_sql_guide
+   guides/opensearch_compatibility
+   guides/resource_limits
+   guides/no_panic_policy
+   guides/benchmarking
 
 .. toctree::
    :maxdepth: 2
@@ -53,4 +57,4 @@ Key Features
    :maxdepth: 1
    :caption: Roadmap
 
-   roadmap
+   guides/roadmap

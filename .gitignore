@@ -70,6 +70,9 @@ benchmark_results/
 trino-benostream/src/main/resources/libbenostreamdb.so
 spark-benostream/src/main/resources/libbenostreamdb.so
 
+# ── Documentation build output (Sphinx) ─────────────────────────────────────
+docs/build/
+
 # ── Build / test logs & scratch ─────────────────────────────────────────────
 # Run logs are written here (see docs/BENCHMARKING.md), never committed.
 logs/

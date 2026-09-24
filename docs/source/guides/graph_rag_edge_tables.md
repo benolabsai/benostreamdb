@@ -1,0 +1,1 @@
+../../graph_rag_edge_tables.md
