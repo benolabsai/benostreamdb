@@ -283,53 +283,11 @@ table.expire_snapshots(retain_last=10)
 
 ## 📊 Real-World Testing Plan
 
-### Phase 1: Core Stability (Current)
-
-**Test Datasets:**
-- ✅ NYC Taxi (1.5B rows, ~200GB) - Scalar filtering
-- ✅ Synthetic Embeddings (10M vectors, 768-dim) - Vector search
-- 🔄 Wikipedia + Embeddings (100M docs) - Hybrid queries
-
-**Download Test Data:**
-```bash
-# NYC Taxi dataset
-./tests/data/download_nyc_taxi.sh
-
-# Generate synthetic embeddings
-python tests/data/generate_embeddings.py
-```
-
-**Run Benchmarks:**
-```bash
-# Rust benchmarks
-cargo bench
-
-# Integration tests
-python tests/integration/test_nyc_taxi.py
-```
-
-  **Performance Targets:**
-  - **Scalar Ingest**: >10K rows/sec ✅
-  - **Vector Ingest (768D)**: >4,000 rows/sec ✅ (April 2026)
-  - **Query (indexed)**: <100ms p99 ⏱️
-  - **Vector search**: <50ms for k=10 on 10M vectors ⏱️
-  - **Compaction**: <5min for 10GB ⏱️
-
-  **Benchmarking Environment: Lenovo T480**
-  - **System**: Lenovo T480
-  - **CPU**: Intel(R) Core(TM) i5-8350U CPU @ 1.70GHz
-  - **RAM**: 64GB
-  - **OS**: Linux
-
-  **Benchmarking Environment: Apple M4 Max**
-  - **System**: MacBook Pro (M4 Max, 16-core CPU, 40-core GPU)
-  - **Memory**: 128GB Unified Memory
-  - **OS**: macOS (Arm64)
-  - **Optimizations**: `target-cpu=native` (NEON SIMD)
-  - **Results (100K vectors, 768D) [OUT OF DATE - Pre-v0.5.0]**:
-    - **Vector Ingest**: 16,707 rows/sec (CPU) ✅
-    - **Vector Search (k=10)**: 819ms (CPU / NEON) ✅
-    - **Vector Search (k=10)**: 860ms (MPS GPU) ⏱️
+The Phase-1 synthetic datasets, their generators, and the associated
+micro-benchmark harnesses have been removed from the repository. The maintained,
+measured end-to-end workload is the full-site Wikipedia Graph RAG demo — see
+[`examples/web_ui/README.md`](../examples/web_ui/README.md) and
+[`docs/BENCHMARKING.md`](BENCHMARKING.md).
 
 ## Phase 2: Nessie Integration (Next)
 
