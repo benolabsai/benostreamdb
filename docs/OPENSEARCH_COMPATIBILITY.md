@@ -55,7 +55,7 @@ the gaps.
 
 ### Error envelope
 Errors use the ES shape:
-```json
+```text
 { "error": { "type": "<exception>", "reason": "..." }, "status": <http_code> }
 ```
 Mapped types include `index_not_found_exception` (404), `resource_already_exists_exception`

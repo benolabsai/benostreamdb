@@ -282,7 +282,7 @@ results = doc_table.hybrid_search(
 
 The official `dbt-benostreamdb` adapter plugin provides native Jinja macros for all Graph UDFs, allowing analytics engineers to model, transform, and materialize graph analytics tables into Apache Iceberg directly within dbt projects:
 
-```sql
+```jinja
 -- models/entity_pagerank.sql
 {{ config(materialized='table') }}
 
