@@ -38,7 +38,11 @@ extensions = [
     'myst_parser',
     'sphinx_copybutton',
     'sphinx_design',
+    'sphinxcontrib.mermaid',
 ]
+
+# Render ```mermaid fenced blocks as diagrams.
+mermaid_version = "10.9.0"
 
 templates_path = ['_templates']
 exclude_patterns = []
@@ -57,6 +61,10 @@ myst_enable_extensions = [
     "fieldlist",
     "html_image",
 ]
+
+# Treat ```mermaid fenced blocks as the sphinxcontrib-mermaid directive so they
+# render as diagrams instead of unhighlighted code blocks.
+myst_fence_as_directive = ["mermaid"]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
