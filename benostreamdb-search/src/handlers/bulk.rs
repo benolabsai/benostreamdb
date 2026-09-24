@@ -215,14 +215,16 @@ async fn write_index_docs(
         .map(|(pos, item)| match item.doc.as_ref() {
             Some(doc) => match infer::infer_schema(doc) {
                 Ok(s) => Ok((*pos, *item, s)),
-                Err(e) => Err(err_result(*pos, item, 400, e.to_string())),
+                // Box the error: `(usize, ItemResult)` is ~136 bytes, which trips
+                // `clippy::result_large_err` under `#![deny(warnings)]`.
+                Err(e) => Err(Box::new(err_result(*pos, item, 400, e.to_string()))),
             },
-            None => Err(err_result(
+            None => Err(Box::new(err_result(
                 *pos,
                 item,
                 400,
                 "missing document source".into(),
-            )),
+            ))),
         })
         .collect();
 
@@ -232,7 +234,7 @@ async fn write_index_docs(
     for res in inferred {
         match res {
             Ok(s) => doc_schemas.push(s),
-            Err(e) => results.push(e),
+            Err(e) => results.push(*e),
         }
     }
     if doc_schemas.is_empty() {
