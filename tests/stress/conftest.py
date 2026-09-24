@@ -58,10 +58,10 @@ def rss_gb():
 
 @pytest.fixture(scope="session")
 def rows_of():
-    """Row count of whatever the Python API returns from `read()`.
+    """Row count of whatever the Python API returns.
 
-    Accepts a pyarrow Table/RecordBatch, a list of batches, or an object with
-    `num_rows`.
+    Accepts a pyarrow Table/RecordBatch, a list of batches, a pandas DataFrame
+    (the `search()` API returns one), or any object with `num_rows`/`shape`.
     """
 
     def _rows(obj) -> int:
@@ -73,6 +73,12 @@ def rows_of():
             return sum(_rows(x) for x in obj)
         if hasattr(obj, "to_batches"):
             return sum(b.num_rows for b in obj.to_batches())
+        # pandas.DataFrame (and anything 2-D): `read()` returns Arrow, but
+        # `search()` returns a DataFrame.
+        if hasattr(obj, "shape"):
+            return int(obj.shape[0])
+        if hasattr(obj, "__len__"):
+            return len(obj)
         raise TypeError(f"cannot count rows of {type(obj)!r}")
 
     return _rows
