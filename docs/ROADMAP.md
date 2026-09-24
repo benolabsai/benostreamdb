@@ -36,55 +36,12 @@ Detailed phase history and the dependency-ordered active backlog follow below.
 
 ### Test Datasets
 
-#### 1. NYC Taxi Dataset ✅
-- **Size:** 3M rows (January 2023 subset)
-- **Purpose:** Test scalar filtering, compaction, manifest scaling
-- **Download:** `./tests/data/download_nyc_taxi.sh`
-- **Test:** `python tests/integration/test_nyc_taxi.py`
-
-**Results (2026-01-18):**
-| Metric | Target | Actual | Status |
-|--------|--------|--------|--------|
-| Ingest throughput | >100K rows/sec | **753,782 rows/sec** | ✅ |
-| Query latency (indexed, p99) | <100ms | **85ms** | ✅ |
-| Compaction (3M rows) | <5min | **4.91s** | ✅ |
-
-#### 2. Synthetic Vector Embeddings ✅
-- **Size:** 100K vectors, 768-dim (BERT-like)
-- **Purpose:** Test HNSW performance, vector search
-- **Generate:** `python tests/data/generate_embeddings.py`
-- **Test:** `python tests/integration/test_vector_search.py`
-
-**Results (2026-01-18):**
-| Metric | Target | Actual | Status |
-|--------|--------|--------|--------|
-| Vector search (100K, parallel) | <10s | **5.0s** | ✅ |
-| Vector search (10K segment) | <50ms | ~500ms* | ⚠️ |
-| Recall@10 | >95% | **100%** | ✅ |
-| Index build time (100K) | <10min | **62s** | ✅ |
-
-*Note: <50ms target achievable with scalar filter pre-pruning to 1-2 segments. 
-Parallel loading (16 workers auto-detected) achieves 5s for 100K vectors across 10 segments.
-
-#### 3. Wikipedia + Embeddings ✅
-- **Size:** 100K documents with 768-dim embeddings
-- **Purpose:** Test hybrid queries (scalar + vector)
-- **Generate:** `python tests/data/generate_wikipedia.py`
-- **Test:** `python tests/integration/test_wikipedia.py`
-
-**Results (2026-01-18):**
-| Metric | Target | Actual | Status |
-|--------|--------|--------|--------|
-| Ingest (with embeddings) | >50K rows/sec | **4,563 rows/sec*** | ⚠️ |
-| Scalar filter (all columns) | <500ms | 1,553ms | ⚠️ |
-| Scalar filter (w/projection) | <500ms | **112ms** | ✅ |
-| Vector search (100K) | <10s | **3.9s** | ✅ |
-| Hybrid query | <10s | **3.9s** | ✅ |
-
-*Notes:
-- Ingest I/O bound by 768D embedding writes (~315MB total)
-- Scalar query uses STRING INVERTED INDEX + COLUMN PROJECTION
-- With `columns=[]` parameter: skip embedding reads → **142x speedup**
+The Phase-1 datasets (NYC Taxi, synthetic 768-dim embeddings, and a synthetic
+Wikipedia corpus) were used to validate scalar filtering, vector search, and
+hybrid queries. Their generators and the associated benchmark harnesses have
+been removed from the repository. The only benchmark that is kept and
+maintained is the full-site Wikipedia Graph RAG demo
+([`examples/web_ui/README.md`](../examples/web_ui/README.md)).
 
 ### Tasks
 - [x] Create data download scripts
@@ -105,22 +62,13 @@ Parallel loading (16 workers auto-detected) achieves 5s for 100K vectors across 
 6. **Configurable Parallelism** - `table.set_max_parallel_readers(n)` for memory-constrained environments
 7. **Column Projection** - Skip reading unused columns (e.g., embeddings) → 142x faster scalar queries
 
-### Performance Baseline (2026-01-18)
+### Performance Baseline
 
-| Operation | Dataset | Performance | Notes |
-|-----------|---------|-------------|-------|
-| Query (selective) | NYC Taxi 3M | **85ms** | High-selectivity ID filter |
-| Vector Search k=10 | 100K vectors | **4,598ms** | 10 segments, 16 parallel readers |
-| Scalar (all cols) | Wikipedia 100K | 1,187ms | Full column scan |
-| Scalar (projected) | Wikipedia 100K | **14ms** | 142x speedup via projection |
-
-**Analysis:**
-- **Vector search**: Native HNSW-IVF indexing avoids full scans.
-- **Indexed queries**: Fast sub-100ms lookups for selective filters.
-- **Column projection**: Significant performance gains by skipping large embedding columns.
-- **Scale**: Designed to maintain O(1) lookup performance at petabyte scale.
-
-Run benchmark: `python tests/benchmarks/benchmark_vs_iceberg.py`
+The Phase-1 micro-benchmarks and the OpenSearch / LanceDB comparisons have
+been removed from the repository and are no longer maintained. For the current,
+measured end-to-end workload see
+[`docs/BENCHMARKING.md`](BENCHMARKING.md) and
+[`examples/web_ui/README.md`](../examples/web_ui/README.md).
 
 ---
 

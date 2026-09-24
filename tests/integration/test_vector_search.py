@@ -3,17 +3,42 @@ import os
 import time
 import numpy as np
 import benostreamdb as bsdb
+import pyarrow as pa
 import pyarrow.parquet as pq
 from pathlib import Path
 
-# Import generator
-sys.path.append("tests/data")
-try:
-    from generate_embeddings import generate_embeddings, DEFAULT_EMBEDDING_DIM
-    EMBEDDING_DIM = DEFAULT_EMBEDDING_DIM
-except ImportError:
-    print("Could not import generate_embeddings.py")
-    sys.exit(1)
+EMBEDDING_DIM = 768
+
+
+def generate_embeddings(
+    num_vectors: int,
+    batch_size: int = 10_000,
+    out_dir: str = "tests/data/embeddings",
+):
+    """Write synthetic L2-normalized embeddings as parquet shards.
+
+    Self-contained replacement for the removed synthetic-data generator so this
+    integration test has no external data dependency.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written = 0
+    shard = 0
+    while written < num_vectors:
+        n = min(batch_size, num_vectors - written)
+        vecs = np.random.randn(n, EMBEDDING_DIM).astype(np.float32)
+        vecs /= np.linalg.norm(vecs, axis=1, keepdims=True)
+        table = pa.table(
+            {
+                "id": pa.array(np.arange(written, written + n, dtype=np.int64)),
+                "embedding": pa.array(
+                    [v.tolist() for v in vecs], type=pa.list_(pa.float32())
+                ),
+            }
+        )
+        pq.write_table(table, out / f"embeddings_{shard:05d}.parquet")
+        written += n
+        shard += 1
 
 def test_vector_search_flow():
     # 1. Generate Data (if not exists)

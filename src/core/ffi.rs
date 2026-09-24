@@ -19,9 +19,8 @@ use tokio::runtime::Runtime;
 /// bridge anyway. Mirrors `python::helpers::TOKIO_RUNTIME` (same justification,
 /// and the same no-panic exemption).
 #[allow(clippy::expect_used)]
-static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
-    Runtime::new().expect("Failed to create Tokio runtime for the JNI bridge")
-});
+static RUNTIME: LazyLock<Runtime> =
+    LazyLock::new(|| Runtime::new().expect("Failed to create Tokio runtime for the JNI bridge"));
 
 pub struct BenoStreamSession {
     reader: Option<HybridReader>, // Used if no filter
