@@ -1,0 +1,75 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "benostreamdb"
+version = "0.10.0"
+description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT AND Apache-2.0" }
+authors = [
+    { name = "Beno Labs Artificial Intelligence LLC" }
+]
+keywords = ["database", "vector", "search", "indexing", "parquet", "iceberg"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+]
+
+dependencies = [
+    "pyarrow>=14.0.0",
+    "numpy>=1.20.0",
+    "pandas>=1.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "maturin>=1.7",
+    "boto3>=1.26.0",
+    "pyiceberg[sql-sqlite]>=0.6.0",
+    "networkx",
+    "cffi",
+    "scikit-learn",
+    "pandas",
+    "hypothesis",
+    "jinja2",
+]
+# Hardware acceleration extras
+all_gpu = []
+src = ["maturin>=1.7"]
+
+[project.urls]
+Homepage = "https://github.com/benolabsai/benostreamdb"
+Repository = "https://github.com/benolabsai/benostreamdb"
+
+[project.scripts]
+bsdb = "benostreamdb.cli:main"
+
+
+[tool.maturin]
+features = ["python"]
+# Build both the Rust library and Python bindings (multi-version compatible)
+module-name = "benostreamdb.benostreamdb"
+python-source = "python"
+# Build both the Rust library and Python bindings
+bindings = "pyo3"
+sdist-include = ["LICENSE*", "README.md", "THIRDPARTY_NOTICES.md", "vendor/**/*", "tests/**/*", "benches/**/*"]
+# Optimizations for WHEEL builds
+strip = true
+# Use sccache if available during build
+sccache = false

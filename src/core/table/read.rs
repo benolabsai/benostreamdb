@@ -1,0 +1,1511 @@
+// Copyright (c) 2026 Richard Albright. All rights reserved.
+
+use anyhow::Result;
+use arrow::record_batch::RecordBatch;
+use futures::StreamExt;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use super::fluent::TableQuery;
+use crate::core::index::gpu::get_thread_gpu_context;
+use crate::core::manifest::{IndexAlgorithm, IndexFile, ManifestEntry, ManifestManager};
+use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner, VectorSearchParams};
+use crate::core::query::{QueryConfig, VectorSearchRequest};
+use crate::core::reader::HybridReader;
+use crate::SegmentConfig;
+use arrow::datatypes::Schema;
+use roaring::RoaringBitmap;
+
+use super::primary_key::PrimaryKeyFilter;
+use super::Table;
+use crate::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
+use futures::stream::BoxStream;
+
+impl Table {
+    pub fn read(
+        &self,
+        filter: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+    ) -> Result<Vec<RecordBatch>> {
+        self.runtime()
+            .block_on(self.read_async(filter, vector_filters, None))
+    }
+
+    pub fn read_with_columns(
+        &self,
+        filter: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Vec<String>,
+    ) -> Result<Vec<RecordBatch>> {
+        let columns_refs: Vec<&str> = columns.iter().map(|s| s.as_str()).collect();
+        self.runtime()
+            .block_on(self.read_async(filter, vector_filters, Some(&columns_refs)))
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn sql(&self, query: &str) -> Result<Vec<RecordBatch>> {
+        use crate::core::sql::optimizer::VectorSearchConfig;
+        use crate::core::sql::BenoStreamTableProvider;
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        // Apply any `/*+ ... */` optimizer hints to the session configuration
+        // so the vector-search optimizer rule can pick them up.
+        let mut session_config = SessionConfig::new();
+        if let Some(hints) = VectorSearchConfig::extract_sql_hints(query) {
+            let vs_config = VectorSearchConfig::from_sql_hints(&hints)?;
+            session_config.options_mut().extensions.insert(vs_config);
+        }
+
+        let mut ctx = SessionContext::new_with_config(session_config);
+        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(self.clone())));
+        ctx.register_table("t", provider)?;
+        let df = ctx.sql(query).await?;
+        Ok(df.collect().await?)
+    }
+
+    #[tracing::instrument(skip(self, filter_str, vector_filters, columns))]
+    pub async fn read_async(
+        &self,
+        filter_str: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        self.read_with_config_async(
+            filter_str,
+            vector_filters,
+            columns,
+            self.query_config.clone(),
+        )
+        .await
+    }
+
+    pub async fn read_stream_async(
+        &self,
+        filter_str: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        self.read_with_config_stream_async(
+            filter_str,
+            vector_filters,
+            columns,
+            self.query_config.clone(),
+        )
+        .await
+    }
+
+    pub async fn read_with_config_stream_async(
+        &self,
+        filter_str: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        let expr = match filter_str {
+            Some(f) => {
+                let schema = self.arrow_schema();
+                Some(FilterExpr::parse_sql(f, schema).await?)
+            }
+            _ => None,
+        };
+        self.read_expr_stream_async(expr, vector_filters, columns, config, filter_str)
+            .await
+    }
+
+    pub fn query(&self) -> TableQuery<'_> {
+        TableQuery::new(self)
+    }
+
+    /// Generate a detailed execution plan with hit counts and pruning stats
+    pub async fn explain(
+        &self,
+        filter_str: Option<&str>,
+        vector_params: Option<Vec<VectorSearchParams>>,
+    ) -> String {
+        let manifest_manager =
+            crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, version) = manifest_manager
+            .load_latest_full()
+            .await
+            .unwrap_or((crate::core::manifest::Manifest::default(), Vec::new(), 0));
+        let total_rows_table: usize = all_entries.iter().map(|e| e.record_count as usize).sum();
+        let total_segments_table = all_entries.len();
+
+        let mut plan = Vec::new();
+        let divider = "-".repeat(60);
+        plan.push(divider.clone());
+        plan.push(format!("BENOSTREAM QUERY PLAN [Table: {}]", self.uri));
+
+        // 1. Initial Pruning (Partition & Stats)
+        let expr = if let Some(f) = filter_str {
+            FilterExpr::parse_sql(f, self.arrow_schema()).await.ok()
+        } else {
+            None
+        };
+
+        let planner = QueryPlanner::new();
+        let pruned_entries: Vec<(ManifestEntry, Option<IndexFile>)> = if version > 0 {
+            planner.prune_entries(&all_entries, expr.as_ref(), vector_params.as_ref())
+        } else {
+            all_entries.iter().map(|e| (e.clone(), None)).collect()
+        };
+
+        let scanned_segments = pruned_entries.len();
+        let scanned_rows: usize = pruned_entries
+            .iter()
+            .map(|(e, _)| e.record_count as usize)
+            .sum();
+
+        plan.push("Context Selection:".to_string());
+        plan.push(format!(
+            "  -> Total Table Scope: {} rows in {} segments",
+            total_rows_table, total_segments_table
+        ));
+        if scanned_segments < total_segments_table {
+            plan.push(format!(
+                "  -> Pruning Activity: {} segments pruned via Partition/Stats mapping",
+                total_segments_table - scanned_segments
+            ));
+
+            // Reason breakdown: which rule ruled each pruned segment out. An
+            // entry is pruned as soon as any sub-filter rules it out, so we
+            // report the first matching reason — the same precedence the scan
+            // itself uses. Metrics are suppressed here: EXPLAIN must not
+            // inflate the operational pruning counters.
+            if let Some(ref e) = expr {
+                let sub_filters = e.extract_and_conditions();
+                let mut reasons: std::collections::HashMap<&'static str, usize> =
+                    std::collections::HashMap::new();
+                for entry in &all_entries {
+                    if let Some(reason) = sub_filters
+                        .iter()
+                        .find_map(|f| planner.classify_condition(entry, f, false))
+                    {
+                        *reasons.entry(reason.label()).or_insert(0) += 1;
+                    }
+                }
+                let mut pairs: Vec<(&'static str, usize)> = reasons.into_iter().collect();
+                pairs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+                for (label, count) in pairs {
+                    plan.push(format!("       - {} segment(s): {}", count, label));
+                }
+            }
+        }
+        plan.push(format!(
+            "  -> Execution Scope: {} rows in {} segments",
+            scanned_rows, scanned_segments
+        ));
+        plan.push("".to_string());
+
+        // 2. Index Dry-run of Filters
+        let mut scalar_hits = scanned_rows;
+        let mut access_paths = Vec::new();
+
+        if let Some(ref e) = expr {
+            let sub_filters = e.extract_and_conditions();
+            let mut total_hits = 0;
+            let base_uri = self.uri.clone();
+
+            // Convert file:// URI to filesystem path for directory listing
+            let fs_path = if base_uri.starts_with("file://") {
+                base_uri
+                    .strip_prefix("file://")
+                    .unwrap_or(&base_uri)
+                    .to_string()
+            } else {
+                base_uri.clone()
+            };
+
+            // Map to track which index type was used for each sub-filter
+            let mut filter_index_types: HashMap<String, HashSet<&'static str>> = HashMap::new();
+
+            for (entry, _) in &pruned_entries {
+                let file_path_str = entry.file_path.clone();
+                let segment_id = file_path_str
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&file_path_str)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&file_path_str);
+
+                let config = SegmentConfig::new(&base_uri, segment_id)
+                    .with_parquet_path(entry.file_path.clone())
+                    .with_index_files(entry.index_files.clone())
+                    .with_delete_files(entry.delete_files.clone())
+                    .with_record_count(entry.record_count as u64);
+
+                let reader = HybridReader::new(config, self.store.clone(), &base_uri);
+
+                let mut seg_bm: Option<roaring::RoaringBitmap> = None;
+                for sub_f in &sub_filters {
+                    // Detect access path by checking for actual index files on disk
+                    let path = {
+                        // Check for inverted index (.inv.parquet files)
+                        let inv_pattern = format!("{}.{}.inv.parquet", segment_id, sub_f.column);
+                        let has_inverted = std::fs::read_dir(&fs_path)
+                            .ok()
+                            .and_then(|dir| {
+                                dir.flatten().find(|e| {
+                                    e.file_name().to_string_lossy().contains(&inv_pattern)
+                                })
+                            })
+                            .is_some();
+
+                        if has_inverted {
+                            "Inverted Index (Parquet)"
+                        } else {
+                            // Check for bitmap index (.idx files)
+                            let bitmap_pattern = format!("{}.{}.idx", segment_id, sub_f.column);
+                            let has_bitmap = std::fs::read_dir(&fs_path)
+                                .ok()
+                                .and_then(|dir| {
+                                    dir.flatten().find(|e| {
+                                        e.file_name().to_string_lossy().contains(&bitmap_pattern)
+                                    })
+                                })
+                                .is_some();
+
+                            if has_bitmap {
+                                "Bitmap Index (.idx)"
+                            } else {
+                                "Full Scan"
+                            }
+                        }
+                    };
+                    filter_index_types
+                        .entry(sub_f.column.clone())
+                        .or_default()
+                        .insert(path);
+                }
+
+                let rewritten_filters = reader.rewrite_composite_filters(sub_filters.clone());
+                for sub_f in &rewritten_filters {
+                    if let Ok(Some(bm)) = reader.get_scalar_filter_bitmap(sub_f).await {
+                        match seg_bm {
+                            Some(ref mut existing) => *existing &= bm,
+                            None => seg_bm = Some(bm),
+                        }
+                    }
+                }
+
+                if let Some(bm) = seg_bm {
+                    total_hits += bm.len() as usize;
+                } else {
+                    total_hits += entry.record_count as usize;
+                }
+            }
+            scalar_hits = total_hits;
+
+            for sub_f in &sub_filters {
+                let paths: Vec<&'static str> = filter_index_types
+                    .get(&sub_f.column)
+                    .map(|s: &HashSet<&'static str>| s.iter().cloned().collect())
+                    .unwrap_or_else(|| vec!["Scan"]);
+                access_paths.push(format!(
+                    "  -> Filter (col: {}, op: {}, access: {})",
+                    sub_f.column,
+                    sub_f.op_to_string(),
+                    paths.join(", ")
+                ));
+            }
+        }
+
+        // 3. Scalar Plan (First: Pre-filter the dataset)
+        if !access_paths.is_empty() {
+            plan.push("Scalar Execution:".to_string());
+            for path in access_paths {
+                plan.push(path);
+            }
+            let pct = if scanned_rows > 0 {
+                (scalar_hits as f32 / scanned_rows as f32) * 100.0
+            } else {
+                0.0
+            };
+            plan.push(format!(
+                "     [Selectivity: {} / {} rows ({:.2}%)]",
+                scalar_hits, scanned_rows, pct
+            ));
+            plan.push("".to_string());
+        }
+
+        // 4. Vector Plan (Second: Vector search on pre-filtered rows)
+        if let Some(ref vss) = vector_params {
+            plan.push("Vector Execution:".to_string());
+            for vs in vss {
+                plan.push(format!(
+                    "  -> VectorSearch (col: {}, k: {}, metric: {:?})",
+                    vs.column, vs.k, vs.metric
+                ));
+            }
+
+            // Check for vector index by detecting .hnsw.graph files on disk
+            let mut has_vector_index = false;
+
+            // Convert file:// URI to filesystem path
+            let fs_path = if self.uri.starts_with("file://") {
+                self.uri.strip_prefix("file://").unwrap_or(&self.uri)
+            } else {
+                &self.uri
+            };
+
+            for (entry, _) in &pruned_entries {
+                let segment_id = entry
+                    .file_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&entry.file_path)
+                    .strip_suffix(".parquet")
+                    .unwrap_or(&entry.file_path);
+
+                for vs in vss {
+                    let hnsw_pattern_prefix = format!("{}.{}.cluster_", segment_id, vs.column);
+                    let hnsw_pattern_suffix = ".hnsw.graph";
+
+                    // Try to list files in the table directory to detect index files
+                    if let Ok(dirs) = std::fs::read_dir(fs_path) {
+                        for entry in dirs.flatten() {
+                            if let Some(filename) = entry.file_name().to_str() {
+                                if filename.starts_with(&hnsw_pattern_prefix)
+                                    && filename.ends_with(hnsw_pattern_suffix)
+                                {
+                                    has_vector_index = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if has_vector_index {
+                        break;
+                    }
+                }
+                if has_vector_index {
+                    break;
+                }
+            }
+
+            let access_mode = if has_vector_index {
+                "HNSW-IVF Cluster Index"
+            } else {
+                "Brute Force Scan (No Index)"
+            };
+            plan.push(format!(
+                "     [Access: {}] [Eligibility: {} rows]",
+                access_mode, scalar_hits
+            ));
+            plan.push("".to_string());
+        }
+
+        plan.push("Final Retrieval:".to_string());
+        plan.push(format!(
+            "  -> ParallelRead (threads: {}, format: Parquet)",
+            self.query_config.max_parallel_readers.unwrap_or(16)
+        ));
+        plan.push(divider);
+
+        plan.join("\n")
+    }
+
+    pub fn filter(&self, expr: &str) -> TableQuery<'_> {
+        TableQuery::new(self).filter(expr)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn read_with_config_async(
+        &self,
+        filter_str: Option<&str>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+    ) -> Result<Vec<RecordBatch>> {
+        let expr = match filter_str {
+            Some(f) => {
+                let schema = self.arrow_schema();
+                Some(FilterExpr::parse_sql(f, schema).await?)
+            }
+            _ => None,
+        };
+        self.read_expr_with_config_async(expr, vector_filters, columns, config, filter_str)
+            .await
+    }
+
+    pub async fn read_expr_with_config_async(
+        &self,
+        expr: Option<FilterExpr>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+        filter_str: Option<&str>,
+    ) -> Result<Vec<RecordBatch>> {
+        let stream = self
+            .read_expr_stream_async(expr, vector_filters, columns, config, filter_str)
+            .await?;
+        let results: Vec<Result<RecordBatch>> = stream.collect().await;
+        results.into_iter().collect()
+    }
+
+    pub async fn read_expr_stream_async(
+        &self,
+        expr: Option<FilterExpr>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+        filter_str: Option<&str>,
+    ) -> Result<BoxStream<'static, Result<RecordBatch>>> {
+        use futures::StreamExt;
+
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, version) = match manifest_manager.load_latest_full().await {
+            Ok((m, e, v)) => (m, e, v),
+            Err(_) => {
+                if manifest_manager.exists().await.unwrap_or(false) {
+                    (crate::core::manifest::Manifest::default(), Vec::new(), 0)
+                } else {
+                    let segments = self.list_segments_from_store().await.unwrap_or_default();
+                    (crate::core::manifest::Manifest::default(), segments, 0)
+                }
+            }
+        };
+        let entries_to_read = if version > 0 {
+            if expr.is_some() || vector_filters.is_some() {
+                let planner = QueryPlanner::new();
+                planner
+                    .prune_entries(&all_entries, expr.as_ref(), vector_filters.as_ref())
+                    .into_iter()
+                    .map(|(e, _)| e)
+                    .collect()
+            } else {
+                all_entries.clone()
+            }
+        } else {
+            // Version 0. Check if we want autodetection.
+            if manifest_manager.exists().await.unwrap_or(false) {
+                Vec::new() // Strictly follow the empty manifest
+            } else {
+                all_entries.clone() // Already contains discovered segments if in autodetection path
+            }
+        };
+
+        // --- SMART HYBRID TRIGGER ---
+        // If we have both a vector filter AND a single text filter targeting a BM25/Inverted indexed column,
+        // we switch to the Hybrid Coordinator path. If there are multiple filter columns or non-BM25 conditions,
+        // we must stay on the standard SQL pushdown + vector search path.
+        if let (Some(ref vs_params_list), Some(ref e)) = (&vector_filters, &expr) {
+            let manifest = self.manifest().await?;
+            let filtered_cols = e.get_referenced_columns();
+
+            let current_schema = manifest
+                .schemas
+                .iter()
+                .find(|s| s.schema_id == manifest.current_schema_id);
+
+            let single_bm25_col = if filtered_cols.len() == 1 {
+                filtered_cols.iter().next().cloned().and_then(|col| {
+                    current_schema
+                        .and_then(|s| {
+                            s.fields.iter().find(|f| {
+                                f.name == col
+                                    && f.indexes
+                                        .iter()
+                                        .any(|idx| matches!(idx, IndexAlgorithm::Bm25 { .. }))
+                            })
+                        })
+                        .map(|f| f.name.clone())
+                })
+            } else {
+                None
+            };
+
+            if let Some(target_col) = single_bm25_col {
+                tracing::info!(
+                    "Smart Trigger: Executing Hybrid Search (RRF) for column '{}'",
+                    target_col
+                );
+                let coordinator = HybridSearchCoordinator::new();
+
+                // Extract search terms from FilterExpr for the BM25 engine
+                let extracted_query = {
+                    let conditions = e.extract_and_conditions();
+                    let mut terms = Vec::new();
+                    for f in conditions {
+                        if f.column == target_col {
+                            if let Some(v) = &f.min {
+                                if let Some(s) = v.as_str() {
+                                    terms.push(s.to_string());
+                                }
+                            }
+                            if let Some(vals) = &f.values {
+                                for v in vals {
+                                    if let Some(s) = v.as_str() {
+                                        terms.push(s.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if terms.is_empty() {
+                        filter_str.unwrap_or("").to_string()
+                    } else {
+                        terms.join(" ")
+                    }
+                };
+
+                let keyword_params = KeywordSearchParams::new(target_col, extracted_query);
+
+                let first_vs_param = vs_params_list.first().cloned();
+                let k = first_vs_param.as_ref().map(|p| p.k).unwrap_or(10);
+
+                let scored_results = coordinator
+                    .execute_hybrid(
+                        self,
+                        filter_str,
+                        first_vs_param,
+                        Some(keyword_params),
+                        k,
+                        config.rrf_k,
+                    )
+                    .await?;
+
+                // Convert ScoredResults back to RecordBatches by fetching from Parquet
+                // This is a simplified version of the final row-fetcher
+                let results = self.fetch_results_by_id(scored_results, columns).await?;
+                return Ok(futures::stream::iter(results.into_iter().map(Ok)).boxed());
+            }
+        }
+
+        // Handle standard vector search
+        if let Some(ref vs_params_list) = vector_filters {
+            // 1. Search Disk
+            let mut requests = Vec::new();
+            for vs_params in vs_params_list {
+                requests.push(
+                    VectorSearchRequest::new(
+                        vs_params.column.clone(),
+                        vs_params.query.clone(),
+                        vs_params.k,
+                        vs_params.metric,
+                        vs_params.use_mmap,
+                    )
+                    .with_filter(expr.clone())
+                    .with_config(config.clone())
+                    .with_ef_search(vs_params.ef_search)
+                    .with_columns(columns.map(|c| c.iter().map(|s| s.to_string()).collect())),
+                );
+            }
+
+            let mut results = crate::core::query::execute_multi_vector_search_with_config(
+                entries_to_read.clone(),
+                self.store.clone(),
+                self.data_store.clone(),
+                &self.uri,
+                requests,
+            )
+            .await?;
+
+            // 2. Search Memory
+            let memory_hits = {
+                let idx = self.indexing.memory_index.read();
+                if let Some(mem_idx) = idx.as_ref() {
+                    let filter_bitmap = if let Some(ref e) = expr {
+                        let buffer = self.write_buffer.read();
+                        let mut bitmap = RoaringBitmap::new();
+                        let mut offset = 0;
+                        let planner = QueryPlanner::new();
+                        for batch in buffer.iter() {
+                            if let Ok(mask) = planner.evaluate_expr(batch, e) {
+                                for i in 0..batch.num_rows() {
+                                    if mask.value(i) {
+                                        bitmap.insert((offset + i) as u32);
+                                    }
+                                }
+                            }
+                            offset += batch.num_rows();
+                        }
+                        Some(bitmap)
+                    } else {
+                        None
+                    };
+                    let mut all_mem_hits = Vec::new();
+                    for vs_params in vs_params_list {
+                        let hits =
+                            mem_idx.search(&vs_params.query, vs_params.k, filter_bitmap.as_ref());
+                        all_mem_hits.extend(hits);
+                    }
+                    all_mem_hits
+                } else {
+                    vec![]
+                }
+            };
+
+            if !memory_hits.is_empty() {
+                let buffer = self.write_buffer.read();
+                if let Some(first) = buffer.first() {
+                    let schema = first.schema();
+                    let batch_offsets: Vec<usize> = buffer
+                        .iter()
+                        .scan(0, |state, b| {
+                            let start = *state;
+                            *state += b.num_rows();
+                            Some(start)
+                        })
+                        .collect();
+
+                    let mut result_rows = Vec::new();
+                    for (id, _dist) in &memory_hits {
+                        for (i, offset) in batch_offsets.iter().enumerate().rev() {
+                            if *id >= *offset {
+                                let row_idx = *id - offset;
+                                if i < buffer.len() && row_idx < buffer[i].num_rows() {
+                                    result_rows.push(buffer[i].slice(row_idx, 1));
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if !result_rows.is_empty() {
+                        let mem_batch = arrow::compute::concat_batches(
+                            &schema,
+                            result_rows.iter().collect::<Vec<&RecordBatch>>(),
+                        )?;
+
+                        let projected_batch = if let Some(cols) = columns {
+                            let indices: Vec<usize> = cols
+                                .iter()
+                                .filter_map(|name| mem_batch.schema().index_of(name).ok())
+                                .collect();
+                            mem_batch.project(&indices).unwrap_or(mem_batch.clone())
+                        } else {
+                            mem_batch.clone()
+                        };
+
+                        let projected_schema = projected_batch.schema();
+
+                        // Append _distance column to match disk search schema
+                        let mut new_fields = projected_schema.fields().to_vec();
+                        new_fields.push(std::sync::Arc::new(arrow::datatypes::Field::new(
+                            "distance",
+                            arrow::datatypes::DataType::Float32,
+                            false,
+                        )));
+                        let new_schema =
+                            std::sync::Arc::new(arrow::datatypes::Schema::new(new_fields));
+
+                        let mut new_columns = projected_batch.columns().to_vec();
+                        let distance_array = arrow::array::Float32Array::from(
+                            memory_hits
+                                .iter()
+                                .map(|(_, dist)| *dist)
+                                .collect::<Vec<f32>>(),
+                        );
+                        new_columns.push(std::sync::Arc::new(distance_array));
+
+                        if let Ok(dist_batch) = RecordBatch::try_new(new_schema, new_columns) {
+                            results.push(("write_buffer".to_string(), dist_batch));
+                        }
+                    }
+                }
+            }
+
+            return Ok(
+                futures::stream::iter(results.into_iter().map(|(_, batch)| Ok(batch))).boxed(),
+            );
+        }
+
+        // Extract Iceberg schema from the already-loaded manifest to avoid
+        // redundant manifest loads inside each per-segment read.
+        let iceberg_schema = _manifest
+            .schemas
+            .iter()
+            .find(|s| s.schema_id == _manifest.current_schema_id)
+            .cloned();
+        let iceberg_schema_arc = iceberg_schema.map(Arc::new);
+
+        // Capture current GPU context so it can be propagated into each async
+        // worker closure (thread_local is per-thread, not per-future).
+        let current_gpu_context = get_thread_gpu_context();
+
+        let expr_arc = expr.map(Arc::new);
+        let concurrency = config
+            .max_parallel_readers
+            .or_else(|| {
+                std::env::var("BENOSTREAM_MAX_CONCURRENCY")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            })
+            .min(64); // Cap to prevent resource exhaustion
+
+        struct ReadCtx {
+            table: Table,
+            expr: Option<Arc<FilterExpr>>,
+            schema: Option<Arc<crate::core::manifest::Schema>>,
+            gpu: Option<crate::core::index::gpu::ComputeContext>,
+            columns: Option<Vec<String>>,
+            version: u64,
+        }
+        let read_ctx = Arc::new(ReadCtx {
+            table: self.clone(),
+            expr: expr_arc.clone(),
+            schema: iceberg_schema_arc,
+            gpu: current_gpu_context,
+            columns: columns.map(|c| c.iter().map(|s| s.to_string()).collect()),
+            version,
+        });
+
+        let stream = futures::stream::iter(entries_to_read)
+            .map({
+                let read_ctx = read_ctx.clone();
+                move |entry| {
+                    let ctx = read_ctx.clone();
+                    async move {
+                        if let Some(c) = ctx.gpu.clone() {
+                            crate::core::index::gpu::set_thread_gpu_context(Some(c));
+                        }
+                        let cols_refs: Option<Vec<&str>> = ctx
+                            .columns
+                            .as_ref()
+                            .map(|v| v.iter().map(|s| s.as_str()).collect());
+                        ctx.table
+                            .read_segment_expr(
+                                &entry,
+                                ctx.expr.as_deref(),
+                                ctx.version,
+                                cols_refs.as_deref(),
+                                ctx.schema.as_deref(),
+                            )
+                            .await
+                    }
+                }
+            })
+            .buffer_unordered(concurrency);
+
+        let results_stream = stream.flat_map(|res| match res {
+            Ok(b_vec) => futures::stream::iter(b_vec.into_iter().map(Ok)).boxed(),
+            Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
+        });
+
+        // --- Read from In-Memory Write Buffer ---
+        let mut mem_batches = Vec::new();
+        {
+            let buffer = self.write_buffer.read();
+            if !buffer.is_empty() {
+                let table_schema = self.arrow_schema();
+                // Align batches to the full evolved schema first
+                let mut aligned_buffer = Vec::with_capacity(buffer.len());
+                for b in buffer.iter() {
+                    let aligned = if b.schema() != table_schema {
+                        let mut cols = Vec::with_capacity(table_schema.fields().len());
+                        for field in table_schema.fields() {
+                            let col = if let Some(c) = b.column_by_name(field.name()) {
+                                c.clone()
+                            } else {
+                                arrow::array::new_null_array(field.data_type(), b.num_rows())
+                            };
+                            cols.push(col);
+                        }
+                        RecordBatch::try_new(table_schema.clone(), cols)
+                            .unwrap_or_else(|_| b.clone())
+                    } else {
+                        b.clone()
+                    };
+                    aligned_buffer.push(aligned);
+                }
+
+                if let Some(ref e) = expr_arc {
+                    let planner = QueryPlanner::new();
+                    for batch in aligned_buffer.iter() {
+                        let batch_to_scan = if let Some(cols) = columns {
+                            let indices: Vec<usize> = cols
+                                .iter()
+                                .filter_map(|name| batch.schema().index_of(name).ok())
+                                .collect();
+                            batch.project(&indices).unwrap_or_else(|_| batch.clone())
+                        } else {
+                            batch.clone()
+                        };
+
+                        if let Ok(filtered) = planner.filter_expr(&batch_to_scan, e) {
+                            if filtered.num_rows() > 0 {
+                                mem_batches.push(Ok(filtered));
+                            }
+                        }
+                    }
+                } else {
+                    for batch in aligned_buffer.iter() {
+                        if let Some(cols) = columns {
+                            let indices: Vec<usize> = cols
+                                .iter()
+                                .filter_map(|name| batch.schema().index_of(name).ok())
+                                .collect();
+                            if let Ok(projected) = batch.project(&indices) {
+                                mem_batches.push(Ok(projected));
+                            }
+                        } else {
+                            mem_batches.push(Ok(batch.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let mem_stream = futures::stream::iter(mem_batches);
+
+        Ok(results_stream.chain(mem_stream).boxed())
+    }
+
+    pub async fn read_filter_async(
+        &self,
+        filters: Vec<QueryFilter>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        self.read_filter_with_config_async(
+            filters,
+            vector_filters,
+            columns,
+            self.query_config.clone(),
+        )
+        .await
+    }
+
+    /// Read the rows matching a row-value `IN` list over the primary key
+    /// columns, e.g. `(id, region) IN ((1, 'US'), (2, 'CA'))`.
+    ///
+    /// This is the read-side counterpart of the write-path PK enforcement. It
+    /// pushes the whole tuple set down as a single DataFusion expression (so
+    /// the predicate is evaluated inside the parquet scan instead of after it),
+    /// and additionally consults the per-column inverted indexes to skip whole
+    /// segments that contain no matching row — which is where the win comes
+    /// from on a wide table.
+    pub async fn read_pk_filter_async(
+        &self,
+        pk_filter: &PrimaryKeyFilter,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        if pk_filter.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (manifest, all_entries, version) = manifest_manager.load_latest_full().await?;
+
+        // Single-column PK: a plain IN list is already index-accelerated.
+        if pk_filter.columns.len() == 1 {
+            if let Some(qf) = pk_filter.to_query_filter() {
+                return self
+                    .read_filter_with_config_async(
+                        vec![qf],
+                        None,
+                        columns,
+                        self.query_config.clone(),
+                    )
+                    .await;
+            }
+        }
+
+        let expr = FilterExpr::DataFusion(pk_filter.to_expr());
+        let planner = QueryPlanner::new();
+        let candidates = planner.prune_entries(&all_entries, Some(&expr), None);
+        let cached_schema = manifest.schemas.last().cloned();
+
+        let mut out = Vec::new();
+        for (entry, _) in candidates {
+            // Index-assisted segment skip: when the PK columns carry inverted
+            // indexes and no row matches, don't read the segment at all.
+            if let Ok(reader) = self.segment_reader(&entry) {
+                if let Ok(Some(bm)) = Self::pk_match_bitmap(&reader, pk_filter).await {
+                    let deleted = reader.load_merged_deletes().await.unwrap_or_default();
+                    if (bm - deleted).is_empty() {
+                        continue;
+                    }
+                }
+            }
+
+            let batches = self
+                .read_segment_expr(
+                    &entry,
+                    Some(&expr),
+                    version,
+                    columns,
+                    cached_schema.as_ref(),
+                )
+                .await?;
+            out.extend(batches);
+        }
+
+        Ok(out)
+    }
+
+    pub async fn read_filter_with_config_async(
+        &self,
+        filters: Vec<QueryFilter>,
+        vector_filters: Option<Vec<VectorSearchParams>>,
+        columns: Option<&[&str]>,
+        config: QueryConfig,
+    ) -> Result<Vec<RecordBatch>> {
+        let expr = FilterExpr::from_filters(filters);
+        self.read_expr_with_config_async(expr, vector_filters, columns, config, None)
+            .await
+    }
+
+    pub async fn read_segment_expr(
+        &self,
+        entry: &ManifestEntry,
+        expr: Option<&FilterExpr>,
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+        cached_iceberg_schema: Option<&crate::core::manifest::Schema>,
+    ) -> Result<Vec<RecordBatch>> {
+        tracing::debug!(
+            "read_segment_expr entry={} manifest_version={} columns={:?} expr={:?}",
+            entry.file_path,
+            manifest_version,
+            columns,
+            expr
+        );
+        let file_path_str = entry.file_path.clone();
+        let segment_id = file_path_str
+            .split('/')
+            .next_back()
+            .unwrap_or(&file_path_str)
+            .strip_suffix(".parquet")
+            .unwrap_or(&file_path_str);
+
+        // Use cached schema if provided by caller; otherwise fall back to manifest load.
+        let iceberg_schema = if let Some(schema) = cached_iceberg_schema {
+            Some(schema.clone())
+        } else {
+            let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+            let (manifest, _, _) = manifest_manager
+                .load_latest_full()
+                .await
+                .unwrap_or_default();
+            manifest
+                .schemas
+                .iter()
+                .find(|s| s.schema_id == manifest.current_schema_id)
+                .cloned()
+        };
+
+        // Resolve partition-aware path
+        let path = std::path::Path::new(&file_path_str);
+        let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+        let full_base_path = if rel_parent.is_empty() {
+            self.uri.clone()
+        } else {
+            format!("{}/{}", self.uri, rel_parent)
+        };
+
+        let config = SegmentConfig::new(&full_base_path, segment_id)
+            .with_parquet_path(entry.file_path.clone())
+            .with_data_store(self.data_store.clone().unwrap_or(self.store.clone()))
+            .with_delete_files(entry.delete_files.clone())
+            .with_index_files(entry.index_files.clone())
+            .with_file_size(entry.file_size_bytes as u64)
+            .with_index_all(self.indexing.index_all)
+            .with_columns_to_index(self.indexing.index_columns.read().clone());
+
+        let mut reader = HybridReader::new(config, self.store.clone(), &self.uri);
+        if let Some(s) = &iceberg_schema {
+            reader = reader.with_iceberg_schema(s.clone());
+        }
+
+        let full_schema = if let Some(schema) = &iceberg_schema {
+            Arc::new(schema.to_arrow())
+        } else {
+            self.arrow_schema()
+        };
+
+        let target_schema = if let Some(cols) = columns {
+            let fields: Vec<arrow::datatypes::Field> = cols
+                .iter()
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                .collect();
+            Some(Arc::new(Schema::new(fields)))
+        } else {
+            Some(full_schema.clone())
+        };
+
+        let read_schema = if let (Some(cols), Some(e)) = (columns, expr) {
+            let mut read_cols: std::collections::HashSet<String> =
+                cols.iter().map(|s| s.to_string()).collect();
+            for ref_col in e.get_referenced_columns() {
+                read_cols.insert(ref_col.clone());
+            }
+            let fields: Vec<arrow::datatypes::Field> = read_cols
+                .iter()
+                .filter_map(|name| full_schema.field_with_name(name).ok().cloned())
+                .collect();
+            Some(Arc::new(Schema::new(fields)))
+        } else {
+            target_schema.clone()
+        };
+
+        if manifest_version == 0 || expr.is_none() {
+            let mut stream = reader.stream_all(target_schema).await?;
+            let mut batches = Vec::new();
+            while let Some(batch_result) = stream.next().await {
+                batches.push(batch_result?);
+            }
+            return Ok(batches);
+        }
+
+        // `expr.is_none()` returned above, so this is `Some`; the `None` arm is
+        // defensive only.
+        let expr = match expr {
+            Some(e) => e,
+            None => return Ok(Vec::new()),
+        };
+        let and_filters = reader.rewrite_composite_filters(expr.extract_and_conditions());
+
+        // Try to use index for the FIRST filter that has one
+        let mut batches = Vec::new();
+        let mut index_used = false;
+
+        for filter in &and_filters {
+            if let Ok(indexed_batches) = reader.query_index_first(filter, read_schema.clone()).await
+            {
+                batches = indexed_batches;
+                index_used = true;
+                break;
+            }
+        }
+
+        if !index_used {
+            // Point Selection Optimization: Check Bloom Filters before scanning
+            for filter in &and_filters {
+                if let Some(vals) = &filter.values {
+                    if vals.len() == 1
+                        && !reader
+                            .check_bloom_filter(&filter.column, &vals[0])
+                            .await
+                            .unwrap_or(true)
+                    {
+                        tracing::debug!(
+                            "Bloom Filter Pruned segment: {} for col: {}",
+                            segment_id,
+                            filter.column
+                        );
+                        return Ok(vec![]);
+                    }
+                } else if let (Some(min), Some(max)) = (&filter.min, &filter.max) {
+                    if min == max
+                        && !reader
+                            .check_bloom_filter(&filter.column, min)
+                            .await
+                            .unwrap_or(true)
+                    {
+                        tracing::debug!(
+                            "Bloom Filter Pruned segment: {} for col: {}",
+                            segment_id,
+                            filter.column
+                        );
+                        return Ok(vec![]);
+                    }
+                }
+            }
+
+            let mut stream = reader.stream_all(read_schema).await?;
+            while let Some(batch_result) = stream.next().await {
+                batches.push(batch_result?);
+            }
+        }
+
+        let planner = QueryPlanner::new();
+        let mut filtered_batches = Vec::new();
+        for batch in batches {
+            match planner.filter_expr(&batch, expr) {
+                Ok(filtered) => {
+                    if filtered.num_rows() > 0 {
+                        let projected = if let Some(ts) = &target_schema {
+                            let indices: Vec<usize> = ts
+                                .fields()
+                                .iter()
+                                .filter_map(|f| filtered.schema().index_of(f.name()).ok())
+                                .collect();
+                            filtered.project(&indices).unwrap_or(filtered.clone())
+                        } else {
+                            filtered
+                        };
+                        filtered_batches.push(projected);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to evaluate filter expression on batch: {}", e);
+                }
+            }
+        }
+        Ok(filtered_batches)
+    }
+
+    pub async fn read_segment_multi(
+        &self,
+        entry: &ManifestEntry,
+        filters: &[QueryFilter],
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        let expr = FilterExpr::from_filters(filters.to_vec());
+        self.read_segment_expr(entry, expr.as_ref(), manifest_version, columns, None)
+            .await
+    }
+
+    pub async fn read_segment(
+        &self,
+        entry: &ManifestEntry,
+        query_filter_opt: Option<&QueryFilter>,
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        let filters = match query_filter_opt {
+            Some(f) => vec![f.clone()],
+            None => vec![],
+        };
+        self.read_segment_multi(entry, &filters, manifest_version, columns)
+            .await
+    }
+
+    pub async fn stream_segment_multi(
+        &self,
+        entry: &ManifestEntry,
+        filters: &[QueryFilter],
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+        let batches = self
+            .read_segment_multi(entry, filters, manifest_version, columns)
+            .await?;
+        Ok(futures::stream::iter(batches.into_iter().map(Ok)).boxed())
+    }
+
+    pub async fn stream_segment(
+        &self,
+        entry: &ManifestEntry,
+        query_filter_opt: Option<&QueryFilter>,
+        manifest_version: u64,
+        columns: Option<&[&str]>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+        let filters = match query_filter_opt {
+            Some(f) => vec![f.clone()],
+            None => vec![],
+        };
+        self.stream_segment_multi(entry, &filters, manifest_version, columns)
+            .await
+    }
+
+    pub async fn stream_all(
+        &self,
+        columns: Option<&[&str]>,
+    ) -> Result<futures::stream::BoxStream<'static, Result<RecordBatch>>> {
+        use futures::StreamExt;
+        let manifest = self.manifest().await.unwrap_or_default();
+        let all_entries = self.get_snapshot_segments().await?;
+
+        let mut streams = Vec::new();
+        for entry in all_entries {
+            let stream = self
+                .stream_segment(&entry, None, manifest.version, columns)
+                .await?;
+            streams.push(stream);
+        }
+
+        // Chain all streams
+        let combined_stream = futures::stream::iter(streams).flatten();
+        Ok(combined_stream.boxed())
+    }
+
+    async fn list_segments_from_store(&self) -> Result<Vec<ManifestEntry>> {
+        use futures::StreamExt;
+        let mut entries = Vec::new();
+        let mut stream = self.store.list(None);
+        while let Some(res) = stream.next().await {
+            if let Ok(meta) = res {
+                let path = meta.location.to_string();
+                if (!path.contains("/") || path.contains("data/"))
+                    && path.ends_with(".parquet")
+                    && !path.contains(".inv.parquet")
+                    && !path.contains(".hnsw.")
+                {
+                    entries.push(ManifestEntry {
+                        file_path: path,
+                        file_size_bytes: meta.size as i64,
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        Ok(entries)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn execute_vector_search_as_scored(
+        &self,
+        params: VectorSearchParams,
+    ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_, all_entries, _) = manifest_manager.load_latest_full().await?;
+
+        let request = VectorSearchRequest::new(
+            params.column.clone(),
+            params.query.clone(),
+            params.k,
+            params.metric,
+            params.use_mmap,
+        )
+        .with_ef_search(params.ef_search)
+        .with_config(self.query_config.clone());
+
+        let scored_results = crate::core::query::execute_vector_search_raw_with_config(
+            all_entries,
+            self.store.clone(),
+            self.data_store.clone(),
+            &self.uri,
+            request,
+        )
+        .await?;
+
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
+            .observe(start_time.elapsed().as_secs_f64());
+        Ok(scored_results)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn execute_keyword_search_as_scored(
+        &self,
+        params: KeywordSearchParams,
+    ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+
+        let mut all_scored = Vec::new();
+        for entry in all_entries {
+            let file_path_str = entry.file_path.clone();
+            let segment_id = file_path_str
+                .split('/')
+                .next_back()
+                .unwrap_or(&file_path_str)
+                .strip_suffix(".parquet")
+                .unwrap_or(&file_path_str);
+
+            let config = SegmentConfig::new(&self.uri, segment_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone())
+                .with_record_count(entry.record_count as u64);
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            let matches = reader
+                .keyword_search_index(
+                    &params.column,
+                    &params.query,
+                    1000,
+                    &params.params(),
+                    params.analyzer.as_deref(),
+                    None,
+                )
+                .await?;
+
+            for (row_id, score) in matches {
+                all_scored.push(ScoredResult {
+                    segment_id: segment_id.to_string(),
+                    row_id: row_id as u32,
+                    score,
+                });
+            }
+        }
+        // Global best-first order: per-segment results were concatenated above,
+        // and RRF rank fusion requires each input list sorted by score desc.
+        all_scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
+            .observe(start_time.elapsed().as_secs_f64());
+        Ok(all_scored)
+    }
+
+    /// Helper to fetch full RecordBatches for a set of fused IDs
+    pub async fn fetch_results_by_id(
+        &self,
+        results: Vec<ScoredResult>,
+        columns: Option<&[&str]>,
+    ) -> Result<Vec<RecordBatch>> {
+        if results.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Score-only short-circuit (vector-search I/O optimisation).
+        //
+        // The score is already in hand from the HNSW/BM25 index search, and the
+        // engine synthesises the distance column *after* reading Parquet. So a
+        // query that projects nothing but the score was reading every column of
+        // every matched row for a value it already had. Emit it directly.
+        if let Some(cols) = columns.filter(|c| !c.is_empty()) {
+            let score_like = |c: &str| c == "distance" || c == "_distance" || c == "score";
+            if cols.iter().all(|c| score_like(c)) {
+                let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
+                let fields: Vec<arrow::datatypes::Field> = cols
+                    .iter()
+                    .map(|c| {
+                        arrow::datatypes::Field::new(*c, arrow::datatypes::DataType::Float32, false)
+                    })
+                    .collect();
+                let schema = Arc::new(arrow::datatypes::Schema::new(fields));
+                let arrays: Vec<Arc<dyn arrow::array::Array>> = cols
+                    .iter()
+                    .map(|_| {
+                        Arc::new(arrow::array::Float32Array::from(scores.clone()))
+                            as Arc<dyn arrow::array::Array>
+                    })
+                    .collect();
+                return Ok(vec![RecordBatch::try_new(schema, arrays)?]);
+            }
+        }
+
+        // Group by segment to minimize I/O
+        let mut by_segment: HashMap<String, Vec<(u32, f32)>> = HashMap::new();
+        for r in results {
+            by_segment
+                .entry(r.segment_id)
+                .or_default()
+                .push((r.row_id, r.score));
+        }
+
+        let mut final_batches = Vec::new();
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+
+        for (seg_id, rows) in by_segment {
+            if seg_id == "vector_path" {
+                continue;
+            }
+
+            // Find segment in all entries
+            let entry = all_entries
+                .iter()
+                .find(|e| e.file_path.contains(&seg_id))
+                .ok_or_else(|| anyhow::anyhow!("Segment {} not found in manifest", seg_id))?;
+
+            let config = SegmentConfig::new(&self.uri, &seg_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone());
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+
+            // Convert fused row IDs and scores to RecordBatch
+            let batch = reader.read_rows_by_id(rows, columns).await?;
+            final_batches.push(batch);
+        }
+
+        Ok(final_batches)
+    }
+
+    /// Verifies the data integrity of all segments in the table by comparing
+    /// their actual file checksums against the ones stored in the manifest.
+    pub async fn verify_integrity_async(&self) -> Result<()> {
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _version) = manifest_manager.load_latest_full().await?;
+
+        for entry in all_entries {
+            if let Some(expected_checksum) = &entry.file_checksum {
+                let file_path = &entry.file_path;
+                let is_remote = file_path.contains("://") && !file_path.starts_with("file://");
+
+                let mut hasher = sha2::Sha256::new();
+                use futures::StreamExt;
+                use sha2::Digest;
+
+                if is_remote {
+                    let path_str = if file_path.starts_with("s3://")
+                        || file_path.starts_with("gcs://")
+                        || file_path.starts_with("azure://")
+                    {
+                        let parts: Vec<&str> = file_path.split("://").collect();
+                        if parts.len() > 1 {
+                            let without_scheme = parts[1];
+                            let path_parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+                            if path_parts.len() > 1 {
+                                path_parts[1].to_string()
+                            } else {
+                                without_scheme.to_string()
+                            }
+                        } else {
+                            file_path.clone()
+                        }
+                    } else {
+                        // Relative remote path
+                        let uri_parts: Vec<&str> = self.uri.split("://").collect();
+                        if uri_parts.len() > 1 {
+                            let without_scheme = uri_parts[1];
+                            let path_parts: Vec<&str> = without_scheme.splitn(2, '/').collect();
+                            if path_parts.len() > 1 {
+                                format!("{}/{}", path_parts[1], file_path)
+                            } else {
+                                file_path.to_string()
+                            }
+                        } else {
+                            file_path.clone()
+                        }
+                    };
+
+                    let path = object_store::path::Path::parse(&path_str)?;
+                    let mut stream = self.store.get(&path).await?.into_stream();
+                    while let Some(chunk_result) = stream.next().await {
+                        let chunk = chunk_result?;
+                        hasher.update(&chunk);
+                    }
+                } else {
+                    let mut local_path = std::path::PathBuf::from(
+                        self.uri.strip_prefix("file://").unwrap_or(&self.uri),
+                    );
+                    if !file_path.starts_with('/') && !file_path.starts_with("file://") {
+                        local_path.push(file_path);
+                    } else {
+                        local_path = std::path::PathBuf::from(
+                            file_path.strip_prefix("file://").unwrap_or(file_path),
+                        );
+                    }
+
+                    tracing::debug!(
+                        "verify_integrity_async: self.uri={}, file_path={}, local_path={:?}",
+                        self.uri,
+                        file_path,
+                        local_path
+                    );
+
+                    let mut file = std::fs::File::open(&local_path).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to open local data file {:?} for integrity check: {}",
+                            local_path,
+                            e
+                        )
+                    })?;
+
+                    let mut buffer = [0; 65536];
+                    use std::io::Read;
+                    while let Ok(n) = file.read(&mut buffer) {
+                        if n == 0 {
+                            break;
+                        }
+                        hasher.update(&buffer[..n]);
+                    }
+                }
+
+                let actual_checksum = format!("{:x}", hasher.finalize());
+                if &actual_checksum != expected_checksum {
+                    anyhow::bail!("Data integrity validation failed for segment {}: expected checksum {}, but got {}", file_path, expected_checksum, actual_checksum);
+                }
+            }
+        }
+        Ok(())
+    }
+}

@@ -1,0 +1,176 @@
+package com.benostreamdb.trino;
+
+import io.trino.spi.Page;
+import io.trino.spi.connector.ColumnHandle;
+import io.trino.spi.connector.ConnectorPageSource;
+import io.trino.spi.block.BlockBuilder;
+import io.trino.spi.type.IntegerType;
+import io.trino.spi.type.VarcharType;
+import java.util.List;
+import java.io.IOException;
+
+import org.apache.arrow.c.ArrowArray;
+import org.apache.arrow.c.ArrowSchema;
+import org.apache.arrow.c.Data;
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.VectorSchemaRoot;
+
+public class BenoStreamDBPageSource implements ConnectorPageSource {
+
+    private final BenoStreamDBSplit split;
+    private final List<ColumnHandle> columns;
+    private long nativeHandle = 0;
+    private boolean finished = false;
+    private final BufferAllocator allocator;
+
+    // Load Native Lib
+    static {
+        try {
+            System.loadLibrary("benostreamdb");
+        } catch (UnsatisfiedLinkError e) {
+            /* handled by SplitManager or ignored in tests */ }
+    }
+
+    // JNI Declarations
+    private native long openSession(String path, String rowSelection);
+
+    // Updated signature: returns 1 for success/has_more, 0 for done/empty
+    private native long readBatch(long handle, long outArrayPtr, long outSchemaPtr);
+
+    private native void closeSession(long handle);
+
+
+    private final String gpuDevice;
+
+    public BenoStreamDBPageSource(BenoStreamDBSplit split, List<ColumnHandle> columns, String gpuDevice) {
+        this.split = split;
+        this.columns = columns;
+        this.gpuDevice = gpuDevice;
+        this.allocator = new RootAllocator();
+
+        System.out.println("BenoStreamDBPageSource: Opening session for " + split.getPath());
+        try {
+            if (BenoStreamDBJNIBridge.isLoaded()) {
+                BenoStreamDBJNIBridge.setGpuContext(this.gpuDevice);
+            }
+            this.nativeHandle = openSession(split.getPath(), split.getRowSelection());
+        } catch (UnsatisfiedLinkError e) {
+            System.err.println("JNI openSession not found. using mock handle.");
+            this.nativeHandle = 12345;
+        }
+    }
+
+    @Override
+    public long getCompletedBytes() {
+        return 0;
+    }
+
+    @Override
+    public long getReadTimeNanos() {
+        return 0;
+    }
+
+    @Override
+    public boolean isFinished() {
+        return finished;
+    }
+
+    @Override
+    public long getMemoryUsage() {
+        return 0;
+    }
+
+    @Override
+    public Page getNextPage() {
+        if (finished)
+            return null;
+
+        // 1. Allocate C Data Interface Structures
+        try (ArrowArray arrowArray = ArrowArray.allocateNew(allocator);
+                ArrowSchema arrowSchema = ArrowSchema.allocateNew(allocator)) {
+
+            // 2. Call Native (Passing memory addresses)
+            long result = 0;
+            try {
+                result = readBatch(nativeHandle, arrowArray.memoryAddress(), arrowSchema.memoryAddress());
+            } catch (UnsatisfiedLinkError e) {
+                System.err.println("JNI readBatch not found.");
+            }
+
+            if (result == 0) {
+                finished = true;
+                return null;
+            }
+
+            // 3. Import data into Java Arrow Vector
+            try (VectorSchemaRoot root = Data.importVectorSchemaRoot(allocator, arrowArray, arrowSchema, null)) {
+                System.out.println("Java: Received Arrow Batch with " + root.getRowCount() + " rows");
+
+                // 4. Convert Arrow VectorSchemaRoot to Trino Page
+                return convertArrowToTrinoPage(root);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to import Arrow batch", e);
+            }
+        }
+    }
+
+    private Page convertArrowToTrinoPage(VectorSchemaRoot root) {
+        // Real Implementation:
+        // Iterate root.getFieldVectors(), match with 'columns', append to BlockBuilder
+
+        // Ensure PageBuilder matches requested columns
+        io.trino.spi.PageBuilder pageBuilder = new io.trino.spi.PageBuilder(
+                columns.stream().map(c -> ((BenoStreamDBColumnHandle) c).getColumnType())
+                        .collect(java.util.stream.Collectors.toList()));
+
+        int rowCount = root.getRowCount();
+        pageBuilder.declarePositions(rowCount);
+
+        for (int i = 0; i < columns.size(); i++) {
+            BenoStreamDBColumnHandle col = (BenoStreamDBColumnHandle) columns.get(i);
+            BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(i);
+
+            org.apache.arrow.vector.FieldVector vector = root.getVector(col.getColumnName());
+            
+            for (int r = 0; r < rowCount; r++) {
+                if (vector == null || vector.isNull(r)) {
+                    blockBuilder.appendNull();
+                    continue;
+                }
+                
+                io.trino.spi.type.Type trinoType = col.getColumnType();
+                Object obj = vector.getObject(r);
+                
+                if (trinoType instanceof io.trino.spi.type.IntegerType || trinoType instanceof io.trino.spi.type.BigintType) {
+                    trinoType.writeLong(blockBuilder, ((Number) obj).longValue());
+                } else if (trinoType instanceof io.trino.spi.type.DoubleType) {
+                    trinoType.writeDouble(blockBuilder, ((Number) obj).doubleValue());
+                } else if (trinoType instanceof io.trino.spi.type.RealType) {
+                    trinoType.writeLong(blockBuilder, Float.floatToRawIntBits(((Number) obj).floatValue()));
+                } else if (trinoType instanceof io.trino.spi.type.BooleanType) {
+                    trinoType.writeBoolean(blockBuilder, (Boolean) obj);
+                } else {
+                    io.trino.spi.type.VarcharType.VARCHAR.writeString(blockBuilder, obj.toString());
+                }
+            }
+        }
+
+        return pageBuilder.build();
+    }
+
+    @Override
+    public void close() throws IOException {
+        System.out.println("Closing BenoStreamDBPageSource handle: " + nativeHandle);
+        try {
+            if (nativeHandle != 0 && nativeHandle != 12345) {
+                closeSession(nativeHandle);
+                nativeHandle = 0;
+            }
+        } catch (UnsatisfiedLinkError e) {
+            System.err.println("JNI closeSession not found.");
+        }
+        allocator.close();
+    }
+}

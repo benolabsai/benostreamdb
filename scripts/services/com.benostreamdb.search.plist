@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.benostreamdb.search</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Use the wrapper script to load the config file first -->
+        <string>/usr/local/bin/benostream-search-runner.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/benostream-search.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/benostream-search.err</string>
+</dict>
+</plist>
