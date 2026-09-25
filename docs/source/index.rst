@@ -42,6 +42,7 @@ Key Features
    guides/iceberg_v2_v3_api
    guides/pgvector_sql_guide
    guides/opensearch_compatibility
+   guides/qdrant_compatibility
    guides/resource_limits
    guides/no_panic_policy
    guides/benchmarking

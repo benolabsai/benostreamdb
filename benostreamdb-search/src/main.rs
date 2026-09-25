@@ -13,7 +13,7 @@
 )]
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -183,31 +183,7 @@ async fn main() {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
 
     // Qdrant-compatible API on 6333
-    let qdrant_app = Router::new()
-        .route(
-            "/collections/:collection_name",
-            get(benostreamdb_search::handlers::qdrant::get_collection)
-                .put(benostreamdb_search::handlers::qdrant::create_collection)
-                .delete(benostreamdb_search::handlers::qdrant::delete_collection),
-        )
-        .route(
-            "/collections/:collection_name/index",
-            put(benostreamdb_search::handlers::qdrant::create_payload_index),
-        )
-        .route(
-            "/collections/:collection_name/points",
-            put(benostreamdb_search::handlers::qdrant::upsert_points)
-                .get(benostreamdb_search::handlers::qdrant::retrieve_points),
-        )
-        .route(
-            "/collections/:collection_name/points/search",
-            post(benostreamdb_search::handlers::qdrant::query_points),
-        )
-        .route(
-            "/collections/:collection_name/points/delete",
-            post(benostreamdb_search::handlers::qdrant::delete_points),
-        )
-        .with_state(state.clone())
+    let qdrant_app = benostreamdb_search::handlers::qdrant::router(state.clone())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
 
