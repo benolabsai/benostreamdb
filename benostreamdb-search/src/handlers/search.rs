@@ -828,7 +828,7 @@ pub async fn search_core(
             });
         }
         ScoreKind::None => {
-            hits.sort_by(|a, b| a.id.cmp(&b.id));
+            hits.sort_by_key(|a| a.id.clone());
         }
     }
 
