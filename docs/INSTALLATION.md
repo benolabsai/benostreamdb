@@ -519,7 +519,9 @@ _(merged from the former `INSTALLATION.md`)_
 This guide covers two ways to use BenoStreamDB:
 
 1. **The `bsdb-search` REST server** — an OpenSearch / Elasticsearch 7.10-compatible
-   API (plus a Qdrant-compatible API) served on top of the BenoStreamDB engine.
+   API (plus a Qdrant v1.x-compatible API; see
+   [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md)) served on top of the
+   BenoStreamDB engine.
 2. **The Python client** — direct, in-process access to the engine via `pyo3` bindings.
 
 ---

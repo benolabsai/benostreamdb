@@ -82,8 +82,8 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 BenoStreamDB includes a highly optimized HTTP frontend (`benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
 
-- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search. (e.g., connect Kibana or Grafana directly).
-- **Qdrant Vector API (Port 6333)**: Native vector database emulation. Fully compatible with Qdrant's unstructured JSON payloads, which are dynamically inferred and converted into highly compressed Arrow columns on write.
+- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search. (e.g., connect Kibana or Grafana directly). See the [OpenSearch compatibility matrix](docs/OPENSEARCH_COMPATIBILITY.md).
+- **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation covering collections, points, payloads, vectors, aliases, and the universal query API. Qdrant's unstructured JSON payloads are dynamically inferred and converted into highly compressed Arrow columns on write. See the [Qdrant compatibility matrix](docs/QDRANT_COMPATIBILITY.md) for the exact supported surface and known approximations.
 
 Both APIs are hosted concurrently from a single binary, completely share the exact same underlying `AppState` and data files, and require zero data duplication. You can write a collection of embeddings via the Qdrant API and instantly query it via the OpenSearch API!
 
@@ -114,7 +114,7 @@ docker compose -f docker/docker-compose.quickstart.yml up -d
 | Service | Protocol | Port | Description |
 | :--- | :--- | :--- | :--- |
 | **Elasticsearch 7.10** | REST / JSON | `9200` | Text indexing, BM25, and hybrid search |
-| **Qdrant Vector** | REST / JSON | `6333` | Point upsert and vector similarity queries |
+| **Qdrant Vector** | REST / JSON | `6333` | Collections, point upsert/retrieve, payload & vector edits, vector search, aliases |
 | **Arrow Flight SQL** | gRPC / Flight | `50051` | Zero-copy SQL for DuckDB, Polars, BI tools |
 
 Verify cluster health:

@@ -328,7 +328,7 @@ bsdb repair s3://bucket/table
 ### Objectives
 - Expose engine over standard search and database protocols
 - OpenSearch / Elasticsearch 7.10 REST compatibility for document search
-- Qdrant REST compatibility for unstructured vector collections
+- Qdrant v1.x REST compatibility for unstructured vector collections (see [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md))
 - Arrow Flight SQL Gateway for zero-copy SQL analytics and dbt integration
 
 ### Implementations
@@ -386,6 +386,7 @@ bsdb repair s3://bucket/table
 - **Service Quickstarts**:
   - `INSTALLATION.md` — Search API quickstart for OpenSearch 7.10 and Qdrant endpoints.
   - `OPENSEARCH_COMPATIBILITY.md` — API support matrix and error envelope documentation.
+  - `QDRANT_COMPATIBILITY.md` — Qdrant API support matrix, score semantics, and known approximations.
 
 ---
 

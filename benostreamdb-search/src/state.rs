@@ -41,6 +41,12 @@ pub struct AppState {
     pub catalog: Option<Arc<dyn benostreamdb::core::catalog::Catalog>>,
     /// Namespace for table operations in the external catalog (default: "default").
     pub catalog_namespace: String,
+    /// Qdrant collection aliases: alias name -> target collection name.
+    ///
+    /// Aliases are process-local (in-memory) rather than persisted: they are a
+    /// routing convenience, and the underlying collection data is durable. See
+    /// `docs/QDRANT_COMPATIBILITY.md`.
+    pub aliases: Arc<RwLock<HashMap<String, String>>>,
     /// Serializes open/create so concurrent first-use requests for the same
     /// index share one `Table` instance (no forked write buffers / WALs).
     open_gate: Arc<Mutex<()>>,
@@ -85,6 +91,7 @@ impl AppState {
             compute,
             catalog,
             catalog_namespace,
+            aliases: Arc::new(RwLock::new(HashMap::new())),
             open_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -102,6 +109,31 @@ impl AppState {
         &self,
         index: &str,
         schema: &Option<SchemaRef>,
+    ) -> Result<Arc<Table>, BenoStreamError> {
+        self.open_or_create_with_indexing(index, schema, true).await
+    }
+
+    /// Open/create a table for the Qdrant API.
+    ///
+    /// Unlike [`Self::open_or_create`], only the `vector` column is indexed
+    /// (no BM25 inverted index over every payload column). Qdrant payload
+    /// filtering falls back to a scan, but point writes stay cheap — indexing
+    /// every inferred payload column made each upsert commit rebuild a full
+    /// inverted index for columns that are never lexically searched.
+    pub async fn open_or_create_qdrant(
+        &self,
+        index: &str,
+        schema: &Option<SchemaRef>,
+    ) -> Result<Arc<Table>, BenoStreamError> {
+        self.open_or_create_with_indexing(index, schema, false)
+            .await
+    }
+
+    async fn open_or_create_with_indexing(
+        &self,
+        index: &str,
+        schema: &Option<SchemaRef>,
+        index_all: bool,
     ) -> Result<Arc<Table>, BenoStreamError> {
         // 1. Fast path: already open in this process.
         {
@@ -123,7 +155,7 @@ impl AppState {
         // works for existing tables, while new ones still need
         // `create_async` for the manifest/Iceberg init.
         let mut builder = Table::builder(uri.clone())
-            .with_index_all(true)
+            .with_index_all(index_all)
             .with_durability(resolve_wal_durability());
 
         if let Some(catalog) = &self.catalog {
@@ -186,14 +218,26 @@ impl AppState {
             })?
         };
 
-        // Backfill BM25/HNSW indexes on segments committed before this
-        // table instance was opened with indexing enabled (a no-op for
-        // fresh tables). The call also pins `index_all = true` on this
-        // instance so its commits keep building the indexes in the
-        // background.
-        table.index_all_columns_async().await.map_err(|e| {
-            BenoStreamError::internal(format!("failed to build search indexes for '{index}': {e}"))
-        })?;
+        // Backfill indexes on segments committed before this table instance
+        // was opened (a no-op for fresh tables). The call also pins the
+        // indexing configuration on this instance so its commits keep
+        // building the indexes in the background.
+        if index_all {
+            table.index_all_columns_async().await.map_err(|e| {
+                BenoStreamError::internal(format!(
+                    "failed to build search indexes for '{index}': {e}"
+                ))
+            })?;
+        } else {
+            table
+                .add_index_columns_async(vec!["vector".to_string()], None)
+                .await
+                .map_err(|e| {
+                    BenoStreamError::internal(format!(
+                        "failed to build vector index for '{index}': {e}"
+                    ))
+                })?;
+        }
 
         // 3. Publish (first instance wins) and hand back the shared handle.
         let mut tables = self.tables.write().await;

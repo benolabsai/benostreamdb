@@ -216,6 +216,8 @@ struct SearchRequest {
     /// RRF fusion constant override (request-level; falls back to
     /// `BENOSEARCH_RRF_K`, then the core default of 60).
     rrf_k: Option<f32>,
+    /// ES `aggs` / `aggregations` object, computed over the top-level filter.
+    aggs: Option<Value>,
 }
 
 impl Default for SearchRequest {
@@ -228,6 +230,7 @@ impl Default for SearchRequest {
             from: 0,
             source: None,
             rrf_k: None,
+            aggs: None,
         }
     }
 }
@@ -323,6 +326,12 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
         if k > 0.0 {
             req.rrf_k = Some(k as f32);
         }
+    }
+    if let Some(aggs) = obj.get("aggs").or_else(|| obj.get("aggregations")) {
+        if !aggs.is_object() {
+            return Err(bad_request("aggs: expected an object"));
+        }
+        req.aggs = Some(aggs.clone());
     }
 
     if let Some(query) = obj.get("query") {
@@ -492,7 +501,7 @@ fn valid_field(field: &str) -> Result<String, BenoStreamError> {
     }
 }
 
-fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStreamError> {
+pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStreamError> {
     match clause {
         Value::Array(items) => {
             if items.is_empty() {
@@ -859,6 +868,13 @@ pub async fn search_core(
         .with_label_values(&[op])
         .observe(start.elapsed().as_secs_f64());
 
+    let aggregations = match &req.aggs {
+        Some(a) => Some(
+            crate::handlers::aggs::compute_aggregations(&table, req.filter.as_deref(), a).await?,
+        ),
+        None => None,
+    };
+
     Ok(SearchResponse {
         took: start.elapsed().as_millis() as u64,
         timed_out: false,
@@ -870,6 +886,7 @@ pub async fn search_core(
             max_score,
             hits: page,
         },
+        aggregations,
     })
 }
 
@@ -1504,5 +1521,56 @@ mod tests {
         }
         let es: EsError = err.into();
         assert_eq!(es.status, 400);
+    }
+
+    #[tokio::test]
+    async fn aggregations_terms_stats_histogram_range() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("agg")).unwrap();
+
+        index_docs(
+            &state,
+            "agg",
+            &[
+                json!({"category": "a", "age": 10}),
+                json!({"category": "a", "age": 20}),
+                json!({"category": "b", "age": 30}),
+                json!({"category": "b", "age": 40}),
+            ],
+        )
+        .await;
+
+        let resp = search_core(
+            &state,
+            "agg",
+            &json!({
+                "query": {"match_all": {}},
+                "size": 0,
+                "aggs": {
+                    "by_cat": {"terms": {"field": "category"}},
+                    "age_stats": {"stats": {"field": "age"}},
+                    "age_hist": {"histogram": {"field": "age", "interval": 20}},
+                    "age_ranges": {"range": {"field": "age", "ranges": [{"to": 25}, {"from": 25}]}}
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs = resp.aggregations.expect("aggregations present");
+        let buckets = aggs["by_cat"]["buckets"].as_array().unwrap();
+        assert_eq!(buckets.len(), 2);
+        // Both categories have doc_count 2, so the tie order is arbitrary.
+        let bucket_a = buckets.iter().find(|b| b["key"] == "a").expect("bucket a");
+        assert_eq!(bucket_a["doc_count"], 2);
+        assert_eq!(aggs["age_stats"]["count"], 4.0);
+        assert_eq!(aggs["age_stats"]["sum"], 100.0);
+        assert_eq!(aggs["age_stats"]["avg"], 25.0);
+        assert_eq!(aggs["age_hist"]["buckets"].as_array().unwrap().len(), 3);
+        let ranges = aggs["age_ranges"]["buckets"].as_array().unwrap();
+        assert_eq!(ranges[0]["doc_count"], 2);
+        assert_eq!(ranges[1]["doc_count"], 2);
     }
 }
