@@ -868,10 +868,37 @@ cargo run -p benostreamdb-search --bin bsdb-search
 
 | Method | Endpoint | Description |
 |:---|:---|:---|
+| `GET` | `/` | Service/version info. |
+| `GET` | `/healthz`, `/livez`, `/readyz` | Liveness/readiness probes. |
+| `GET` | `/telemetry` | Basic telemetry JSON. |
 | `GET` | `/collections` | List available vector collections. |
+| `GET` | `/collections/{name}/exists` | Collection existence. |
+| `GET` | `/collections/{name}` | Collection info (real point count, vector size, distance). |
 | `PUT` | `/collections/{name}` | Create a vector collection with vector parameters (dimension, distance). |
+| `PATCH` | `/collections/{name}` | Update collection parameters. |
+| `DELETE` | `/collections/{name}` | Drop the collection. |
+| `PUT` | `/collections/{name}/index` | Create a payload index (accepted). |
+| `DELETE` | `/collections/{name}/index/{field}` | Delete a payload index (accepted). |
 | `PUT` | `/collections/{name}/points` | Upsert vector points with payload metadata. |
-| `POST` | `/collections/{name}/points/search` | Approximate nearest neighbor vector search with optional payload filters. |
+| `GET`/`POST` | `/collections/{name}/points` | Retrieve points by id. |
+| `GET` | `/collections/{name}/points/{id}` | Retrieve a single point. |
+| `POST` | `/collections/{name}/points/search` | Vector similarity search with optional payload filters. |
+| `POST` | `/collections/{name}/points/query` | Universal query API (`query: [..]` or `{nearest: [..]}`). |
+| `POST` | `/collections/{name}/points/scroll` | Paginated point listing. |
+| `POST` | `/collections/{name}/points/count` | Count points (optionally filtered). |
+| `POST` | `/collections/{name}/points/recommend` | Recommendation by example vectors. |
+| `POST` | `/collections/{name}/points/discover` | Discovery with context pairs. |
+| `POST` | `/collections/{name}/points/batch` | Batched write operations. |
+| `POST`/`PUT` | `/collections/{name}/points/payload` | Set (merge) / overwrite payload. |
+| `POST` | `/collections/{name}/points/payload/delete` | Delete payload keys. |
+| `POST` | `/collections/{name}/points/payload/clear` | Clear payload. |
+| `PUT` | `/collections/{name}/points/vectors` | Update point vectors. |
+| `POST` | `/collections/{name}/points/delete` | Delete by ids and/or filter. |
+| `GET`/`POST` | `/collections/aliases` | List / create / delete / rename aliases. |
+
+> [!NOTE]
+> See [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md) for the full support
+> matrix, score semantics, and known approximations.
 
 ## Error Handling
 

@@ -38,6 +38,23 @@ the gaps.
 | `POST /_bulk`, `POST /{index}/_bulk` | NDJSON `index` / `create` / `delete` actions. Batched per index; per-item status in the response. |
 | `POST /{index}/_refresh`, `POST /_refresh` | Flush the write buffer (memtable + WAL → segments + indexes) so new docs become searchable. |
 
+### Aggregations
+`POST /{index}/_search` accepts an `aggs` (or `aggregations`) object, compiled
+to SQL and executed with DataFusion. Aggregations run over the top-level
+`filter` (the query clause does not scope aggregations in v1).
+
+| Aggregation | Notes |
+|-------------|-------|
+| `terms` | `{field, size}` → `{buckets: [{key, doc_count}]}`, ordered by `doc_count` desc. |
+| `histogram` | `{field, interval}` → numeric buckets. |
+| `date_histogram` | `{field, calendar_interval\|fixed_interval}` → `date_trunc` buckets. |
+| `range` | `{field, ranges: [{from, to, key?}]}` → range buckets. |
+| `filter` | `{...filter clause...}` → `{doc_count}`. |
+| `missing` | `{field}` → `{doc_count}` of null rows. |
+| `avg`, `sum`, `min`, `max`, `value_count`, `cardinality` | `{field}` → `{value}`. |
+| `stats`, `extended_stats` | `{field}` → `{count, min, max, avg, sum, sum_of_squares, variance, std_deviation}`. |
+| Nested `aggs` | Supported on `terms`, `histogram`, `range`, `filter`, and `missing` buckets. |
+
 ### Search
 | Feature | Notes |
 |---------|-------|
@@ -69,7 +86,7 @@ Mapped types include `index_not_found_exception` (404), `resource_already_exists
 |---------|----------------------|
 | Per-document delete | `DELETE /{index}/_doc/{id}` returns **501**. The store is append-only (Iceberg); soft-delete is deferred. Use `DELETE /{index}` to drop the whole index. Bulk `delete` actions return a per-item 501. |
 | `delete_by_query` | Not implemented. |
-| Aggregations (`aggs`) | Not implemented. Use the data-lake path (DuckDB / Trino / Spark) for analytical queries over the same Iceberg/Parquet files. |
+| Aggregations (`aggs`) | **Supported** (see the Aggregations section above): `terms`, `histogram`, `date_histogram`, `range`, `filter`, `missing`, `avg`, `sum`, `min`, `max`, `value_count`, `cardinality`, `stats`, `extended_stats`, and nested `aggs`. Not supported: `nested`, `reverse_nested`, `composite`, `significant_terms`, `percentiles`, `cardinality` precision tuning, pipeline aggs. |
 | Index aliases | Not implemented (`aliases` is always `{}`). |
 | Reindex | Not implemented. |
 | ILM (index lifecycle) | Not implemented. |

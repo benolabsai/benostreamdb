@@ -71,5 +71,5 @@ BenoStreamDB combines scalar pre-filtering, vector search, and in-memory caching
 
 BenoStreamDB exposes its columnar storage and index overlays via standard REST protocols:
 *   **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for `_search`, `_bulk`, `_mapping`, and `_cat/indices`.
-*   **Qdrant Vector API (Port 6333)**: Compatibility for point upserts and vector similarity search.
+*   **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation — collections, point upsert/retrieve, payload & vector edits, vector search, aliases, and the universal query API. See [QDRANT_COMPATIBILITY.md](QDRANT_COMPATIBILITY.md).
 *   **Arrow Flight SQL (Port 50051)**: Low-latency zero-copy gRPC queries for analytical tools.

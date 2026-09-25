@@ -2,6 +2,7 @@
 
 //! Axum handlers for the ES-compatible API.
 
+pub mod aggs;
 pub mod bulk;
 pub mod cluster;
 pub mod docs;

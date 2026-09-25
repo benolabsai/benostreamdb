@@ -195,6 +195,8 @@ pub struct SearchResponse {
     pub took: u64,
     pub timed_out: bool,
     pub hits: SearchHits,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregations: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
