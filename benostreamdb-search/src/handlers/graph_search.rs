@@ -181,6 +181,7 @@ async fn graph_search_core(
                 max_score: None,
                 hits: vec![],
             },
+            aggregations: None,
         });
     }
 

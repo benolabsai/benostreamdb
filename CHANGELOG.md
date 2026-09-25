@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **OpenSearch/Elasticsearch aggregations in `bsdb-search`.** `POST
+  /{index}/_search` now accepts an `aggs` (or `aggregations`) object, compiled
+  to SQL and executed with DataFusion: `terms`, `histogram`, `date_histogram`,
+  `range`, `filter`, `missing`, `avg`, `sum`, `min`, `max`, `value_count`,
+  `cardinality`, `stats`, `extended_stats`, and nested `aggs` on bucket
+  aggregations. Aggregations run over the top-level `filter`. See
+  `docs/OPENSEARCH_COMPATIBILITY.md`.
+- **Complete Qdrant v1.x REST API in `bsdb-search` (port 6333).** The
+  Qdrant-compatible listener now implements the full surface instead of the
+  three-endpoint subset: collection list/exists/get/create/update/delete and
+  payload-index create/delete; point upsert, retrieve (`GET` **and** `POST`),
+  get-by-id, `search`, `query` (universal query API), `scroll`, `count`,
+  `recommend`, `discover`, `batch`, and delete-by-ids/filter; payload
+  set/overwrite/delete/clear; vector updates; collection aliases
+  (list/create/delete/rename); and the service endpoints `GET /`, `/healthz`,
+  `/livez`, `/readyz`, `/telemetry`. See `docs/QDRANT_COMPATIBILITY.md` for the
+  support matrix.
+- **Qdrant collection metadata sidecar.** The distance metric and HNSW config
+  are persisted in `_qdrant_collection.json` under the collection root, so
+  `GET /collections/:name` reports the configured `distance` and `size`.
+- **`benostreamdb-search/tests/qdrant_api.rs`** — an in-process conformance
+  suite (axum `Router` + `tower::ServiceExt::oneshot`) covering every endpoint.
+
+### Fixed
+- **Qdrant `points_count` is now the real row count.** `GET /collections/:name`
+  previously read stale manifest statistics and reported `0` immediately after
+  an upsert; it now counts the effective rows (including the write buffer).
+- **Qdrant search scores follow the collection's `distance`.** The engine's
+  trailing distance column (squared L2 / `1-cos` / `-dot` / L1) is converted to
+  the Qdrant score for the configured metric — Euclidean distance for `Euclid`,
+  cosine similarity for `Cosine`, dot product for `Dot` — and results are
+  ordered best-first. Previously every metric returned squared-L2.
+- **Qdrant upserts overwrite by id.** Upserts are now *flush → delete-by-id →
+  append* (merge-on-read via Iceberg position deletes) instead of a plain
+  append, so re-upserting an id replaces the point.
+- **Qdrant `GET /` returns service info** (`{title, version, commit}`) instead
+  of `404`, and error/success envelopes carry the real elapsed `time`.
+- **Qdrant collections index only the `vector` column.** The shared
+  `open_or_create` path indexes every column (needed for OpenSearch BM25); the
+  new `open_or_create_qdrant` path avoids building inverted indexes over payload
+  columns, which made each point write rebuild indexes for columns that are
+  never lexically searched.
+
+### Changed
+- **Qdrant docs are now honest.** `README.md`, `docs/INSTALLATION.md`,
+  `docs/architecture.md`, `docs/index.md`, `docs/ROADMAP.md`, and
+  `docs/PYTHON_VECTOR_API.md` no longer claim blanket "Qdrant-compatible"
+  support; they link to the new `docs/QDRANT_COMPATIBILITY.md` support matrix.
+
 ## [0.10.0] - 2026-09-24
 
 ### Changed
