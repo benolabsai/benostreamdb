@@ -1,3 +1,11 @@
+# Pin the toolchain to an exact stable release, not "stable".
+#
+# CI and local dev were drifting (local stable 1.93 vs CI 1.98), so a clippy
+# lint introduced upstream would pass locally and fail CI (e.g.
+# `unnecessary_sort_by`). Pinning makes the compiler, rustfmt and clippy
+# identical everywhere; rustup auto-installs the pinned version on first use.
+# Keep this in sync with the `dtolnay/rust-toolchain@<version>` pins in
+# .github/workflows/ (ci.yml, soak.yml, release.yml).
 [toolchain]
-channel = "stable"
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]

@@ -77,10 +77,10 @@ async fn mixed_workload_soak() {
             .expect("write");
         writes += 1;
 
-        if writes % 3 == 0 {
+        if writes.is_multiple_of(3) {
             table.commit_async().await.expect("commit");
         }
-        if writes % 2 == 0 {
+        if writes.is_multiple_of(2) {
             let batches = table.read_async(None, None, None).await.expect("read");
             assert!(
                 batches.iter().map(|b| b.num_rows()).sum::<usize>() >= ROWS,
