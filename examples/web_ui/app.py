@@ -33,6 +33,7 @@ import os
 os.environ.setdefault("BENOSTREAM_CACHE_GB", "40")
 
 import shutil
+import time
 
 import pandas as pd
 import streamlit as st
@@ -378,11 +379,20 @@ with TAB_DRIFT:
                              if vec else find_pages(q, seeds_n))
                 seed_ids = [int(i) for i in hits["id"]][:seeds_n]
                 st.write(f"Seeds: {[lookup_titles(seed_ids).get(i, i) for i in seed_ids]}")
-                region = as_df(edges_t.subgraph(seeds=seed_ids, hops=1, directed=False))
+                # 1-hop region via the CSR graph index (memory-mapped, ~ms/seed).
+                # The generic edges_t.subgraph() runs a SQL frontier BFS over the
+                # whole 383M-edge table (100 s+); for a 1-hop region the CSR path
+                # is the same intent and orders of magnitude faster.
+                t_expand = time.time()
+                pairs = [(int(s), int(n)) for s in seed_ids
+                         for n in edges_t.graph_neighbors(int(s), 1, graph_column="source")]
+                region = pd.DataFrame(pairs, columns=["source", "target"])
+                st.write(f"Region expansion: {time.time() - t_expand:.2f}s "
+                         f"({len(region):,} edges from {len(seed_ids)} seeds)")
                 if region.empty:
                     st.error("Empty region.");  status.update(label="No region", state="error")
                     st.stop()
-                region = region[["source", "target"]].head(60_000)
+                region = region.head(60_000)
                 st.write(f"Region: {len(region):,} edges")
                 import pyarrow as pa
                 schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
