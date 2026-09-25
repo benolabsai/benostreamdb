@@ -858,7 +858,7 @@ async fn scroll_core(
     for b in &batches {
         points.extend(batch_to_retrieved(b, &wp, wv));
     }
-    points.sort_by(|a, b| a.id.as_string().cmp(&b.id.as_string()));
+    points.sort_by_key(|a| a.id.as_string());
 
     let start_idx = match offset {
         Some(o) => {
@@ -1592,7 +1592,7 @@ pub async fn list_aliases(State(state): State<Arc<AppState>>) -> Response {
             collection_name: collection_name.clone(),
         })
         .collect();
-    list.sort_by(|a, b| a.alias_name.cmp(&b.alias_name));
+    list.sort_by_key(|a| a.alias_name.clone());
     ok(AliasesListResult { aliases: list }, start)
 }
 
