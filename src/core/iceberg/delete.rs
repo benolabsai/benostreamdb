@@ -462,17 +462,40 @@ fn avro_to_arrow_array(
     }
 }
 
-/// Writer for Iceberg Delete Files (Position and Equality Deletes)
+/// Writer for Iceberg Delete Files (Position and Equality Deletes).
+///
+/// Delete files are written through the table's `ObjectStore`, so they land in
+/// the same store as the data (local FS, S3/MinIO, …). The previous
+/// implementation used `std::fs::File::create` on a path derived from the table
+/// URI, which silently wrote to a bogus local path for any non-`file://` store
+/// (e.g. `./s3:/bucket/…`) and made deletes invisible to readers.
 pub struct IcebergDeleteWriter {
     base_path: String,
     format_version: i32,
+    store: Arc<dyn object_store::ObjectStore>,
 }
 
 impl IcebergDeleteWriter {
-    pub fn new(base_path: String, format_version: i32) -> Self {
+    pub fn new(
+        base_path: String,
+        format_version: i32,
+        store: Arc<dyn object_store::ObjectStore>,
+    ) -> Self {
         Self {
             base_path: base_path.replace("file://", ""),
             format_version,
+            store,
+        }
+    }
+
+    /// Build the full URI recorded in the manifest for a delete file written at
+    /// `object_path` (relative to the table root / store prefix).
+    fn metadata_uri(&self, object_path: &str) -> String {
+        let full = format!("{}/{}", self.base_path, object_path);
+        if full.starts_with("file://") || full.starts_with("s3://") {
+            full
+        } else {
+            format!("file://{}", full)
         }
     }
 
@@ -499,10 +522,11 @@ impl IcebergDeleteWriter {
             uuid::Uuid::new_v4(),
             self.format_version
         );
-        let full_path = if let Some((ref part_path, _)) = partition_data {
-            format!("{}/{}/{}", self.base_path, part_path, file_name)
+        // Path relative to the table root / store prefix.
+        let object_path = if let Some((ref part_path, _)) = partition_data {
+            format!("{}/{}", part_path, file_name)
         } else {
-            format!("{}/{}", self.base_path, file_name)
+            file_name.clone()
         };
 
         // Construct Avro Schema for Position Deletes
@@ -518,9 +542,8 @@ impl IcebergDeleteWriter {
         "#;
         let schema = apache_avro::Schema::parse_str(schema_json)?;
 
-        // Write file
-        let file = std::fs::File::create(&full_path)?;
-        let mut writer = apache_avro::Writer::new(&schema, file);
+        // Build the Avro bytes in memory, then write to the object store.
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
         for i in 0..file_path_column.len() {
             let mut record =
@@ -534,13 +557,16 @@ impl IcebergDeleteWriter {
         }
 
         let len = writer.flush()?;
+        let bytes = writer.into_inner()?;
+        self.store
+            .put(
+                &object_store::path::Path::from(object_path.as_str()),
+                bytes.into(),
+            )
+            .await?;
 
-        // Create DeleteFile metadata
-        // Note: For Metadata, we prefer the full URI
-        let mut metadata_path = full_path.clone();
-        if !metadata_path.starts_with("file://") && !metadata_path.starts_with("s3://") {
-            metadata_path = format!("file://{}", full_path);
-        }
+        // The manifest records the full URI; the reader relativizes it.
+        let metadata_path = self.metadata_uri(&object_path);
 
         let partition_values = partition_data.map(|(_, map)| map).unwrap_or_default();
 
@@ -566,10 +592,11 @@ impl IcebergDeleteWriter {
             uuid::Uuid::new_v4(),
             self.format_version
         );
-        let full_path = if let Some(part) = partition_value {
-            format!("{}/{}/{}", self.base_path, part, file_name)
+        // Path relative to the table root / store prefix.
+        let object_path = if let Some(part) = partition_value {
+            format!("{}/{}", part, file_name)
         } else {
-            format!("{}/{}", self.base_path, file_name)
+            file_name.clone()
         };
 
         // 1. Construct Avro Schema based on equality IDs
@@ -614,9 +641,8 @@ impl IcebergDeleteWriter {
 
         let schema = apache_avro::Schema::parse_str(&schema_json)?;
 
-        // 2. Write file
-        let file = std::fs::File::create(&full_path)?;
-        let mut writer = apache_avro::Writer::new(&schema, file);
+        // 2. Build the Avro bytes in memory, then write to the object store.
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
 
         for i in 0..batch.num_rows() {
             let mut record =
@@ -638,11 +664,16 @@ impl IcebergDeleteWriter {
         }
 
         let len = writer.flush()?;
+        let bytes = writer.into_inner()?;
+        self.store
+            .put(
+                &object_store::path::Path::from(object_path.as_str()),
+                bytes.into(),
+            )
+            .await?;
 
-        let mut metadata_path = full_path.clone();
-        if !metadata_path.starts_with("file://") && !metadata_path.starts_with("s3://") {
-            metadata_path = format!("file://{}", full_path);
-        }
+        // The manifest records the full URI; the reader relativizes it.
+        let metadata_path = self.metadata_uri(&object_path);
 
         Ok(crate::core::manifest::DeleteFile {
             file_path: metadata_path,

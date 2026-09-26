@@ -231,6 +231,7 @@ impl Table {
                 let delete_writer = crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
                     self.uri.clone(),
                     2, // Format V2
+                    self.store.clone(),
                 );
 
                 let partition_data = if !entry.partition_values.is_empty() {

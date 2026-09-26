@@ -528,3 +528,48 @@ async fn s3_shared_store_multi_writer_no_lost_updates() -> Result<()> {
 
     Ok(())
 }
+
+/// WS3/WS5 against MinIO: the full lifecycle over a real S3-compatible store —
+/// write → read → delete (MoR position deletes over HTTP) → read → compact →
+/// read → vacuum → read. Gated on `AWS_ENDPOINT_URL` like the test above.
+#[tokio::test]
+async fn s3_full_lifecycle_round_trip() -> Result<()> {
+    if std::env::var("AWS_ENDPOINT_URL").is_err() {
+        eprintln!("skipping: AWS_ENDPOINT_URL not set (see docker-compose-minio-nessie.yml)");
+        return Ok(());
+    }
+    let bucket =
+        std::env::var("BSDB_TEST_S3_BUCKET").unwrap_or_else(|_| "mstar-staging".to_string());
+    let prefix = format!(
+        "ws3-lifecycle-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let uri = format!("s3://{}/{}", bucket, prefix);
+
+    let wal = tempfile::tempdir()?;
+    let table = TableBuilder::new(&uri)
+        .with_wal_dir(wal.path())
+        .build_async()
+        .await?;
+
+    // Write 20 rows.
+    table.write_async(vec![batch(0, 20)]).await?;
+    table.commit_async().await?;
+    assert_eq!(count_rows(&table).await?, 20, "write over S3");
+
+    // Delete id < 5 (MoR position deletes written to and read from S3).
+    table.delete_async("id < 5").await?;
+    assert_eq!(count_rows(&table).await?, 15, "delete over S3");
+
+    // Compact, then vacuum (retention 2 keeps recent versions readable).
+    table.rewrite_data_files_async(None).await?;
+    assert_eq!(count_rows(&table).await?, 15, "compaction over S3");
+
+    table.vacuum_async(2).await?;
+    assert_eq!(count_rows(&table).await?, 15, "vacuum over S3");
+
+    Ok(())
+}
