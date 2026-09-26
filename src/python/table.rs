@@ -2651,7 +2651,8 @@ impl PyTable {
             let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
                 std::sync::Arc::new(self.table.clone()),
             ));
-            ctx.register_table("t", provider).map_err(|e| e.to_string())?;
+            ctx.register_table("t", provider)
+                .map_err(|e| e.to_string())?;
             let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
             let res = crate::core::algorithms::frontier::bfs_visited(
                 &ctx, "t", &seeds, hops, directed, &src_col, &dst_col, &tmp,
@@ -2815,8 +2816,7 @@ impl PyTable {
                 .build()
                 .map(std::sync::Arc::new)
                 .unwrap_or_else(|_| std::sync::Arc::new(RuntimeEnv::default()));
-            let mut ctx =
-                SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+            let mut ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
 
             // Register standard functions and aggregates
             datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;

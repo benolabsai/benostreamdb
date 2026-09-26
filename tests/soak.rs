@@ -155,10 +155,7 @@ async fn maintenance_churn_soak() {
         let start = round * ROWS as i64;
 
         eprintln!("[soak] round {round}: insert");
-        table
-            .write_async(vec![batch(start)])
-            .await
-            .expect("insert");
+        table.write_async(vec![batch(start)]).await.expect("insert");
         table.commit_async().await.expect("commit");
 
         eprintln!("[soak] round {round}: delete");
@@ -181,8 +178,7 @@ async fn maintenance_churn_soak() {
 
         // vector query mid-churn (must never panic)
         eprintln!("[soak] round {round}: vector query");
-        let params =
-            VectorSearchParams::new("embedding", VectorValue::Float32(vec![0.25; DIM]), 5);
+        let params = VectorSearchParams::new("embedding", VectorValue::Float32(vec![0.25; DIM]), 5);
         let _ = table
             .read_async(None, Some(vec![params]), None)
             .await

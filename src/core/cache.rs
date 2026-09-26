@@ -364,13 +364,14 @@ pub static POSITION_DELETE_CACHE: Lazy<Cache<String, Arc<std::collections::HashS
             .build()
     });
 
-pub static FULL_DELETE_FILE_CACHE: Lazy<Cache<String, Arc<std::collections::HashMap<String, std::collections::HashSet<i64>>>>> =
-    Lazy::new(|| {
-        Cache::builder()
-            .max_capacity(50_000)
-            .time_to_idle(Duration::from_secs(60 * 10)) // 10 mins idle
-            .build()
-    });
+pub static FULL_DELETE_FILE_CACHE: Lazy<
+    Cache<String, Arc<std::collections::HashMap<String, std::collections::HashSet<i64>>>>,
+> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(50_000)
+        .time_to_idle(Duration::from_secs(60 * 10)) // 10 mins idle
+        .build()
+});
 
 /// Global cache for parsed equality-delete values, keyed by the segment's
 /// delete-file set (same key as the merged position-delete cache).
@@ -378,7 +379,7 @@ pub static FULL_DELETE_FILE_CACHE: Lazy<Cache<String, Arc<std::collections::Hash
 /// `load_equality_deletes` is called on every segment read; without this cache
 /// it re-reads and re-parses every equality delete file each time.
 pub static EQUALITY_DELETE_CACHE: Lazy<
-    Cache<String, Arc<Vec<crate::core::reader::EqualityDelete>>>
+    Cache<String, Arc<Vec<crate::core::reader::EqualityDelete>>>,
 > = Lazy::new(|| {
     Cache::builder()
         .max_capacity(50_000)

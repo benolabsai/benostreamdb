@@ -1124,8 +1124,9 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_getPrim
         "[]".to_string()
     } else {
         match Table::new(uri) {
-            Ok(table) => serde_json::to_string(&table.get_primary_key())
-                .unwrap_or_else(|_| "[]".to_string()),
+            Ok(table) => {
+                serde_json::to_string(&table.get_primary_key()).unwrap_or_else(|_| "[]".to_string())
+            }
             Err(_) => "[]".to_string(),
         }
     };

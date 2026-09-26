@@ -340,8 +340,7 @@ impl Accumulator for LeidenAccumulator {
 
                 let mut best_c = c_u;
                 let k_in_curr = *comm_weights.get(&c_u).unwrap_or(&0.0);
-                let current_delta =
-                    k_in_curr - self.resolution * (comm_tot[c_u] * k_u) / two_m;
+                let current_delta = k_in_curr - self.resolution * (comm_tot[c_u] * k_u) / two_m;
                 let mut best_delta = current_delta;
 
                 for (&c, &k_in) in &comm_weights {

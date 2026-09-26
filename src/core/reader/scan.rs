@@ -577,7 +577,10 @@ impl HybridReader {
             };
 
             crate::core::cache::PARQUET_META_CACHE
-                .insert(meta_cache_key, (Arc::new(arrow_meta.clone()), size as usize))
+                .insert(
+                    meta_cache_key,
+                    (Arc::new(arrow_meta.clone()), size as usize),
+                )
                 .await;
             (arrow_meta, size)
         };

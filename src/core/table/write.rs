@@ -646,9 +646,7 @@ impl Table {
         wal_res?;
         // WS2 crash boundary: WAL is durable, but the manifest has not been
         // committed yet. On reopen the WAL replay must recover these rows.
-        crate::core::fault_injection::check(
-            crate::core::fault_injection::CrashPoint::WalFlush,
-        )?;
+        crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::WalFlush)?;
         idx_res?;
         let wal_idx_ms = t_wal.elapsed().as_millis();
         // -----------------------------
@@ -1045,9 +1043,7 @@ impl Table {
 
         // WS2 crash boundary: data files are staged on disk but the manifest has
         // not been committed, so they are not yet referenced by any snapshot.
-        crate::core::fault_injection::check(
-            crate::core::fault_injection::CrashPoint::DataUpload,
-        )?;
+        crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::DataUpload)?;
 
         // 3. Upload data files synchronously BEFORE committing manifest/metadata.
         // Invariant: A published manifest may reference only immutable artifacts that
@@ -1316,10 +1312,7 @@ impl Table {
                             }
                         }
                         _ => {
-                            tracing::error!(
-                                "Index building failed for segment {}",
-                                segment_id_c
-                            );
+                            tracing::error!("Index building failed for segment {}", segment_id_c);
                         }
                     }
                     memory_reclaimed_c.notify_waiters();

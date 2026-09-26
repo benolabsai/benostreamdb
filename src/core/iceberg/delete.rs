@@ -32,7 +32,10 @@ impl PositionDeleteReader {
 
         // Probe the cache first so hit/miss is observable, then fall back to
         // `try_get_with` (which coalesces concurrent misses) on a miss.
-        let full_map = match crate::core::cache::FULL_DELETE_FILE_CACHE.get(&cache_key).await {
+        let full_map = match crate::core::cache::FULL_DELETE_FILE_CACHE
+            .get(&cache_key)
+            .await
+        {
             Some(v) => {
                 crate::telemetry::metrics::DELETE_FILE_CACHE_TOTAL
                     .with_label_values(&["hit"])
@@ -49,8 +52,15 @@ impl PositionDeleteReader {
                         let path_obj = object_store::path::Path::from(path);
 
                         // Add jitter/retry? No, moka will handle coalescing.
-                        let res = self.store.get(&path_obj).await.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
-                        let bytes = res.bytes().await.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+                        let res = self
+                            .store
+                            .get(&path_obj)
+                            .await
+                            .map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+                        let bytes = res
+                            .bytes()
+                            .await
+                            .map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
 
                         let result_map_res = tokio::task::spawn_blocking(move || {
                             if is_avro {
@@ -58,10 +68,13 @@ impl PositionDeleteReader {
                             } else {
                                 Self::read_deletes_parquet_static(&bytes)
                             }
-                        }).await.map_err(|e| Arc::new(anyhow::anyhow!("JoinError: {}", e)))?;
+                        })
+                        .await
+                        .map_err(|e| Arc::new(anyhow::anyhow!("JoinError: {}", e)))?;
 
                         // Parsed delete file successfully
-                        let result_map = result_map_res.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+                        let result_map =
+                            result_map_res.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
                         Ok::<_, Arc<anyhow::Error>>(Arc::new(result_map))
                     })
                     .await
@@ -110,7 +123,9 @@ impl PositionDeleteReader {
         let full_map = self.fetch_deletes_map(path).await?;
 
         let mut deleted_positions = HashSet::new();
-        let target_clean = target_data_file_path.strip_prefix("file://").unwrap_or(target_data_file_path);
+        let target_clean = target_data_file_path
+            .strip_prefix("file://")
+            .unwrap_or(target_data_file_path);
 
         for (fp, positions) in full_map.iter() {
             let fp_clean = fp.strip_prefix("file://").unwrap_or(fp);
@@ -131,11 +146,7 @@ impl PositionDeleteReader {
         Ok(deleted_positions)
     }
 
-
-
-    fn read_deletes_avro_static(
-        bytes: &[u8],
-    ) -> Result<HashMap<String, HashSet<i64>>> {
+    fn read_deletes_avro_static(bytes: &[u8]) -> Result<HashMap<String, HashSet<i64>>> {
         let reader = apache_avro::Reader::new(bytes)?;
         let mut result_map: HashMap<String, HashSet<i64>> = HashMap::new();
 
@@ -169,11 +180,7 @@ impl PositionDeleteReader {
         Ok(result_map)
     }
 
-
-
-    fn read_deletes_parquet_static(
-        bytes: &[u8],
-    ) -> Result<HashMap<String, HashSet<i64>>> {
+    fn read_deletes_parquet_static(bytes: &[u8]) -> Result<HashMap<String, HashSet<i64>>> {
         use arrow::array::{Int64Array, StringArray};
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         let cursor = bytes::Bytes::copy_from_slice(bytes);

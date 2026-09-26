@@ -434,7 +434,10 @@ impl IcebergWriter {
             if let Some(fid) = entry.first_row_id {
                 data_file.put(
                     "first_row_id",
-                    apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(fid))),
+                    apache_avro::types::Value::Union(
+                        1,
+                        Box::new(apache_avro::types::Value::Long(fid)),
+                    ),
                 );
             } else {
                 data_file.put(
@@ -777,7 +780,10 @@ impl IcebergWriter {
             if let Some(fid) = entry.first_row_id {
                 data_file.put(
                     "first_row_id",
-                    apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(fid))),
+                    apache_avro::types::Value::Union(
+                        1,
+                        Box::new(apache_avro::types::Value::Long(fid)),
+                    ),
                 );
             } else {
                 data_file.put(

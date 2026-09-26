@@ -79,11 +79,15 @@ async fn drop_index_removes_files_for_tiered_manifest() -> anyhow::Result<()> {
         ".graph_v2.csr.dict",
     ];
     let find_csr = |suffix: &str| -> Option<std::path::PathBuf> {
-        std::fs::read_dir(&path).ok()?.flatten().map(|e| e.path()).find(|p| {
-            p.file_name()
-                .map(|n| n.to_string_lossy().ends_with(suffix))
-                .unwrap_or(false)
-        })
+        std::fs::read_dir(&path)
+            .ok()?
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().ends_with(suffix))
+                    .unwrap_or(false)
+            })
     };
     for suffix in csr_suffixes {
         assert!(

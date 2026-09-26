@@ -56,7 +56,10 @@ async fn manifest_round_trip_registers_data_and_index() -> anyhow::Result<()> {
     );
 
     let total_rows: i64 = entries.iter().map(|e| e.record_count).sum();
-    assert_eq!(total_rows, 25, "manifest must report the committed row count");
+    assert_eq!(
+        total_rows, 25,
+        "manifest must report the committed row count"
+    );
 
     // The data file must be registered and exist on disk.
     for entry in &entries {

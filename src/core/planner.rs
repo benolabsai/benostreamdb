@@ -15,12 +15,11 @@ use std::sync::Arc;
 /// the vector operators) on *every* batch. That construction dominated the read
 /// path's filter phase. The context is stateless for our purposes, so a single
 /// shared instance is sufficient.
-static FILTER_SESSION: once_cell::sync::Lazy<SessionContext> =
-    once_cell::sync::Lazy::new(|| {
-        let mut ctx = SessionContext::new();
-        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
-        ctx
-    });
+static FILTER_SESSION: once_cell::sync::Lazy<SessionContext> = once_cell::sync::Lazy::new(|| {
+    let mut ctx = SessionContext::new();
+    let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+    ctx
+});
 
 /// Cache of compiled physical expressions keyed by `(expression, schema)`.
 ///
@@ -1030,13 +1029,13 @@ impl QueryPlanner {
             None => {
                 let compiled = create_physical_expr(df_expr, &df_schema, state.execution_props())
                     .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to create physical expression: {}. Expression: {:?}, Schema: {:?}",
-                            e,
-                            df_expr,
-                            df_schema
-                        )
-                    })?;
+                    anyhow::anyhow!(
+                        "Failed to create physical expression: {}. Expression: {:?}, Schema: {:?}",
+                        e,
+                        df_expr,
+                        df_schema
+                    )
+                })?;
                 let mut write = PHYS_EXPR_CACHE.write().unwrap_or_else(|e| e.into_inner());
                 if write.len() >= PHYS_EXPR_CACHE_MAX {
                     write.clear();

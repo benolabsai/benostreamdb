@@ -124,7 +124,11 @@ impl FaultyStore {
 
 #[async_trait::async_trait]
 impl ObjectStore for FaultyStore {
-    async fn put(&self, location: &ObjPath, payload: PutPayload) -> object_store::Result<PutResult> {
+    async fn put(
+        &self,
+        location: &ObjPath,
+        payload: PutPayload,
+    ) -> object_store::Result<PutResult> {
         self.inner.put(location, payload).await
     }
 
@@ -160,7 +164,11 @@ impl ObjectStore for FaultyStore {
         self.inner.put_multipart_opts(location, opts).await
     }
 
-    async fn get_range(&self, location: &ObjPath, range: Range<u64>) -> object_store::Result<Bytes> {
+    async fn get_range(
+        &self,
+        location: &ObjPath,
+        range: Range<u64>,
+    ) -> object_store::Result<Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -172,7 +180,10 @@ impl ObjectStore for FaultyStore {
         self.inner.delete(location).await
     }
 
-    fn list(&self, prefix: Option<&ObjPath>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&ObjPath>,
+    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 

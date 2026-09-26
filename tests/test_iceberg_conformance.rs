@@ -119,24 +119,39 @@ async fn metadata_json_has_required_v2_fields() -> anyhow::Result<()> {
         );
     }
 
-    assert_eq!(meta["format-version"], 2, "default format version must be 2");
+    assert_eq!(
+        meta["format-version"], 2,
+        "default format version must be 2"
+    );
     assert!(
-        meta["table-uuid"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        meta["table-uuid"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         "table-uuid must be a non-empty string"
     );
     assert!(
-        meta["schemas"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        meta["schemas"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
         "schemas must be a non-empty array"
     );
     assert!(
-        meta["snapshots"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        meta["snapshots"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false),
         "a committed table must have at least one snapshot"
     );
 
     // The snapshot must reference a manifest list.
     let snap = &meta["snapshots"][0];
     assert!(
-        snap["manifest-list"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+        snap["manifest-list"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
         "snapshot must reference a manifest-list"
     );
     assert!(snap["snapshot-id"].is_i64(), "snapshot-id must be a long");
@@ -167,10 +182,7 @@ async fn manifest_list_avro_conforms_to_v2_schema() -> anyhow::Result<()> {
         "manifest list must contain at least one manifest entry"
     );
     for e in &entries {
-        assert!(
-            !e.manifest_path.is_empty(),
-            "manifest_path must be set"
-        );
+        assert!(!e.manifest_path.is_empty(), "manifest_path must be set");
         assert!(e.manifest_length > 0, "manifest_length must be positive");
         assert_eq!(e.content, 0, "data manifest content must be 0");
         assert!(
@@ -205,7 +217,10 @@ async fn manifest_avro_round_trips() -> anyhow::Result<()> {
 
     assert!(!entries.is_empty(), "data manifest must have entries");
     let total_rows: i64 = entries.iter().map(|e| e.data_file.record_count).sum();
-    assert_eq!(total_rows, 10, "manifest must report the committed row count");
+    assert_eq!(
+        total_rows, 10,
+        "manifest must report the committed row count"
+    );
 
     for e in &entries {
         // status: 0=EXISTING, 1=ADDED, 2=DELETED
