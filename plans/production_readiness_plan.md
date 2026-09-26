@@ -369,14 +369,15 @@ It found two more real bugs:
    classification the write path uses) and mapping the staging paths to the
    remote prefix.
 
-**Open issue (documented, not yet fixed):** the long randomized run currently
-**hangs** in the read-after-delete path — a full-table read blocks after a
-`delete_async` on a table that has been compacted. It reproduces with the
-index-rebuild step disabled, so it is in the read/delete path, not the index
-build. The test is `#[ignore]`d with a note until it is resolved; the focused
-`vector_recall_survives_compaction` and
-`randomized_workload_recovers_atomically_from_injected_crashes` tests run by
-default and pass.
+**Resolved:** the long randomized run previously **hung** in the read-after-delete
+path — a full-table read blocked after a `delete_async` on a compacted table. The
+root cause was the unbounded per-entry delete-file list (see §8): the manifest
+attached the same physical delete file to a data entry once per manifest version,
+so `config.delete_files` grew to thousands of duplicate paths and the merge
+stalled. Storing the delete list once per manifest and resolving it at read time
+fixed it. The test now runs by default (no `#[ignore]`) and passes in ~1.8s at 60
+steps; the focused `vector_recall_survives_compaction` and
+`randomized_workload_recovers_atomically_from_injected_crashes` tests also pass.
 
 ---
 

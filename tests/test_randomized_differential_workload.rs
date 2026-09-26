@@ -242,15 +242,13 @@ async fn vector_recall_survives_compaction() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// KNOWN ISSUE: this long randomized run currently exposes a **hang** in the
-/// read-after-delete path (a full-table read blocks after a `delete_async` on a
-/// table that has been compacted). It is `#[ignore]`d so it does not block CI
-/// while that concurrency issue is investigated; run it explicitly with
-/// `-- --ignored`. The focused `vector_recall_survives_compaction` and
-/// `randomized_workload_recovers_atomically_from_injected_crashes` tests below
-/// run by default.
+/// The long randomized differential run. The read-after-delete hang that
+/// previously forced this to be `#[ignore]`d was fixed by the partition-scoped
+/// delete-file work (see `plans/production_readiness_plan.md` §8): the delete
+/// list is now stored once per manifest and resolved at read time, so a
+/// full-table read after a `delete_async` on a compacted table no longer
+/// blocks. Runs by default; the weekly soak raises `BSDB_WORKLOAD_STEPS`.
 #[tokio::test]
-#[ignore = "exposes a read-after-delete hang under investigation"]
 async fn randomized_differential_workload_matches_model() -> anyhow::Result<()> {
     let _guard = SERIAL.lock().await;
     // Bounded by default so the per-PR run is fast; the weekly soak raises it.
