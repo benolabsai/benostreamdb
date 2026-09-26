@@ -862,8 +862,7 @@ impl HybridReader {
             };
             let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
 
-            let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
+            let arrow_meta = (*meta).clone();
             ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
         } else {
             let head_res = if let Some(s) = self.config.file_size {
@@ -898,10 +897,12 @@ impl HybridReader {
                 Err(e) => return Err(e.into()),
             };
 
+            let options = ArrowReaderOptions::default();
+            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
             crate::core::cache::PARQUET_META_CACHE
                 .insert(
                     format!("{}/{}", self.root_uri, pq_path_str),
-                    (b.metadata().clone(), size),
+                    (Arc::new(arrow_meta), size),
                 )
                 .await;
             b
