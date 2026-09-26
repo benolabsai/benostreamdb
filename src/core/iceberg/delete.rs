@@ -21,7 +21,7 @@ impl PositionDeleteReader {
     /// filtering it to a target data file. The returned map is keyed by the
     /// data-file path recorded in the delete file.
     ///
-    /// This is the async half of [`read_deletes`]; the CPU-bound filtering and
+    /// This is the async half of [`Self::read_deletes`]; the CPU-bound filtering and
     /// bitmap construction is deliberately left to the caller so it can be
     /// parallelized across cores (see `load_merged_deletes_inner`).
     pub async fn fetch_deletes_map(

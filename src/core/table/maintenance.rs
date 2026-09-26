@@ -430,7 +430,7 @@ impl Table {
     ///
     /// v1 CSRs could be mislabeled (wrong direction) by a buggy `add_index`
     /// that registered a graph index under both its `src_column` and the
-    /// original `column` argument. [`crate::python::helpers::load_multi_csr`]
+    /// original `column` argument. `load_multi_csr`
     /// ignores v1 files, so a table carrying them silently falls back to the
     /// SQL BFS path (correct, just slower). This detects such segments and
     /// rebuilds them in the v2 format.
