@@ -11,6 +11,25 @@ use std::collections::HashMap;
 use super::super::types::*;
 use super::ManifestManager;
 
+/// Convert an absolute data/delete-file URI (as Iceberg manifests store it) back
+/// to a store-relative path. A path that is already relative, or that is not
+/// under `root_uri`, is returned unchanged (minus a `file://` scheme).
+fn relativize_file_path(root_uri: &str, file_path: &str) -> String {
+    fn strip_scheme(s: &str) -> &str {
+        s.strip_prefix("file://").unwrap_or(s)
+    }
+    let root_local = strip_scheme(root_uri).trim_end_matches('/');
+    if root_local.is_empty() {
+        return file_path.to_string();
+    }
+    let path_local = strip_scheme(file_path);
+    if let Some(rest) = path_local.strip_prefix(root_local) {
+        rest.trim_start_matches('/').to_string()
+    } else {
+        file_path.to_string()
+    }
+}
+
 impl ManifestManager {
     /// Load the latest manifest bypassing LATEST_VERSION_CACHE.
     pub async fn load_latest_direct(&self) -> Result<(Manifest, u64)> {
@@ -285,6 +304,22 @@ impl ManifestManager {
             entry_map.insert(e.file_path.clone(), e.clone());
         }
 
+        // 3. Resolve the per-entry derived view from the authoritative global
+        //    delete list. The JSON manifest's `delete_files` is the source of
+        //    truth; the per-entry lists carried by Avro sub-manifests are only
+        //    a partial view (the writer emits the global list once, in the last
+        //    chunk), so always rebuild from the global list.
+        if !manifest.delete_files.is_empty() {
+            for e in entry_map.values_mut() {
+                e.delete_files.clear();
+                for df in &manifest.delete_files {
+                    if e.partition_values == df.partition_values {
+                        e.delete_files.push(df.clone());
+                    }
+                }
+            }
+        }
+
         Ok(entry_map.into_values().collect())
     }
 
@@ -341,15 +376,35 @@ impl ManifestManager {
             if ie.status == 0 || ie.status == 1 {
                 // EXISTING or ADDED
                 match crate::core::iceberg::convert_iceberg_to_object(&ie, &schema, &spec)? {
-                    crate::core::iceberg::IcebergManifestObject::Data(me) => data_entries.push(*me),
-                    crate::core::iceberg::IcebergManifestObject::Delete(df) => {
+                    crate::core::iceberg::IcebergManifestObject::Data(mut me) => {
+                        // The manifest stores absolute file URIs (Iceberg spec);
+                        // normalize back to a store-relative path so the rest of
+                        // the engine (vacuum, path resolution, dedup) sees the
+                        // form it writes.
+                        me.file_path = relativize_file_path(&root_uri, &me.file_path);
+                        // Legacy manifests may carry per-entry delete files;
+                        // fold them into the authoritative global list.
+                        for df in me.delete_files.drain(..) {
+                            delete_files.push(df);
+                        }
+                        data_entries.push(*me)
+                    }
+                    crate::core::iceberg::IcebergManifestObject::Delete(mut df) => {
+                        df.file_path = relativize_file_path(&root_uri, &df.file_path);
                         delete_files.push(df)
                     }
                 }
             }
         }
 
-        // Simple linking of equality deletes to data files in same partition
+        // Deduplicate the authoritative, partition-scoped delete list by path.
+        {
+            let mut seen = std::collections::HashSet::new();
+            delete_files.retain(|d| seen.insert(d.file_path.clone()));
+        }
+
+        // Resolve the per-entry derived view by partition. This is NOT
+        // persisted: the commit writes `manifest.delete_files` once.
         for data in &mut data_entries {
             for delete in &delete_files {
                 if data.partition_values == delete.partition_values {
@@ -358,7 +413,8 @@ impl ManifestManager {
             }
         }
 
-        let manifest = Manifest::new(0, data_entries, None);
+        let mut manifest = Manifest::new(0, data_entries, None);
+        manifest.delete_files = delete_files;
         crate::core::cache::MANIFEST_CACHE
             .insert(cache_key, std::sync::Arc::new(manifest.clone()))
             .await;

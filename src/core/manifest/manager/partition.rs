@@ -24,7 +24,7 @@ impl ManifestManager {
             let (current_manifest, current_ver) = self.load_latest().await?;
             let new_ver = current_ver + 1;
 
-            let new_manifest = Manifest::new_with_spec(
+            let mut new_manifest = Manifest::new_with_spec(
                 new_ver,
                 current_manifest.entries.clone(),
                 Some(current_ver),
@@ -32,6 +32,16 @@ impl ManifestManager {
                 current_manifest.current_schema_id,
                 new_spec.clone(),
             );
+            // Preserve the tiered manifest list: for a tiered table the segment
+            // entries live in the manifest list, not inline in `entries` (which
+            // is empty). Dropping `manifest_list_path` here would make the new
+            // manifest reference NO segments — i.e. a partition-spec update would
+            // silently lose all data.
+            new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
+            new_manifest.properties = current_manifest.properties.clone();
+            new_manifest.format_version = current_manifest.format_version;
+            // Carry the authoritative, partition-scoped delete list forward.
+            new_manifest.delete_files = current_manifest.delete_files.clone();
 
             let filename = format!("v{}.json", new_ver);
             let path = self.manifest_dir.child(filename);

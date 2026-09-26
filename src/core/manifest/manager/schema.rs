@@ -49,6 +49,9 @@ impl ManifestManager {
             );
             new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
             new_manifest.last_column_id = last_column_id.unwrap_or(current_manifest.last_column_id);
+            new_manifest.format_version = current_manifest.format_version;
+            // Carry the authoritative, partition-scoped delete list forward.
+            new_manifest.delete_files = current_manifest.delete_files.clone();
 
             let filename = format!("v{}.json", new_ver);
             let path = self.manifest_dir.child(filename);
@@ -180,6 +183,9 @@ impl ManifestManager {
             );
             new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
             new_manifest.properties = current_manifest.properties.clone();
+            new_manifest.format_version = current_manifest.format_version;
+            // Carry the authoritative, partition-scoped delete list forward.
+            new_manifest.delete_files = current_manifest.delete_files.clone();
 
             let filename = format!("v{}.json", new_ver);
             let path = self.manifest_dir.child(filename);

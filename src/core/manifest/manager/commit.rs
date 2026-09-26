@@ -16,6 +16,20 @@ fn is_already_exists(err: &object_store::Error) -> bool {
     err.to_string().contains("already exists")
 }
 
+/// Minimum age (seconds) before vacuum will delete an unreferenced file.
+///
+/// This is the safety margin that closes the GC-vs-writer race: a file uploaded
+/// by a concurrent writer is young, so it is never reaped before the writer's
+/// commit becomes visible. Override with `BSDB_VACUUM_MIN_FILE_AGE_SECS`
+/// (default 60s; `0` disables the grace period).
+fn vacuum_min_file_age_secs() -> i64 {
+    std::env::var("BSDB_VACUUM_MIN_FILE_AGE_SECS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v >= 0)
+        .unwrap_or(60)
+}
+
 impl ManifestManager {
     /// Commit a change to the timeline.
     /// Uses optimistic concurrency control with retries and PutMode::Create
@@ -84,6 +98,21 @@ impl ManifestManager {
             }
             let new_entries: Vec<ManifestEntry> = active_map.into_values().collect();
 
+            // Delete files are partition-scoped: collect them into a single
+            // global list (deduped by path) and clear the per-entry view so it
+            // is never persisted. This breaks the read-attach -> commit-persist
+            // cycle that previously grew the list without bound.
+            let mut global_delete_files: Vec<crate::core::manifest::DeleteFile> =
+                current_manifest.delete_files.clone();
+            let mut seen_delete_paths: std::collections::HashSet<String> =
+                global_delete_files.iter().map(|d| d.file_path.clone()).collect();
+            for entry in add_entries {
+                for df in &entry.delete_files {
+                    if seen_delete_paths.insert(df.file_path.clone()) {
+                        global_delete_files.push(df.clone());
+                    }
+                }
+            }
             // 2. Decide if we need a ManifestList (Scalability)
             // BenoStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
             // chunked by 8MB to ensure 100% Iceberg Spec compatibility.
@@ -110,9 +139,34 @@ impl ManifestManager {
                 let table_spec = current_manifest.partition_spec.clone();
                 let new_ver_i64 = new_ver as i64;
                 let store = self.store.clone();
+                // The `manifest_path` written into the manifest list must be an
+                // absolute location: the Iceberg spec defines it as the manifest
+                // file's location, and external readers (PyIceberg) resolve a
+                // relative path against the process CWD, not the table root.
+                let root_uri = self.root_uri.clone();
+
+                // Iceberg requires `data_file.file_path` to be a full URI.
+                // Qualify the relative store paths for the manifest; the internal
+                // reader relativizes them back against the root URI (see
+                // `load_avro_manifest_static`), so `entry.file_path` stays
+                // store-relative everywhere else.
+                let mut qualified_entries = new_entries.clone();
+                for e in &mut qualified_entries {
+                    if !e.file_path.contains("://") && !e.file_path.starts_with('/') {
+                        e.file_path = format!(
+                            "{}/{}",
+                            root_uri.trim_end_matches('/'),
+                            e.file_path.trim_start_matches('/')
+                        );
+                    }
+                    // The per-entry delete list is a read-time derived view; the
+                    // authoritative list is `global_delete_files`.
+                    e.delete_files.clear();
+                }
 
                 let chunks = writer.write_manifest_chunks(
-                    &new_entries,
+                    &qualified_entries,
+                    &global_delete_files,
                     &table_spec,
                     &table_schema,
                     new_ver_i64,
@@ -126,13 +180,18 @@ impl ManifestManager {
                     let path = self.manifest_dir.child(filename);
                     let store = store.clone();
                     let partition_spec_id = table_spec.spec_id;
+                    let manifest_path_abs = format!(
+                        "{}/{}",
+                        root_uri.trim_end_matches('/'),
+                        path.to_string().trim_start_matches('/')
+                    );
 
                     futures.push(async move {
                         let manifest_length = bytes.len() as i64;
                         store.put(&path, bytes.into()).await?;
 
                         Result::<ManifestListEntry>::Ok(ManifestListEntry {
-                            manifest_path: path.to_string(),
+                            manifest_path: manifest_path_abs,
                             manifest_length,
                             partition_spec_id,
                             content: 0, // Data
@@ -203,9 +262,13 @@ impl ManifestManager {
                 final_schema_id,
                 final_partition_spec,
             );
+            new_manifest.delete_files = global_delete_files;
 
             new_manifest.sort_orders = final_sort_orders;
             new_manifest.default_sort_order_id = final_default_sort_order_id;
+            new_manifest.format_version = metadata
+                .format_version
+                .unwrap_or(current_manifest.format_version);
 
             new_manifest.properties = current_manifest.properties.clone();
             if let Some(props) = &metadata.updated_properties {
@@ -326,6 +389,9 @@ impl ManifestManager {
             new_manifest.sort_orders = current_manifest.sort_orders.clone();
             new_manifest.default_sort_order_id = current_manifest.default_sort_order_id;
             new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
+            new_manifest.format_version = current_manifest.format_version;
+            // Carry the authoritative, partition-scoped delete list forward.
+            new_manifest.delete_files = current_manifest.delete_files.clone();
 
             // Write to storage with conflict detection
             let filename = format!("v{}.json", new_ver);
@@ -507,6 +573,11 @@ impl ManifestManager {
             return Ok(0);
         }
 
+        // WS2 crash boundary: vacuum has started but has not deleted anything.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::VacuumStart,
+        )?;
+
         // 1. Identify active files in the retention window
         let mut active_files = HashSet::new();
         let mut manifest_files_to_keep = HashSet::new();
@@ -521,8 +592,15 @@ impl ManifestManager {
                 Err(_) => continue, // Skip missing versions in history gaps
             };
 
-            // Collect all data and index files
-            for entry in m.entries {
+            // Collect all data and index files. Entries live in the tiered
+            // manifest list, NOT inline in `Manifest.entries` (which is empty
+            // for tiered manifests) — iterating `m.entries` directly would leave
+            // `active_files` empty and make vacuum delete EVERY data file.
+            let entries = match self.load_all_entries(&m).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries {
                 active_files.insert(entry.file_path.clone());
                 for index in entry.index_files {
                     active_files.insert(index.file_path.clone());
@@ -531,6 +609,11 @@ impl ManifestManager {
                     active_files.insert(del.file_path.clone());
                 }
             }
+            // The authoritative delete list is partition-scoped; keep every
+            // delete file even if no data entry shares its partition.
+            for del in &m.delete_files {
+                active_files.insert(del.file_path.clone());
+            }
 
             // Keep the manifest file itself
             let m_name = format!("v{}.json", v);
@@ -538,8 +621,20 @@ impl ManifestManager {
             manifest_files_to_keep.insert(m_path.to_string());
         }
 
-        // 2. Discover all files in the storage
-        let mut deleted_count = 0;
+        // WS2 crash boundary: the delete set is decided but nothing is deleted
+        // yet — a crash here must leave the live snapshot fully intact.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::VacuumDelete,
+        )?;
+
+        // 2. Discover all files in the storage and collect deletion *candidates*.
+        //    We do NOT delete while listing: a concurrent writer may commit a new
+        //    file after we computed `active_files`, and deleting it would orphan a
+        //    live snapshot (the GC-vs-writer race). Collect first, re-validate
+        //    against the latest manifest, then delete.
+        let mut manifest_candidates: Vec<object_store::path::Path> = Vec::new();
+        let mut data_candidates: Vec<(object_store::path::Path, String, chrono::DateTime<Utc>)> =
+            Vec::new();
         let mut stream = self.store.list(None);
 
         while let Some(meta) = stream.next().await {
@@ -548,12 +643,7 @@ impl ManifestManager {
 
             // Skip the current manifest directory itself but check files inside
             if path_str.contains("_manifest/v") {
-                // If it's a manifest file, check if we keep it
-                if !manifest_files_to_keep.contains(&path_str) {
-                    tracing::info!("Vacuum: Deleting old manifest {}", path_str);
-                    self.store.delete(&meta.location).await?;
-                    deleted_count += 1;
-                }
+                manifest_candidates.push(meta.location);
                 continue;
             }
 
@@ -569,23 +659,62 @@ impl ManifestManager {
                 || path_str.ends_with(".tmp");
 
             if is_data_file {
-                // If it's not in the active set, delete it
-                if !active_files.contains(&path_str) {
-                    // Small safety: don't delete very young .tmp files (leeway for active writers)
-                    if path_str.ends_with(".tmp") {
-                        let age = Utc::now()
-                            - chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0)
-                                .unwrap_or(Utc::now());
-                        if age.num_minutes() < 60 {
-                            continue;
-                        }
-                    }
+                let modified =
+                    chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0)
+                        .unwrap_or_else(Utc::now);
+                data_candidates.push((meta.location, path_str, modified));
+            }
+        }
 
-                    tracing::info!("Vacuum: Deleting unreferenced file {}", path_str);
-                    self.store.delete(&meta.location).await?;
-                    deleted_count += 1;
+        // 3. Re-validate against the LATEST manifest to close the GC-vs-writer
+        //    race: a writer may have committed a new file (or a new manifest
+        //    version) after we computed the retention window above.
+        let (latest_m, latest_ver_now) = self.load_latest().await?;
+        if let Ok(latest_entries) = self.load_all_entries(&latest_m).await {
+            for entry in latest_entries {
+                active_files.insert(entry.file_path.clone());
+                for index in entry.index_files {
+                    active_files.insert(index.file_path.clone());
+                }
+                for del in entry.delete_files {
+                    active_files.insert(del.file_path.clone());
                 }
             }
+        }
+        for del in &latest_m.delete_files {
+            active_files.insert(del.file_path.clone());
+        }
+        let start_ver_now = latest_ver_now
+            .saturating_sub(retention_versions as u64 - 1)
+            .max(1);
+        for v in start_ver_now..=latest_ver_now {
+            let m_path = self.manifest_dir.child(format!("v{}.json", v));
+            manifest_files_to_keep.insert(m_path.to_string());
+        }
+
+        // 4. Delete candidates that are still unreferenced.
+        let mut deleted_count = 0;
+        for location in manifest_candidates {
+            if !manifest_files_to_keep.contains(&location.to_string()) {
+                tracing::info!("Vacuum: Deleting old manifest {}", location);
+                self.store.delete(&location).await?;
+                deleted_count += 1;
+            }
+        }
+        for (location, path_str, modified) in data_candidates {
+            if active_files.contains(&path_str) {
+                continue;
+            }
+            // Grace period: never reap a file younger than the safety margin, so
+            // an artifact uploaded by a concurrent writer (or a just-committed
+            // file) is never deleted out from under a live snapshot.
+            let age = Utc::now() - modified;
+            if age.num_seconds() < vacuum_min_file_age_secs() {
+                continue;
+            }
+            tracing::info!("Vacuum: Deleting unreferenced file {}", path_str);
+            self.store.delete(&location).await?;
+            deleted_count += 1;
         }
 
         Ok(deleted_count)
