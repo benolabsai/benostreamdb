@@ -681,3 +681,50 @@ check observes read-your-writes consistency. Verified: 20/20 at 60 steps and
 Note: this is a test-side sync fix. The production behavior (async index build
 with eventual consistency) is intentional; callers that need immediate vector
 consistency should await background tasks or query after the index is uploaded.
+
+### 8.7 Append-only manifest list — commit cost at scale
+
+**Symptom.** Every commit re-encoded *all* live entries into a fresh manifest
+file and rewrote the manifest list to reference only that file. The cost was
+O(N) in the number of live segments, so a table with hundreds of segments paid
+the full re-encode on every small append.
+
+**Fix.** [`ManifestManager::commit`](../src/core/manifest/manager/commit.rs:38)
+now detects an **append-only** commit — no `remove_paths` and every added entry
+is a brand-new file path — and takes a fast path that:
+
+1. writes only the new entries to a new manifest file, and
+2. references the **unchanged previous manifest files** (loaded from the
+   previous manifest list) plus the new one.
+
+The reader already walks every manifest file in the list and dedups by
+`file_path` ([`load_all_entries`](../src/core/manifest/manager/load.rs:238)), so
+the union of the referenced files is the full live set. The global
+`delete_files` list and the version-cache invalidation are preserved on the fast
+path.
+
+**Consolidation bound.** Each append adds one manifest file, so an unbounded
+list would make reads O(number of commits). Once the list reaches
+`BSDB_MANIFEST_MAX_FILES_BEFORE_CONSOLIDATION` (default 32) the next commit
+falls back to the full rewrite, which re-encodes the live entries into a single
+chunked manifest file and resets the list. Commits that carry removes
+(compaction, index-attach, vacuum) always take the full-rewrite path.
+
+**Result** (300 single-row commits, last 50 commits):
+
+| Path | last-50 total | avg/commit |
+|---|---|---|
+| Full rewrite (`threshold=1`) | 1.99s | 39.8ms |
+| Append-only (default) | **1.28s** | **25.5ms** |
+
+The gap widens with segment count. On the small 60-step randomized workload the
+two paths are neutral (~2.0s), as expected.
+
+**Correctness.** New focused test
+[`append_only_commit_grows_then_consolidates`](../tests/read_manifest.rs:89)
+asserts the manifest list grows 1 → 2 on a pure append and consolidates back to
+1 after compaction, with row counts preserved. The full suite
+(`test_iceberg_conformance`, `verify_mor_reads`/`verify_mor_writes`,
+`test_concurrent_writers`, `test_multi_writer_concurrency`,
+`test_crash_injection`, `test_durability_robust`, `test_maintenance_invariant`,
+`verify_delete_correctness`, `test_index_lifecycle`, `test_chaos`) passes.
