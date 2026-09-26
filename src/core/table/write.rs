@@ -918,6 +918,16 @@ impl Table {
 
         let mut all_new_entries = Vec::new();
         let mut files_to_upload: Vec<(String, String)> = Vec::new();
+        // Index-build inputs are collected here and the builds are spawned
+        // AFTER the manifest commit below. Spawning during the flush made the
+        // background index-attach commit race the flush's own commit (both
+        // wrote the next manifest version), causing a ~30ms retry per insert.
+        let mut pending_builds: Vec<(
+            crate::core::manifest::ManifestEntry,
+            arrow::record_batch::RecordBatch,
+            std::collections::HashMap<String, serde_json::Value>,
+            String,
+        )> = Vec::new();
         let index_cols = self.indexing.index_columns.read().clone();
         let index_all_flag = self.indexing.index_all;
 
@@ -1018,147 +1028,18 @@ impl Table {
             }
             all_new_entries.push(entry.clone());
 
-            // 2. Queue index building asynchronously (if needed)
+            // 2. Queue index building asynchronously (if needed). The build is
+            // spawned AFTER the manifest commit below so the index-attach
+            // commit does not race the flush's own commit (which caused a
+            // ~30ms retry per insert).
             let has_pks = !self.primary_key.read().is_empty();
             if index_all_flag || !index_cols.is_empty() || has_pks {
-                let index_cols_clone = index_cols.clone();
-                let base_path_clone = base_path.to_string();
-                let segment_id_clone = segment_id.clone();
-                let batch_for_indexing = batch.clone();
-                let partition_values_clone = partition_values.clone();
-                let index_configs_clone = index_configs_map.clone();
-                let default_device_clone = default_device.clone();
-
-                let entry_clone = entry.clone();
-                let manifest_manager_clone = manifest_manager.clone();
-
-                let pk_clone = self.primary_key.read().clone();
-                let table_store = self.store.clone();
-
-                let spec_bg = spec.clone();
-
-                // Bound concurrent index builds. Each build holds its segment's
-                // vectors plus the HNSW/IVF/quantizer structures — several GB at
-                // this flush size. Without a gate, the runtime fans out one build
-                // per worker thread (nproc), which exceeds RAM and both OOMs and
-                // thrashes (see `Table::index_build_gate`). Acquiring here
-                // back-pressures the writer instead.
-                let permit = self.acquire_index_build_permit().await?;
-                let memory_reclaimed = self.memory_reclaimed.clone();
-
-                let handle = tokio::spawn(async move {
-                    let _permit = permit;
-                    let _start = std::time::Instant::now();
-
-                    let hive_path = spec_bg.partition_to_path(&partition_values_clone);
-                    let full_base_path = if hive_path.is_empty() {
-                        base_path_clone
-                    } else {
-                        format!("{}/{}", base_path_clone, hive_path)
-                    };
-
-                    let parquet_path_rel = if hive_path.is_empty() {
-                        format!("{}.parquet", segment_id_clone)
-                    } else {
-                        format!("{}/{}.parquet", hive_path, segment_id_clone)
-                    };
-
-                    let config_index = SegmentConfig::new(&full_base_path, &segment_id_clone)
-                        .with_index_all(index_all_flag)
-                        .with_columns_to_index(index_cols_clone)
-                        .with_partition_values(partition_values_clone.clone())
-                        .with_column_devices(
-                            index_configs_clone
-                                .iter()
-                                .filter_map(|(c, cfg)| {
-                                    cfg.device.as_ref().map(|d| (c.clone(), d.clone()))
-                                })
-                                .collect(),
-                        )
-                        .with_default_device(default_device_clone)
-                        .with_parquet_path(parquet_path_rel);
-
-                    let index_res = tokio::spawn(async move {
-                        let mut index_writer = HybridSegmentWriter::new(config_index)
-                            .with_index_configs(index_configs_clone);
-                        index_writer.primary_key = pk_clone;
-                        index_writer.set_store(table_store);
-                        // In commit path, we typically have ONE batch per segment write
-                        index_writer.build_indexes(&batch_for_indexing, 0)?;
-                        index_writer.finish_indexing().await?;
-                        // WS2 crash boundary: index files built but not uploaded.
-                        crate::core::fault_injection::check(
-                            crate::core::fault_injection::CrashPoint::IndexUpload,
-                        )?;
-                        index_writer.upload_to_store().await?;
-                        let files = index_writer.get_generated_files();
-                        let updated_entry_info = index_writer.to_manifest_entry();
-                        Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
-                            updated_entry_info,
-                            files,
-                        ))
-                    })
-                    .await;
-
-                    match index_res {
-                        Ok(Ok((updated_entry, _files))) => {
-                            // Atomic metadata update: Add index files to the existing entry
-                            let mut merged_entry = entry_clone;
-                            let mut updated_index_files = updated_entry.index_files;
-
-                            // Prefix index files if in a partitioned subdirectory
-                            let hive_path = spec_bg.partition_to_path(&partition_values_clone);
-                            if !hive_path.is_empty() {
-                                for idx in &mut updated_index_files {
-                                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
-                                }
-                            }
-
-                            tracing::debug!(
-                                "Background indexing task: segment={}, found index_files={:?}",
-                                merged_entry.file_path,
-                                updated_index_files
-                            );
-                            merged_entry.index_files = updated_index_files;
-                            // NOTE: We MUST preserve the record_count and column_stats from entry_clone,
-                            // as updated_entry (from index_writer) only contains the index metadata.
-
-                            let commit_metadata = crate::core::manifest::CommitMetadata::default();
-
-                            let file_path = merged_entry.file_path.clone();
-                            let index_count = merged_entry.index_files.len();
-
-                            let remove_paths = vec![merged_entry.file_path.clone()];
-                            match manifest_manager_clone
-                                .commit(&[merged_entry], &remove_paths, commit_metadata)
-                                .await
-                            {
-                                Ok(_) => tracing::info!(
-                                    "Successfully attached {} indexes to manifest for segment {}",
-                                    index_count,
-                                    file_path
-                                ),
-                                Err(e) => tracing::error!(
-                                    "Failed to attach indexes for segment {}: {}",
-                                    file_path,
-                                    e
-                                ),
-                            }
-                        }
-                        _ => {
-                            tracing::error!(
-                                "Index building failed for segment {}",
-                                segment_id_clone
-                            );
-                        }
-                    }
-
-                    // The build's working set has been dropped (or moved into the
-                    // writer) and its permit released; wake any writer blocked on
-                    // the ingest RAM high-water mark.
-                    memory_reclaimed.notify_waiters();
-                });
-                self.background_tasks.lock().await.push(handle);
+                pending_builds.push((
+                    entry.clone(),
+                    batch.clone(),
+                    partition_values.clone(),
+                    segment_id.clone(),
+                ));
             }
         }
 
@@ -1321,6 +1202,131 @@ impl Table {
         crate::core::fault_injection::check(
             crate::core::fault_injection::CrashPoint::ManifestVisible,
         )?;
+
+        // 3b. Spawn the queued index builds now that the manifest is committed.
+        // Spawning them during the flush made the index-attach commit race the
+        // flush's own commit (both wrote the next manifest version), causing a
+        // ~30ms retry per insert.
+        if !pending_builds.is_empty() {
+            let index_cols_cap = index_cols.clone();
+            let base_path_cap = base_path.to_string();
+            let index_configs_cap = index_configs_map.clone();
+            let default_device_cap = default_device.clone();
+            let pk_cap = self.primary_key.read().clone();
+            let table_store_cap = self.store.clone();
+            let spec_cap = spec.clone();
+            let memory_reclaimed_cap = self.memory_reclaimed.clone();
+            let manifest_manager_cap = manifest_manager.clone();
+
+            for (entry, batch, partition_values, segment_id) in pending_builds {
+                let index_cols_c = index_cols_cap.clone();
+                let base_path_c = base_path_cap.clone();
+                let segment_id_c = segment_id.clone();
+                let batch_c = batch.clone();
+                let partition_values_c = partition_values.clone();
+                let index_configs_c = index_configs_cap.clone();
+                let default_device_c = default_device_cap.clone();
+                let entry_c = entry.clone();
+                let pk_c = pk_cap.clone();
+                let table_store_c = table_store_cap.clone();
+                let spec_c = spec_cap.clone();
+                let memory_reclaimed_c = memory_reclaimed_cap.clone();
+                let manifest_manager_c = manifest_manager_cap.clone();
+
+                // Bound concurrent index builds (see `Table::index_build_gate`).
+                let permit = self.acquire_index_build_permit().await?;
+
+                let handle = tokio::spawn(async move {
+                    let _permit = permit;
+                    let hive_path = spec_c.partition_to_path(&partition_values_c);
+                    let full_base_path = if hive_path.is_empty() {
+                        base_path_c
+                    } else {
+                        format!("{}/{}", base_path_c, hive_path)
+                    };
+                    let parquet_path_rel = if hive_path.is_empty() {
+                        format!("{}.parquet", segment_id_c)
+                    } else {
+                        format!("{}/{}.parquet", hive_path, segment_id_c)
+                    };
+                    let config_index = SegmentConfig::new(&full_base_path, &segment_id_c)
+                        .with_index_all(index_all_flag)
+                        .with_columns_to_index(index_cols_c)
+                        .with_partition_values(partition_values_c.clone())
+                        .with_column_devices(
+                            index_configs_c
+                                .iter()
+                                .filter_map(|(c, cfg)| {
+                                    cfg.device.as_ref().map(|d| (c.clone(), d.clone()))
+                                })
+                                .collect(),
+                        )
+                        .with_default_device(default_device_c)
+                        .with_parquet_path(parquet_path_rel);
+
+                    let index_res = tokio::spawn(async move {
+                        let mut index_writer = HybridSegmentWriter::new(config_index)
+                            .with_index_configs(index_configs_c);
+                        index_writer.primary_key = pk_c;
+                        index_writer.set_store(table_store_c);
+                        index_writer.build_indexes(&batch_c, 0)?;
+                        index_writer.finish_indexing().await?;
+                        crate::core::fault_injection::check(
+                            crate::core::fault_injection::CrashPoint::IndexUpload,
+                        )?;
+                        index_writer.upload_to_store().await?;
+                        let files = index_writer.get_generated_files();
+                        let updated_entry_info = index_writer.to_manifest_entry();
+                        Ok::<(crate::core::manifest::ManifestEntry, Vec<String>), anyhow::Error>((
+                            updated_entry_info,
+                            files,
+                        ))
+                    })
+                    .await;
+
+                    match index_res {
+                        Ok(Ok((updated_entry, _files))) => {
+                            let mut merged_entry = entry_c;
+                            let mut updated_index_files = updated_entry.index_files;
+                            let hive_path = spec_c.partition_to_path(&partition_values_c);
+                            if !hive_path.is_empty() {
+                                for idx in &mut updated_index_files {
+                                    idx.file_path = format!("{}/{}", hive_path, idx.file_path);
+                                }
+                            }
+                            merged_entry.index_files = updated_index_files;
+                            let commit_metadata = crate::core::manifest::CommitMetadata::default();
+                            let file_path = merged_entry.file_path.clone();
+                            let index_count = merged_entry.index_files.len();
+                            let remove_paths = vec![merged_entry.file_path.clone()];
+                            match manifest_manager_c
+                                .commit(&[merged_entry], &remove_paths, commit_metadata)
+                                .await
+                            {
+                                Ok(_) => tracing::info!(
+                                    "Successfully attached {} indexes to manifest for segment {}",
+                                    index_count,
+                                    file_path
+                                ),
+                                Err(e) => tracing::error!(
+                                    "Failed to attach indexes for segment {}: {}",
+                                    file_path,
+                                    e
+                                ),
+                            }
+                        }
+                        _ => {
+                            tracing::error!(
+                                "Index building failed for segment {}",
+                                segment_id_c
+                            );
+                        }
+                    }
+                    memory_reclaimed_c.notify_waiters();
+                });
+                self.background_tasks.lock().await.push(handle);
+            }
+        }
 
         // 4. Update Table Metadata (Iceberg v2 Spec)
         // Determine the root for metadata. If we have a catalog, use its reported location.
