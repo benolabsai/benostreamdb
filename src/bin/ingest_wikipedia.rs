@@ -24,6 +24,10 @@ struct Args {
     /// Also write sections.parquet (article id, section title, level)
     #[arg(short, long, default_value_t = false)]
     sections: bool,
+
+    /// Store the full wikitext (not truncated to 500 chars)
+    #[arg(long, default_value_t = false)]
+    full_text: bool,
 }
 
 #[tokio::main]
@@ -41,6 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sec_titles = Vec::new();
     let mut sec_names = Vec::new();
     let mut sec_levels = Vec::new();
+    let mut sec_starts = Vec::new();
+    let mut sec_ends = Vec::new();
 
     let link_regex = Regex::new(r"\[\[(.*?)\]\]").unwrap();
     let section_regex = Regex::new(r"^={2,6}\s*([^=]+?)\s*={2,6}").unwrap();
@@ -78,6 +84,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Field::new("page_title", DataType::LargeUtf8, false),
         Field::new("section_title", DataType::LargeUtf8, false),
         Field::new("level", DataType::Int32, false),
+        Field::new("start_byte", DataType::Int64, false),
+        Field::new("end_byte", DataType::Int64, false),
     ]));
     let sections_file = AsyncFile::create(format!("{}/sections.parquet", args.output_dir)).await?;
     let mut sections_writer =
@@ -115,6 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let titles = std::mem::take(&mut sec_titles);
                 let names = std::mem::take(&mut sec_names);
                 let levels = std::mem::take(&mut sec_levels);
+                let starts = std::mem::take(&mut sec_starts);
+                let ends = std::mem::take(&mut sec_ends);
                 let batch = RecordBatch::try_new(
                     sections_schema.clone(),
                     vec![
@@ -122,6 +132,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Arc::new(LargeStringArray::from(titles)),
                         Arc::new(LargeStringArray::from(names)),
                         Arc::new(arrow::array::Int32Array::from(levels)),
+                        Arc::new(arrow::array::Int64Array::from(starts)),
+                        Arc::new(arrow::array::Int64Array::from(ends)),
                     ],
                 )?;
                 sections_writer.write(&batch).await?;
@@ -202,12 +214,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nodes_titles.push(current_title.clone());
 
                         // Create summary (first 500 chars, safely handling utf-8)
-                        let summary = if current_text.chars().count() > 500 {
+                        let summary = if args.full_text {
+                            current_text.clone()
+                        } else if current_text.chars().count() > 500 {
                             let mut end_idx = 0;
                             for (i, _) in current_text.char_indices().take(500) {
                                 end_idx = i;
                             }
-                            // Add the length of the 500th char
                             if let Some(c) = current_text[end_idx..].chars().next() {
                                 end_idx += c.len_utf8();
                             }
@@ -219,18 +232,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         if args.sections {
                             for caps in section_regex.captures_iter(&current_text) {
+                                let m = caps.get(0).unwrap();
                                 let title = caps.get(1).unwrap().as_str().trim().to_string();
-                                let level = caps
-                                    .get(0)
-                                    .unwrap()
-                                    .as_str()
-                                    .chars()
-                                    .take_while(|c| *c == '=')
-                                    .count() as i32;
+                                let level = m.as_str().chars().take_while(|c| *c == '=').count() as i32;
+                                let start = m.start() as i64;
+                                let end = m.end() as i64;
+                                // The text BEFORE this header belongs to the previous
+                                // section (or is the lead). For the previous section,
+                                // set its end = this header's start.
+                                if !sec_ends.is_empty() {
+                                    *sec_ends.last_mut().unwrap() = start;
+                                }
                                 sec_page_ids.push(current_id.clone());
                                 sec_titles.push(current_title.clone());
                                 sec_names.push(title);
                                 sec_levels.push(level);
+                                sec_starts.push(end); // section text starts after header
+                                sec_ends.push(end); // will be updated by next header
+                            }
+                            if !sec_ends.is_empty() {
+                                *sec_ends.last_mut().unwrap() = current_text.len() as i64;
                             }
                         }
 
