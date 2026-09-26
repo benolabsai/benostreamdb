@@ -151,9 +151,9 @@ lazy_static! {
     ).unwrap();
 
     // ------------------------------------------------------------------
-    // Merge-on-read delete-path instrumentation (temporary; see
-    // plans/production_readiness_plan.md). These break the 8-28s step
-    // latency down by phase so the dominant contributor is measurable.
+    // Merge-on-read delete-path observability. These break the delete-merge
+    // latency down by phase so the dominant contributor is measurable in
+    // production (see plans/production_readiness_plan.md §8).
     // ------------------------------------------------------------------
 
     /// Wall time of each phase of `load_merged_deletes_inner`, in seconds.
@@ -199,9 +199,9 @@ lazy_static! {
     ).unwrap();
 
     // ------------------------------------------------------------------
-    // Parquet read-path instrumentation (temporary; see
-    // plans/production_readiness_plan.md). Breaks `stream_row_groups` setup
-    // down by phase so the dominant contributor is measurable.
+    // Parquet read-path observability. Breaks `stream_row_groups` setup and
+    // the decode/filter stages down by phase so the dominant contributor is
+    // measurable in production (see plans/production_readiness_plan.md §8.8).
     // ------------------------------------------------------------------
 
     /// Wall time of each phase of `stream_row_groups`, in seconds. Label
@@ -222,10 +222,9 @@ lazy_static! {
     ).unwrap();
 }
 
-/// Render the merge-on-read delete-path instrumentation as a human-readable
-/// per-phase breakdown. Used by the baseline workload to print where the
-/// step latency actually goes. Returns an empty string if nothing has been
-/// recorded yet.
+/// Render the merge-on-read delete-path metrics as a human-readable per-phase
+/// breakdown. Used by the randomized workload to print where the delete-merge
+/// latency goes. Returns an empty string if nothing has been recorded yet.
 pub fn dump_merged_deletes_metrics() -> String {
     let mut out = String::new();
     for mf in prometheus::gather() {
