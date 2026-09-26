@@ -176,7 +176,7 @@ impl DiskCache {
 // Index: "s3://bucket/path/segment_id/column" -> RoaringBitmap
 //
 // NOTE: We intentionally do NOT cache HNSW indexes or Parquet data.
-// At petabyte scale, caching would exhaust memory. The design relies on:
+// At large scale, caching would exhaust memory. The design relies on:
 // - Streaming only needed data via object store range requests
 // - Efficient indexes (roaring bitmaps, HNSW graphs) that are small
 // - Client-side filtering to minimize data transfer
@@ -313,6 +313,42 @@ pub static BLOOM_FILTER_CACHE: Lazy<Cache<String, Arc<Sbbf>>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(2048) // Roughly 250MB if each is 128KB
         .time_to_idle(Duration::from_secs(60 * 30))
+        .build()
+});
+
+/// Global cache for parsed Iceberg position-delete files.
+///
+/// Delete files are immutable once written, so their content can be cached
+/// indefinitely (within TTI bounds). The key is `"{delete_file_path}::{target_data_file_path}"`
+/// because the same physical delete file may contain positions for multiple data
+/// files and we filter to the target during parsing.
+pub static POSITION_DELETE_CACHE: Lazy<Cache<String, Arc<std::collections::HashSet<i64>>>> =
+    Lazy::new(|| {
+        Cache::builder()
+            .max_capacity(50_000)
+            .time_to_idle(Duration::from_secs(60 * 10)) // 10 mins idle
+            .build()
+    });
+
+pub static FULL_DELETE_FILE_CACHE: Lazy<Cache<String, Arc<std::collections::HashMap<String, std::collections::HashSet<i64>>>>> =
+    Lazy::new(|| {
+        Cache::builder()
+            .max_capacity(50_000)
+            .time_to_idle(Duration::from_secs(60 * 10)) // 10 mins idle
+            .build()
+    });
+
+/// Global cache for parsed equality-delete values, keyed by the segment's
+/// delete-file set (same key as the merged position-delete cache).
+///
+/// `load_equality_deletes` is called on every segment read; without this cache
+/// it re-reads and re-parses every equality delete file each time.
+pub static EQUALITY_DELETE_CACHE: Lazy<
+    Cache<String, Arc<Vec<crate::core::reader::EqualityDelete>>>
+> = Lazy::new(|| {
+    Cache::builder()
+        .max_capacity(50_000)
+        .time_to_idle(Duration::from_secs(60 * 10)) // 10 mins idle
         .build()
 });
 
