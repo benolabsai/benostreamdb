@@ -198,23 +198,51 @@ async fn case_f_two_writers_no_lost_updates() -> anyhow::Result<()> {
         table.commit_async().await?;
     }
 
-    let t1 = Table::new_async(uri.clone()).await?;
-    let t2 = Table::new_async(uri.clone()).await?;
+    eprintln!("[case-f] seed committed");
+
+    use benostreamdb::core::table::builder::TableBuilder;
+    let wal1 = tempdir()?;
+    let wal2 = tempdir()?;
+    let t1 = TableBuilder::new(&uri)
+        .with_wal_dir(wal1.path())
+        .build_async()
+        .await?;
+    let t2 = TableBuilder::new(&uri)
+        .with_wal_dir(wal2.path())
+        .build_async()
+        .await?;
 
     let w1 = tokio::spawn(async move {
-        t1.write_async(vec![batch(1000, 3)]).await?;
-        t1.commit_async().await
+        t1.write_async(vec![batch(1000, 3)]).await.map_err(|e| {
+            eprintln!("[case-f] writer 1 write error: {e}");
+            e
+        })?;
+        t1.commit_async().await.map_err(|e| {
+            eprintln!("[case-f] writer 1 commit error: {e}");
+            e
+        })
     });
     let w2 = tokio::spawn(async move {
-        t2.write_async(vec![batch(2000, 4)]).await?;
-        t2.commit_async().await
+        t2.write_async(vec![batch(2000, 4)]).await.map_err(|e| {
+            eprintln!("[case-f] writer 2 write error: {e}");
+            e
+        })?;
+        t2.commit_async().await.map_err(|e| {
+            eprintln!("[case-f] writer 2 commit error: {e}");
+            e
+        })
     });
+
+    eprintln!("[case-f] waiting for writers");
     w1.await??;
+    eprintln!("[case-f] writer 1 done");
     w2.await??;
+    eprintln!("[case-f] writer 2 done");
 
     let table = Table::new_async(uri).await?;
     let ids = read_ids(&table).await?;
     let unique: HashSet<i32> = ids.iter().copied().collect();
+    eprintln!("[case-f] read {} ids: {ids:?}", ids.len());
     assert_eq!(
         ids.len(),
         8,
