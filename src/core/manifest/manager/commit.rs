@@ -43,7 +43,10 @@ impl ManifestManager {
     ) -> Result<Manifest> {
         let max_retries = 100;
         for attempt in 0..max_retries {
-            let (current_manifest, current_ver) = self.load_latest_direct().await?;
+            // Use the version cache (load_latest) instead of listing the
+            // manifest directory on every commit (~4ms). A stale cache entry
+            // just causes a conflict below, which the retry loop rebases.
+            let (current_manifest, current_ver) = self.load_latest().await?;
 
             // 1. Calculate new state
             let all_entries = self.load_all_entries(&current_manifest).await?;
@@ -322,6 +325,12 @@ impl ManifestManager {
                     let file_key = format!("{}/{}", self.root_uri, path);
                     crate::core::cache::MANIFEST_CACHE
                         .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
+                    // The version cache must reflect the new head so the next
+                    // commit's `load_latest` fast path is correct.
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
                         .await;
 
                     return Ok(new_manifest);
