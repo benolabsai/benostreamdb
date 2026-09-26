@@ -461,3 +461,70 @@ async fn distributed_lock_mutual_exclusion() -> Result<()> {
     );
     Ok(())
 }
+
+/// WS3 against a **real S3-compatible object store** (MinIO), not the in-memory
+/// store. The in-memory store covers the OCC logic; this covers the HTTP/network
+/// object store (path-style requests, `PutMode::Create` over HTTP, visibility).
+///
+/// Skipped unless `AWS_ENDPOINT_URL` is set. Bring MinIO up with
+/// `docker compose -f docker-compose-minio-nessie.yml up -d` and export:
+///   AWS_ENDPOINT_URL=http://localhost:9000
+///   AWS_ACCESS_KEY_ID=minioadmin
+///   AWS_SECRET_ACCESS_KEY=minioadmin
+///   AWS_REGION=us-east-1
+///   BSDB_TEST_S3_BUCKET=mstar-staging
+#[tokio::test]
+async fn s3_shared_store_multi_writer_no_lost_updates() -> Result<()> {
+    if std::env::var("AWS_ENDPOINT_URL").is_err() {
+        eprintln!("skipping: AWS_ENDPOINT_URL not set (see docker-compose-minio-nessie.yml)");
+        return Ok(());
+    }
+    let bucket =
+        std::env::var("BSDB_TEST_S3_BUCKET").unwrap_or_else(|_| "mstar-staging".to_string());
+    let prefix = format!(
+        "ws3-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let uri = format!("s3://{}/{}", bucket, prefix);
+
+    const WRITERS: i32 = 4;
+    const PER_WRITER: i32 = 5;
+
+    let mut handles = Vec::new();
+    for w in 0..WRITERS {
+        let uri = uri.clone();
+        handles.push(tokio::spawn(async move {
+            let wal = tempfile::tempdir()?;
+            let table = TableBuilder::new(&uri)
+                .with_wal_dir(wal.path())
+                .build_async()
+                .await?;
+            for i in 0..PER_WRITER {
+                let id = w * PER_WRITER + i;
+                table.write_async(vec![batch(id, 1)]).await?;
+                table.commit_async().await?;
+            }
+            anyhow::Ok(())
+        }));
+    }
+    for h in handles {
+        h.await??;
+    }
+
+    let wal = tempfile::tempdir()?;
+    let table = TableBuilder::new(&uri)
+        .with_wal_dir(wal.path())
+        .build_async()
+        .await?;
+    let total = count_rows(&table).await?;
+    assert_eq!(
+        total,
+        (WRITERS * PER_WRITER) as i64,
+        "lost updates against the shared S3 store"
+    );
+
+    Ok(())
+}
