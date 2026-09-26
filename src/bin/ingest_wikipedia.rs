@@ -20,6 +20,10 @@ struct Args {
 
     #[arg(short, long)]
     output_dir: String,
+
+    /// Also write sections.parquet (article id, section title, level)
+    #[arg(short, long, default_value_t = false)]
+    sections: bool,
 }
 
 #[tokio::main]
@@ -33,7 +37,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut edges_sources = Vec::new();
     let mut edges_targets = Vec::new();
 
+    let mut sec_page_ids = Vec::new();
+    let mut sec_titles = Vec::new();
+    let mut sec_names = Vec::new();
+    let mut sec_levels = Vec::new();
+
     let link_regex = Regex::new(r"\[\[(.*?)\]\]").unwrap();
+    let section_regex = Regex::new(r"^={2,6}\s*([^=]+?)\s*={2,6}").unwrap();
 
     let mut paths: Vec<_> = std::fs::read_dir(&args.input_dir)?
         .filter_map(Result::ok)
@@ -63,6 +73,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let edges_file = AsyncFile::create(format!("{}/edges.parquet", args.output_dir)).await?;
     let mut edges_writer = AsyncArrowWriter::try_new(edges_file, edges_schema.clone(), None)?;
 
+    let sections_schema = Arc::new(Schema::new(vec![
+        Field::new("page_id", DataType::LargeUtf8, false),
+        Field::new("page_title", DataType::LargeUtf8, false),
+        Field::new("section_title", DataType::LargeUtf8, false),
+        Field::new("level", DataType::Int32, false),
+    ]));
+    let sections_file = AsyncFile::create(format!("{}/sections.parquet", args.output_dir)).await?;
+    let mut sections_writer =
+        AsyncArrowWriter::try_new(sections_file, sections_schema.clone(), None)?;
+
     const FLUSH_PAGES: usize = 1_000_000;
     const FLUSH_EDGES: usize = 8_000_000;
 
@@ -84,6 +104,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ],
                 )?;
                 nodes_writer.write(&batch).await?;
+            }
+        };
+    }
+
+    macro_rules! flush_sections {
+        () => {
+            if !sec_page_ids.is_empty() {
+                let pids = std::mem::take(&mut sec_page_ids);
+                let titles = std::mem::take(&mut sec_titles);
+                let names = std::mem::take(&mut sec_names);
+                let levels = std::mem::take(&mut sec_levels);
+                let batch = RecordBatch::try_new(
+                    sections_schema.clone(),
+                    vec![
+                        Arc::new(LargeStringArray::from(pids)),
+                        Arc::new(LargeStringArray::from(titles)),
+                        Arc::new(LargeStringArray::from(names)),
+                        Arc::new(arrow::array::Int32Array::from(levels)),
+                    ],
+                )?;
+                sections_writer.write(&batch).await?;
             }
         };
     }
@@ -176,6 +217,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         };
                         nodes_texts.push(summary);
 
+                        if args.sections {
+                            for caps in section_regex.captures_iter(&current_text) {
+                                let title = caps.get(1).unwrap().as_str().trim().to_string();
+                                let level = caps
+                                    .get(0)
+                                    .unwrap()
+                                    .as_str()
+                                    .chars()
+                                    .take_while(|c| *c == '=')
+                                    .count() as i32;
+                                sec_page_ids.push(current_id.clone());
+                                sec_titles.push(current_title.clone());
+                                sec_names.push(title);
+                                sec_levels.push(level);
+                            }
+                        }
+
                         // Extract links
                         for cap in link_regex.captures_iter(&current_text) {
                             if let Some(link_match) = cap.get(1) {
@@ -198,6 +256,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if edges_sources.len() >= FLUSH_EDGES {
                             flush_edges!();
                         }
+                        if args.sections && sec_page_ids.len() >= FLUSH_PAGES {
+                            flush_sections!();
+                        }
 
                         if nodes_titles.len() % 10000 == 0 {
                             println!("Processed {} pages...", nodes_titles.len());
@@ -217,9 +278,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     flush_nodes!();
     flush_edges!();
+    flush_sections!();
 
     nodes_writer.close().await?;
     edges_writer.close().await?;
+    sections_writer.close().await?;
 
     println!("Total pages processed: {total_pages}");
     println!("Total edges found: {total_edges}");
