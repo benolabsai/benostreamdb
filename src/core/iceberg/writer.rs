@@ -3,37 +3,44 @@
 use super::value::json_to_avro_value;
 use anyhow::{Context, Result};
 
+/// Iceberg V2 manifest-list Avro schema.
+///
+/// Every field carries a `field-id` (Iceberg spec, manifest-list schema). This
+/// is **required** for external readers: PyIceberg's `AvroSchemaConversion`
+/// rejects a field without a `field-id` (`Cannot convert field, missing
+/// field-id`). The record is named `manifest_file` to match the spec.
 pub const MANIFEST_LIST_SCHEMA_V2: &str = r#"
 {
     "type": "record",
-    "name": "manifest_list",
+    "name": "manifest_file",
     "fields": [
-        {"name": "manifest_path", "type": "string"},
-        {"name": "manifest_length", "type": "long"},
-        {"name": "partition_spec_id", "type": "int"},
-        {"name": "content", "type": "int", "doc": "0=data, 1=deletes"},
-        {"name": "sequence_number", "type": "long", "default": 0},
-        {"name": "min_sequence_number", "type": "long", "default": 0},
-        {"name": "added_snapshot_id", "type": "long"},
-        {"name": "added_data_files_count", "type": "int"},
-        {"name": "existing_data_files_count", "type": "int"},
-        {"name": "deleted_data_files_count", "type": "int"},
-        {"name": "added_rows_count", "type": "long"},
-        {"name": "existing_rows_count", "type": "long"},
-        {"name": "deleted_rows_count", "type": "long"},
+        {"name": "manifest_path", "type": "string", "field-id": 500},
+        {"name": "manifest_length", "type": "long", "field-id": 501},
+        {"name": "partition_spec_id", "type": "int", "field-id": 502},
+        {"name": "content", "type": "int", "field-id": 517, "doc": "0=data, 1=deletes"},
+        {"name": "sequence_number", "type": "long", "field-id": 515, "default": 0},
+        {"name": "min_sequence_number", "type": "long", "field-id": 516, "default": 0},
+        {"name": "added_snapshot_id", "type": "long", "field-id": 503},
+        {"name": "added_data_files_count", "type": "int", "field-id": 504},
+        {"name": "existing_data_files_count", "type": "int", "field-id": 505},
+        {"name": "deleted_data_files_count", "type": "int", "field-id": 506},
+        {"name": "added_rows_count", "type": "long", "field-id": 512},
+        {"name": "existing_rows_count", "type": "long", "field-id": 513},
+        {"name": "deleted_rows_count", "type": "long", "field-id": 514},
         {"name": "partitions", "type": ["null", {
             "type": "array",
+            "element-id": 508,
             "items": {
                 "type": "record",
                 "name": "field_summary",
                 "fields": [
-                    {"name": "contains_null", "type": "boolean"},
-                    {"name": "contains_nan", "type": ["null", "boolean"]},
-                    {"name": "lower_bound", "type": ["null", "bytes"]},
-                    {"name": "upper_bound", "type": ["null", "bytes"]}
+                    {"name": "contains_null", "type": "boolean", "field-id": 509},
+                    {"name": "contains_nan", "type": ["null", "boolean"], "field-id": 518, "default": null},
+                    {"name": "lower_bound", "type": ["null", "bytes"], "field-id": 510, "default": null},
+                    {"name": "upper_bound", "type": ["null", "bytes"], "field-id": 511, "default": null}
                 ]
             }
-        }]}
+        }], "field-id": 507, "default": null}
     ]
 }
 "#;
@@ -44,6 +51,141 @@ impl Default for IcebergWriter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Append a single Iceberg Delete record (content = 1/2/3) to a manifest writer.
+///
+/// Delete files are partition-scoped and are written **once** per manifest, not
+/// once per data entry. Extracted so `write_manifest_chunks` can emit the
+/// global delete list after the data entries.
+fn append_delete_record<W: std::io::Write>(
+    writer: &mut apache_avro::Writer<W>,
+    avro_schema: &apache_avro::Schema,
+    partition_spec: &crate::core::manifest::PartitionSpec,
+    del_file: &crate::core::manifest::DeleteFile,
+    snapshot_id: i64,
+    seq_num: i64,
+) -> Result<()> {
+    let mut record = apache_avro::types::Record::new(avro_schema)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
+    record.put("status", apache_avro::types::Value::Int(1)); // 1=ADDED
+    record.put(
+        "snapshot_id",
+        apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(snapshot_id))),
+    );
+    record.put(
+        "sequence_number",
+        apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))),
+    );
+    record.put(
+        "file_sequence_number",
+        apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(seq_num))),
+    );
+
+    let data_file_schema = match avro_schema {
+        apache_avro::Schema::Record(r) => {
+            &r.fields
+                .iter()
+                .find(|f| f.name == "data_file")
+                .context("Missing data_file")?
+                .schema
+        }
+        _ => unreachable!(),
+    };
+    let mut data_file = apache_avro::types::Record::new(data_file_schema)
+        .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
+
+    let content_id = match del_file.content {
+        crate::core::manifest::DeleteContent::Position => 1,
+        crate::core::manifest::DeleteContent::Equality { .. } => 2,
+        crate::core::manifest::DeleteContent::DeletionVector { .. } => 3,
+    };
+
+    data_file.put("content", apache_avro::types::Value::Int(content_id));
+    data_file.put(
+        "file_path",
+        apache_avro::types::Value::String(del_file.file_path.clone()),
+    );
+    data_file.put(
+        "file_format",
+        apache_avro::types::Value::String("AVRO".to_string()),
+    );
+    data_file.put(
+        "record_count",
+        apache_avro::types::Value::Long(del_file.record_count),
+    );
+    data_file.put(
+        "file_size_in_bytes",
+        apache_avro::types::Value::Long(del_file.file_size_bytes),
+    );
+
+    data_file.put(
+        "column_sizes",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+    data_file.put(
+        "value_counts",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+    data_file.put(
+        "null_value_counts",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+    data_file.put(
+        "nan_value_counts",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+    data_file.put(
+        "lower_bounds",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+    data_file.put(
+        "upper_bounds",
+        apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+    );
+
+    let mut partition_record_values = Vec::new();
+    for field in &partition_spec.fields {
+        let val = del_file
+            .partition_values
+            .get(&field.name)
+            .unwrap_or(&serde_json::Value::Null);
+        let avro_val = json_to_avro_value(val);
+        let union_val = match avro_val {
+            apache_avro::types::Value::Null => {
+                apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null))
+            }
+            _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
+        };
+        partition_record_values.push((field.name.clone(), union_val));
+    }
+    data_file.put(
+        "partition",
+        apache_avro::types::Value::Record(partition_record_values),
+    );
+
+    if let crate::core::manifest::DeleteContent::Equality { equality_ids } = &del_file.content {
+        let avro_ids: Vec<apache_avro::types::Value> = equality_ids
+            .iter()
+            .map(|&i| apache_avro::types::Value::Int(i))
+            .collect();
+        data_file.put(
+            "equality_ids",
+            apache_avro::types::Value::Union(
+                1,
+                Box::new(apache_avro::types::Value::Array(avro_ids)),
+            ),
+        );
+    } else {
+        data_file.put(
+            "equality_ids",
+            apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+        );
+    }
+
+    record.put("data_file", data_file);
+    writer.append(record)?;
+    Ok(())
 }
 
 impl IcebergWriter {
@@ -289,6 +431,18 @@ impl IcebergWriter {
                 );
             }
 
+            if let Some(fid) = entry.first_row_id {
+                data_file.put(
+                    "first_row_id",
+                    apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(fid))),
+                );
+            } else {
+                data_file.put(
+                    "first_row_id",
+                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+                );
+            }
+
             record.put("data_file", data_file);
             writer.append(record)?;
 
@@ -442,6 +596,7 @@ impl IcebergWriter {
     pub fn write_manifest_chunks(
         &self,
         entries: &[crate::core::manifest::ManifestEntry],
+        delete_files: &[crate::core::manifest::DeleteFile],
         partition_spec: &crate::core::manifest::PartitionSpec,
         schema: &crate::core::manifest::Schema,
         snapshot_id: i64,
@@ -619,147 +774,22 @@ impl IcebergWriter {
                 );
             }
 
+            if let Some(fid) = entry.first_row_id {
+                data_file.put(
+                    "first_row_id",
+                    apache_avro::types::Value::Union(1, Box::new(apache_avro::types::Value::Long(fid))),
+                );
+            } else {
+                data_file.put(
+                    "first_row_id",
+                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
+                );
+            }
+
             record.put("data_file", data_file);
             writer.append(record)?;
             current_file_count += 1;
             current_row_count += entry.record_count;
-
-            for del_file in &entry.delete_files {
-                let mut record = apache_avro::types::Record::new(&avro_schema)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
-                record.put("status", apache_avro::types::Value::Int(1)); // 1=ADDED
-                record.put(
-                    "snapshot_id",
-                    apache_avro::types::Value::Union(
-                        1,
-                        Box::new(apache_avro::types::Value::Long(snapshot_id)),
-                    ),
-                );
-                record.put(
-                    "sequence_number",
-                    apache_avro::types::Value::Union(
-                        1,
-                        Box::new(apache_avro::types::Value::Long(seq_num)),
-                    ),
-                );
-                record.put(
-                    "file_sequence_number",
-                    apache_avro::types::Value::Union(
-                        1,
-                        Box::new(apache_avro::types::Value::Long(seq_num)),
-                    ),
-                );
-
-                let data_file_schema = match &avro_schema {
-                    apache_avro::Schema::Record(r) => {
-                        &r.fields
-                            .iter()
-                            .find(|f| f.name == "data_file")
-                            .context("Missing data_file")?
-                            .schema
-                    }
-                    _ => unreachable!(),
-                };
-                let mut data_file = apache_avro::types::Record::new(data_file_schema)
-                    .ok_or_else(|| anyhow::anyhow!("Failed to create Record"))?;
-
-                let content_id = match del_file.content {
-                    crate::core::manifest::DeleteContent::Position => 1,
-                    crate::core::manifest::DeleteContent::Equality { .. } => 2,
-                    crate::core::manifest::DeleteContent::DeletionVector { .. } => 3,
-                };
-
-                data_file.put("content", apache_avro::types::Value::Int(content_id));
-                data_file.put(
-                    "file_path",
-                    apache_avro::types::Value::String(del_file.file_path.clone()),
-                );
-                data_file.put(
-                    "file_format",
-                    apache_avro::types::Value::String("AVRO".to_string()),
-                );
-                data_file.put(
-                    "record_count",
-                    apache_avro::types::Value::Long(del_file.record_count),
-                );
-                data_file.put(
-                    "file_size_in_bytes",
-                    apache_avro::types::Value::Long(del_file.file_size_bytes),
-                );
-
-                data_file.put(
-                    "column_sizes",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-                data_file.put(
-                    "value_counts",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-                data_file.put(
-                    "null_value_counts",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-                data_file.put(
-                    "nan_value_counts",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-                data_file.put(
-                    "lower_bounds",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-                data_file.put(
-                    "upper_bounds",
-                    apache_avro::types::Value::Union(0, Box::new(apache_avro::types::Value::Null)),
-                );
-
-                let mut partition_record_values = Vec::new();
-                for field in &partition_spec.fields {
-                    let val = del_file
-                        .partition_values
-                        .get(&field.name)
-                        .unwrap_or(&serde_json::Value::Null);
-                    let avro_val = json_to_avro_value(val);
-                    let union_val = match avro_val {
-                        apache_avro::types::Value::Null => apache_avro::types::Value::Union(
-                            0,
-                            Box::new(apache_avro::types::Value::Null),
-                        ),
-                        _ => apache_avro::types::Value::Union(1, Box::new(avro_val)),
-                    };
-                    partition_record_values.push((field.name.clone(), union_val));
-                }
-                data_file.put(
-                    "partition",
-                    apache_avro::types::Value::Record(partition_record_values),
-                );
-
-                if let crate::core::manifest::DeleteContent::Equality { equality_ids } =
-                    &del_file.content
-                {
-                    let avro_ids: Vec<apache_avro::types::Value> = equality_ids
-                        .iter()
-                        .map(|&i| apache_avro::types::Value::Int(i))
-                        .collect();
-                    data_file.put(
-                        "equality_ids",
-                        apache_avro::types::Value::Union(
-                            1,
-                            Box::new(apache_avro::types::Value::Array(avro_ids)),
-                        ),
-                    );
-                } else {
-                    data_file.put(
-                        "equality_ids",
-                        apache_avro::types::Value::Union(
-                            0,
-                            Box::new(apache_avro::types::Value::Null),
-                        ),
-                    );
-                }
-
-                record.put("data_file", data_file);
-                writer.append(record)?;
-            }
 
             writer.flush()?;
             if written.load(Ordering::Relaxed) >= target_size_bytes {
@@ -779,7 +809,19 @@ impl IcebergWriter {
             }
         }
 
-        if current_file_count > 0 {
+        // Delete files are partition-scoped: write them once, not per entry.
+        for del_file in delete_files {
+            append_delete_record(
+                &mut writer,
+                &avro_schema,
+                partition_spec,
+                del_file,
+                snapshot_id,
+                seq_num,
+            )?;
+        }
+
+        if current_file_count > 0 || !delete_files.is_empty() {
             writer.flush()?;
             let tracker = writer.into_inner()?;
             chunks.push((tracker.inner, current_file_count, current_row_count));
@@ -794,11 +836,15 @@ impl IcebergWriter {
         schema: &crate::core::manifest::Schema,
     ) -> String {
         let mut partition_fields = Vec::new();
-        for field in &spec.fields {
+        for (idx, field) in spec.fields.iter().enumerate() {
             let type_str = partition_field_avro_type(field, schema);
+            // Partition struct fields carry the partition spec's field id
+            // (spec default: 1000 + position). Avro `field-id` is required by
+            // external readers (PyIceberg).
+            let field_id = field.field_id.unwrap_or(1000 + idx as i32);
             partition_fields.push(format!(
-                r#"{{"name": "{}", "type": {}, "default": null}}"#,
-                field.name, type_str
+                r#"{{"name": "{}", "type": {}, "field-id": {}, "default": null}}"#,
+                field.name, type_str, field_id
             ));
         }
         let partition_fields_json = partition_fields.join(",");
@@ -807,39 +853,40 @@ impl IcebergWriter {
             r#"
 {{
     "type": "record",
-    "name": "manifest",
+    "name": "manifest_entry",
     "fields": [
-        {{"name": "status", "type": "int", "doc": "0=EXISTING, 1=ADDED, 2=DELETED"}},
-        {{"name": "snapshot_id", "type": ["null", "long"]}},
-        {{"name": "sequence_number", "type": ["null", "long"]}},
-        {{"name": "file_sequence_number", "type": ["null", "long"]}},
+        {{"name": "status", "type": "int", "field-id": 0, "doc": "0=EXISTING, 1=ADDED, 2=DELETED"}},
+        {{"name": "snapshot_id", "type": ["null", "long"], "field-id": 1, "default": null}},
+        {{"name": "sequence_number", "type": ["null", "long"], "field-id": 3, "default": null}},
+        {{"name": "file_sequence_number", "type": ["null", "long"], "field-id": 4, "default": null}},
         {{"name": "data_file", "type": {{
             "type": "record",
             "name": "r2",
             "fields": [
-                {{"name": "content", "type": "int", "doc": "0=DATA, 1=POSITION DELETES, 2=EQUALITY DELETES"}},
-                {{"name": "file_path", "type": "string"}},
-                {{"name": "file_format", "type": "string"}},
+                {{"name": "content", "type": "int", "field-id": 134, "doc": "0=DATA, 1=POSITION DELETES, 2=EQUALITY DELETES"}},
+                {{"name": "file_path", "type": "string", "field-id": 100}},
+                {{"name": "file_format", "type": "string", "field-id": 101}},
                 {{"name": "partition", "type": {{
                     "type": "record",
                     "name": "r102",
                     "fields": [{}]
-                }}}},
+                }}, "field-id": 102}},
 
-                {{"name": "record_count", "type": "long"}},
-                {{"name": "file_size_in_bytes", "type": "long"}},
-                {{"name": "column_sizes", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k1", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"long"}}]}}}}], "default": null}},
-                {{"name": "value_counts", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k2", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"long"}}]}}}}], "default": null}},
-                {{"name": "null_value_counts", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k3", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"long"}}]}}}}], "default": null}},
-                {{"name": "nan_value_counts", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k4", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"long"}}]}}}}], "default": null}},
-                {{"name": "lower_bounds", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k5", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"bytes"}}]}}}}], "default": null}},
-                {{"name": "upper_bounds", "type": ["null", {{"type": "array", "items": {{"type": "record", "name": "k6", "fields": [{{"name":"key", "type":"int"}}, {{"name":"value", "type":"bytes"}}]}}}}], "default": null}},
-                {{"name": "equality_ids", "type": ["null", {{"type": "array", "items": "int"}}], "default": null}},
-                {{"name": "index_files", "type": ["null", "string"], "default": null}},
-                {{"name": "file_checksum", "type": ["null", "string"], "default": null}}
+                {{"name": "record_count", "type": "long", "field-id": 103}},
+                {{"name": "file_size_in_bytes", "type": "long", "field-id": 104}},
+                {{"name": "column_sizes", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k117_v118", "fields": [{{"name":"key", "type":"int", "field-id": 117}}, {{"name":"value", "type":"long", "field-id": 118}}]}}}}], "field-id": 108, "default": null}},
+                {{"name": "value_counts", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k119_v120", "fields": [{{"name":"key", "type":"int", "field-id": 119}}, {{"name":"value", "type":"long", "field-id": 120}}]}}}}], "field-id": 109, "default": null}},
+                {{"name": "null_value_counts", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k121_v122", "fields": [{{"name":"key", "type":"int", "field-id": 121}}, {{"name":"value", "type":"long", "field-id": 122}}]}}}}], "field-id": 110, "default": null}},
+                {{"name": "nan_value_counts", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k138_v139", "fields": [{{"name":"key", "type":"int", "field-id": 138}}, {{"name":"value", "type":"long", "field-id": 139}}]}}}}], "field-id": 137, "default": null}},
+                {{"name": "lower_bounds", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k126_v127", "fields": [{{"name":"key", "type":"int", "field-id": 126}}, {{"name":"value", "type":"bytes", "field-id": 127}}]}}}}], "field-id": 125, "default": null}},
+                {{"name": "upper_bounds", "type": ["null", {{"type": "array", "logicalType": "map", "items": {{"type": "record", "name": "k129_v130", "fields": [{{"name":"key", "type":"int", "field-id": 129}}, {{"name":"value", "type":"bytes", "field-id": 130}}]}}}}], "field-id": 128, "default": null}},
+                {{"name": "equality_ids", "type": ["null", {{"type": "array", "element-id": 136, "items": "int"}}], "field-id": 135, "default": null}},
+                {{"name": "index_files", "type": ["null", "string"], "field-id": 1000, "default": null}},
+                {{"name": "file_checksum", "type": ["null", "string"], "field-id": 1001, "default": null}},
+                {{"name": "first_row_id", "type": ["null", "long"], "field-id": 142, "default": null}}
             ]
-        }}
-    }}]
+        }}, "field-id": 2}}
+    ]
 }}
 "#,
             partition_fields_json
@@ -1015,6 +1062,7 @@ mod bounds_roundtrip_tests {
         let chunks = IcebergWriter::new()
             .write_manifest_chunks(
                 &[entry],
+                &[],
                 &PartitionSpec::default(),
                 &schema,
                 1,

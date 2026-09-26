@@ -544,7 +544,12 @@ impl Table {
                         &iceberg_schema,
                         &iceberg_spec,
                     ) {
-                        Ok(crate::core::iceberg::IcebergManifestObject::Data(me)) => {
+                        Ok(crate::core::iceberg::IcebergManifestObject::Data(mut me)) => {
+                            // Legacy manifests may carry per-entry delete files;
+                            // fold them into the authoritative global list.
+                            for df in me.delete_files.drain(..) {
+                                delete_files.push(df);
+                            }
                             data_entries.push(*me);
                         }
                         Ok(crate::core::iceberg::IcebergManifestObject::Delete(df)) => {
@@ -553,6 +558,14 @@ impl Table {
                         Err(e) => tracing::warn!("Error converting Iceberg entry: {}", e),
                     }
                 }
+            }
+
+            // Deduplicate by path before linking: the manifest can list the
+            // same physical delete file many times, and the nested link loop
+            // below is O(delete_files x data_entries).
+            {
+                let mut seen = std::collections::HashSet::new();
+                delete_files.retain(|d| seen.insert(d.file_path.clone()));
             }
 
             for df in delete_files {

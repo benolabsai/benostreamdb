@@ -578,6 +578,20 @@ impl HybridReader {
                     } else {
                         let null_arr =
                             arrow::array::new_null_array(field.data_type(), batch.num_rows());
+                        // A missing column must not manufacture NULLs into a
+                        // REQUIRED (non-nullable) field: `try_new` would fail
+                        // with "declared as non-nullable but contains null
+                        // values". This happens when the projection matched no
+                        // physical columns (e.g. a 0-column read). Surface it as
+                        // a clear error rather than a confusing construction
+                        // failure downstream.
+                        if !field.is_nullable() && batch.num_rows() > 0 {
+                            anyhow::bail!(
+                                "read: required column '{}' is missing from the source segment \
+                                 (projection matched no physical columns)",
+                                field.name()
+                            );
+                        }
                         new_columns.push(null_arr);
                     }
                 }
