@@ -16,8 +16,9 @@ use url::Url;
 /// shared-object-store model used by the WS3 concurrency harness. Without the
 /// registry each call would create an isolated store and the handles would not
 /// see each other's commits.
-static MEMORY_STORES: once_cell::sync::Lazy<parking_lot::Mutex<HashMap<String, Arc<dyn ObjectStore>>>> =
-    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashMap::new()));
+static MEMORY_STORES: once_cell::sync::Lazy<
+    parking_lot::Mutex<HashMap<String, Arc<dyn ObjectStore>>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Factory to create an ObjectStore based on the URI scheme.
 ///
