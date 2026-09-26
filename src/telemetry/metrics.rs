@@ -197,6 +197,29 @@ lazy_static! {
         "benostreamdb_merged_deletes_calls_total",
         "Number of load_merged_deletes invocations"
     ).unwrap();
+
+    // ------------------------------------------------------------------
+    // Parquet read-path instrumentation (temporary; see
+    // plans/production_readiness_plan.md). Breaks `stream_row_groups` setup
+    // down by phase so the dominant contributor is measurable.
+    // ------------------------------------------------------------------
+
+    /// Wall time of each phase of `stream_row_groups`, in seconds. Label
+    /// `phase` is one of: `meta`, `projection`, `deletes`, `build`, `total`.
+    pub static ref READ_PHASE_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
+        "benostreamdb_read_phase_seconds",
+        "Wall time of each phase of stream_row_groups, in seconds",
+        &["phase"],
+        latency_buckets()
+    ).unwrap();
+
+    /// Outcome of the parquet-metadata cache lookup. Label `result` is
+    /// `hit` or `miss`.
+    pub static ref PARQUET_META_CACHE_TOTAL: IntCounterVec = register_int_counter_vec!(
+        "benostreamdb_parquet_meta_cache_total",
+        "Parquet-metadata cache lookups by outcome",
+        &["result"]
+    ).unwrap();
 }
 
 /// Render the merge-on-read delete-path instrumentation as a human-readable
@@ -209,6 +232,50 @@ pub fn dump_merged_deletes_metrics() -> String {
         let name = mf.get_name();
         if !name.starts_with("benostreamdb_merged_deletes")
             && !name.starts_with("benostreamdb_delete_file_cache")
+        {
+            continue;
+        }
+        for m in mf.get_metric() {
+            let labels: Vec<String> = m
+                .get_label()
+                .iter()
+                .map(|l| format!("{}={}", l.get_name(), l.get_value()))
+                .collect();
+            let label_str = if labels.is_empty() {
+                String::new()
+            } else {
+                format!("{{{}}}", labels.join(","))
+            };
+            if m.has_histogram() {
+                let h = m.get_histogram();
+                out.push_str(&format!(
+                    "{}{} count={} sum={:.6}s\n",
+                    name,
+                    label_str,
+                    h.get_sample_count(),
+                    h.get_sample_sum()
+                ));
+            } else if m.has_counter() {
+                out.push_str(&format!(
+                    "{}{} {}\n",
+                    name,
+                    label_str,
+                    m.get_counter().get_value()
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Render the parquet read-path instrumentation as a human-readable per-phase
+/// breakdown. Returns an empty string if nothing has been recorded yet.
+pub fn dump_read_metrics() -> String {
+    let mut out = String::new();
+    for mf in prometheus::gather() {
+        let name = mf.get_name();
+        if !name.starts_with("benostreamdb_read_phase")
+            && !name.starts_with("benostreamdb_parquet_meta_cache")
         {
             continue;
         }
