@@ -441,8 +441,8 @@ not below, treat it as unverified.
 | Stage (whole enwiki: 51.8M live pages / 383M edges) | Wall time | Peak memory |
 | :--- | :--- | :--- |
 | embed (all-MiniLM-L6-v2, 384-d, RTX 3090) | 2.1 h | 8.3 GB RSS, 5.9 GB VRAM |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | 41 min | 14.6–18.0 GB per chunk |
-| load — edges (383M + CSR) | 271 s | ~6 GB |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | 38.7 min | 13.3–16.2 GB per 10M-row chunk |
+| load — edges (383M + CSR) | 245 s | ~6 GB |
 
 Run it with `python scripts/prepare_demo.py`. Full per-stage timings, the
 per-chunk node-load table, and reproduction commands live in
