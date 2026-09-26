@@ -32,6 +32,12 @@ pub const FALLBACK_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Fraction of the effective memory used for the ingest high-water mark and the
 /// heap-trim budget.
+///
+/// Deliberately a single knob: an operator who wants to run a query-heavy
+/// workload lowers this (or sets `BSDB_MAX_INGEST_RAM_GB`) rather than accepting
+/// a fixed split. Independent overrides remain available:
+/// `BSDB_MAX_INGEST_RAM_GB`, `BSDB_INGEST_MEMORY_BUDGET_GB`,
+/// `BSDB_DATAFUSION_MEMORY_GB`, `BSDB_INDEX_BUILD_CONCURRENCY`.
 pub const MEMORY_BUDGET_FRACTION: f64 = 0.8;
 
 /// Default minimum free disk space for local (`file://`) tables, in GiB.
@@ -199,6 +205,29 @@ pub fn default_max_ingest_ram_gb() -> f64 {
 /// Default heap-trim budget in bytes, derived from the effective memory.
 pub fn default_memory_budget_bytes() -> u64 {
     memory_budget_bytes_for(effective_memory_bytes())
+}
+
+/// Fraction of the effective memory used as the DataFusion query memory limit.
+///
+/// An independent knob from the ingest budget: an operator who wants a larger
+/// query working set raises this (or sets `BSDB_DATAFUSION_MEMORY_GB`) rather
+/// than having it derived from a fixed split.
+pub const DATAFUSION_MEMORY_FRACTION: f64 = 0.5;
+
+/// Default DataFusion query memory limit in bytes.
+///
+/// Derived from the effective memory so SQL sorts/joins/aggregations spill to
+/// disk instead of OOMing. `BSDB_DATAFUSION_MEMORY_GB` overrides the derived
+/// default.
+pub fn default_datafusion_memory_bytes() -> u64 {
+    if let Some(gb) = std::env::var("BSDB_DATAFUSION_MEMORY_GB")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|g| *g > 0.0)
+    {
+        return (gb * 1024.0 * 1024.0 * 1024.0) as u64;
+    }
+    (effective_memory_bytes() as f64 * DATAFUSION_MEMORY_FRACTION) as u64
 }
 
 #[cfg(target_os = "linux")]
@@ -429,6 +458,17 @@ mod tests {
         assert_eq!(memory_budget_bytes_for(four_gib), (gb * 1e9) as u64);
         // And it must be strictly below the container's own limit.
         assert!(gb * 1e9 < four_gib as f64);
+    }
+
+    #[test]
+    fn datafusion_limit_is_independently_configurable() {
+        // The DataFusion limit is its own fraction, not the ingest fraction, so
+        // an operator can tune one without the other.
+        assert_ne!(DATAFUSION_MEMORY_FRACTION, MEMORY_BUDGET_FRACTION);
+        let bytes = 16 * 1024 * 1024 * 1024;
+        let expected = (bytes as f64 * DATAFUSION_MEMORY_FRACTION) as u64;
+        assert!(expected > 0);
+        assert!(expected < bytes);
     }
 
     #[test]

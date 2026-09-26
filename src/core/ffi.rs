@@ -876,3 +876,301 @@ fn vector_search_impl(
 
     result_len as jint
 }
+
+// -----------------------------------------------------------------------------
+// Trino write / merge path
+// -----------------------------------------------------------------------------
+
+/// Serialize an Arrow schema to a compact JSON array of `{name, type, nullable}`.
+fn schema_to_json(schema: &arrow::datatypes::Schema) -> String {
+    let fields: Vec<serde_json::Value> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "name": f.name(),
+                "type": format!("{}", f.data_type()),
+                "nullable": f.is_nullable(),
+            })
+        })
+        .collect();
+    serde_json::Value::Array(fields).to_string()
+}
+
+/// Import an Arrow batch from the C Data Interface.
+///
+/// # Safety
+/// `array_ptr`/`schema_ptr` must point to valid, owned `FFI_ArrowArray` /
+/// `FFI_ArrowSchema` structs exported by the caller; ownership transfers here.
+unsafe fn import_batch(
+    array_ptr: jlong,
+    schema_ptr: jlong,
+) -> anyhow::Result<arrow::record_batch::RecordBatch> {
+    if array_ptr == 0 || schema_ptr == 0 {
+        anyhow::bail!("null Arrow C Data Interface pointers");
+    }
+    let array = std::ptr::read(array_ptr as *const FFI_ArrowArray);
+    let schema = std::ptr::read(schema_ptr as *const FFI_ArrowSchema);
+    let data = arrow::ffi::from_ffi(array, &schema)?;
+    let struct_array = StructArray::from(data);
+    Ok(arrow::record_batch::RecordBatch::from(struct_array))
+}
+
+/// Trino: return the table's Arrow schema as JSON.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_getTableSchema(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() {
+        return std::ptr::null_mut();
+    }
+    let json = match Table::new(uri) {
+        Ok(table) => schema_to_json(&table.arrow_schema()),
+        Err(e) => {
+            tracing::error!("FFI(Trino): getTableSchema failed: {}", e);
+            return std::ptr::null_mut();
+        }
+    };
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Trino: append an Arrow batch to the table and commit.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_appendBatch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() {
+        return 0;
+    }
+    let batch = match unsafe { import_batch(in_array_ptr, in_schema_ptr) } {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI(Trino): appendBatch import failed: {}", e);
+            return 0;
+        }
+    };
+    let rows = batch.num_rows();
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.write_async(vec![batch]).await?;
+        table.commit_async().await?;
+        Ok::<(), anyhow::Error>(())
+    });
+    match res {
+        Ok(()) => {
+            tracing::info!("FFI(Trino): appended {} rows", rows);
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): appendBatch failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: merge (upsert) an Arrow batch on the given key columns.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_mergeRows(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    key_columns: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let keys: String = env
+        .get_string(&key_columns)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() || keys.is_empty() {
+        return 0;
+    }
+    let batch = match unsafe { import_batch(in_array_ptr, in_schema_ptr) } {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI(Trino): mergeRows import failed: {}", e);
+            return 0;
+        }
+    };
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        // `Table::merge` drives its own runtime via `block_on`, so run it on a
+        // blocking thread rather than inside the async context.
+        tokio::task::spawn_blocking(move || {
+            table.merge(
+                vec![batch],
+                &keys,
+                crate::core::table::MergeMode::MergeOnRead,
+            )
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("merge task panicked: {e}"))?
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): mergeRows failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: delete rows matching a filter.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_deleteRows(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    filter: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let filter: String = env
+        .get_string(&filter)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() || filter.is_empty() {
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.delete_async(&filter).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): deleteRows failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Map an Arrow type name (as produced by `schema_to_json`) back to a `DataType`.
+fn arrow_type_from_str(s: &str) -> arrow::datatypes::DataType {
+    use arrow::datatypes::DataType::*;
+    match s {
+        "Int8" => Int8,
+        "Int16" => Int16,
+        "Int32" => Int32,
+        "Int64" => Int64,
+        "UInt8" => UInt8,
+        "UInt16" => UInt16,
+        "UInt32" => UInt32,
+        "UInt64" => UInt64,
+        "Float16" => Float16,
+        "Float32" => Float32,
+        "Float64" => Float64,
+        "Boolean" => Boolean,
+        "Date32" => Date32,
+        "Date64" => Date64,
+        "Utf8" => Utf8,
+        "LargeUtf8" => LargeUtf8,
+        _ => Utf8,
+    }
+}
+
+/// Parse the `[{name, type, nullable}]` JSON produced by `schema_to_json`.
+fn schema_from_json(json: &str) -> anyhow::Result<arrow::datatypes::Schema> {
+    let fields: Vec<serde_json::Value> = serde_json::from_str(json)?;
+    let mut arrow_fields = Vec::with_capacity(fields.len());
+    for f in fields {
+        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("col");
+        let ty = f.get("type").and_then(|v| v.as_str()).unwrap_or("Utf8");
+        let nullable = f.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true);
+        arrow_fields.push(arrow::datatypes::Field::new(
+            name,
+            arrow_type_from_str(ty),
+            nullable,
+        ));
+    }
+    Ok(arrow::datatypes::Schema::new(arrow_fields))
+}
+
+/// Trino: return the table's primary-key column names as a JSON array.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_getPrimaryKey(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let json = if uri.is_empty() {
+        "[]".to_string()
+    } else {
+        match Table::new(uri) {
+            Ok(table) => serde_json::to_string(&table.get_primary_key())
+                .unwrap_or_else(|_| "[]".to_string()),
+            Err(_) => "[]".to_string(),
+        }
+    };
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Trino: create a table from a `[{name, type, nullable}]` JSON schema.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createTable(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    schema_json: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let json: String = env
+        .get_string(&schema_json)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() || json.is_empty() {
+        return 0;
+    }
+    let schema = match schema_from_json(&json) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("FFI(Trino): createTable schema parse failed: {}", e);
+            return 0;
+        }
+    };
+    let res = RUNTIME.block_on(async {
+        Table::create_async(uri, std::sync::Arc::new(schema))
+            .await
+            .map(|_| ())
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): createTable failed: {}", e);
+            0
+        }
+    }
+}

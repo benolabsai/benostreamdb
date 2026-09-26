@@ -254,9 +254,14 @@ impl HybridReader {
     ) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
 
+        // Inverted (parquet) indexes: exact (`inverted`) or tokenized (`bm25`).
+        // A `scalar` index is a roaring bitmap (`.idx`), handled separately below.
         let inv_idx_info = self.config.index_files.iter().find(|f| {
-            (f.index_type == "inverted" || f.index_type == "bitmap" || f.index_type == "bm25")
+            (f.index_type == "inverted" || f.index_type == "bm25")
                 && f.column_name.as_deref() == Some(filter_column)
+        });
+        let bitmap_idx_info = self.config.index_files.iter().find(|f| {
+            f.index_type == "scalar" && f.column_name.as_deref() == Some(filter_column)
         });
 
         let matching_bitmap = if let Some(idx_info) = inv_idx_info {
@@ -345,6 +350,21 @@ impl HybridReader {
                     parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
                         Bytes::from(inv_bytes),
                     )?;
+
+                // Record the analyzer so an exact-match filter can tell a
+                // tokenized (BM25) inverted index from an exact (identity) one.
+                if let Some(kv_list) = builder.metadata().file_metadata().key_value_metadata() {
+                    for kv in kv_list {
+                        if kv.key == "analyzer" {
+                            if let Some(value) = &kv.value {
+                                crate::core::cache::ANALYZER_META_CACHE
+                                    .insert(cache_key.clone(), value.clone())
+                                    .await;
+                            }
+                            break;
+                        }
+                    }
+                }
                 let reader = builder.build()?;
 
                 let mut decoded = Vec::new();
@@ -360,6 +380,23 @@ impl HybridReader {
                     .await;
                 decoded
             };
+
+            // A tokenized (BM25) inverted index stores *tokens*, not raw values,
+            // so it cannot answer an exact-match or range filter — using it would
+            // silently drop every matching row (e.g. `category = 'cat_1'` against
+            // an index keyed on `["cat", "1"]` returns nothing). Only an
+            // identity-analyzed index is exact; otherwise fall back to a full scan.
+            let is_exact_filter =
+                filter.values.is_some() || filter.min.is_some() || filter.max.is_some();
+            if is_exact_filter {
+                let analyzer = crate::core::cache::ANALYZER_META_CACHE
+                    .get(&cache_key)
+                    .await
+                    .unwrap_or_else(|| "identity".to_string());
+                if analyzer != "identity" {
+                    return Ok(None);
+                }
+            }
 
             let mut bitmap = RoaringBitmap::new();
 
@@ -728,8 +765,13 @@ impl HybridReader {
             }
             bitmap
         } else {
-            // Step 1 (fallback): Read scalar Index (.idx)
-            let idx_path = self.resolve_object_path(&format!("{}.idx", filter_column));
+            // Step 1: Read the scalar bitmap (`.idx`). Prefer the manifest's
+            // `scalar` index path; fall back to the legacy guessed path only when
+            // the manifest has no entry.
+            let idx_path = match bitmap_idx_info {
+                Some(info) => Path::from(info.file_path.as_str()),
+                None => self.resolve_object_path(&format!("{}.idx", filter_column)),
+            };
             let idx_path_str = idx_path.to_string();
 
             // Check Cache

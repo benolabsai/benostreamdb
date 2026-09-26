@@ -35,6 +35,22 @@ pub struct PqEncoder {
 
 impl PqEncoder {
     pub fn train(vectors: &[Vec<f32>], config: PqConfig) -> Result<Self> {
+        // Validate before dividing: `m` is derived from `dim / compression`, so a
+        // compression larger than the dimension yields `m == 0` and a
+        // divide-by-zero panic. Degrade to a clear error instead (no-panic policy).
+        if config.m == 0 {
+            anyhow::bail!(
+                "PQ requires m > 0 (got m=0; check dim={} vs compression)",
+                config.dim
+            );
+        }
+        if config.dim == 0 || !config.dim.is_multiple_of(config.m) {
+            anyhow::bail!(
+                "PQ requires dim divisible by m (dim={}, m={})",
+                config.dim,
+                config.m
+            );
+        }
         let sub_dim = config.dim / config.m;
         tracing::info!(
             "Training PQ: m={}, k={}, dim={}, sub_dim={}",

@@ -182,6 +182,11 @@ pub struct TableBuilder {
     index_all: bool,
     default_device: Option<String>,
     query_config: QueryConfig,
+    /// Override for the manifest/metadata object store. When `None`, the store
+    /// is derived from the URI. Set via [`TableBuilder::with_store`] to share a
+    /// store across tables (e.g. an in-memory or fault-injecting store) — the
+    /// WS3 concurrency harness relies on this.
+    store: Option<Arc<dyn ObjectStore>>,
     data_store: Option<Arc<dyn ObjectStore>>,
     label_pattern: crate::core::table::LabelPattern,
     wal_dir: Option<std::path::PathBuf>,
@@ -201,6 +206,7 @@ impl TableBuilder {
             index_all: false,
             default_device: None,
             query_config: QueryConfig::default(),
+            store: None,
             data_store: None,
             label_pattern: crate::core::table::LabelPattern::default(),
             wal_dir: None,
@@ -282,6 +288,14 @@ impl TableBuilder {
         self
     }
 
+    /// Override the manifest/metadata object store instead of deriving it from
+    /// the URI. Enables sharing one store across multiple `Table` handles (the
+    /// multi-writer concurrency harness) and injecting a fault-injecting store.
+    pub fn with_store(mut self, store: Arc<dyn ObjectStore>) -> Self {
+        self.store = Some(store);
+        self
+    }
+
     pub fn with_auto_label_columns(mut self, pattern: crate::core::table::LabelPattern) -> Self {
         self.label_pattern = pattern;
         self
@@ -312,7 +326,10 @@ impl TableBuilder {
             return Box::pin(Table::new_from_rest(base, prefix, ns, table, &uri)).await;
         }
 
-        let store = create_object_store(&uri)?;
+        let store = match self.store {
+            Some(s) => s,
+            None => create_object_store(&uri)?,
+        };
 
         let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
         let (manifest, version) = manifest_manager.load_latest().await.unwrap_or_default();
@@ -358,6 +375,51 @@ impl TableBuilder {
             tracing::warn!("WAL Recovery Warning: {}", e);
             (vec![], vec![])
         });
+
+        // Idempotent recovery: skip WAL records whose transaction was already
+        // committed to the manifest. This is the "manifest-before-WAL-truncation"
+        // crash case (review case E): the commit succeeded but the process died
+        // before the WAL was truncated, so replaying the record would duplicate
+        // the committed rows. The committed tx ids are recorded in the manifest
+        // property `benostream.committed_wal_tx` at commit time.
+        let committed_tx: std::collections::HashSet<uuid::Uuid> = manifest
+            .properties
+            .get("benostream.committed_wal_tx")
+            .map(|s| {
+                s.split(',')
+                    .filter_map(|t| uuid::Uuid::parse_str(t.trim()).ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let recovered_batches: Vec<RecordBatch> = if committed_tx.is_empty() {
+            recovered_batches
+        } else {
+            let before = recovered_batches.len();
+            let filtered: Vec<RecordBatch> = recovered_batches
+                .into_iter()
+                .filter(|b| match crate::core::wal::extract_wal_tx(b) {
+                    Some(h) => !committed_tx.contains(&h.tx_id),
+                    None => true,
+                })
+                .collect();
+            if filtered.len() != before {
+                tracing::info!(
+                    "WAL recovery: skipped {} already-committed record(s) (idempotent replay)",
+                    before - filtered.len()
+                );
+            }
+            filtered
+        };
+
+        // Track the tx ids of the recovered (uncommitted) WAL records. Their rows
+        // are now in the write buffer, so the *next* commit must record them as
+        // committed — otherwise a later crash would re-replay them and duplicate
+        // the rows (the recovered batch is committed as part of the buffer, but
+        // its tx id would not be in `benostream.committed_wal_tx`).
+        let recovered_tx_ids: Vec<uuid::Uuid> = recovered_batches
+            .iter()
+            .filter_map(|b| crate::core::wal::extract_wal_tx(b).map(|h| h.tx_id))
+            .collect();
 
         let recovered_stream = Box::new(recovered_batches.into_iter().map(Ok));
 
@@ -435,10 +497,26 @@ impl TableBuilder {
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: Arc::new(tokio::sync::Notify::new()),
+            format_version: Arc::new(std::sync::atomic::AtomicI32::new(manifest.format_version)),
+            pending_wal_tx_ids: Arc::new(parking_lot::Mutex::new(recovered_tx_ids)),
         };
 
         table.sync_primary_key_from_schema_async().await.ok();
         let _ = table.infer_index_metadata_from_physical_async().await;
+
+        // One-time migration of legacy v1 graph indexes (see
+        // `migrate_legacy_graph_indexes_async`). Run in the background so
+        // opening a large table is not blocked; queries during the rebuild use
+        // the SQL BFS fallback, which is correct. Set
+        // BENOSTREAM_DISABLE_GRAPH_MIGRATION=1 to opt out.
+        if std::env::var("BENOSTREAM_DISABLE_GRAPH_MIGRATION").as_deref() != Ok("1") {
+            let migration_table = table.clone();
+            tokio::spawn(async move {
+                if let Err(e) = migration_table.migrate_legacy_graph_indexes_async().await {
+                    tracing::warn!("legacy graph index migration failed: {e}");
+                }
+            });
+        }
 
         if let Some(interval) = self.streaming_flush_interval {
             table.start_streaming_flush_task(interval);

@@ -255,3 +255,74 @@ async fn test_streaming_flush_interval() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn v3_row_lineage_assigns_monotonic_row_ids() -> Result<()> {
+    // Iceberg V3 row lineage: `_row_id` is a monotonic long, each data file
+    // records its `first_row_id`, and table metadata's `next_row_id` advances
+    // past every assigned row ID.
+    let dir = tempdir()?;
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+
+    let table = Table::new_async(uri.clone()).await?;
+    table.set_format_version(3);
+    assert_eq!(table.get_format_version(), 3);
+
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+    ]);
+
+    let batch1 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["a", "b", "c"])),
+        ],
+    )?;
+    table.write_async(vec![batch1]).await?;
+    table.commit_async().await?;
+
+    let store = crate::core::storage::create_object_store(&uri)?;
+    let manager = crate::core::manifest::ManifestManager::new(store.clone(), "", &uri);
+    let (manifest, entries, _) = manager.load_latest_full().await?;
+    assert_eq!(manifest.format_version, 3, "manifest must be v3");
+    let first_ids: Vec<i64> = entries.iter().filter_map(|e| e.first_row_id).collect();
+    assert!(!first_ids.is_empty(), "v3 entries must carry first_row_id");
+    assert_eq!(first_ids.iter().min().copied(), Some(0));
+
+    let meta = crate::core::metadata::TableMetadata::load_latest(store.as_ref()).await?;
+    assert_eq!(meta.format_version, 3);
+    assert_eq!(
+        meta.next_row_id,
+        Some(3),
+        "next_row_id must advance past the 3 rows"
+    );
+    let snap = meta.snapshots.last().expect("snapshot");
+    assert_eq!(snap.first_row_id, Some(0));
+    assert_eq!(snap.added_rows, Some(3));
+
+    // A second commit must continue the row-ID sequence, not restart it.
+    let batch2 = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int32Array::from(vec![4, 5])),
+            Arc::new(StringArray::from(vec!["d", "e"])),
+        ],
+    )?;
+    table.write_async(vec![batch2]).await?;
+    table.commit_async().await?;
+
+    let (_, entries2, _) = manager.load_latest_full().await?;
+    let max_first = entries2.iter().filter_map(|e| e.first_row_id).max();
+    assert_eq!(max_first, Some(3), "second data file starts at row id 3");
+
+    let meta2 = crate::core::metadata::TableMetadata::load_latest(store.as_ref()).await?;
+    assert_eq!(
+        meta2.next_row_id,
+        Some(5),
+        "next_row_id must advance to 5 after the second commit"
+    );
+
+    Ok(())
+}

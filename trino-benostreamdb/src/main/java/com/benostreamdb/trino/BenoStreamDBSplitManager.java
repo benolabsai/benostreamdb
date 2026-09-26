@@ -8,9 +8,11 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.Optional;
 
 public class BenoStreamDBSplitManager implements ConnectorSplitManager {
+    private final String warehouse;
     private final String gpuDevice;
 
-    public BenoStreamDBSplitManager(String gpuDevice) {
+    public BenoStreamDBSplitManager(String warehouse, String gpuDevice) {
+        this.warehouse = warehouse;
         this.gpuDevice = gpuDevice;
     }
 
@@ -41,8 +43,7 @@ public class BenoStreamDBSplitManager implements ConnectorSplitManager {
 
         BenoStreamDBTableHandle tableHandle = (BenoStreamDBTableHandle) table;
         String tableName = tableHandle.getTableName();
-        // Assuming simplistic URI mapping for PoC
-        String uri = "s3://default/" + tableHandle.getSchemaName() + "/" + tableName;
+        String uri = BenoStreamDBTableUri.of(warehouse, tableHandle.getSchemaName(), tableName);
         
         String filter = tableHandle.getFilterString().orElse("");
 

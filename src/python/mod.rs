@@ -26,6 +26,8 @@ use pyo3::prelude::*;
 pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Helper functions
     m.add_function(wrap_pyfunction!(helpers::init_logging, m)?)?;
+    m.add_function(wrap_pyfunction!(helpers::build_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(helpers::is_debug_build, m)?)?;
 
     // Catalog factory functions
     m.add_function(wrap_pyfunction!(catalog::create_catalog, m)?)?;

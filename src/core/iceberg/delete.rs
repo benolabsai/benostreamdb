@@ -4,7 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use apache_avro::types::Record;
 use arrow::array::Array;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// Reader for position delete files (Avro and Parquet)
@@ -17,30 +17,127 @@ impl PositionDeleteReader {
         Self { store }
     }
 
+    /// Fetch (and cache) the parsed content of a position-delete file without
+    /// filtering it to a target data file. The returned map is keyed by the
+    /// data-file path recorded in the delete file.
+    ///
+    /// This is the async half of [`read_deletes`]; the CPU-bound filtering and
+    /// bitmap construction is deliberately left to the caller so it can be
+    /// parallelized across cores (see `load_merged_deletes_inner`).
+    pub async fn fetch_deletes_map(
+        &self,
+        path: &str,
+    ) -> Result<Arc<HashMap<String, HashSet<i64>>>> {
+        let cache_key = path.to_string();
+
+        // Probe the cache first so hit/miss is observable, then fall back to
+        // `try_get_with` (which coalesces concurrent misses) on a miss.
+        let full_map = match crate::core::cache::FULL_DELETE_FILE_CACHE.get(&cache_key).await {
+            Some(v) => {
+                crate::telemetry::metrics::DELETE_FILE_CACHE_TOTAL
+                    .with_label_values(&["hit"])
+                    .inc();
+                v
+            }
+            None => {
+                crate::telemetry::metrics::DELETE_FILE_CACHE_TOTAL
+                    .with_label_values(&["miss"])
+                    .inc();
+                crate::core::cache::FULL_DELETE_FILE_CACHE
+                    .try_get_with(cache_key.clone(), async {
+                        let is_avro = path.ends_with(".avro");
+                        let path_obj = object_store::path::Path::from(path);
+
+                        // Add jitter/retry? No, moka will handle coalescing.
+                        let res = self.store.get(&path_obj).await.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+                        let bytes = res.bytes().await.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+
+                        let result_map_res = tokio::task::spawn_blocking(move || {
+                            if is_avro {
+                                Self::read_deletes_avro_static(&bytes)
+                            } else {
+                                Self::read_deletes_parquet_static(&bytes)
+                            }
+                        }).await.map_err(|e| Arc::new(anyhow::anyhow!("JoinError: {}", e)))?;
+
+                        // Parsed delete file successfully
+                        let result_map = result_map_res.map_err(|e| Arc::new(anyhow::anyhow!(e)))?;
+                        Ok::<_, Arc<anyhow::Error>>(Arc::new(result_map))
+                    })
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Failed to read delete file: {}", e))?
+            }
+        };
+
+        Ok(full_map)
+    }
+
+    /// CPU-bound: filter a parsed delete-file map to `target_data_file_path`
+    /// and build a `RoaringBitmap` of the deleted positions.
+    ///
+    /// Pure function (no I/O, no async) so it can be called from a rayon
+    /// worker to parallelize the merge across cores.
+    pub fn filter_map_to_bitmap(
+        full_map: &HashMap<String, HashSet<i64>>,
+        target_data_file_path: &str,
+    ) -> roaring::RoaringBitmap {
+        let mut bm = roaring::RoaringBitmap::new();
+        let target_clean = target_data_file_path
+            .strip_prefix("file://")
+            .unwrap_or(target_data_file_path);
+
+        for (fp, positions) in full_map.iter() {
+            let fp_clean = fp.strip_prefix("file://").unwrap_or(fp);
+            if fp_clean == target_clean
+                || target_clean.ends_with(fp_clean)
+                || fp_clean.ends_with(target_clean)
+            {
+                for &pos in positions {
+                    if pos >= 0 && pos <= u32::MAX as i64 {
+                        bm.insert(pos as u32);
+                    }
+                }
+            }
+        }
+        bm
+    }
+
     pub async fn read_deletes(
         &self,
         path: &str,
         target_data_file_path: &str,
     ) -> Result<HashSet<i64>> {
-        let is_avro = path.ends_with(".avro");
-        let path_obj = object_store::path::Path::from(path);
-        let res = self.store.get(&path_obj).await?;
-        let bytes = res.bytes().await?;
+        let full_map = self.fetch_deletes_map(path).await?;
 
-        if is_avro {
-            self.read_deletes_avro(bytes, target_data_file_path)
-        } else {
-            self.read_deletes_parquet(bytes, target_data_file_path)
+        let mut deleted_positions = HashSet::new();
+        let target_clean = target_data_file_path.strip_prefix("file://").unwrap_or(target_data_file_path);
+
+        for (fp, positions) in full_map.iter() {
+            let fp_clean = fp.strip_prefix("file://").unwrap_or(fp);
+            if fp_clean == target_clean
+                || target_clean.ends_with(fp_clean)
+                || fp_clean.ends_with(target_clean)
+            {
+                for pos in positions {
+                    deleted_positions.insert(*pos);
+                }
+            }
         }
+
+        // We intentionally do NOT populate the POSITION_DELETE_CACHE here.
+        // Doing so would evict the merged deletes cache key since there are thousands of delete files.
+        // The parsed file content is already cached in FULL_DELETE_FILE_CACHE.
+
+        Ok(deleted_positions)
     }
 
-    fn read_deletes_avro(
-        &self,
-        bytes: bytes::Bytes,
-        target_data_file_path: &str,
-    ) -> Result<HashSet<i64>> {
-        let reader = apache_avro::Reader::new(&bytes[..])?;
-        let mut deleted_positions = HashSet::new();
+
+
+    fn read_deletes_avro_static(
+        bytes: &[u8],
+    ) -> Result<HashMap<String, HashSet<i64>>> {
+        let reader = apache_avro::Reader::new(bytes)?;
+        let mut result_map: HashMap<String, HashSet<i64>> = HashMap::new();
 
         for record in reader {
             let value = record?;
@@ -65,33 +162,25 @@ impl PositionDeleteReader {
                 }
 
                 if let (Some(fp), Some(p)) = (file_path, pos) {
-                    let fp_clean = fp.replace("file://", "");
-                    let target_clean = target_data_file_path.replace("file://", "");
-
-                    if fp_clean == target_clean
-                        || target_clean.ends_with(&fp_clean)
-                        || fp_clean.ends_with(&target_clean)
-                    {
-                        deleted_positions.insert(p);
-                    }
+                    result_map.entry(fp).or_default().insert(p);
                 }
             }
         }
-        Ok(deleted_positions)
+        Ok(result_map)
     }
 
-    fn read_deletes_parquet(
-        &self,
-        bytes: bytes::Bytes,
-        target_data_file_path: &str,
-    ) -> Result<HashSet<i64>> {
+
+
+    fn read_deletes_parquet_static(
+        bytes: &[u8],
+    ) -> Result<HashMap<String, HashSet<i64>>> {
         use arrow::array::{Int64Array, StringArray};
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-        let cursor = bytes;
+        let cursor = bytes::Bytes::copy_from_slice(bytes);
         let builder = ParquetRecordBatchReaderBuilder::try_new(cursor)?;
         let reader = builder.build()?;
 
-        let mut deleted_positions = HashSet::new();
+        let mut result_map: HashMap<String, HashSet<i64>> = HashMap::new();
 
         for batch_res in reader {
             let batch = batch_res?;
@@ -110,20 +199,13 @@ impl PositionDeleteReader {
                     .ok_or_else(|| anyhow::anyhow!("pos column is not int64"))?;
 
                 for i in 0..batch.num_rows() {
-                    let fp = file_paths.value(i);
-                    let fp_clean = fp.replace("file://", "");
-                    let target_clean = target_data_file_path.replace("file://", "");
-
-                    if fp_clean == target_clean
-                        || target_clean.ends_with(&fp_clean)
-                        || fp_clean.ends_with(&target_clean)
-                    {
-                        deleted_positions.insert(positions.value(i));
-                    }
+                    let fp = file_paths.value(i).to_string();
+                    let pos = positions.value(i);
+                    result_map.entry(fp).or_default().insert(pos);
                 }
             }
         }
-        Ok(deleted_positions)
+        Ok(result_map)
     }
 }
 

@@ -1,7 +1,10 @@
 # Installation
 
 ```bash
-# Install from source
+# Install from PyPI
+pip install benostreamdb
+
+# Or install from source
 git clone https://github.com/benolabsai/benostreamdb
 cd benostreamdb
 
@@ -11,9 +14,6 @@ maturin develop
 
 # Build with NVIDIA CUDA support (requires NVIDIA driver)
 maturin develop --features cuda
-
-# Or install from PyPI (coming soon)
-pip install benostreamdb
 
 # Windows Users
 # BenoStreamDB is optimized for Linux/POSIX environments.

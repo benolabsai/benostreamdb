@@ -15,7 +15,7 @@ This document outlines the step-by-step plan to take BenoStreamDB from PoC to pr
 | 🚧 **In progress** | **A5** GPU & Hardware (bounded items: nvrtc discovery, sparse/binary kernels, cross-backend harness) · **Part B** Client Ecosystem |
 | 📋 **Todo / planned** | **A2** Connector & Pushdown · **A3** Advanced Search · **A6** Catalog · **A7** Graph RAG · **A8** Correctness Suite · **A9** Competitive Benchmarking · **A10** Packaging & CI · **B2** Codebase Intelligence & MCP · **B3** High-Cardinality Scale Lighthouse · **B4** Enterprise Security [Paid] · **B5** Accelerator & Lifecycle [Paid] |
 | 🔬 **Research / long-term** | **A11** GPU-Native Index Construction |
-| 🤔 **Open questions** | Distributed compaction strategy · Polaris credential-refresh lifecycle · Graph RAG Leiden vs. Louvain · `PAGERANK` materialization |
+| 🤔 **Open questions** | Distributed compaction strategy · Polaris credential-refresh lifecycle · `PAGERANK` materialization |
 
 Detailed phase history and the dependency-ordered active backlog follow below.
 
@@ -796,8 +796,13 @@ All core foundation phases (Phases 1–8) are **COMPLETE and verified in code**:
 ### 🤔 Open
 - Distributed compaction strategy (Spark job vs local async daemon)?
 - Polaris catalog credential refresh token lifecycles?
-- Graph RAG: Leiden vs. Louvain for community detection default? (Leiden is newer but more complex to implement)
 - Graph RAG: Should `PAGERANK` return results as a materialized sidecar or as a transient DataFrame?
+
+### ✅ Resolved
+- **Graph RAG: Leiden vs. Louvain.** Both are implemented: `Table.communities(resolution, algorithm=...)`
+  selects either, `leiden_communities` is also exposed as a SQL UDAF, and both share the
+  CSR-backed path (O(V) state) plus warm-started incremental updates with stable ids.
+  Louvain remains the default (faster); Leiden is opt-in for guaranteed-connected communities.
 
 > **Note:** The former "Technical Debt & Missing Features" list has been folded into **A1. Core Engine Correctness & Concurrency** (next steps) so all outstanding core work lives in one dependency-ordered place.
 

@@ -136,7 +136,7 @@ def test_vector_search_flow():
     assert search_time < expected_max_ms, f"Search latency {search_time:.2f}ms > {expected_max_ms}ms"
     print(f"✓ Parallel search completed in {search_time/1000:.1f}s (10 segments x 10K vectors)")
     
-    # Note: For <50ms target at petabyte scale:
+    # Note: For <50ms target at large scale:
     # 1. Use scalar filters FIRST to prune to 1-2 relevant segments
     # 2. Then vector search only hits those segments
     # 3. Example: WHERE category='electronics' AND embedding ~ query

@@ -189,6 +189,7 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
     let mut content_size_in_bytes = None;
     let mut index_files = None;
     let mut file_checksum = None;
+    let mut first_row_id = None;
 
     for (name, val) in fields {
         match name.as_str() {
@@ -295,6 +296,16 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
                     file_checksum = Some(s);
                 }
             }
+            "first_row_id" => {
+                let inner = if let AvroValue::Union(_, b) = val {
+                    *b
+                } else {
+                    val
+                };
+                if let AvroValue::Long(id) = inner {
+                    first_row_id = Some(id);
+                }
+            }
             _ => {}
         }
     }
@@ -318,6 +329,7 @@ fn parse_data_file(fields: Vec<(String, AvroValue)>) -> Result<IcebergDataFile> 
         content_size_in_bytes,
         index_files,
         file_checksum,
+        first_row_id,
     })
 }
 
@@ -457,6 +469,7 @@ pub fn convert_iceberg_to_object(
             partition_values,
             index_files,
             file_checksum: df.file_checksum.clone(),
+            first_row_id: df.first_row_id,
             ..Default::default()
         })))
     } else {
