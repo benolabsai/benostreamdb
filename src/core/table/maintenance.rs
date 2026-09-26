@@ -424,6 +424,43 @@ impl Table {
         Ok(unindexed_count)
     }
 
+    /// One-time migration: rebuild graph indexes written in the legacy v1
+    /// on-disk format.
+    ///
+    /// v1 CSRs could be mislabeled (wrong direction) by a buggy `add_index`
+    /// that registered a graph index under both its `src_column` and the
+    /// original `column` argument. [`crate::python::helpers::load_multi_csr`]
+    /// ignores v1 files, so a table carrying them silently falls back to the
+    /// SQL BFS path (correct, just slower). This detects such segments and
+    /// rebuilds them in the v2 format.
+    ///
+    /// Idempotent: once rebuilt, no v1 files remain, so subsequent opens are a
+    /// cheap manifest scan. Returns the number of graph columns migrated.
+    pub async fn migrate_legacy_graph_indexes_async(&self) -> Result<usize> {
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, all_entries, _) = manager.load_latest_full().await?;
+
+        let mut legacy_cols: Vec<String> = all_entries
+            .iter()
+            .flat_map(|e| e.index_files.iter())
+            .filter(|f| f.index_type == "graph")
+            .filter_map(|f| f.column_name.clone())
+            .collect();
+
+        if legacy_cols.is_empty() {
+            return Ok(0);
+        }
+
+        legacy_cols.sort();
+        legacy_cols.dedup();
+        tracing::warn!(
+            columns = ?legacy_cols,
+            "Detected legacy v1 graph indexes; rebuilding in the v2 format"
+        );
+        self.backfill_indexes_async(legacy_cols.clone()).await?;
+        Ok(legacy_cols.len())
+    }
+
     pub fn recover_indexes(&self) -> Result<usize> {
         self.runtime().block_on(self.recover_indexes_async())
     }

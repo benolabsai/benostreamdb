@@ -33,11 +33,14 @@ impl BenoStreamSession {
         // (`PySession::new`), so a failure here must degrade rather than panic.
         let runtime = {
             let builder = RuntimeEnvBuilder::new();
-            let builder = if let Some(limit) = memory_limit_bytes {
-                builder.with_memory_limit(limit, 1.0)
-            } else {
-                builder
-            };
+            // Default the query memory limit from the effective memory so SQL
+            // sorts/joins/aggregations spill to disk instead of OOMing. A caller
+            // that passes an explicit limit (e.g. `PySession`) still wins;
+            // `BSDB_DATAFUSION_MEMORY_GB` overrides the derived default.
+            let limit = memory_limit_bytes.unwrap_or_else(|| {
+                crate::core::resources::default_datafusion_memory_bytes() as usize
+            });
+            let builder = builder.with_memory_limit(limit, 1.0);
             match builder.build() {
                 Ok(rt) => Arc::new(rt),
                 Err(e) => {
@@ -108,6 +111,15 @@ impl BenoStreamSession {
         // Strip PARTITIONED BY to bypass DataFusion's lack of Hive distribution support on memory tables
         let query_processed =
             crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
+
+        // Native MERGE INTO: DataFusion has no logical plan for it, so intercept
+        // the parsed statement before planning and execute it via the key-based
+        // merge primitive.
+        if let Some(batch) =
+            crate::core::sql::merge_into::try_parse_and_execute(&self.ctx, &query_processed).await?
+        {
+            return self.ctx.read_batch(batch).map_err(Into::into);
+        }
 
         // Parse the SQL query to get a logical plan
         let plan = self

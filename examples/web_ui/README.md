@@ -91,6 +91,27 @@ streamlit run examples/web_ui/app.py
 Open <http://localhost:8501>. The first query per tab warms the indexes; CSR
 traversals and vector search respond in milliseconds on the full graph.
 
+### Live tracing, resources & bottlenecks
+
+Each search tab instruments itself so you can see what the engine is doing:
+
+- **Engine trace** — a live, auto-scrolling, fixed-height log of every pipeline
+  stage (embed → search → rerank → fetch), timestamped with per-stage cost and
+  the process RSS at each step.
+- **Query plan (explain)** — the engine's `EXPLAIN` output: segments scanned vs.
+  pruned (with per-rule reasons) and the index access path chosen (Inverted
+  Index / Bitmap / Full scan).
+- **Process resources** — a live RSS / peak-RSS / disk-read / disk-write / CPU
+  readout (sampled from `/proc`) with deltas since the query started, plus DB
+  filesystem headroom. It re-samples every 0.4s while the query runs.
+- **Bottleneck breakdown** — stages ranked by wall time with the dominant stage
+  called out, a bar chart, and resource deltas across the run.
+- **End-to-end timing** — each tab prints its total wall time.
+
+Toggle the trace and plan panels from the sidebar. Engine calls run on a worker
+thread, so these panels keep updating *during* a query rather than only after it
+returns.
+
 ### Optional: LLM endpoint
 
 Any OpenAI-compatible provider works — a local vLLM or a hosted one. Set it

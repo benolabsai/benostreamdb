@@ -28,6 +28,7 @@ pub mod table;
 pub mod wal;
 // pub mod parquet_filter;
 pub mod embeddings;
+pub mod fault_injection;
 pub mod license;
 pub mod lock;
 pub mod search;

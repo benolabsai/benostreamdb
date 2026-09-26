@@ -6,6 +6,7 @@ pub mod drift_search;
 pub mod graph_neighbors;
 pub mod jaccard_coefficient;
 pub mod label_propagation;
+pub mod leiden_communities;
 pub mod louvain_communities;
 pub mod modularity;
 pub mod pagerank;
@@ -21,6 +22,7 @@ pub use connected_components::ConnectedComponentsUDF;
 pub use degree_centrality::DegreeCentralityUDF;
 pub use graph_neighbors::GraphNeighborsUDF;
 pub use label_propagation::LabelPropagationUDF;
+pub use leiden_communities::LeidenCommunitiesUDF;
 pub use louvain_communities::LouvainCommunitiesUDF;
 pub use modularity::ModularityUDF;
 pub use pagerank::PageRankUDF;
@@ -42,6 +44,7 @@ pub fn all_graph_aggregates() -> Vec<AggregateUDF> {
         AggregateUDF::new_from_impl(degree_centrality::DegreeCentralityUDF::new()),
         AggregateUDF::new_from_impl(jaccard_coefficient::JaccardCoefficientUDF::new()),
         AggregateUDF::new_from_impl(louvain_communities::LouvainCommunitiesUDF::new()),
+        AggregateUDF::new_from_impl(leiden_communities::LeidenCommunitiesUDF::new()),
         AggregateUDF::new_from_impl(modularity::ModularityUDF::new()),
         AggregateUDF::new_from_impl(pagerank::PageRankUDF::new()),
         AggregateUDF::new_from_impl(personalized_pagerank::PersonalizedPageRankUDF::new()),

@@ -2,6 +2,7 @@
 
 pub mod graph_udf;
 pub mod literal;
+pub mod merge_into;
 pub mod optimizer;
 pub mod partition_rewriter;
 pub mod pgvector_rewriter;

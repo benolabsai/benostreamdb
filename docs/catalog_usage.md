@@ -332,5 +332,5 @@ WHERE r.rating <= 2;
 1. **Zero-Copy Architecture**: No `COPY INTO`, no Kafka-to-Snowflake connectors, and no duplicate storage charges.
 2. **Dual-Speed Workloads**:
    * **Sub-2ms Interactive Search**: Applications query `bsdb-search` over HTTP for instant vector & full-text retrieval.
-   * **Petabyte-Scale BI & SQL**: Data analysts and data scientists query the exact same data in Snowflake.
+   * **Large-Scale BI & SQL**: Data analysts and data scientists query the exact same data in Snowflake.
 3. **Open Standards**: If you ever migrate away from Snowflake, all data remains in vanilla Apache Iceberg / Parquet format with Apache Polaris as the vendor-neutral catalog.

@@ -75,6 +75,8 @@ pub struct IcebergDataFile {
     pub index_files: Option<String>,
     /// BenoStream Extension: File Checksum for integrity validation
     pub file_checksum: Option<String>,
+    /// Iceberg V3 Row Lineage: first `_row_id` assigned in this data file.
+    pub first_row_id: Option<i64>,
 }
 
 /// Enum to distinguish between Data and Delete entries in the manifest
