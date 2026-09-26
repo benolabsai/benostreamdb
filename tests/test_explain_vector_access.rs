@@ -237,3 +237,64 @@ async fn explain_reports_brute_force_without_index() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// The performance half of the §2 regression: an indexed vector query must be
+/// materially faster than the full scan. Builds two tables over identical data,
+/// one with an HNSW-TQ8 index and one without, and compares the search latency.
+///
+/// This is a benchmark-style assertion; it uses a large enough row count that
+/// the index's sub-linear search dominates its fixed overhead.
+#[tokio::test]
+async fn indexed_vector_query_is_faster_than_full_scan() -> anyhow::Result<()> {
+    let dim = 32usize;
+    let n = 5000i32;
+    let batch = embedding_batch(embedding_schema(dim), n, dim)?;
+
+    let dir_a = tempdir()?;
+    let table_a = Table::new_async(format!("file://{}", dir_a.path().display())).await?;
+    table_a
+        .add_index("embedding".to_string(), IndexAlgorithm::hnsw_tq8())
+        .await?;
+    table_a.write_async(vec![batch.clone()]).await?;
+    table_a.commit_async().await?;
+    table_a.wait_for_background_tasks_async().await?;
+
+    let dir_b = tempdir()?;
+    let table_b = Table::new_async(format!("file://{}", dir_b.path().display())).await?;
+    table_b.write_async(vec![batch]).await?;
+    table_b.commit_async().await?;
+    table_b.wait_for_background_tasks_async().await?;
+
+    let q = vec![0.5f32; dim];
+    let params = || {
+        vec![VectorSearchParams::new(
+            "embedding",
+            VectorValue::Float32(q.clone()),
+            5,
+        )]
+    };
+
+    // Warm up (index load, caches) so the comparison is steady-state.
+    let _ = table_a.read_async(None, Some(params()), None).await?;
+    let _ = table_b.read_async(None, Some(params()), None).await?;
+
+    const M: usize = 20;
+    let t = std::time::Instant::now();
+    for _ in 0..M {
+        let _ = table_a.read_async(None, Some(params()), None).await?;
+    }
+    let indexed = t.elapsed();
+
+    let t = std::time::Instant::now();
+    for _ in 0..M {
+        let _ = table_b.read_async(None, Some(params()), None).await?;
+    }
+    let scan = t.elapsed();
+
+    assert!(
+        indexed < scan,
+        "indexed vector query ({indexed:?}) should be faster than the full scan ({scan:?})"
+    );
+
+    Ok(())
+}
