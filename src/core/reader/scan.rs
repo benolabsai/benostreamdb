@@ -549,8 +549,7 @@ impl HybridReader {
             crate::telemetry::metrics::PARQUET_META_CACHE_TOTAL
                 .with_label_values(&["hit"])
                 .inc();
-            let options = ArrowReaderOptions::default();
-            (ArrowReaderMetadata::try_new(meta, options)?, size as u64)
+            ((*meta).clone(), size as u64)
         } else {
             // Miss
             crate::telemetry::metrics::PARQUET_META_CACHE_TOTAL
@@ -578,7 +577,7 @@ impl HybridReader {
             };
 
             crate::core::cache::PARQUET_META_CACHE
-                .insert(meta_cache_key, (arrow_meta.metadata().clone(), size as usize))
+                .insert(meta_cache_key, (Arc::new(arrow_meta.clone()), size as usize))
                 .await;
             (arrow_meta, size)
         };
@@ -1596,7 +1595,9 @@ impl HybridReader {
             let size = object_meta.size as usize;
             let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
             let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
-            let meta = b.metadata().clone();
+            let options = ArrowReaderOptions::default();
+            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
+            let meta = Arc::new(arrow_meta);
             crate::core::cache::PARQUET_META_CACHE
                 .insert(cache_key.clone(), (meta.clone(), size))
                 .await;
@@ -1620,8 +1621,7 @@ impl HybridReader {
                     version: None,
                 };
                 let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-                let options = ArrowReaderOptions::default();
-                let arrow_meta = ArrowReaderMetadata::try_new(meta.clone(), options)?;
+                let arrow_meta = (*meta).clone();
                 let builder =
                     ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
@@ -1742,8 +1742,7 @@ impl HybridReader {
             version: None,
         };
         let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-        let options = ArrowReaderOptions::default();
-        let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
+        let arrow_meta = (*meta).clone();
         let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
 
         let selection = self.bitmap_to_row_selection(
@@ -1924,8 +1923,7 @@ impl HybridReader {
                 version: None,
             };
             let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
-            let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
+            let arrow_meta = (*meta).clone();
             ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
         } else {
             let object_meta = self
@@ -1936,10 +1934,12 @@ impl HybridReader {
             let size = object_meta.size;
             let reader = ParquetObjectReader::new(self.store.clone(), object_meta.location);
             let b = ParquetRecordBatchStreamBuilder::new(reader).await?;
+            let options = ArrowReaderOptions::default();
+            let arrow_meta = ArrowReaderMetadata::try_new(b.metadata().clone(), options)?;
             crate::core::cache::PARQUET_META_CACHE
                 .insert(
                     format!("{}/{}", self.root_uri, pq_path_str),
-                    (b.metadata().clone(), size as usize),
+                    (Arc::new(arrow_meta), size as usize),
                 )
                 .await;
             b

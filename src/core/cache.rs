@@ -9,8 +9,8 @@ use arrow::record_batch::RecordBatch;
 use moka::future::Cache;
 use object_store::ObjectStore;
 use once_cell::sync::Lazy;
+use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 use parquet::bloom_filter::Sbbf;
-use parquet::file::metadata::ParquetMetaData;
 use roaring::RoaringBitmap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -330,7 +330,12 @@ pub static ANALYZER_META_CACHE: Lazy<Cache<String, String>> = Lazy::new(|| {
         .build()
 });
 
-pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ParquetMetaData>, usize)>> =
+/// Parsed parquet metadata, keyed by object path, paired with the file size.
+///
+/// Stores the `ArrowReaderMetadata` (not the raw `ParquetMetaData`) so a read
+/// can skip re-deriving the Arrow schema from the parquet schema on every
+/// access — the read path's `meta` phase.
+pub static PARQUET_META_CACHE: Lazy<Cache<String, (Arc<ArrowReaderMetadata>, usize)>> =
     Lazy::new(|| {
         Cache::builder()
             .max_capacity(1000) // 1000 file footers (schema, row groups)
