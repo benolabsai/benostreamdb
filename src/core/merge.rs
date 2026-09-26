@@ -241,6 +241,7 @@ impl MergePlanner {
         let delete_writer = crate::core::iceberg::iceberg_delete::IcebergDeleteWriter::new(
             base_path.to_string(),
             format_version,
+            store.clone(),
         );
 
         // 2. Process matched updates

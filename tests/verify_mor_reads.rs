@@ -40,7 +40,7 @@ async fn test_mor_mixed_deletes_avro() -> anyhow::Result<()> {
     let (_manifest, all_entries, _) = manifest_manager.load_latest_full().await?;
     let entry = all_entries.first().expect("Should have one data file");
 
-    let delete_writer = IcebergDeleteWriter::new(uri.clone(), 2);
+    let delete_writer = IcebergDeleteWriter::new(uri.clone(), 2, table.store.clone());
 
     let eq_batch = RecordBatch::try_new(
         Arc::new(arrow::datatypes::Schema::new(vec![
