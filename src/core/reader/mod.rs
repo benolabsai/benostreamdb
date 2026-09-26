@@ -136,6 +136,7 @@ pub mod delete;
 pub mod filter;
 pub mod scan;
 
+#[derive(Clone)]
 pub struct EqualityDelete {
     pub column_name: String,
     pub values: arrow::array::ArrayRef,
@@ -147,6 +148,7 @@ pub struct HybridReader {
     pub store: Arc<dyn ObjectStore>,
     pub root_uri: String,
     pub iceberg_schema: Option<crate::core::manifest::Schema>,
+    cached_deletes: tokio::sync::OnceCell<roaring::RoaringBitmap>,
 }
 
 impl HybridReader {
@@ -156,6 +158,7 @@ impl HybridReader {
             store,
             root_uri: root_uri.to_string(),
             iceberg_schema: None,
+            cached_deletes: tokio::sync::OnceCell::new(),
         }
     }
 
