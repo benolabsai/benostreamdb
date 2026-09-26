@@ -168,22 +168,23 @@ impl HybridReader {
                 let root_uri = self.root_uri.clone();
                 
                 futures.push(async move {
-                    let resolved_path = if path_str.starts_with("file://") {
-                        let root_local = root_uri
+                    // Relativize the delete-file URI against the table root so
+                    // the object store (rooted at the table URI) can resolve it.
+                    // Works for `file://` and remote schemes (s3://, gs://, …).
+                    let resolved_path = {
+                        let root_clean = root_uri
                             .strip_prefix("file://")
                             .unwrap_or(&root_uri)
                             .trim_end_matches('/');
                         let path_clean = path_str.strip_prefix("file://").unwrap_or(&path_str);
 
-                        if !root_local.is_empty() && path_clean.starts_with(root_local) {
-                            path_clean[root_local.len()..]
+                        if !root_clean.is_empty() && path_clean.starts_with(root_clean) {
+                            path_clean[root_clean.len()..]
                                 .trim_start_matches('/')
                                 .to_string()
                         } else {
                             path_clean.trim_start_matches('/').to_string()
                         }
-                    } else {
-                        path_str.to_string()
                     };
 
                     if resolved_path.ends_with(".parquet") || resolved_path.ends_with(".avro") {
