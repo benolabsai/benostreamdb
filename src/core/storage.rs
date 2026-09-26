@@ -3,10 +3,21 @@
 use anyhow::{Context, Result};
 use object_store::{
     aws::AmazonS3Builder, azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder,
-    http::HttpBuilder, local::LocalFileSystem, ObjectStore,
+    http::HttpBuilder, local::LocalFileSystem, memory::InMemory, ObjectStore,
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
+
+/// Process-wide registry of in-memory stores, keyed by URI.
+///
+/// `memory://<name>` resolves to a single shared `InMemory` store per name, so
+/// multiple `Table` handles opened with the same URI share one store — the
+/// shared-object-store model used by the WS3 concurrency harness. Without the
+/// registry each call would create an isolated store and the handles would not
+/// see each other's commits.
+static MEMORY_STORES: once_cell::sync::Lazy<parking_lot::Mutex<HashMap<String, Arc<dyn ObjectStore>>>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// Factory to create an ObjectStore based on the URI scheme.
 ///
@@ -90,6 +101,14 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
                     .build()
                     .context("Failed to build HTTP store")?;
                 output_store = Arc::new(http);
+            }
+            "memory" => {
+                // Shared in-memory store keyed by the full URI (see MEMORY_STORES).
+                let mut map = MEMORY_STORES.lock();
+                output_store = map
+                    .entry(uri.to_string())
+                    .or_insert_with(|| Arc::new(InMemory::new()))
+                    .clone();
             }
             _ => anyhow::bail!("Unsupported scheme: {}", url.scheme()),
         }

@@ -111,6 +111,16 @@ pub struct Table {
     /// finished, or the ingest loop trimmed the heap), so writers blocked by
     /// `max_ingest_ram_gb` wake immediately instead of polling RSS on a timer.
     pub(crate) memory_reclaimed: Arc<tokio::sync::Notify>,
+    /// Iceberg table format version (1, 2, or 3). v3 enables row lineage
+    /// (`_row_id` / `_last_updated_sequence_number`).
+    pub(crate) format_version: Arc<std::sync::atomic::AtomicI32>,
+    /// WAL transaction IDs appended since the last flush, in buffer order.
+    ///
+    /// Recorded in the manifest at commit time (property
+    /// `benostream.committed_wal_tx`) so that WAL replay is **idempotent**: a
+    /// crash between the manifest commit and the WAL truncation must not replay
+    /// an already-committed batch. See `plans/production_readiness_plan.md` WS2.
+    pub(crate) pending_wal_tx_ids: Arc<parking_lot::Mutex<Vec<uuid::Uuid>>>,
 }
 
 /// Durability level for WAL writes.
@@ -217,6 +227,8 @@ impl Clone for Table {
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: self.memory_reclaimed.clone(),
+            format_version: self.format_version.clone(),
+            pending_wal_tx_ids: self.pending_wal_tx_ids.clone(),
         }
     }
 }
@@ -520,6 +532,20 @@ impl Table {
         self.sort_order.read().clone()
     }
 
+    /// Iceberg table format version (1, 2, or 3).
+    pub fn get_format_version(&self) -> i32 {
+        self.format_version
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Set the Iceberg table format version. v3 enables row lineage
+    /// (`_row_id` / `_last_updated_sequence_number`). The change is persisted on
+    /// the next commit.
+    pub fn set_format_version(&self, version: i32) {
+        self.format_version
+            .store(version, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub(crate) fn apply_sort_order(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         let guard = self.sort_order.read();
         let order = match guard.as_ref() {
@@ -563,38 +589,32 @@ impl Table {
         Ok(RecordBatch::try_new(batch.schema(), sorted_columns)?)
     }
 
-    // Iceberg v3 row-lineage metadata. Implemented but not yet wired into the
-    // write path; tracked as tech debt — either integrate (emit `_row_id` /
-    // `_last_updated_sequence_number` on v3 tables) or remove.
-    #[allow(dead_code)]
-    pub(crate) fn has_v3_metadata_columns(schema: &arrow::datatypes::SchemaRef) -> bool {
-        schema.column_with_name("_row_id").is_some()
-            && schema
-                .column_with_name("_last_updated_sequence_number")
-                .is_some()
-    }
-
-    #[allow(dead_code)]
+    /// Iceberg V3 row lineage: append the `_row_id` and
+    /// `_last_updated_sequence_number` metadata columns to a batch.
+    ///
+    /// `_row_id` is a monotonically assigned `long` (Iceberg spec v3), starting
+    /// at `first_row_id` for the first row of the batch. The caller advances the
+    /// base across batches and data files so that row IDs are unique and
+    /// contiguous within each file — i.e. `_row_id == first_row_id + position`.
     pub(crate) fn add_v3_metadata_columns(
         &self,
         batch: &RecordBatch,
         sequence_number: i64,
+        first_row_id: i64,
     ) -> Result<RecordBatch> {
-        use arrow::array::{Int64Array, StringArray};
+        use arrow::array::Int64Array;
         use arrow::datatypes::{DataType, Field};
 
         let num_rows = batch.num_rows();
 
-        let row_ids: Vec<String> = (0..num_rows)
-            .map(|_| uuid::Uuid::new_v4().to_string())
-            .collect();
-        let row_id_array = Arc::new(StringArray::from(row_ids));
+        let row_ids: Vec<i64> = (0..num_rows as i64).map(|i| first_row_id + i).collect();
+        let row_id_array = Arc::new(Int64Array::from(row_ids));
 
         let seq_numbers = vec![sequence_number; num_rows];
         let seq_array = Arc::new(Int64Array::from(seq_numbers));
 
         let mut new_fields: Vec<Arc<Field>> = batch.schema().fields().iter().cloned().collect();
-        new_fields.push(Arc::new(Field::new("_row_id", DataType::Utf8, false)));
+        new_fields.push(Arc::new(Field::new("_row_id", DataType::Int64, false)));
         new_fields.push(Arc::new(Field::new(
             "_last_updated_sequence_number",
             DataType::Int64,

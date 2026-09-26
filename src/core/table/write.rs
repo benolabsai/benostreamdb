@@ -558,6 +558,11 @@ impl Table {
                 let t_wal_task = std::time::Instant::now();
                 let wal_lock = wal.lock().await;
                 let t_wal_lock = t_wal_task.elapsed().as_millis();
+                // WS2 crash boundary: process dies after the batch is handed to
+                // the WAL but before it is fsynced.
+                crate::core::fault_injection::check(
+                    crate::core::fault_injection::CrashPoint::WalAppend,
+                )?;
                 for batch in batches_for_wal {
                     match durability {
                         crate::core::table::WalDurability::Sync => {
@@ -639,6 +644,11 @@ impl Table {
         );
 
         wal_res?;
+        // WS2 crash boundary: WAL is durable, but the manifest has not been
+        // committed yet. On reopen the WAL replay must recover these rows.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::WalFlush,
+        )?;
         idx_res?;
         let wal_idx_ms = t_wal.elapsed().as_millis();
         // -----------------------------
@@ -653,6 +663,10 @@ impl Table {
         let _write_buffer_len = {
             let mut buffer = self.write_buffer.write();
             buffer.extend(batches);
+            // Record the WAL tx id alongside the buffered rows, under the same
+            // lock, so the tx id and its rows are always taken together at flush
+            // time (see `flush_async`). This is what makes WAL replay idempotent.
+            self.pending_wal_tx_ids.lock().push(tx_id);
             buffer.len()
         };
 
@@ -685,30 +699,42 @@ impl Table {
     /// Flush buffer to disk
     #[tracing::instrument(skip(self))]
     pub async fn flush_async(&self) -> Result<()> {
-        // Extract batches from buffer
-        let batches_to_write: Vec<RecordBatch> = {
+        // Extract batches from buffer. The WAL tx ids are taken under the same
+        // lock so they stay paired with the rows they tag.
+        let (batches_to_write, tx_ids): (Vec<RecordBatch>, Vec<uuid::Uuid>) = {
             let mut buffer = self.write_buffer.write();
             if buffer.is_empty() {
                 return Ok(());
             }
-            std::mem::take(&mut *buffer)
+            let batches = std::mem::take(&mut *buffer);
+            let tx_ids = std::mem::take(&mut *self.pending_wal_tx_ids.lock());
+            (batches, tx_ids)
         };
 
         // If flush fails at any point (upload, network, catalog lock), restore batches back into write_buffer
         // so in-memory visibility is preserved and subsequent calls can retry!
-        let flush_res = self.flush_internal_async(&batches_to_write).await;
+        let flush_res = self.flush_internal_async(&batches_to_write, &tx_ids).await;
         if let Err(e) = flush_res {
             let mut buffer = self.write_buffer.write();
             let mut restored = batches_to_write;
             restored.append(&mut *buffer);
             *buffer = restored;
+            // Restore the tx ids too, so a retry records them at commit time.
+            let mut pending = self.pending_wal_tx_ids.lock();
+            let mut restored_tx = tx_ids;
+            restored_tx.append(&mut *pending);
+            *pending = restored_tx;
             return Err(e);
         }
 
         Ok(())
     }
 
-    async fn flush_internal_async(&self, batches_to_write: &[RecordBatch]) -> Result<()> {
+    async fn flush_internal_async(
+        &self,
+        batches_to_write: &[RecordBatch],
+        wal_tx_ids: &[uuid::Uuid],
+    ) -> Result<()> {
         // Type alias for stream results to avoid complex type annotation
         type PartitionSegment = (
             crate::core::manifest::ManifestEntry,
@@ -731,13 +757,25 @@ impl Table {
         let spec = self.partition_spec.clone();
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
 
-        // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage)
-        let manifest = manifest_manager
-            .load_latest()
+        // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage).
+        // `load_latest_full` (not `load_latest`) so sharded manifest entries are
+        // included — `row_id_base` must see every existing data file.
+        let (manifest, existing_entries, _) = manifest_manager
+            .load_latest_full()
             .await
-            .map(|(m, _)| m)
             .unwrap_or_default();
         let sequence_number = manifest.version as i64;
+        let format_version = self.get_format_version();
+
+        // Iceberg V3 row lineage: the next `_row_id` to assign is one past the
+        // highest row ID already present in the table. Derive it from the
+        // manifest entries' `first_row_id` + `record_count` so it is monotonic
+        // and collision-free across snapshots.
+        let row_id_base: i64 = existing_entries
+            .iter()
+            .filter_map(|e| e.first_row_id.map(|f| f + e.record_count))
+            .max()
+            .unwrap_or(0);
 
         // Consolidate batches of compatible schemas before partitioning/writing
         // so single-row inserts from streaming/REST ingest don't create thousands of 1-row files!
@@ -813,12 +851,7 @@ impl Table {
         let mut partitioned_batches = Vec::new();
         for batch in &aligned_batches {
             let sorted_batch = self.apply_sort_order(batch)?;
-            let batch_with_metadata = if manifest.format_version >= 3 {
-                self.add_v3_metadata_columns(&sorted_batch, sequence_number)?
-            } else {
-                sorted_batch
-            };
-            let mut pb = spec.partition_batch(&batch_with_metadata)?;
+            let mut pb = spec.partition_batch(&sorted_batch)?;
             partitioned_batches.append(&mut pb);
         }
 
@@ -861,6 +894,24 @@ impl Table {
             res
         };
 
+        // Iceberg V3 row lineage: assign a contiguous `_row_id` block to each
+        // data file, starting from `row_id_base`. Doing this after partitioning
+        // keeps row IDs contiguous within a file, so `_row_id` equals
+        // `first_row_id + row_position` as the spec requires.
+        let mut next_row_id = row_id_base;
+        let mut partitions_with_lineage: Vec<(HashMap<String, Value>, RecordBatch, Option<i64>)> =
+            Vec::with_capacity(coalesced_partitions.len());
+        for (pv, batch) in coalesced_partitions {
+            if format_version >= 3 {
+                let first_row_id = next_row_id;
+                let batch = self.add_v3_metadata_columns(&batch, sequence_number, first_row_id)?;
+                next_row_id += batch.num_rows() as i64;
+                partitions_with_lineage.push((pv, batch, Some(first_row_id)));
+            } else {
+                partitions_with_lineage.push((pv, batch, None));
+            }
+        }
+
         // Extract local path from URI for writer
         let base_path = self.uri.strip_prefix("file://").unwrap_or(&self.uri);
         std::fs::create_dir_all(base_path)?;
@@ -885,8 +936,8 @@ impl Table {
                     .unwrap_or(16)
             })
             .min(64); // Cap to prevent resource exhaustion
-        let stream = futures::stream::iter(coalesced_partitions.into_iter().map(
-            |(partition_values, batch)| {
+        let stream = futures::stream::iter(partitions_with_lineage.into_iter().map(
+            |(partition_values, batch, first_row_id)| {
                 let base_path = base_path.to_string();
                 let spec = spec.clone();
                 let default_device_inner = default_device_for_stream.clone();
@@ -911,7 +962,7 @@ impl Table {
                     writer_write.set_store(self.store.clone());
 
                     let batch_inner = batch.clone();
-                    let (entry, generated_files) = tokio::task::spawn_blocking(move || {
+                    let (mut entry, generated_files) = tokio::task::spawn_blocking(move || {
                         writer_write.write_batch(&batch_inner)?;
                         let entry = writer_write.to_manifest_entry();
                         let files = writer_write.get_generated_files();
@@ -921,6 +972,9 @@ impl Table {
                     })
                     .await
                     .context("Flush task panicked")??;
+                    // Iceberg V3 row lineage: record the first `_row_id` in this
+                    // data file so readers can derive `_row_id` from position.
+                    entry.first_row_id = first_row_id;
 
                     Ok::<PartitionSegment, anyhow::Error>((
                         entry,
@@ -1032,6 +1086,10 @@ impl Table {
                         // In commit path, we typically have ONE batch per segment write
                         index_writer.build_indexes(&batch_for_indexing, 0)?;
                         index_writer.finish_indexing().await?;
+                        // WS2 crash boundary: index files built but not uploaded.
+                        crate::core::fault_injection::check(
+                            crate::core::fault_injection::CrashPoint::IndexUpload,
+                        )?;
                         index_writer.upload_to_store().await?;
                         let files = index_writer.get_generated_files();
                         let updated_entry_info = index_writer.to_manifest_entry();
@@ -1103,6 +1161,12 @@ impl Table {
                 self.background_tasks.lock().await.push(handle);
             }
         }
+
+        // WS2 crash boundary: data files are staged on disk but the manifest has
+        // not been committed, so they are not yet referenced by any snapshot.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::DataUpload,
+        )?;
 
         // 3. Upload data files synchronously BEFORE committing manifest/metadata.
         // Invariant: A published manifest may reference only immutable artifacts that
@@ -1209,16 +1273,35 @@ impl Table {
         };
 
         // Final commit for all data segments (with possible schema update)
+        // Record the WAL transaction ids being committed so that recovery can
+        // skip them if the process dies before the WAL is truncated (the
+        // review's "manifest-before-WAL-truncation" case). Without this, WAL
+        // replay would re-apply an already-committed batch and duplicate rows.
+        let updated_properties = if wal_tx_ids.is_empty() {
+            None
+        } else {
+            let joined = wal_tx_ids
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            Some(HashMap::from([(
+                "benostream.committed_wal_tx".to_string(),
+                joined,
+            )]))
+        };
+
         let commit_metadata = crate::core::manifest::CommitMetadata {
             updated_schemas: final_schemas,
             updated_schema_id: final_schema_id,
             updated_partition_specs: None,
             updated_default_spec_id: None,
-            updated_properties: None,
+            updated_properties,
             removed_properties: None,
             updated_sort_orders: final_sort_orders,
             updated_default_sort_order_id: final_sort_order_id,
             updated_last_column_id: None,
+            format_version: Some(format_version),
             is_fast_append: false,
             ..Default::default()
         };
@@ -1226,9 +1309,18 @@ impl Table {
         // Calculate total rows being added from all new manifest entries
         let added_rows_total: i64 = all_new_entries.iter().map(|e| e.record_count).sum();
 
+        // WS2 crash boundary: immediately before the atomic publish point.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::ManifestCommit,
+        )?;
         let new_manifest = manifest_manager
             .commit(&all_new_entries, &[], commit_metadata)
             .await?;
+        // WS2 crash boundary: the manifest is committed (visible) but the caller
+        // has not yet observed success — a "delayed visibility" crash.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::ManifestVisible,
+        )?;
 
         // 4. Update Table Metadata (Iceberg v2 Spec)
         // Determine the root for metadata. If we have a catalog, use its reported location.
@@ -1261,12 +1353,13 @@ impl Table {
                 }
                 meta.sort_orders = new_manifest.sort_orders.clone();
                 meta.default_sort_order_id = new_manifest.default_sort_order_id;
+                meta.format_version = format_version;
                 meta
             }
             Err(_) => {
                 // Initialize skeleton if not found
                 TableMetadata::new(
-                    2,
+                    format_version,
                     uuid::Uuid::new_v4().to_string(),
                     self.uri.clone(),
                     new_manifest.schemas.last().cloned().unwrap_or_else(|| {
@@ -1282,19 +1375,47 @@ impl Table {
             }
         };
 
-        // Add a new snapshot pointing to the latest manifest
+        // Add a new snapshot pointing to the latest manifest.
+        //
+        // Iceberg V3 row lineage: the snapshot's `first-row-id` is the lowest row
+        // ID assigned in this snapshot, and `next-row-id` advances past every row
+        // ID assigned so far.
+        let snapshot_first_row_id = all_new_entries
+            .iter()
+            .filter_map(|e| e.first_row_id)
+            .min()
+            .or(table_meta.next_row_id);
+        // The Iceberg spec requires the snapshot's `manifest-list` to be an
+        // absolute path (external readers such as PyIceberg resolve a relative
+        // path against the *process CWD*, not the table location, and fail).
+        // The manifest manager stores it relative to the table root, so qualify
+        // it with the table location here.
+        let manifest_list_abs = match new_manifest.manifest_list_path.clone() {
+            Some(p) if p.contains("://") || p.starts_with('/') => p,
+            Some(p) => format!(
+                "{}/{}",
+                self.uri.trim_end_matches('/'),
+                p.trim_start_matches('/')
+            ),
+            None => String::new(),
+        };
         let snapshot = crate::core::metadata::Snapshot {
             snapshot_id: new_manifest.version as i64,
             parent_snapshot_id: table_meta.current_snapshot_id,
             timestamp_ms: new_manifest.timestamp_ms,
             sequence_number: Some(new_manifest.version as i64),
             summary: HashMap::from([("operation".to_string(), "append".to_string())]),
-            manifest_list: new_manifest.manifest_list_path.clone().unwrap_or_default(),
+            manifest_list: manifest_list_abs,
             schema_id: Some(new_manifest.current_schema_id),
-            first_row_id: table_meta.next_row_id,
+            first_row_id: snapshot_first_row_id,
             added_rows: Some(added_rows_total),
         };
         table_meta.add_snapshot(snapshot);
+
+        if format_version >= 3 {
+            let advanced = row_id_base + added_rows_total;
+            table_meta.next_row_id = Some(table_meta.next_row_id.unwrap_or(0).max(advanced));
+        }
 
         // Save metadata file (vX.metadata.json)
         let new_meta_version = (new_manifest.version) as i32; // Sync with manifest version for simplicity
@@ -1348,6 +1469,11 @@ impl Table {
 
         // 5. Truncate WAL (Durability Checkpoint)
         {
+            // WS2 crash boundary: manifest committed but WAL not yet truncated.
+            // On reopen the WAL replay must be idempotent (no duplicate rows).
+            crate::core::fault_injection::check(
+                crate::core::fault_injection::CrashPoint::WalTruncate,
+            )?;
             let mut wal = self.wal.lock().await;
             wal.truncate().context("Failed to truncate WAL")?;
 

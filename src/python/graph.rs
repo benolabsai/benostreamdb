@@ -19,66 +19,14 @@ impl PyGraphAPI {
         &self,
         graph_column: &str,
     ) -> PyResult<crate::core::index::csr_graph::MultiSegmentCsrGraph> {
-        let entries = crate::python::helpers::TOKIO_RUNTIME
-            .block_on(async {
-                let manifest = self
-                    .table
-                    .manifest()
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                let manifest_manager = crate::core::manifest::ManifestManager::new(
-                    self.table.store.clone(),
-                    "",
-                    &self.table.uri,
-                );
-                manifest_manager
-                    .load_all_entries(&manifest)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            })
-            .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-
-        let segments = crate::python::helpers::TOKIO_RUNTIME.block_on(async {
-            let mut segments = Vec::new();
-            let cache = crate::core::cache::DiskCache::new(self.table.store.clone());
-
-            for entry in &entries {
-                for idx in &entry.index_files {
-                    if idx.index_type == "graph" && idx.column_name.as_deref() == Some(graph_column)
-                    {
-                        let offsets_str = format!("{}.graph.csr.offsets", idx.file_path);
-                        let edges_str = format!("{}.graph.csr.edges", idx.file_path);
-                        let dict_str = format!("{}.graph.csr.dict", idx.file_path);
-
-                        if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
-                            cache.get_mmap(&offsets_str).await,
-                            cache.get_mmap(&edges_str).await,
-                            cache.get_mmap(&dict_str).await,
-                        ) {
-                            let mmap_graph =
-                                crate::core::index::csr_graph::MmapCsrGraph::from_mmaps(
-                                    offsets_mmap,
-                                    edges_mmap,
-                                    dict_mmap,
-                                );
-                            segments.push(mmap_graph);
-                        }
-                    }
-                }
-            }
-            Ok::<_, pyo3::PyErr>(segments)
-        })?;
-
-        if segments.is_empty() {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+        match crate::python::helpers::load_multi_csr(&self.table, graph_column) {
+            Ok(Some(graph)) => Ok(graph),
+            Ok(None) => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "No CSR graph index found for column {}",
                 graph_column
-            )));
+            ))),
+            Err(e) => Err(pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
         }
-
-        Ok(crate::core::index::csr_graph::MultiSegmentCsrGraph::new(
-            segments,
-        ))
     }
 }
 

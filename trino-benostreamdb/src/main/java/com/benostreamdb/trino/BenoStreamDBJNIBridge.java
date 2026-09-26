@@ -22,6 +22,22 @@ public class BenoStreamDBJNIBridge {
 
     // Vector Search
     public static native int vectorSearch(String table, String segmentId, String column, int k, long queryVectorPtr, int queryVectorLen, long outArrayPtr, long outSchemaPtr);
-    
-    // We can migrate other JNI methods here in the future if needed
+
+    // Schema resolution: returns a JSON array of {name, type, nullable}.
+    public static native String getTableSchema(String tableUri);
+
+    // Primary key: returns a JSON array of column names.
+    public static native String getPrimaryKey(String tableUri);
+
+    // DDL: create a table from a JSON array of {name, type, nullable}.
+    public static native boolean createTable(String tableUri, String schemaJson);
+
+    // Write path: append an Arrow batch (C Data Interface) and commit.
+    public static native boolean appendBatch(String tableUri, long inArrayPtr, long inSchemaPtr);
+
+    // Merge path: upsert an Arrow batch on the given comma-separated key columns.
+    public static native boolean mergeRows(String tableUri, String keyColumns, long inArrayPtr, long inSchemaPtr);
+
+    // Delete path: delete rows matching a SQL filter.
+    public static native boolean deleteRows(String tableUri, String filter);
 }

@@ -241,7 +241,8 @@ public class TrinoConnectorTest {
 
     @Test
     public void testSplitManagerGetSplitsReturnsSource() {
-        BenoStreamDBSplitManager splitManager = new BenoStreamDBSplitManager("auto");
+        BenoStreamDBSplitManager splitManager = new BenoStreamDBSplitManager(
+                BenoStreamDBTableUri.DEFAULT_WAREHOUSE, "auto");
         BenoStreamDBTableHandle tableHandle = new BenoStreamDBTableHandle("default", "test_table");
 
         var splitSource = splitManager.getSplits(null, null, tableHandle, null, null);
@@ -302,5 +303,134 @@ public class TrinoConnectorTest {
         assertNotNull("Split manager should not be null", splitManager);
         assertNotNull("Page source provider should not be null", pageSourceProvider);
         assertEquals("Should have 2 columns", 2, columnHandles.size());
+    }
+
+    // ---- Write / MERGE path tests ----
+
+    @Test
+    public void testConnectorGetPageSinkProvider() {
+        BenoStreamDBConnectorFactory factory = new BenoStreamDBConnectorFactory();
+        var connector = factory.create("test", Map.of(), null);
+
+        var provider = connector.getPageSinkProvider();
+        assertNotNull("Page sink provider should not be null", provider);
+        assertTrue("Should be BenoStreamDBPageSinkProvider",
+                provider instanceof BenoStreamDBPageSinkProvider);
+    }
+
+    @Test
+    public void testBeginInsertReturnsHandle() {
+        BenoStreamDBMetadata metadata = new BenoStreamDBMetadata();
+        BenoStreamDBTableHandle table = new BenoStreamDBTableHandle("default", "test_table");
+        List<ColumnHandle> columns = List.of(
+                new BenoStreamDBColumnHandle("id", IntegerType.INTEGER),
+                new BenoStreamDBColumnHandle("name", VarcharType.VARCHAR));
+
+        var handle = metadata.beginInsert(null, table, columns,
+                io.trino.spi.connector.RetryMode.NO_RETRIES);
+        assertTrue("Should be BenoStreamDBInsertTableHandle",
+                handle instanceof BenoStreamDBInsertTableHandle);
+
+        BenoStreamDBInsertTableHandle insert = (BenoStreamDBInsertTableHandle) handle;
+        assertEquals("default", insert.getSchemaName());
+        assertEquals("test_table", insert.getTableName());
+        assertEquals("Should carry the insert columns", 2, insert.getColumns().size());
+    }
+
+    @Test
+    public void testBeginMergeReturnsHandle() {
+        BenoStreamDBMetadata metadata = new BenoStreamDBMetadata();
+        BenoStreamDBTableHandle table = new BenoStreamDBTableHandle("default", "test_table");
+
+        var handle = metadata.beginMerge(null, table,
+                io.trino.spi.connector.RetryMode.NO_RETRIES);
+        assertTrue("Should be BenoStreamDBMergeTableHandle",
+                handle instanceof BenoStreamDBMergeTableHandle);
+
+        BenoStreamDBMergeTableHandle merge = (BenoStreamDBMergeTableHandle) handle;
+        assertNotNull("Merge handle should wrap the table handle", merge.getTableHandle());
+        assertNotNull("Merge handle should carry an insert handle", merge.getInsertHandle());
+    }
+
+    @Test
+    public void testGetMergeRowIdColumnHandle() {
+        BenoStreamDBMetadata metadata = new BenoStreamDBMetadata();
+        BenoStreamDBTableHandle table = new BenoStreamDBTableHandle("default", "test_table");
+
+        ColumnHandle rowId = metadata.getMergeRowIdColumnHandle(null, table);
+        assertTrue("Should be BenoStreamDBColumnHandle", rowId instanceof BenoStreamDBColumnHandle);
+        // The merge row id is exposed as the target's key (first) column.
+        assertEquals("id", ((BenoStreamDBColumnHandle) rowId).getColumnName());
+    }
+
+    @Test
+    public void testArrowConverterSchemaMapping() {
+        List<BenoStreamDBColumnHandle> columns = List.of(
+                new BenoStreamDBColumnHandle("id", IntegerType.INTEGER),
+                new BenoStreamDBColumnHandle("name", VarcharType.VARCHAR));
+
+        var schema = BenoStreamDBArrowConverter.toArrowSchema(columns);
+        assertEquals("Should have 2 fields", 2, schema.getFields().size());
+        assertEquals("id", schema.getFields().get(0).getName());
+        assertEquals("name", schema.getFields().get(1).getName());
+    }
+
+    @Test
+    public void testTableUriMapping() {
+        assertEquals("s3://default/default/test_table",
+                BenoStreamDBTableUri.of(BenoStreamDBTableUri.DEFAULT_WAREHOUSE, "default", "test_table"));
+    }
+
+    @Test
+    public void testTableUriMappingCustomWarehouse() {
+        assertEquals("s3://my-bucket/warehouse/default/test_table",
+                BenoStreamDBTableUri.of("s3://my-bucket/warehouse", "default", "test_table"));
+        // A trailing slash is normalized.
+        assertEquals("s3://my-bucket/warehouse/default/test_table",
+                BenoStreamDBTableUri.of("s3://my-bucket/warehouse/", "default", "test_table"));
+    }
+
+    @Test
+    public void testConnectorFactoryWarehouseConfig() {
+        BenoStreamDBConnectorFactory factory = new BenoStreamDBConnectorFactory();
+        var connector = factory.create("test",
+                Map.of("benostream.warehouse", "s3://my-bucket/wh"), null);
+        assertNotNull("Connector should not be null", connector);
+
+        var metadata = connector.getMetadata(null, null);
+        assertTrue("Should be BenoStreamDBMetadata", metadata instanceof BenoStreamDBMetadata);
+    }
+
+    @Test
+    public void testBeginCreateTableReturnsHandle() {
+        BenoStreamDBMetadata metadata = new BenoStreamDBMetadata();
+        var tableMetadata = new io.trino.spi.connector.ConnectorTableMetadata(
+                new SchemaTableName("default", "new_table"),
+                List.of(
+                        new io.trino.spi.connector.ColumnMetadata("id", IntegerType.INTEGER),
+                        new io.trino.spi.connector.ColumnMetadata("name", VarcharType.VARCHAR)));
+
+        var handle = metadata.beginCreateTable(null, tableMetadata, java.util.Optional.empty(),
+                io.trino.spi.connector.RetryMode.NO_RETRIES);
+        assertTrue("Should be BenoStreamDBOutputTableHandle",
+                handle instanceof BenoStreamDBOutputTableHandle);
+
+        BenoStreamDBOutputTableHandle out = (BenoStreamDBOutputTableHandle) handle;
+        assertEquals("default", out.getSchemaName());
+        assertEquals("new_table", out.getTableName());
+        assertEquals("Should carry the output columns", 2, out.getColumns().size());
+    }
+
+    @Test
+    public void testSchemaJsonMapping() {
+        List<BenoStreamDBColumnHandle> columns = List.of(
+                new BenoStreamDBColumnHandle("id", IntegerType.INTEGER),
+                new BenoStreamDBColumnHandle("name", VarcharType.VARCHAR));
+
+        String json = BenoStreamDBArrowConverter.toSchemaJson(columns);
+        assertTrue("Should contain the id field", json.contains("\"name\":\"id\""));
+        assertTrue("Should map INTEGER to Int32", json.contains("\"type\":\"Int32\""));
+        assertTrue("Should contain the name field", json.contains("\"name\":\"name\""));
+        assertTrue("Should map VARCHAR to Utf8", json.contains("\"type\":\"Utf8\""));
     }
 }

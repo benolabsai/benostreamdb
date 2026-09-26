@@ -9,7 +9,7 @@ use crate::SegmentConfig;
 /// - `TableIndexState` / `TableCatalogState` structs
 /// - `ColumnIndexConfig` / `LabelPattern` types
 /// - State accessor/mutator methods on `Table`
-use anyhow::Result;
+use anyhow::{Context, Result};
 use arrow::datatypes::SchemaRef;
 use object_store::ObjectStore;
 use serde::{Deserialize, Serialize};
@@ -156,6 +156,25 @@ impl Table {
             .as_ref()
             .expect("Runtime not available on async Table")
             .clone()
+    }
+
+    /// Run a future to completion for a synchronous table API.
+    ///
+    /// Uses the table's runtime when present. Async-constructed tables
+    /// ([`Table::new_async`]) have no runtime, so a temporary current-thread
+    /// runtime is created. Callers must not already be inside a Tokio runtime —
+    /// the synchronous merge/delete APIs are driven from `spawn_blocking`.
+    pub(crate) fn block_on_io<F: std::future::Future>(&self, fut: F) -> Result<F::Output> {
+        match &self.rt {
+            Some(rt) => Ok(rt.block_on(fut)),
+            None => {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("failed to build a temporary runtime for a synchronous table API")?;
+                Ok(rt.block_on(fut))
+            }
+        }
     }
 
     pub fn arrow_schema(&self) -> SchemaRef {

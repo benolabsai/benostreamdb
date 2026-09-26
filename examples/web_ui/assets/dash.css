@@ -1,0 +1,143 @@
+/* BenoStreamDB Dash demo — minimal styling */
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+  background: #fafafa;
+  color: #1a1a1a;
+}
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 24px 48px;
+}
+
+h2 {
+  margin: 8px 0 4px;
+}
+
+.summary {
+  font-weight: 700;
+  font-size: 15px;
+  margin: 4px 0 8px;
+}
+
+.global-res {
+  margin-bottom: 12px;
+}
+
+.global-res-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #555;
+}
+
+.section-title {
+  font-weight: 600;
+  margin: 14px 0 6px;
+}
+
+.caption {
+  font-size: 12px;
+  color: #666;
+  margin: 4px 0;
+}
+
+.error {
+  color: #b00020;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.go {
+  margin: 10px 0;
+  padding: 6px 16px;
+  border: 1px solid #4c78a8;
+  background: #4c78a8;
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.go:hover {
+  background: #3b5f86;
+}
+
+/* Process-resource metric cards */
+.metric-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.metric-card {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 110px;
+  background: #fff;
+}
+
+.metric-label {
+  font-size: 11px;
+  color: #777;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.metric-value {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.metric-delta {
+  font-size: 11px;
+  color: #2e7d32;
+}
+
+/* Trace log */
+.trace {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  background: #0f172a;
+  color: #d6e2f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.plan {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  background: #f4f4f4;
+  border-radius: 6px;
+  padding: 10px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.doc-body {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+
+.bottleneck-label {
+  font-weight: 600;
+  color: #b26a00;
+}
+
+details {
+  margin: 6px 0;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 500;
+}

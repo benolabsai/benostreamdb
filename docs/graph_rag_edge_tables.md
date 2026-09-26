@@ -253,6 +253,72 @@ result = doc_table.graph_rag_search(
 print(result.format_context())
 ```
 
+### Bounded Traversal (CRS Fast Path)
+
+When the edge table has a CSR graph index, `subgraph` / `graph_neighbors` run over the
+memory-mapped CSR instead of re-materializing the edge set. Two independent caps bound
+the frontier — important on scale-free graphs like the Wikipedia link network, where a
+handful of super-nodes reach most of the graph in two hops:
+
+```python
+# Skip super-nodes (>500 links) and cap the total visited set.
+edges = edge_table.subgraph(
+    seeds, hops=2, graph_column="source",
+    max_degree=500,     # report but do not expand hubs
+    max_nodes=10_000,   # hard token-budget cap on the visited set
+)
+
+# Node set only — no edge materialization (Graph RAG uses this internally).
+nodes = edge_table.subgraph_nodes(seeds, hops=2, graph_column="source", max_nodes=10_000)
+```
+
+`Table.communities()` also runs over the CSR when available, keeping only **O(V)** state
+resident regardless of the edge count. Choose Louvain (default) or Leiden (connected
+communities):
+
+```python
+parts = edge_table.communities(resolution=1.0, algorithm="leiden")   # community_id + community
+
+# Incremental update: warm-start from the previous partition so unchanged
+# communities keep their ids.
+parts2 = edge_table.update_communities(previous=parts)
+```
+
+### LLM-Authored Community Reports and Routing
+
+`summarize_communities` can generate model-authored reports and embed them as
+first-class vector-retrieval units; `graph_rag_search` (global mode) can rate and prune
+communities with a cheap router before descending:
+
+```python
+comm_table = edge_table.summarize_communities(
+    doc_table=doc_table,
+    target_uri="file:///tmp/communities",
+    llm=lambda prompt: my_llm(prompt),         # -> report string per community
+    embed=lambda texts: my_embedder(texts),    # -> vectors; builds an HNSW index
+)
+
+result = doc_table.graph_rag_search(
+    query=query_embedding, edge_table=edge_table, mode="global",
+    llm_router=lambda q, summary: my_router(q, summary),  # -> relevance float
+    relevance_threshold=0.5,                              # prune below this
+)
+```
+
+### Knowledge-Graph Extraction (`Table.extract_graph`)
+
+Build an edge table (plus an optional claims table) from a document table using an LLM.
+Entity names map to stable uint64 ids via SHA-256, so the graph is reproducible:
+
+```python
+kg = doc_table.extract_graph(
+    doc_table,
+    target_uri="file:///tmp/kg",
+    llm=lambda prompt: my_llm(prompt),   # -> JSON {entities, relationships, claims}
+    claims_uri="file:///tmp/claims",
+)
+```
+
 ### Entity Equivalence Resolution (`Table.resolve_entities`)
 Automatically resolve synonyms, aliases, and entity duplicates across `same_as` edges using transitive equivalence closure:
 

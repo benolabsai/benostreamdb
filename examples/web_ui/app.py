@@ -25,6 +25,9 @@ used for query parsing and answer synthesis; configure via
 
 import json
 import os
+import queue
+import threading
+from contextlib import contextmanager
 
 # Serving default: the engine's 1 GB index-cache cannot hold whole-site segment
 # indexes (69 segments x ~300 MB TQ8 graphs), so every query would evict and
@@ -100,8 +103,11 @@ def get_embedder():
         return None
 
 
-def embed_text(text: str):
-    m = get_embedder()
+def embed_text(text: str, model=None):
+    # `model` is passed in when embedding runs on a worker thread: `get_embedder`
+    # is an `st.cache_resource`, which needs the script context, so it must be
+    # resolved on the script thread and handed to the worker.
+    m = model if model is not None else get_embedder()
     if m is None:
         return None
     return m.encode([text], normalize_embeddings=True)[0].tolist()
@@ -142,12 +148,70 @@ with st.sidebar:
     st.caption(f"DB: `{DB}`")
     st.caption(f"Embed model: `{EMBED_MODEL}` · LLM: `{llm_config()['model']}`")
     llm_on = st.toggle("Use LLM (parsing + synthesis)", value=llm_available())
+    show_trace = st.toggle("Show engine trace", value=True)
+    show_explain = st.toggle("Show query plan (explain)", value=True)
     if st.button("Clear caches"):
         st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
 
 edges_t, nodes_t = open_tables()
+
+
+# ── Startup summary: what's loaded ──────────────────────────────────────────
+def _fmt_bytes(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:,.1f} {unit}"
+        n /= 1024
+    return f"{n:,.1f} TB"
+
+
+def _dir_sizes(path: str) -> tuple[int, int]:
+    """(total_bytes, index_bytes) on disk for a table directory. Index bytes are
+    everything that isn't a data `.parquet` file — the CSR / HNSW / inverted
+    sidecars. The engine's `total_index_size_bytes` is not populated, so we read
+    the filesystem directly."""
+    total = index = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                sz = os.path.getsize(os.path.join(root, f))
+            except OSError:
+                continue
+            total += sz
+            if not f.endswith(".parquet"):
+                index += sz
+    return total, index
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def graph_summary() -> dict:
+    """Row counts, segment counts, and on-disk data/index sizes for the two
+    tables backing the demo."""
+    e = edges_t.statistics
+    n = nodes_t.statistics
+    e_total, e_idx = _dir_sizes(os.path.join(DB, "edges"))
+    n_total, n_idx = _dir_sizes(os.path.join(DB, "nodes"))
+    return {
+        "pages": n.row_count,
+        "edges": e.row_count,
+        "segments": n.file_count + e.file_count,
+        "data_bytes": n.total_size_bytes + e.total_size_bytes,
+        "index_bytes": e_idx + n_idx,
+        "disk_bytes": e_total + n_total,
+    }
+
+
+try:
+    _s = graph_summary()
+    st.markdown(
+        f"**Loaded graph: {_s['pages']:,} pages · {_s['edges']:,} edges · "
+        f"{_s['segments']} segments · data {_fmt_bytes(_s['data_bytes'])} · "
+        f"indexes {_fmt_bytes(_s['index_bytes'])} · on disk {_fmt_bytes(_s['disk_bytes'])}**"
+    )
+except Exception as _e:
+    st.caption(f"Graph summary unavailable ({type(_e).__name__}: {_e})")
 
 
 # ── Helpers over the engine (no full-table pandas loads) ─────────────────────
@@ -168,6 +232,379 @@ def lookup_titles(ids):
     if df.empty:
         return {}
     return {int(r["id"]): str(r["title"]) for _, r in df.iterrows()}
+
+
+# ── Live trace, query plan (explain), and document text ─────────────────────
+def _scroll_log_to_bottom() -> None:
+    """Best-effort auto-scroll of the newest log panel to its latest line."""
+    try:
+        st.html(
+            """
+            <script>
+            (function () {
+              const doc = window.parent.document;
+              const codes = doc.querySelectorAll('[data-testid="stCode"]');
+              if (!codes.length) return;
+              const el = codes[codes.length - 1];
+              let p = el.parentElement;
+              while (p && p !== doc.body && p.scrollHeight <= p.clientHeight + 4) {
+                p = p.parentElement;
+              }
+              if (p && p !== doc.body) p.scrollTop = p.scrollHeight;
+            })();
+            </script>
+            """,
+            unsafe_allow_javascript=True,
+        )
+    except Exception:
+        pass
+
+
+def _proc_status():
+    rss = peak = 0
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1])
+                elif line.startswith("VmHWM:"):
+                    peak = int(line.split()[1])
+    except Exception:
+        pass
+    return rss, peak
+
+
+def _proc_io():
+    r = w = 0
+    try:
+        with open("/proc/self/io") as f:
+            for line in f:
+                if line.startswith("read_bytes:"):
+                    r = int(line.split()[1])
+                elif line.startswith("write_bytes:"):
+                    w = int(line.split()[1])
+    except Exception:
+        pass
+    return r, w
+
+
+def _proc_cpu_seconds():
+    try:
+        with open("/proc/self/stat") as f:
+            parts = f.read().split()
+        return (int(parts[13]) + int(parts[14])) / os.sysconf("SC_CLK_TCK")
+    except Exception:
+        return 0.0
+
+
+def sample_resources() -> dict:
+    """Snapshot this process's memory, disk I/O, and CPU usage."""
+    rss_kb, peak_kb = _proc_status()
+    read_b, write_b = _proc_io()
+    return {
+        "rss_mb": rss_kb / 1024.0,
+        "peak_mb": peak_kb / 1024.0,
+        "read_mb": read_b / 1e6,
+        "write_mb": write_b / 1e6,
+        "cpu_s": _proc_cpu_seconds(),
+    }
+
+
+def disk_headroom(path: str):
+    """(total, used, free) bytes for the filesystem holding ``path``."""
+    try:
+        return shutil.disk_usage(path)
+    except Exception:
+        return None
+
+
+@st.fragment(run_every=1.0)
+def sidebar_resources() -> None:
+    """Always-on sidebar process readout (re-samples every second)."""
+    r = sample_resources()
+    st.caption(f"RSS {r['rss_mb']:.0f} MB · peak {r['peak_mb']:.0f} MB · "
+               f"CPU {r['cpu_s']:.1f} s · {time.strftime('%H:%M:%S')}")
+    st.caption(f"Disk I/O: read {r['read_mb']:.1f} MB · write {r['write_mb']:.1f} MB")
+    dh = disk_headroom(DB)
+    if dh:
+        st.caption(f"DB disk: {dh[2] / 1e9:.1f} GB free / {dh[0] / 1e9:.1f} GB")
+
+
+def _render_resources(base: dict) -> None:
+    """Render the live process-resource metrics against a base snapshot."""
+    s = sample_resources()
+    with st.container(border=True):
+        st.caption(f"Process resources  ·  live  ·  {time.strftime('%H:%M:%S')}")
+        cols = st.columns(5)
+        cols[0].metric("RSS", f"{s['rss_mb']:.1f} MB",
+                       f"{s['rss_mb'] - base['rss_mb']:+.1f} MB")
+        cols[1].metric("Peak RSS", f"{s['peak_mb']:.1f} MB")
+        cols[2].metric("Disk read", f"{s['read_mb']:.1f} MB",
+                       f"{s['read_mb'] - base['read_mb']:+.1f} MB")
+        cols[3].metric("Disk write", f"{s['write_mb']:.1f} MB",
+                       f"{s['write_mb'] - base['write_mb']:+.1f} MB")
+        cols[4].metric("CPU time", f"{s['cpu_s']:.2f} s",
+                       f"{s['cpu_s'] - base['cpu_s']:+.2f} s")
+        dh = disk_headroom(DB)
+        if dh:
+            total, used, free = dh
+            st.caption(
+                f"DB filesystem: {free / 1e9:.1f} GB free / {total / 1e9:.1f} GB "
+                f"({used / 1e9:.1f} GB used)")
+
+
+class LiveRun:
+    """A query running on a worker thread, streaming trace events to the UI.
+
+    The engine call runs off Streamlit's script thread, so the script thread
+    stays free and a self-refreshing fragment can drain the event queue and
+    repaint the trace + resource panels every half second — during the query and
+    after it. Results are rendered by the main script once ``done`` is set.
+    """
+
+    def __init__(self, title: str):
+        self.title = title
+        self.events: queue.Queue = queue.Queue()
+        self.result: dict = {}
+        self.error: BaseException | None = None
+        self.done = threading.Event()
+        self.t0 = time.time()
+        self.lines: list[str] = []
+        self.stages: list[tuple[str, float]] = []
+        self.base_res = sample_resources()
+
+    def log(self, msg: str) -> None:
+        self.events.put(("log", msg))
+
+    def stage(self, label: str, ms: float) -> None:
+        self.events.put(("stage", (label, ms)))
+
+    def start(self, work) -> None:
+        def runner():
+            try:
+                work(self)
+            except BaseException as e:  # surfaced in the UI
+                self.error = e
+            finally:
+                self.done.set()
+        threading.Thread(target=runner, daemon=True).start()
+
+    def drain(self) -> None:
+        while True:
+            try:
+                kind, payload = self.events.get_nowait()
+            except queue.Empty:
+                return
+            if kind == "log":
+                self.lines.append(f"{time.time() - self.t0:7.3f}s  {payload}")
+            elif kind == "stage":
+                label, ms = payload
+                self.stages.append((label, ms))
+                self.lines.append(f"{time.time() - self.t0:7.3f}s  ✓ {label}  ({ms:.1f} ms)")
+
+    def summary(self) -> None:
+        """Rank stages by wall time and call out the dominant one."""
+        if not self.stages:
+            return
+        total = sum(ms for _, ms in self.stages)
+        ranked = sorted(self.stages, key=lambda x: x[1], reverse=True)
+        slowest, slow_ms = ranked[0]
+        share = (slow_ms / total * 100) if total else 0.0
+        st.markdown(f"**Bottleneck breakdown** — {total:.1f} ms across {len(self.stages)} stages")
+        st.markdown(f":orange[**Bottleneck:**] `{slowest}` — {slow_ms:.1f} ms "
+                    f"({share:.0f}% of traced time)")
+        st.bar_chart(pd.DataFrame({"ms": [ms for _, ms in ranked]},
+                                  index=[s for s, _ in ranked]))
+        s = sample_resources()
+        b = self.base_res
+        st.caption(
+            f"Resource deltas over the run: RSS {s['rss_mb'] - b['rss_mb']:+.0f} MB · "
+            f"disk read {s['read_mb'] - b['read_mb']:+.1f} MB · "
+            f"disk write {s['write_mb'] - b['write_mb']:+.1f} MB")
+
+
+@st.fragment(run_every=0.5)
+def live_run_panel(run_id: str, height: int = 240) -> None:
+    """Self-refreshing trace + resource panel for an in-flight :class:`LiveRun`.
+
+    Drains the run's event queue and repaints every half second. When the run
+    finishes it triggers a full rerun so the main script can render results.
+    """
+    run = st.session_state.get(run_id)
+    if run is None:
+        return
+    run.drain()
+    with st.container(height=height, border=True):
+        st.caption(run.title)
+        st.code("\n".join(run.lines) or "…", language="text")
+    _scroll_log_to_bottom()
+    _render_resources(run.base_res)
+    if run.done.is_set():
+        st.rerun()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_documents(ids):
+    """Fetch the stored document text (Wikipedia summary) for node ids."""
+    if not ids:
+        return pd.DataFrame()
+    id_list = ", ".join(str(int(i)) for i in ids)
+    return as_df(nodes_t.execute_sql(
+        f"SELECT id, title, summary FROM t WHERE id IN ({id_list})"))
+
+
+def render_documents(ids, heading: str = "Retrieved documents", limit: int = 10) -> None:
+    """Expose the actual document text behind a set of result ids."""
+    ids = [int(i) for i in ids][:limit]
+    if not ids:
+        return
+    df = fetch_documents(ids)
+    if df.empty:
+        return
+    order = {i: r for r, i in enumerate(ids)}
+    df = df.assign(_o=df["id"].astype(int).map(order)).sort_values("_o")
+    st.markdown(f"**{heading}**")
+    for _, r in df.iterrows():
+        with st.expander(f"{r['title']}  ·  id {int(r['id'])}"):
+            st.markdown(str(r["summary"]) or "_No summary stored._")
+            st.caption(f"[Wikipedia](https://en.wikipedia.org/wiki/?curid={int(r['id'])})")
+
+
+def render_explain(table, label: str, filter: str | None = None,
+                   vector_filter: dict | None = None) -> None:
+    """Render the engine's query plan: pruning activity + index access paths."""
+    t = time.time()
+    try:
+        plan = table.explain(filter=filter, vector_filter=vector_filter)
+    except Exception as e:
+        st.warning(f"explain failed ({type(e).__name__}: {e})")
+        return
+    with st.expander(f"Query plan — {label}  ({(time.time() - t) * 1000:.1f} ms)"):
+        st.code(plan, language="text")
+
+
+def _render_semantic_results(run: "LiveRun") -> None:
+    """Render the results of a completed semantic-search :class:`LiveRun`."""
+    k = st.session_state.get("sem_k", 10)
+    vec = run.result.get("vec")
+    res = run.result.get("res")
+    mode = run.result.get("mode")
+    df = as_df(res)
+    st.caption(f"Mode: {mode}")
+    if df is None or df.empty:
+        st.info("No results.")
+    else:
+        show = df[[c for c in ["id", "title", "rrf_score"] if c in df.columns]]
+        st.dataframe(show.head(k), hide_index=True, height=420)
+        ids = [int(i) for i in df["id"].tolist()] if "id" in df.columns else []
+        if show_explain and vec is not None:
+            if "explain" not in run.result:
+                try:
+                    run.result["explain"] = nodes_t.explain(
+                        vector_filter={"column": "embedding", "query": vec, "k": k})
+                except Exception as e:
+                    run.result["explain"] = f"explain failed ({type(e).__name__}: {e})"
+            with st.expander("Query plan — hybrid vector leg (HNSW-TQ)"):
+                st.code(run.result["explain"], language="text")
+        if ids:
+            render_documents(ids, "Retrieved documents")
+    run.summary()
+    st.caption(f"End-to-end: {(time.time() - run.t0) * 1000:.1f} ms")
+
+
+def _render_graphrag_results(run: "LiveRun") -> None:
+    """Render the results of a completed Graph RAG :class:`LiveRun`."""
+    top_k = run.result.get("top_k", 5)
+    rerank_n = run.result.get("rerank_n", 8)
+    vec = run.result.get("vec")
+    result = run.result.get("result")
+    ids: list[int] = []
+    context = ""
+    if run.error is not None:
+        st.error(f"{type(run.error).__name__}: {run.error}")
+    elif result is not None:
+        seeds = [int(s) for s in (result.seeds or [])]
+        seed_titles = lookup_titles(seeds)
+        st.write("**Seeds:**", [seed_titles.get(i, i) for i in seeds])
+        ctx_df = as_df(result.nodes) if getattr(result, "nodes", None) is not None else pd.DataFrame()
+        if not ctx_df.empty:
+            st.dataframe(ctx_df.head(30), hide_index=True, height=300)
+        ids = seeds + ([int(x) for x in ctx_df["id"]] if "id" in ctx_df.columns else [])
+        titles = lookup_titles(ids)
+        if titles and getattr(result, "edges", None) is not None:
+            e_df = as_df(result.edges)
+            if not e_df.empty:
+                pairs = list(zip(e_df["source"].astype("int64"), e_df["target"].astype("int64")))[:120]
+                st.graphviz_chart(graphviz_from_edges(pairs, titles))
+        context = result.format_context() if hasattr(result, "format_context") else ""
+        if vec is not None and not ctx_df.empty and "id" in ctx_df.columns:
+            pool = [int(x) for x in ctx_df["id"].tolist()]
+            try:
+                rr = nodes_t.vector_search(
+                    "embedding", vec, k=min(int(rerank_n), len(pool)),
+                    filter=f"id IN ({', '.join(map(str, pool))})",
+                    columns=["id", "title"],
+                )
+                if rr is not None and not rr.empty:
+                    st.markdown(f"**Bitmap-filtered rerank** — same query vector, "
+                                f"search space constrained to the {len(pool)}-node "
+                                f"PPR neighborhood:")
+                    show = rr[[c for c in ["_distance", "distance", "id", "title"] if c in rr.columns]]
+                    st.dataframe(show, hide_index=True, height=min(40 + 35 * len(show), 350))
+                    rr_ids = ", ".join(str(int(i)) for i in rr["id"].tolist())
+                    rr_full = as_df(nodes_t.execute_sql(
+                        f"SELECT id, title, summary FROM t WHERE id IN ({rr_ids})"))
+                    if not rr_full.empty:
+                        order = {int(i): r for r, i in enumerate(rr["id"].tolist())}
+                        rr_full = rr_full.assign(
+                            _o=rr_full["id"].astype(int).map(order)).sort_values("_o")
+                        block = "\n#### Reranked neighborhood (topology ∩ semantics)\n" + "\n".join(
+                            f"- **{row['title']}** — {str(row['summary'])[:400]}"
+                            for _, row in rr_full.iterrows())
+                        context = (context + "\n" + block) if context else block
+            except Exception as re_err:
+                st.warning(f"Rerank skipped ({type(re_err).__name__}: {re_err})")
+    if ids:
+        render_documents(ids, "Subgraph documents")
+    if show_explain and vec is not None:
+        if "explain" not in run.result:
+            try:
+                run.result["explain"] = nodes_t.explain(
+                    vector_filter={"column": "embedding", "query": vec, "k": int(top_k)})
+            except Exception as e:
+                run.result["explain"] = f"explain failed ({type(e).__name__}: {e})"
+        with st.expander("Query plan — graph RAG seed vector leg (HNSW-TQ)"):
+            st.code(run.result["explain"], language="text")
+    run.summary()
+    st.caption(f"End-to-end: {(time.time() - run.t0) * 1000:.1f} ms")
+    if context and llm_on:
+        with st.spinner("Synthesizing answer with LLM..."):
+            try:
+                ans = llm_chat([{"role": "user", "content":
+                    "Answer the question using ONLY the retrieved context. Cite page titles.\n\n"
+                    f"Question: {st.session_state.get('gr_q', '')}\n\nContext:\n{context[:12000]}"}],
+                    temperature=0.3)
+                st.markdown("### Answer")
+                st.markdown(ans)
+            except Exception as e:
+                st.warning(f"LLM unavailable ({e}). Raw context shown above.")
+    elif context:
+        st.markdown("#### Retrieved context")
+        st.text(context[:4000])
+
+
+def _csr_or_sql(csr_fn, sql_fn, what: str):
+    """Run the CSR fast path; if the graph index isn't available yet — the
+    one-time v1→v2 graph-index migration runs in the background on first open —
+    fall back to the SQL BFS path and say so, instead of erroring."""
+    try:
+        return csr_fn()
+    except Exception as e:
+        if "CSR graph index" in str(e):
+            st.info(f"{what}: CSR index not ready yet (background migration in "
+                    f"progress) — using the SQL BFS fallback.")
+            return sql_fn()
+        raise
 
 
 def find_pages(term: str, limit: int = 5):
@@ -191,6 +628,12 @@ def graphviz_from_edges(edge_pairs, titles):
         dot.append(f'  "{ut}" -> "{vt}";')
     dot.append("}")
     return "\n".join(dot)
+
+
+with st.sidebar:
+    st.divider()
+    st.subheader("Process")
+    sidebar_resources()
 
 
 TAB_BROWSE, TAB_SEMANTIC, TAB_GRAPHRAG, TAB_DRIFT, TAB_TRAVERSAL = st.tabs([
@@ -249,28 +692,45 @@ with TAB_SEMANTIC:
     q = st.text_input("Query", key="sem_q", placeholder="what causes auroras?")
     k = st.slider("Top k", 5, 50, 10, key="sem_k")
     if st.button("Search", key="sem_go", type="primary") and q:
-        vec = embed_text(q)
-        with st.spinner("Querying vector + BM25 indexes..."):
-            try:
-                if vec is not None:
-                    res = nodes_t.hybrid_search(text_column="title", query_text=q,
-                                                vector_column="embedding",
-                                                query_vector=vec, k=k)
-                    mode = "hybrid (BM25 + HNSW-TQ, RRF)"
-                else:
-                    safe_q = q.replace("'", "''")
-                    res = nodes_t.execute_sql(
-                        f"SELECT id, title FROM t WHERE lower(title) LIKE lower('%{safe_q}%') LIMIT {k}")
-                    mode = "keyword only (no embedder)"
-            except Exception as e:
-                res, mode = None, f"failed: {e}"
-        df = as_df(res)
-        st.caption(f"Mode: {mode}")
-        if df is None or df.empty:
-            st.info("No results.")
+        run = LiveRun("Semantic search trace")
+        st.session_state["sem_run"] = run
+        model = get_embedder()  # warm on the script thread (st.cache_resource)
+
+        def work(r):
+            r.log(f"query={q!r}  k={k}")
+            t0 = time.time()
+            r.log("▶ embed query (all-MiniLM-L6-v2)")
+            vec = embed_text(q, model)
+            r.stage("embed query (all-MiniLM-L6-v2)", (time.time() - t0) * 1000)
+            r.result["vec"] = vec
+            if vec is not None:
+                t1 = time.time()
+                r.log("▶ hybrid_search: BM25 + HNSW-TQ, RRF fusion")
+                try:
+                    r.result["res"] = nodes_t.hybrid_search(
+                        text_column="title", query_text=q,
+                        vector_column="embedding", query_vector=vec, k=k)
+                    r.result["mode"] = "hybrid (BM25 + HNSW-TQ, RRF)"
+                except Exception as e:
+                    r.result["res"], r.result["mode"] = None, f"failed: {e}"
+                r.stage("hybrid_search: BM25 + HNSW-TQ, RRF fusion", (time.time() - t1) * 1000)
+            else:
+                t2 = time.time()
+                r.log("▶ keyword fallback (no embedder)")
+                safe_q = q.replace("'", "''")
+                r.result["res"] = nodes_t.execute_sql(
+                    f"SELECT id, title FROM t WHERE lower(title) LIKE lower('%{safe_q}%') LIMIT {k}")
+                r.result["mode"] = "keyword only (no embedder)"
+                r.stage("keyword fallback (no embedder)", (time.time() - t2) * 1000)
+
+        run.start(work)
+
+    _sem = st.session_state.get("sem_run")
+    if _sem is not None:
+        if _sem.done.is_set():
+            _render_semantic_results(_sem)
         else:
-            show = df[["id", "title"]] if "title" in df.columns else df
-            st.dataframe(show.head(k), hide_index=True, height=420)
+            live_run_panel("sem_run")
 
 # ── 3. Graph RAG (local search: seeds -> subgraph -> PPR) ───────────────────
 with TAB_GRAPHRAG:
@@ -289,78 +749,40 @@ with TAB_GRAPHRAG:
                    "a vector search **filtered to that pool** (`id IN (...)` → RoaringBitmap "
                    "predicate pushdown): topology prunes, semantics orders.")
     if st.button("Run Graph RAG", key="gr_go", type="primary") and q:
-        vec = embed_text(q)
-        with st.expander("Pipeline", expanded=True):
-            with st.spinner("graph_rag_search: vector seeds -> CSR subgraph -> PPR -> bitmap-filtered rerank..."):
-                try:
-                    result = nodes_t.graph_rag_search(
-                        query=vec if vec is not None else q,
-                        edge_table=edges_t, doc_table=nodes_t,
-                        mode="local", vector_column="embedding",
-                        id_column="id", top_k=int(top_k), hops=int(hops),
-                    )
-                    seeds = [int(s) for s in (result.seeds or [])]
-                    seed_titles = lookup_titles(seeds)
-                    st.write("**Seeds:**", [seed_titles.get(i, i) for i in seeds])
-                    ctx_df = as_df(result.nodes) if getattr(result, "nodes", None) is not None else pd.DataFrame()
-                    if not ctx_df.empty:
-                        st.dataframe(ctx_df.head(30), hide_index=True, height=300)
-                    ids = seeds + ([int(x) for x in ctx_df["id"]] if "id" in ctx_df.columns else [])
-                    titles = lookup_titles(ids)
-                    if titles and getattr(result, "edges", None) is not None:
-                        e_df = as_df(result.edges)
-                        if not e_df.empty:
-                            pairs = list(zip(e_df["source"].astype("int64"), e_df["target"].astype("int64")))[:120]
-                            st.graphviz_chart(graphviz_from_edges(pairs, titles))
-                    context = result.format_context() if hasattr(result, "format_context") else ""
+        run = LiveRun("Graph RAG trace")
+        run.result["top_k"] = int(top_k)
+        run.result["rerank_n"] = int(rerank_n)
+        st.session_state["gr_run"] = run
+        model = get_embedder()  # warm on the script thread (st.cache_resource)
 
-                    # Two-level rerank: the PPR neighborhood becomes a bitmap filter on the
-                    # vector index — semantic re-scoring constrained to the subgraph that the
-                    # CSR expansion proved topologically relevant.
-                    if vec is not None and not ctx_df.empty and "id" in ctx_df.columns:
-                        pool = [int(x) for x in ctx_df["id"].tolist()]
-                        try:
-                            rr = nodes_t.vector_search(
-                                "embedding", vec, k=min(int(rerank_n), len(pool)),
-                                filter=f"id IN ({', '.join(map(str, pool))})",
-                                columns=["id", "title"],
-                            )
-                            if rr is not None and not rr.empty:
-                                st.markdown(f"**Bitmap-filtered rerank** — same query vector, "
-                                            f"search space constrained to the {len(pool)}-node "
-                                            f"PPR neighborhood:")
-                                show = rr[[c for c in ["_distance", "distance", "id", "title"] if c in rr.columns]]
-                                st.dataframe(show, hide_index=True,
-                                             height=min(40 + 35 * len(show), 350))
-                                rr_ids = ", ".join(str(int(i)) for i in rr["id"].tolist())
-                                rr_full = as_df(nodes_t.execute_sql(
-                                    f"SELECT id, title, summary FROM t WHERE id IN ({rr_ids})"))
-                                if not rr_full.empty:
-                                    order = {int(i): r for r, i in enumerate(rr["id"].tolist())}
-                                    rr_full = rr_full.assign(
-                                        _o=rr_full["id"].astype(int).map(order)).sort_values("_o")
-                                    block = "\n#### Reranked neighborhood (topology ∩ semantics)\n" + "\n".join(
-                                        f"- **{row['title']}** — {str(row['summary'])[:400]}"
-                                        for _, row in rr_full.iterrows())
-                                    context = (context + "\n" + block) if context else block
-                        except Exception as re_err:
-                            st.warning(f"Rerank skipped ({type(re_err).__name__}: {re_err})")
-                except Exception as e:
-                    st.error(f"{type(e).__name__}: {e}")
-                    context = ""
-        if context and llm_on:
-            with st.spinner("Synthesizing answer with LLM..."):
-                try:
-                    ans = llm_chat([{"role": "user", "content":
-                        "Answer the question using ONLY the retrieved context. Cite page titles.\n\n"
-                        f"Question: {q}\n\nContext:\n{context[:12000]}"}], temperature=0.3)
-                    st.markdown("### Answer")
-                    st.markdown(ans)
-                except Exception as e:
-                    st.warning(f"LLM unavailable ({e}). Raw context shown above.")
-        elif context:
-            st.markdown("#### Retrieved context")
-            st.text(context[:4000])
+        def work(r):
+            t0 = time.time()
+            r.log("▶ embed query")
+            vec = embed_text(q, model)
+            r.stage("embed query", (time.time() - t0) * 1000)
+            r.result["vec"] = vec
+            t1 = time.time()
+            r.log("▶ graph_rag_search: vector seeds -> CSR subgraph -> PPR")
+            try:
+                r.result["result"] = nodes_t.graph_rag_search(
+                    query=vec if vec is not None else q,
+                    edge_table=edges_t, doc_table=nodes_t,
+                    mode="local", vector_column="embedding",
+                    id_column="id", top_k=int(top_k), hops=int(hops),
+                )
+            except Exception as e:
+                r.error = e
+            r.stage("graph_rag_search (seeds+CSR+PPR)", (time.time() - t1) * 1000)
+
+        run.start(work)
+
+    _gr = st.session_state.get("gr_run")
+    if _gr is not None:
+        if _gr.done.is_set():
+            _render_graphrag_results(_gr)
+        else:
+            with st.expander("Pipeline", expanded=True):
+                live_run_panel("gr_run")
 
 # ── 4. DRIFT (regional communities) ─────────────────────────────────────────
 with TAB_DRIFT:
@@ -368,6 +790,7 @@ with TAB_DRIFT:
     q = st.text_input("Query", key="d_q", placeholder="what is the history of computing?")
     seeds_n = st.slider("Region seeds", 2, 10, 4, key="d_seeds")
     if st.button("Build region + search", key="d_go", type="primary") and q:
+        t_e2e = time.time()
         tmp_edges = "/tmp/hdb_demo_region"
         tmp_comm = "file:///tmp/hdb_demo_communities"
         shutil.rmtree(tmp_edges, ignore_errors=True)
@@ -417,6 +840,7 @@ with TAB_DRIFT:
                     st.dataframe(pd.DataFrame(acts).head(20), hide_index=True)
             except Exception as e:
                 status.update(label=f"Failed: {e}", state="error")
+        st.caption(f"End-to-end: {(time.time() - t_e2e) * 1000:.1f} ms")
 
 # ── 5. Traversals ────────────────────────────────────────────────────────────
 with TAB_TRAVERSAL:
@@ -430,6 +854,7 @@ with TAB_TRAVERSAL:
         op = st.selectbox("Operation", ["shortest_path", "connecting_paths",
                                         "graph_neighbors", "subgraph"])
     if st.button("Run traversal", type="primary"):
+        t_e2e = time.time()
         ra, rb = find_pages(a, 1), find_pages(b, 1)
         if ra.empty:
             st.error(f"Could not resolve '{a}'.")
@@ -442,16 +867,26 @@ with TAB_TRAVERSAL:
             st.write("Resolved:", [titles.get(i, i) for i in ids])
             try:
                 if op == "shortest_path" and len(ids) == 2:
-                    path = [int(n) for n in edges_t.shortest_path(ids[0], ids[1], graph_column="source")]
+                    path = _csr_or_sql(
+                        lambda: [int(n) for n in edges_t.shortest_path(ids[0], ids[1], graph_column="source")],
+                        lambda: [int(n) for n in as_df(edges_t.shortest_path(ids[0], ids[1]))["node"].tolist()],
+                        "shortest_path")
                     pt = lookup_titles(path)
                     st.write(f"Path ({len(path)} hops):", " → ".join(str(pt.get(p, p)) for p in path))
                     st.graphviz_chart(graphviz_from_edges(list(zip(path[:-1], path[1:])), pt))
                 elif op == "connecting_paths" and len(ids) == 2:
-                    eps = [(int(u), int(v)) for u, v in edges_t.connecting_paths(ids, graph_column="source")]
+                    eps = _csr_or_sql(
+                        lambda: [(int(u), int(v)) for u, v in edges_t.connecting_paths(ids, graph_column="source")],
+                        lambda: [(int(r["source"]), int(r["target"]))
+                                 for _, r in as_df(edges_t.connecting_paths(ids)).iterrows()],
+                        "connecting_paths")
                     st.write(f"{len(eps)} connecting edges")
                     st.graphviz_chart(graphviz_from_edges(eps[:120], lookup_titles({u for u, v in eps} | {v for u, v in eps})))
                 elif op == "graph_neighbors":
-                    ns = [int(n) for n in edges_t.graph_neighbors(ia, graph_column="source")]
+                    ns = _csr_or_sql(
+                        lambda: [int(n) for n in edges_t.graph_neighbors(ia, graph_column="source")],
+                        lambda: [int(n) for n in as_df(edges_t.graph_neighbors(ia))["neighbor"].tolist()],
+                        "graph_neighbors")
                     nt = lookup_titles(ns)
                     st.write("Neighbors:", ", ".join(str(nt.get(n, n)) for n in ns[:50]))
                     st.graphviz_chart(graphviz_from_edges([(ia, n) for n in ns[:60]], {**nt, ia: titles.get(ia, ia)}))
@@ -462,3 +897,4 @@ with TAB_TRAVERSAL:
                         lookup_titles(set(sg["source"].astype("int64")) | set(sg["target"].astype("int64")))))
             except Exception as e:
                 st.error(f"{type(e).__name__}: {e}")
+        st.caption(f"End-to-end: {(time.time() - t_e2e) * 1000:.1f} ms")
