@@ -235,6 +235,35 @@ pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
         .build()
 });
 
+/// Cache of whole small parquet files, keyed by object path.
+///
+/// A scan touches every segment, and a workload issues several scans per step,
+/// so small segments are read repeatedly. Serving their byte ranges from memory
+/// avoids the per-range object-store overhead (a `spawn_blocking` + open per
+/// range). Only files at or below `PARQUET_BYTES_CACHE_MAX_FILE` are cached;
+/// larger files are read through `ParquetObjectReader`, which fetches only the
+/// needed column chunks.
+pub static PARQUET_BYTES_CACHE: Lazy<Cache<String, bytes::Bytes>> = Lazy::new(|| {
+    let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse()
+        .unwrap_or(1);
+
+    // Allocate 10% of the global cache to whole-file parquet bytes (max 512MB).
+    let limit_bytes = (cache_gb * 1024 * 1024 * 1024 / 10).min(512 * 1024 * 1024);
+    let max_kb = limit_bytes / 1024;
+
+    Cache::builder()
+        // moka's weigher is u32 and the value is in KB, so clamp to avoid a
+        // wrap for a value above 4 TiB (u32::MAX KB).
+        .weigher(|_key, value: &bytes::Bytes| -> u32 {
+            (value.len() / 1024).min(u32::MAX as usize) as u32
+        })
+        .max_capacity(max_kb)
+        .time_to_idle(Duration::from_secs(60 * 30)) // 30 mins
+        .build()
+});
+
 pub static HNSW_CACHE: Lazy<Cache<String, Arc<Hnsw<f32, DistL2>>>> = Lazy::new(|| {
     Cache::builder()
         .max_capacity(500) // Cache up to 500 HNSW graphs

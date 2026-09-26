@@ -998,11 +998,19 @@ impl Table {
         };
 
         if manifest_version == 0 || expr.is_none() {
+            let t_setup = std::time::Instant::now();
             let mut stream = reader.stream_all(target_schema).await?;
+            crate::telemetry::metrics::READ_PHASE_SECONDS
+                .with_label_values(&["setup"])
+                .observe(t_setup.elapsed().as_secs_f64());
+            let t_decode = std::time::Instant::now();
             let mut batches = Vec::new();
             while let Some(batch_result) = stream.next().await {
                 batches.push(batch_result?);
             }
+            crate::telemetry::metrics::READ_PHASE_SECONDS
+                .with_label_values(&["decode"])
+                .observe(t_decode.elapsed().as_secs_f64());
             return Ok(batches);
         }
 
@@ -1065,13 +1073,22 @@ impl Table {
                 }
             }
 
+            let t_setup = std::time::Instant::now();
             let mut stream = reader.stream_all(read_schema).await?;
+            crate::telemetry::metrics::READ_PHASE_SECONDS
+                .with_label_values(&["setup"])
+                .observe(t_setup.elapsed().as_secs_f64());
+            let t_decode = std::time::Instant::now();
             while let Some(batch_result) = stream.next().await {
                 batches.push(batch_result?);
             }
+            crate::telemetry::metrics::READ_PHASE_SECONDS
+                .with_label_values(&["decode"])
+                .observe(t_decode.elapsed().as_secs_f64());
         }
 
         let planner = QueryPlanner::new();
+        let t_filter = std::time::Instant::now();
         let mut filtered_batches = Vec::new();
         for batch in batches {
             match planner.filter_expr(&batch, expr) {
@@ -1113,6 +1130,9 @@ impl Table {
                 }
             }
         }
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["filter"])
+            .observe(t_filter.elapsed().as_secs_f64());
         Ok(filtered_batches)
     }
 
