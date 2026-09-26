@@ -728,3 +728,47 @@ asserts the manifest list grows 1 → 2 on a pure append and consolidates back t
 `test_concurrent_writers`, `test_multi_writer_concurrency`,
 `test_crash_injection`, `test_durability_robust`, `test_maintenance_invariant`,
 `verify_delete_correctness`, `test_index_lifecycle`, `test_chaos`) passes.
+
+### 8.8 Parquet read path — profile and fixes
+
+**Profile.** Instrumented [`stream_row_groups`](../src/core/reader/scan.rs:527)
+(setup phases) and [`read_segment_expr`](../src/core/table/read.rs:907)
+(decode/filter) with a `benostreamdb_read_phase_seconds` histogram. On the
+60-step randomized workload (550 reads):
+
+| Phase | Before | After |
+|---|---|---|
+| `decode` (parquet read + decode) | 0.594s | **0.042s** |
+| `filter` (predicate evaluation) | 0.186s | **0.032s** |
+| `setup` (metadata + deletes + build) | 0.178s | 0.221s |
+| `deletes` (merged + equality) | 0.107s | 0.139s |
+| `meta` (metadata cache + builder) | 0.071s | 0.081s |
+
+**Fix 1 — compiled-expression cache.** [`evaluate_expr`](../src/core/planner.rs:940)
+built a fresh `SessionContext` (re-registering the vector operators) and called
+`create_physical_expr` on *every batch*. The context is now a shared
+`once_cell::sync::Lazy<SessionContext>`, and the compiled `PhysicalExpr` is
+cached by `(expression, schema)` in a bounded `RwLock<HashMap>`. This is the
+common case for a multi-segment scan: the same predicate is evaluated against
+many batches that share a schema. Filter phase: 0.186s → 0.032s (5.9x).
+
+**Fix 2 — small-file parquet byte cache.** The decode phase was ~half I/O: a
+full-file read of a tiny segment cost ~0.41ms through the object store (a
+`spawn_blocking` + open per range). Added
+[`PARQUET_BYTES_CACHE`](../src/core/cache.rs:238) and a
+[`BytesReader`](../src/core/reader/scan.rs:38) that serves byte ranges from
+memory. Files at or below `PARQUET_BYTES_CACHE_MAX_FILE` (4 MiB) are cached
+whole; larger files still stream only the needed column chunks through
+`ParquetObjectReader`. Decode phase: 0.594s → 0.042s (10x).
+
+**Result.** A focused benchmark (200 filtered scans over 40 small segments)
+drops from **58.4ms to 33.8ms per scan (1.73x)**. The 60-step randomized
+workload stays green.
+
+**Correctness.** `test_differential_index_oracle`, `test_advanced_sql`,
+`test_sql_bm25_pushdown`, `test_pk_acceleration`, `test_composite_index`,
+`test_iceberg_conformance`, `verify_mor_reads`/`verify_mor_writes`,
+`test_integrity`, `test_maintenance_invariant`, `test_index_lifecycle`,
+`test_chaos`, `test_durability_robust`, `test_concurrent_writers`,
+`test_multi_writer_concurrency`, `test_crash_injection`, `test_merge_integration`,
+and `verify_delete_correctness` all pass.

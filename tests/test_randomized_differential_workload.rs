@@ -329,6 +329,11 @@ async fn randomized_differential_workload_matches_model() -> anyhow::Result<()> 
         benostreamdb::telemetry::metrics::dump_merged_deletes_metrics()
     );
 
+    eprintln!(
+        "[rdw] === read-path phase breakdown ===\n{}",
+        benostreamdb::telemetry::metrics::dump_read_metrics()
+    );
+
     Ok(())
 }
 

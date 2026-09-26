@@ -3,10 +3,38 @@
 use crate::core::manifest::{IndexFile, ManifestEntry};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::prelude::SessionContext;
 use serde_json::Value;
 use std::cmp::Ordering;
 use std::sync::Arc;
+
+/// Shared DataFusion session used to compile physical filter expressions.
+///
+/// The original `evaluate_expr` built a fresh `SessionContext` (and re-registered
+/// the vector operators) on *every* batch. That construction dominated the read
+/// path's filter phase. The context is stateless for our purposes, so a single
+/// shared instance is sufficient.
+static FILTER_SESSION: once_cell::sync::Lazy<SessionContext> =
+    once_cell::sync::Lazy::new(|| {
+        let mut ctx = SessionContext::new();
+        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        ctx
+    });
+
+/// Cache of compiled physical expressions keyed by `(expression, schema)`.
+///
+/// `create_physical_expr` performs function resolution and type coercion, which
+/// is pure overhead when the same expression is evaluated against many batches
+/// that share a schema — the common case for a multi-segment scan. The cache is
+/// bounded; on overflow it is cleared wholesale (cheap and correct, since the
+/// entries are pure derived data).
+static PHYS_EXPR_CACHE: once_cell::sync::Lazy<
+    std::sync::RwLock<std::collections::HashMap<String, Arc<dyn PhysicalExpr>>>,
+> = once_cell::sync::Lazy::new(|| std::sync::RwLock::new(std::collections::HashMap::new()));
+
+/// Upper bound on the compiled-expression cache size before it is cleared.
+const PHYS_EXPR_CACHE_MAX: usize = 1024;
 
 /// Represents a filter predicate.
 /// For MVP, we support simple Range filters on a single column.
@@ -945,11 +973,8 @@ impl QueryPlanner {
         let FilterExpr::DataFusion(df_expr) = expr;
 
         use datafusion::physical_expr::create_physical_expr;
-        use datafusion::prelude::SessionContext;
 
-        let mut ctx = SessionContext::new();
-        let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
-        let state = ctx.state();
+        let state = FILTER_SESSION.state();
 
         // Type Coercion: DataFusion sometimes struggles with LargeUtf8 vs Utf8 in direct physical expr evaluation.
         // We ensure the batch schema matches what's expected or coerce it.
@@ -990,15 +1015,36 @@ impl QueryPlanner {
         use datafusion::common::DFSchema;
         let df_schema = DFSchema::try_from_qualified_schema("t", &arrow_schema)?;
 
-        let phys_expr = create_physical_expr(df_expr, &df_schema, state.execution_props())
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Failed to create physical expression: {}. Expression: {:?}, Schema: {:?}",
-                    e,
-                    df_expr,
-                    df_schema
-                )
-            })?;
+        // Compile the physical expression once per (expression, schema) and reuse
+        // it across batches. `create_physical_expr` does function resolution and
+        // type coercion, which is pure overhead when the same expression is
+        // evaluated against many batches that share a schema.
+        let cache_key = format!("{}|{:?}", df_expr, arrow_schema);
+        let cached = PHYS_EXPR_CACHE
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&cache_key)
+            .cloned();
+        let phys_expr = match cached {
+            Some(e) => e,
+            None => {
+                let compiled = create_physical_expr(df_expr, &df_schema, state.execution_props())
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to create physical expression: {}. Expression: {:?}, Schema: {:?}",
+                            e,
+                            df_expr,
+                            df_schema
+                        )
+                    })?;
+                let mut write = PHYS_EXPR_CACHE.write().unwrap_or_else(|e| e.into_inner());
+                if write.len() >= PHYS_EXPR_CACHE_MAX {
+                    write.clear();
+                }
+                write.insert(cache_key, compiled.clone());
+                compiled
+            }
+        };
 
         let result = phys_expr.evaluate(&coerced_batch)?;
         let array = result.into_array(coerced_batch.num_rows())?;

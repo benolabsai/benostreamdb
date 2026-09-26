@@ -24,7 +24,80 @@ use roaring::RoaringBitmap;
 
 use super::*;
 
+/// Maximum parquet file size (bytes) cached whole in memory.
+///
+/// Small segments are read repeatedly (a scan touches every segment, and a
+/// workload issues several scans per step). Reading them through the object
+/// store each time pays a per-range `spawn_blocking` + open. Caching the whole
+/// file and serving ranges from memory removes that. Larger files are left to
+/// `ParquetObjectReader`, which fetches only the needed column chunks.
+const PARQUET_BYTES_CACHE_MAX_FILE: u64 = 4 * 1024 * 1024;
+
+/// An `AsyncFileReader` that serves byte ranges from an in-memory buffer.
+///
+/// Used with `ParquetRecordBatchStreamBuilder::new_with_metadata`, so only
+/// `get_bytes`/`get_byte_ranges` are exercised; `get_metadata` is never called
+/// (the metadata is supplied by the caller from `PARQUET_META_CACHE`).
+struct BytesReader {
+    bytes: Bytes,
+}
+
+impl parquet::arrow::async_reader::AsyncFileReader for BytesReader {
+    fn get_bytes(
+        &mut self,
+        range: std::ops::Range<u64>,
+    ) -> futures::future::BoxFuture<'_, parquet::errors::Result<Bytes>> {
+        let start = (range.start as usize).min(self.bytes.len());
+        let end = (range.end as usize).min(self.bytes.len());
+        let slice = if start <= end {
+            self.bytes.slice(start..end)
+        } else {
+            Bytes::new()
+        };
+        Box::pin(async move { Ok(slice) })
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        _options: Option<&'a ArrowReaderOptions>,
+    ) -> futures::future::BoxFuture<
+        'a,
+        parquet::errors::Result<Arc<parquet::file::metadata::ParquetMetaData>>,
+    > {
+        Box::pin(async move {
+            Err(parquet::errors::ParquetError::General(
+                "BytesReader does not load metadata; it is supplied by the caller".to_string(),
+            ))
+        })
+    }
+}
+
 impl HybridReader {
+    /// Build a parquet reader for `path`. Small files are served from an
+    /// in-memory cache (see `PARQUET_BYTES_CACHE`); larger files use the object
+    /// store directly so only the needed column chunks are fetched.
+    async fn parquet_reader(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        path: &Path,
+        size: u64,
+    ) -> Box<dyn parquet::arrow::async_reader::AsyncFileReader> {
+        if size <= PARQUET_BYTES_CACHE_MAX_FILE {
+            let key = format!("{}/{}", self.root_uri, path);
+            if let Some(bytes) = crate::core::cache::PARQUET_BYTES_CACHE.get(&key).await {
+                return Box::new(BytesReader { bytes });
+            }
+            if let Ok(res) = store.get(path).await {
+                if let Ok(bytes) = res.bytes().await {
+                    crate::core::cache::PARQUET_BYTES_CACHE
+                        .insert(key, bytes.clone())
+                        .await;
+                    return Box::new(BytesReader { bytes });
+                }
+            }
+        }
+        Box::new(ParquetObjectReader::new(store.clone(), path.clone()))
+    }
     #[tracing::instrument(skip(self, target_schema))]
     pub async fn stream_all(
         &self,
@@ -456,6 +529,8 @@ impl HybridReader {
         row_groups: Option<&[usize]>,
         target_schema: Option<arrow::datatypes::SchemaRef>,
     ) -> Result<BoxStream<'static, Result<arrow::record_batch::RecordBatch>>> {
+        let t_total = std::time::Instant::now();
+        let t_meta = std::time::Instant::now();
         let store = self
             .config
             .data_store
@@ -464,28 +539,23 @@ impl HybridReader {
         let pq_path = self.resolve_object_path("parquet");
         let pq_path_str = pq_path.to_string();
 
-        let mut builder = if let Some((meta, size)) = crate::core::cache::PARQUET_META_CACHE
-            .get_with_metrics(
-                &format!("{}/{}", self.root_uri, pq_path_str),
-                "parquet_meta",
-            )
-            .await
-        {
-            // Cache Hit
-            let object_meta = ObjectMeta {
-                location: pq_path.clone(),
-                last_modified: Utc::now(),
-                size: size as u64,
-                e_tag: None,
-                version: None,
-            };
-            let reader = ParquetObjectReader::new(store.clone(), object_meta.location);
+        let meta_cache_key = format!("{}/{}", self.root_uri, pq_path_str);
+        let cached_meta = crate::core::cache::PARQUET_META_CACHE
+            .get_with_metrics(&meta_cache_key, "parquet_meta")
+            .await;
 
+        let (arrow_meta, size) = if let Some((meta, size)) = cached_meta {
+            // Cache Hit
+            crate::telemetry::metrics::PARQUET_META_CACHE_TOTAL
+                .with_label_values(&["hit"])
+                .inc();
             let options = ArrowReaderOptions::default();
-            let arrow_meta = ArrowReaderMetadata::try_new(meta, options)?;
-            ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta)
+            (ArrowReaderMetadata::try_new(meta, options)?, size as u64)
         } else {
             // Miss
+            crate::telemetry::metrics::PARQUET_META_CACHE_TOTAL
+                .with_label_values(&["miss"])
+                .inc();
             // Ensure file exists/get meta (HEAD)
             let meta_res: Result<ObjectMeta, object_store::Error> = store.head(&pq_path).await;
             let object_meta = match meta_res {
@@ -497,11 +567,10 @@ impl HybridReader {
             };
 
             let size = object_meta.size;
-            let reader = ParquetObjectReader::new(store.clone(), object_meta.location);
-
-            let b_res = ParquetRecordBatchStreamBuilder::new(reader).await;
-            let b = match b_res {
-                Ok(b) => b,
+            let mut reader = ParquetObjectReader::new(store.clone(), object_meta.location);
+            let options = ArrowReaderOptions::default();
+            let arrow_meta = match ArrowReaderMetadata::load_async(&mut reader, options).await {
+                Ok(m) => m,
                 Err(e) if e.to_string().contains("not found") || e.to_string().contains("404") => {
                     return Ok(futures::stream::empty().boxed());
                 }
@@ -509,13 +578,20 @@ impl HybridReader {
             };
 
             crate::core::cache::PARQUET_META_CACHE
-                .insert(
-                    format!("{}/{}", self.root_uri, pq_path_str),
-                    (b.metadata().clone(), size as usize),
-                )
+                .insert(meta_cache_key, (arrow_meta.metadata().clone(), size as usize))
                 .await;
-            b
+            (arrow_meta, size)
         };
+
+        // Serve small files from the in-memory byte cache; larger files stream
+        // only the needed column chunks from the object store.
+        let reader = self.parquet_reader(&store, &pq_path, size).await;
+        let mut builder = ParquetRecordBatchStreamBuilder::new_with_metadata(reader, arrow_meta);
+
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["meta"])
+            .observe(t_meta.elapsed().as_secs_f64());
+        let t_proj = std::time::Instant::now();
 
         // Apply Row Group Selection
         if let Some(rgs) = row_groups {
@@ -544,6 +620,11 @@ impl HybridReader {
             builder = builder.with_projection(projection);
         }
 
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["projection"])
+            .observe(t_proj.elapsed().as_secs_f64());
+        let t_del = std::time::Instant::now();
+
         // Apply Deletes
         let deleted = self.load_merged_deletes().await?;
         if !deleted.is_empty() {
@@ -558,7 +639,16 @@ impl HybridReader {
         // Load Equality Deletes
         let equality_deletes = self.load_equality_deletes().await?;
 
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["deletes"])
+            .observe(t_del.elapsed().as_secs_f64());
+        let t_build = std::time::Instant::now();
+
         let stream = builder.build()?;
+
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["build"])
+            .observe(t_build.elapsed().as_secs_f64());
 
         // Wrap stream to apply Schema Mapping (Evolution) and Equality Deletes
         let mapped_stream = stream.map(move |res| {
@@ -643,6 +733,9 @@ impl HybridReader {
             Ok(batch)
         });
 
+        crate::telemetry::metrics::READ_PHASE_SECONDS
+            .with_label_values(&["total"])
+            .observe(t_total.elapsed().as_secs_f64());
         Ok(mapped_stream.boxed())
     }
 
