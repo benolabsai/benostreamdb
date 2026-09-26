@@ -473,9 +473,14 @@ impl crate::core::segment::HybridSegmentWriter {
                     meta.insert(col_name.to_string(), tokenizer_name.clone());
                 }
 
-                // Build inverted index: Token -> RowIDs (buffered in memory per segment)
-                let mut inverted_lock = self.inverted_data.lock();
-                let col_inverted_map = inverted_lock.entry(col_name.to_string()).or_default();
+                // Build inverted index: Token -> RowIDs (buffered in memory per segment).
+                //
+                // `build_indexes` drives columns through a rayon `into_par_iter`, so
+                // several columns can tokenize concurrently. Accumulate this column's
+                // postings in a task-local map and merge under a short-lived lock,
+                // rather than holding `inverted_data` for the whole tokenization loop.
+                let mut col_inverted_map: std::collections::BTreeMap<String, Vec<u32>> =
+                    std::collections::BTreeMap::new();
 
                 for (batch_i, val) in array.iter().enumerate() {
                     if let Some(v) = val {
@@ -487,6 +492,18 @@ impl crate::core::segment::HybridSegmentWriter {
                                 .or_default()
                                 .push(global_row_id);
                         }
+                    }
+                }
+
+                // Merge into the shared per-segment buffer. Each column is visited by
+                // exactly one rayon task, so this append is the only writer for
+                // `col_name` within a batch; repeated `build_indexes` calls for the
+                // same column (multi-batch ingest) append in row order.
+                {
+                    let mut inverted_lock = self.inverted_data.lock();
+                    let entry = inverted_lock.entry(col_name.to_string()).or_default();
+                    for (token, mut rows) in col_inverted_map {
+                        entry.entry(token).or_default().append(&mut rows);
                     }
                 }
 

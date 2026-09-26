@@ -15,6 +15,45 @@ use super::stats::{PyDataFileInfo, PyIndexCoverage, PyMergeMode, PySplit, PyTabl
 use crate::core::manifest::IndexAlgorithm;
 use crate::python_gpu_context::PyDevice;
 
+/// Standard edge-endpoint column candidates, mirroring the Python
+/// `Table.edge_endpoints()` convention.
+const SOURCE_COLUMN_CANDIDATES: [&str; 4] = ["source", "source_id", "src", "u"];
+const TARGET_COLUMN_CANDIDATES: [&str; 4] = ["target", "target_id", "dst", "v"];
+
+/// Return the first candidate column present in the table schema.
+fn find_endpoint_column(table: &Table, candidates: &[&str]) -> Option<String> {
+    let schema = table.arrow_schema();
+    candidates
+        .iter()
+        .find(|c| schema.field_with_name(c).is_ok())
+        .map(|c| c.to_string())
+}
+
+/// Return the `(source, target)` endpoint columns, defaulting to
+/// `("source", "target")` when the table does not follow the convention.
+fn edge_endpoint_columns(table: &Table) -> (String, String) {
+    (
+        find_endpoint_column(table, &SOURCE_COLUMN_CANDIDATES)
+            .unwrap_or_else(|| "source".to_string()),
+        find_endpoint_column(table, &TARGET_COLUMN_CANDIDATES)
+            .unwrap_or_else(|| "target".to_string()),
+    )
+}
+
+/// Given a graph-index column (the index's *source* column), return the other
+/// edge endpoint column when the table follows the standard edge convention.
+/// Used to locate a reverse CSR for undirected traversal.
+fn other_endpoint_column(table: &Table, graph_column: &str) -> Option<String> {
+    let (source, target) = edge_endpoint_columns(table);
+    if source == graph_column {
+        Some(target)
+    } else if target == graph_column {
+        Some(source)
+    } else {
+        None
+    }
+}
+
 /// High-level Table API - Pandas-compatible interface
 /// This is a thin Python wrapper around the core Rust Table struct
 #[pyclass(name = "Table")]
@@ -235,6 +274,16 @@ impl PyTable {
             .iter()
             .map(|f| f.name().clone())
             .collect()
+    }
+
+    /// Return `True` if the table has a CSR graph index built on `column`.
+    ///
+    /// Used by the Python layer to decide whether the CSR fast path is
+    /// available before opting into it (e.g. Graph RAG's `subgraph` call).
+    fn has_graph_index(&self, column: &str) -> PyResult<bool> {
+        crate::python::helpers::load_multi_csr(&self.table, column)
+            .map(|g| g.is_some())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Add a column to the primary key.
@@ -1125,6 +1174,18 @@ impl PyTable {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
+    /// Iceberg table format version (1, 2, or 3). v3 enables row lineage
+    /// (`_row_id` / `_last_updated_sequence_number`). Persisted on the next commit.
+    #[getter]
+    fn format_version(&self) -> i32 {
+        self.table.get_format_version()
+    }
+
+    #[setter]
+    fn set_format_version(&self, version: i32) {
+        self.table.set_format_version(version);
+    }
+
     /// Update the table's partition specification
     fn update_spec(&self, py: Python<'_>, fields: Vec<PyPartitionField>) -> PyResult<()> {
         let rust_fields: Vec<crate::core::manifest::PartitionField> = fields
@@ -1364,37 +1425,72 @@ impl PyTable {
         crate::python::helpers::arrow_batches_to_pyarrow(py, result_df.0, result_df.1)
     }
 
-    #[pyo3(signature = (node, hops=1))]
-    fn graph_neighbors(&self, py: Python<'_>, node: u64, hops: u32) -> PyResult<Py<PyAny>> {
-        // Frontier-based BFS: bounded, parquet-spilling intermediate state
-        // instead of buffering the entire edge set in a UDAF accumulator.
-        let rt = self.table.runtime();
-        let visited = rt
-            .block_on(async {
-                use datafusion::prelude::SessionContext;
-                let ctx = SessionContext::new();
-                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
-                    std::sync::Arc::new(self.table.clone()),
-                ));
-                ctx.register_table("t", provider)
-                    .map_err(|e| e.to_string())?;
-                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
-                let res = crate::core::algorithms::frontier::bfs_visited(
-                    &ctx,
-                    "t",
-                    &[node],
-                    hops,
-                    true,
-                    "source",
-                    "target",
-                    &tmp,
-                )
-                .await
-                .map_err(|e| e.to_string());
-                let _ = std::fs::remove_dir_all(&tmp);
-                res
-            })
-            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+    #[pyo3(signature = (node, hops=1, graph_column=None, max_degree=None, max_nodes=None))]
+    fn graph_neighbors(
+        &self,
+        py: Python<'_>,
+        node: u64,
+        hops: u32,
+        graph_column: Option<String>,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
+    ) -> PyResult<Py<PyAny>> {
+        // Fast path: when a CSR graph index exists for `graph_column`, run the
+        // bounded BFS in Rust over the memory-mapped CSR. `graph_neighbors` is
+        // directed by definition (it follows out-edges), which is exactly what
+        // the forward CSR provides. Otherwise fall back to the frontier-based
+        // SQL BFS (bounded, parquet-spilling intermediate state).
+        let csr_visited: Option<Vec<u64>> = if let Some(col) = graph_column.as_deref() {
+            crate::python::helpers::load_multi_csr(&self.table, col)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+                .map(|forward| {
+                    crate::python::helpers::csr_bfs_visited(
+                        &forward,
+                        None,
+                        &[node],
+                        hops,
+                        true,
+                        max_degree,
+                        max_nodes,
+                    )
+                })
+        } else {
+            None
+        };
+
+        let visited = match csr_visited {
+            Some(v) => v,
+            None => {
+                let rt = self.table.runtime();
+                rt.block_on(async move {
+                    use datafusion::prelude::SessionContext;
+                    let ctx = SessionContext::new();
+                    let provider =
+                        std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                            std::sync::Arc::new(self.table.clone()),
+                        ));
+                    ctx.register_table("t", provider)
+                        .map_err(|e| e.to_string())?;
+                    let tmp =
+                        std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+                    let res = crate::core::algorithms::frontier::bfs_visited(
+                        &ctx,
+                        "t",
+                        &[node],
+                        hops,
+                        true,
+                        "source",
+                        "target",
+                        &tmp,
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
+                    let _ = std::fs::remove_dir_all(&tmp);
+                    res
+                })
+                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?
+            }
+        };
 
         let neighbors: Vec<u64> = visited.into_iter().filter(|&n| n != node).collect();
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
@@ -1410,20 +1506,40 @@ impl PyTable {
         crate::python::helpers::arrow_batches_to_pyarrow(py, vec![batch], schema)
     }
 
-    #[pyo3(signature = (seeds, hops=1, directed=false))]
+    #[pyo3(signature = (seeds, hops=1, directed=false, graph_column=None, max_degree=None, max_nodes=None))]
     fn subgraph(
         &self,
         py: Python<'_>,
         seeds: Vec<u64>,
         hops: u32,
         directed: bool,
+        graph_column: Option<String>,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
-        // Frontier-based BFS (bounded, spilling intermediates), then join the
-        // induced node set back against the table so payload columns (e.g.
-        // `weight`) survive in the result.
+        // Fast path: when a CSR graph index exists for `graph_column`, run the
+        // multi-hop BFS in Rust over the memory-mapped CSR instead of
+        // re-materializing the whole edge set via `bfs_visited`. For
+        // `directed == false` a reverse CSR is used when the table has a graph
+        // index on the other endpoint column; otherwise we fall back to the SQL
+        // `bfs_visited` path so undirected results are unchanged.
+        let visited = self
+            .compute_visited(
+                &seeds,
+                hops,
+                directed,
+                graph_column.as_deref(),
+                max_degree,
+                max_nodes,
+            )
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        // Join the induced node set back against the table so payload columns
+        // (e.g. `weight`) survive in the result.
+        let (src_col, dst_col) = edge_endpoint_columns(&self.table);
         let rt = self.table.runtime();
         let result = rt
-            .block_on(async {
+            .block_on(async move {
                 use datafusion::prelude::SessionContext;
                 let ctx = SessionContext::new();
                 let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
@@ -1431,14 +1547,6 @@ impl PyTable {
                 ));
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
-                let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
-                let visited_res = crate::core::algorithms::frontier::bfs_visited(
-                    &ctx, "t", &seeds, hops, directed, "source", "target", &tmp,
-                )
-                .await
-                .map_err(|e| e.to_string());
-                let _ = std::fs::remove_dir_all(&tmp);
-                let visited = visited_res?;
 
                 let visited_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                     arrow::datatypes::Field::new("id", arrow::datatypes::DataType::UInt64, false),
@@ -1454,11 +1562,11 @@ impl PyTable {
                     .map_err(|e| e.to_string())?;
 
                 let df = ctx
-                    .sql(
+                    .sql(&format!(
                         "SELECT DISTINCT t.* FROM t \
-                         JOIN hdb_visited vs ON arrow_cast(t.source, 'UInt64') = vs.id \
-                         JOIN hdb_visited vt ON arrow_cast(t.target, 'UInt64') = vt.id",
-                    )
+                         JOIN hdb_visited vs ON arrow_cast(t.{src_col}, 'UInt64') = vs.id \
+                         JOIN hdb_visited vt ON arrow_cast(t.{dst_col}, 'UInt64') = vt.id"
+                    ))
                     .await
                     .map_err(|e| e.to_string())?;
                 let schema = std::sync::Arc::new(df.schema().as_arrow().clone());
@@ -1467,6 +1575,36 @@ impl PyTable {
             })
             .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
         crate::python::helpers::arrow_batches_to_pyarrow(py, result.0, result.1)
+    }
+
+    /// BFS visited node set for `seeds` within `hops`, without materializing the
+    /// induced edges.
+    ///
+    /// Same traversal as `subgraph` (CSR fast path, else frontier SQL BFS) but
+    /// returns only the node IDs. This lets Graph RAG compute its neighbourhood
+    /// set without loading millions of edges into memory.
+    #[pyo3(signature = (seeds, hops=1, directed=false, graph_column=None, max_degree=None, max_nodes=None))]
+    fn subgraph_nodes(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        hops: u32,
+        directed: bool,
+        graph_column: Option<String>,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
+    ) -> PyResult<Vec<u64>> {
+        py.allow_threads(|| {
+            self.compute_visited(
+                &seeds,
+                hops,
+                directed,
+                graph_column.as_deref(),
+                max_degree,
+                max_nodes,
+            )
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
+        })
     }
 
     #[pyo3(signature = (seeds, directed=false))]
@@ -1511,7 +1649,192 @@ impl PyTable {
 
     #[pyo3(signature = (resolution=1.0))]
     fn louvain_communities(&self, py: Python<'_>, resolution: f64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t", resolution);
+        // `community_id` mirrors the CSR path's output so callers can rely on the
+        // same shape regardless of which path produced the partition.
+        let query = format!(
+            "SELECT arrow_cast(row_number() OVER () - 1, 'UInt32') AS community_id, community \
+             FROM (SELECT unnest(louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
+            resolution
+        );
+        self.execute_sql(py, query)
+    }
+
+    /// CSR-backed community detection.
+    ///
+    /// Reads adjacency from the memory-mapped CSR, so only O(V) state is
+    /// resident (no in-RAM edge accumulator). `algorithm` is `"louvain"` or
+    /// `"leiden"`; when the table has a graph index on the other endpoint column
+    /// the traversal is undirected, otherwise directed.
+    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="louvain"))]
+    fn communities_csr(
+        &self,
+        py: Python<'_>,
+        graph_column: &str,
+        resolution: f64,
+        algorithm: &str,
+    ) -> PyResult<Py<PyAny>> {
+        let (forward, reverse) = self
+            .load_csr_pair(graph_column)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+
+        let leiden = algorithm.eq_ignore_ascii_case("leiden");
+        let communities = py.allow_threads(|| {
+            if leiden {
+                crate::core::algorithms::communities::csr_leiden(
+                    &forward,
+                    reverse.as_ref(),
+                    resolution as f32,
+                )
+            } else {
+                crate::core::algorithms::communities::csr_louvain(
+                    &forward,
+                    reverse.as_ref(),
+                    resolution as f32,
+                )
+            }
+        });
+
+        self.communities_to_pyarrow(py, communities)
+    }
+
+    /// CSR-backed community detection, warm-started from a previous partition.
+    ///
+    /// `seed_nodes` and `seed_communities` are parallel arrays giving each
+    /// previously-seen node's community id. Communities that do not change keep
+    /// their ids, so an incrementally-updated graph does not renumber every
+    /// community.
+    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="louvain", seed_nodes=Vec::new(), seed_communities=Vec::new()))]
+    fn communities_csr_seeded(
+        &self,
+        py: Python<'_>,
+        graph_column: &str,
+        resolution: f64,
+        algorithm: &str,
+        seed_nodes: Vec<u64>,
+        seed_communities: Vec<u32>,
+    ) -> PyResult<Py<PyAny>> {
+        let (forward, reverse) = self
+            .load_csr_pair(graph_column)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        let seed: std::collections::HashMap<u64, u32> =
+            seed_nodes.into_iter().zip(seed_communities).collect();
+        let leiden = algorithm.eq_ignore_ascii_case("leiden");
+        let communities = py.allow_threads(|| {
+            if leiden {
+                crate::core::algorithms::communities::csr_leiden_seeded(
+                    &forward,
+                    reverse.as_ref(),
+                    resolution as f32,
+                    &seed,
+                )
+            } else {
+                crate::core::algorithms::communities::csr_louvain_seeded(
+                    &forward,
+                    reverse.as_ref(),
+                    resolution as f32,
+                    &seed,
+                )
+            }
+        });
+        self.communities_to_pyarrow(py, communities)
+    }
+
+    /// Community detection over an on-the-fly CSR, for a table with no graph index.
+    ///
+    /// Streams the edge columns to a temp file on disk, builds (and memory-maps)
+    /// a forward CSR — plus a reverse CSR for undirected traversal — runs the O(V)
+    /// algorithm, then removes the temp files. This gives tables without a
+    /// persisted graph index the same bounded-memory path, and enables
+    /// warm-started updates (`seed_nodes`/`seed_communities`) on them.
+    #[pyo3(signature = (src_column="source", dst_column="target", resolution=1.0, algorithm="louvain", seed_nodes=Vec::new(), seed_communities=Vec::new(), undirected=true))]
+    #[allow(clippy::too_many_arguments)]
+    fn communities_temp_csr(
+        &self,
+        py: Python<'_>,
+        src_column: &str,
+        dst_column: &str,
+        resolution: f64,
+        algorithm: &str,
+        seed_nodes: Vec<u64>,
+        seed_communities: Vec<u32>,
+        undirected: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let src = src_column.to_string();
+        let dst = dst_column.to_string();
+        let leiden = algorithm.eq_ignore_ascii_case("leiden");
+
+        let communities = rt
+            .block_on(async move {
+                use datafusion::prelude::SessionContext;
+
+                let ctx = SessionContext::new();
+                let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                    std::sync::Arc::new(table),
+                ));
+                ctx.register_table("t", provider).map_err(|e| e.to_string())?;
+
+                let dir = std::env::temp_dir()
+                    .join(format!("bsdb_temp_csr_{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+                // Forward CSR: src -> dst.
+                let fwd_sql = format!(
+                    "SELECT arrow_cast({src}, 'UInt64') AS s, arrow_cast({dst}, 'UInt64') AS d FROM t"
+                );
+                let forward = Self::build_temp_csr(&ctx, &fwd_sql, &dir, "forward").await?;
+
+                // Reverse CSR: dst -> src, for undirected traversal.
+                let reverse = if undirected {
+                    let rev_sql = format!(
+                        "SELECT arrow_cast({dst}, 'UInt64') AS s, arrow_cast({src}, 'UInt64') AS d FROM t"
+                    );
+                    Some(Self::build_temp_csr(&ctx, &rev_sql, &dir, "reverse").await?)
+                } else {
+                    None
+                };
+
+                let fwd = crate::core::index::csr_graph::MultiSegmentCsrGraph::new(vec![forward]);
+                let rev = reverse.map(|r| {
+                    crate::core::index::csr_graph::MultiSegmentCsrGraph::new(vec![r])
+                });
+
+                let seed: std::collections::HashMap<u64, u32> =
+                    seed_nodes.into_iter().zip(seed_communities).collect();
+
+                use crate::core::algorithms::communities::{
+                    csr_leiden, csr_leiden_seeded, csr_louvain, csr_louvain_seeded,
+                };
+                let res = match (seed.is_empty(), leiden) {
+                    (true, true) => csr_leiden(&fwd, rev.as_ref(), resolution as f32),
+                    (true, false) => csr_louvain(&fwd, rev.as_ref(), resolution as f32),
+                    (false, true) => {
+                        csr_leiden_seeded(&fwd, rev.as_ref(), resolution as f32, &seed)
+                    }
+                    (false, false) => {
+                        csr_louvain_seeded(&fwd, rev.as_ref(), resolution as f32, &seed)
+                    }
+                };
+
+                let _ = std::fs::remove_dir_all(&dir);
+                Ok::<_, String>(res)
+            })
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+
+        self.communities_to_pyarrow(py, communities)
+    }
+
+    #[pyo3(signature = (resolution=1.0))]
+    fn leiden_communities(&self, py: Python<'_>, resolution: f64) -> PyResult<Py<PyAny>> {
+        // Leiden adds a connectivity-refinement phase, so every returned
+        // community is internally connected (unlike Louvain). `community_id`
+        // mirrors the CSR path's output.
+        let query = format!(
+            "SELECT arrow_cast(row_number() OVER () - 1, 'UInt32') AS community_id, community \
+             FROM (SELECT unnest(leiden_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
+            resolution
+        );
         self.execute_sql(py, query)
     }
 
@@ -1796,42 +2119,14 @@ impl PyTable {
 
         // If graph_column is provided, use MmapCsrGraph. Otherwise fallback to DiGraphMap
         let result = if let Some(col) = graph_column {
-            let (_manifest, segments) = crate::python::helpers::TOKIO_RUNTIME
-                .block_on(async {
-                    let manifest = self.table.manifest().await.map_err(|e| e.to_string())?;
-                    let mut segments = Vec::new();
-                    let cache = crate::core::cache::DiskCache::new(self.table.store.clone());
-
-                    for entry in &manifest.entries {
-                        for idx in &entry.index_files {
-                            if idx.index_type == "graph"
-                                && idx.column_name.as_deref() == Some(col.as_str())
-                            {
-                                let offsets_str = format!("{}.graph.csr.offsets", idx.file_path);
-                                let edges_str = format!("{}.graph.csr.edges", idx.file_path);
-                                let dict_str = format!("{}.graph.csr.dict", idx.file_path);
-
-                                if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
-                                    cache.get_mmap(&offsets_str).await,
-                                    cache.get_mmap(&edges_str).await,
-                                    cache.get_mmap(&dict_str).await,
-                                ) {
-                                    let mmap_graph =
-                                        crate::core::index::csr_graph::MmapCsrGraph::from_mmaps(
-                                            offsets_mmap,
-                                            edges_mmap,
-                                            dict_mmap,
-                                        );
-                                    segments.push(mmap_graph);
-                                }
-                            }
-                        }
-                    }
-                    Ok::<_, String>((manifest, segments))
-                })
-                .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
-
-            let multi_graph = crate::core::index::csr_graph::MultiSegmentCsrGraph::new(segments);
+            // Shared CSR loader. When the table has no graph index on `col` we
+            // preserve the historical behaviour of an empty graph (no neighbours)
+            // rather than silently switching to the in-memory fallback.
+            let multi_graph = crate::python::helpers::load_multi_csr(&self.table, &col)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
+                .unwrap_or_else(|| {
+                    crate::core::index::csr_graph::MultiSegmentCsrGraph::new(Vec::new())
+                });
 
             #[allow(deprecated)]
             py.allow_threads(move || {
@@ -2302,6 +2597,203 @@ impl PyTable {
 }
 
 impl PyTable {
+    /// Compute the BFS visited set for `subgraph` / `subgraph_nodes` without
+    /// materializing the induced edges.
+    ///
+    /// Uses the memory-mapped CSR fast path when a graph index exists for
+    /// `graph_column` (and a reverse CSR is available for undirected traversal);
+    /// otherwise falls back to the frontier-based SQL BFS, which spills its
+    /// per-hop frontier to parquet.
+    pub(crate) fn compute_visited(
+        &self,
+        seeds: &[u64],
+        hops: u32,
+        directed: bool,
+        graph_column: Option<&str>,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
+    ) -> Result<Vec<u64>, String> {
+        if let Some(col) = graph_column {
+            if let Some(forward) = crate::python::helpers::load_multi_csr(&self.table, col)
+                .map_err(|e| e.to_string())?
+            {
+                let reverse = if directed {
+                    None
+                } else {
+                    match other_endpoint_column(&self.table, col) {
+                        Some(other_col) => {
+                            crate::python::helpers::load_multi_csr(&self.table, &other_col)
+                                .map_err(|e| e.to_string())?
+                        }
+                        None => None,
+                    }
+                };
+                if directed || reverse.is_some() {
+                    return Ok(crate::python::helpers::csr_bfs_visited(
+                        &forward,
+                        reverse.as_ref(),
+                        seeds,
+                        hops,
+                        directed,
+                        max_degree,
+                        max_nodes,
+                    ));
+                }
+            }
+        }
+
+        // SQL fallback: frontier-based BFS with parquet-spilling state.
+        let (src_col, dst_col) = edge_endpoint_columns(&self.table);
+        let seeds = seeds.to_vec();
+        self.table.runtime().block_on(async move {
+            use datafusion::prelude::SessionContext;
+            let ctx = SessionContext::new();
+            let provider = std::sync::Arc::new(crate::core::sql::BenoStreamTableProvider::new(
+                std::sync::Arc::new(self.table.clone()),
+            ));
+            ctx.register_table("t", provider).map_err(|e| e.to_string())?;
+            let tmp = std::env::temp_dir().join(format!("hdb_bfs_{}", uuid::Uuid::new_v4()));
+            let res = crate::core::algorithms::frontier::bfs_visited(
+                &ctx, "t", &seeds, hops, directed, &src_col, &dst_col, &tmp,
+            )
+            .await
+            .map_err(|e| e.to_string());
+            let _ = std::fs::remove_dir_all(&tmp);
+            res
+        })
+    }
+
+    /// Load the forward CSR for `graph_column`, plus the reverse CSR when the
+    /// table has a graph index on the other endpoint (undirected traversal).
+    ///
+    /// Errors when no forward CSR exists, so callers can surface a clear message.
+    pub(crate) fn load_csr_pair(
+        &self,
+        graph_column: &str,
+    ) -> Result<
+        (
+            crate::core::index::csr_graph::MultiSegmentCsrGraph,
+            Option<crate::core::index::csr_graph::MultiSegmentCsrGraph>,
+        ),
+        String,
+    > {
+        let forward = crate::python::helpers::load_multi_csr(&self.table, graph_column)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("No CSR graph index found for column {graph_column}"))?;
+        let reverse = match other_endpoint_column(&self.table, graph_column) {
+            Some(other) => crate::python::helpers::load_multi_csr(&self.table, &other)
+                .map_err(|e| e.to_string())?,
+            None => None,
+        };
+        Ok((forward, reverse))
+    }
+
+    /// Build the `(community_id, community)` pyarrow table for a partition.
+    pub(crate) fn communities_to_pyarrow(
+        &self,
+        py: Python<'_>,
+        communities: Vec<(u32, Vec<u64>)>,
+    ) -> PyResult<Py<PyAny>> {
+        use arrow::array::{ListBuilder, UInt32Array, UInt64Builder};
+
+        let ids: Vec<u32> = communities.iter().map(|(c, _)| *c).collect();
+        let mut list = ListBuilder::new(UInt64Builder::new());
+        for (_, members) in &communities {
+            for m in members {
+                list.values().append_value(*m);
+            }
+            list.append(true);
+        }
+
+        let item = arrow::datatypes::Field::new("item", arrow::datatypes::DataType::UInt64, true);
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("community_id", arrow::datatypes::DataType::UInt32, false),
+            arrow::datatypes::Field::new(
+                "community",
+                arrow::datatypes::DataType::List(std::sync::Arc::new(item)),
+                true,
+            ),
+        ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                std::sync::Arc::new(UInt32Array::from(ids)),
+                std::sync::Arc::new(list.finish()),
+            ],
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        crate::python::helpers::arrow_batches_to_pyarrow(py, vec![batch], schema)
+    }
+
+    /// Stream an edge query to a `(u64 src, u64 dst, u32 row_id)` binary file.
+    ///
+    /// Runs the query as a DataFusion stream and appends each row, so the edge
+    /// set is never resident — only the current batch is.
+    async fn stream_edges_to_file(
+        ctx: &datafusion::prelude::SessionContext,
+        sql: &str,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        use futures::StreamExt;
+        use std::io::Write;
+
+        let file = std::fs::File::create(path).map_err(|e| e.to_string())?;
+        let mut out = std::io::BufWriter::new(file);
+        let df = ctx.sql(sql).await.map_err(|e| e.to_string())?;
+        let mut stream = df.execute_stream().await.map_err(|e| e.to_string())?;
+        let mut row_id: u32 = 0;
+
+        while let Some(batch) = stream.next().await {
+            let batch = batch.map_err(|e| e.to_string())?;
+            let s = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .ok_or_else(|| "temp CSR: expected a UInt64 source column".to_string())?;
+            let d = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .ok_or_else(|| "temp CSR: expected a UInt64 target column".to_string())?;
+            for i in 0..batch.num_rows() {
+                out.write_all(&s.value(i).to_le_bytes())
+                    .map_err(|e| e.to_string())?;
+                out.write_all(&d.value(i).to_le_bytes())
+                    .map_err(|e| e.to_string())?;
+                out.write_all(&row_id.to_le_bytes())
+                    .map_err(|e| e.to_string())?;
+                row_id = row_id.wrapping_add(1);
+            }
+        }
+        out.flush().map_err(|e| e.to_string())
+    }
+
+    /// Build a [`MmapCsrGraph`](crate::core::index::csr_graph::MmapCsrGraph) from
+    /// an edge query, writing the sidecars under `dir/{name}.graph_v2.csr.*`.
+    ///
+    /// This is the on-the-fly path for tables that have no persisted graph index:
+    /// the edges go to a temp file on disk (streamed), the CSR is built and
+    /// memory-mapped, so only O(V) algorithm state is resident.
+    async fn build_temp_csr(
+        ctx: &datafusion::prelude::SessionContext,
+        sql: &str,
+        dir: &std::path::Path,
+        name: &str,
+    ) -> Result<crate::core::index::csr_graph::MmapCsrGraph, String> {
+        let tmp = dir.join(format!("{name}.edges.bin"));
+        Self::stream_edges_to_file(ctx, sql, &tmp).await?;
+        let base = dir.join(name);
+        crate::core::index::csr_graph::MmapCsrGraph::build_from_file(&tmp, &base)
+            .map_err(|e| e.to_string())?;
+        let base_str = base.to_string_lossy().to_string();
+        crate::core::index::csr_graph::MmapCsrGraph::load(
+            std::path::Path::new(&format!("{base_str}.graph_v2.csr.offsets")),
+            std::path::Path::new(&format!("{base_str}.graph_v2.csr.edges")),
+            std::path::Path::new(&format!("{base_str}.graph_v2.csr.dict")),
+        )
+        .map_err(|e| e.to_string())
+    }
+
     pub(crate) fn execute_sql_internal(
         &self,
         query: String,
@@ -2310,8 +2802,21 @@ impl PyTable {
         let rt = self.table.runtime();
 
         rt.block_on(async {
-            use datafusion::prelude::SessionContext;
-            let mut ctx = SessionContext::new();
+            use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
+            use datafusion::prelude::{SessionConfig, SessionContext};
+
+            // Apply the configurable DataFusion query memory limit
+            // (`BSDB_DATAFUSION_MEMORY_GB`, else half the effective memory) so
+            // SQL operators spill to disk instead of OOMing. This is the path the
+            // graph UDFs (`subgraph`, `communities`, `bfs`) run on.
+            let memory_limit = crate::core::resources::default_datafusion_memory_bytes();
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(memory_limit as usize, 1.0)
+                .build()
+                .map(std::sync::Arc::new)
+                .unwrap_or_else(|_| std::sync::Arc::new(RuntimeEnv::default()));
+            let mut ctx =
+                SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
 
             // Register standard functions and aggregates
             datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;

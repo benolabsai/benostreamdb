@@ -153,7 +153,7 @@ BenoStreamDB competes across four distinct product categories in data infrastruc
 │    Play" Vector Silos  │   Milvus, Weaviate, Chroma     │ hot RAM/NVMe clusters; Qdrant wire drop-in.  │
 ├────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────┤
 │ 3. Search & Database   │ • Elasticsearch / OpenSearch   │ Scale-to-zero Rust serverless vs. JVM heap   │
-│    Incumbents          │ • pgvector (PostgreSQL)        │ crashes; petabyte scale vs. pg RAM limits.   │
+│    Incumbents          │ • pgvector (PostgreSQL)        │ crashes; TB-scale per node vs. pg RAM limits.│
 ├────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────┤
 │ 4. Big Cloud           │ • Databricks Vector Search     │ Multi-cloud & format neutrality vs. locked-in│
 │    Lakehouse Giants    │ • Snowflake Cortex Search      │ DBU consumption and proprietary credits.     │
@@ -182,7 +182,7 @@ LanceDB is our most visible mindshare competitor in the "serverless/embedded dis
 
 ### Why BenoStreamDB Wins the Enterprise Battle against LanceDB:
 1. **No Data Rewrites (The Sidecar Advantage)**:
-   LanceDB requires companies to ingest their data into `.lance` files. For an enterprise with hundreds of terabytes in S3, migrating to `.lance` is an operational non-starter. BenoStreamDB leaves Parquet files untouched and simply generates persistent sidecar indexes (`.hnsw`, `.idx`, `.inv`) in the same object storage bucket.
+   LanceDB requires companies to ingest their data into `.lance` files. For an enterprise with hundreds of terabytes in S3, migrating to `.lance` is an operational non-starter. BenoStreamDB leaves Parquet files untouched and simply generates persistent sidecar indexes (`.hnsw`, `.idx`, `.inv`) in the same object storage bucket. A single embedded node indexes and serves **TB-scale** corpora; larger datasets are handled by fanning the same sidecars out across a distributed query engine (Spark/Trino) rather than by one process.
 2. **Respect for the Winning Standard (Iceberg)**:
    Enterprises spent billions standardizing on Apache Iceberg to prevent vendor lock-in. LanceDB is attempting to replace Parquet with `.lance`. BenoStreamDB embraces Iceberg V2/V3, supporting snapshot isolation, sort orders, partition evolution, and catalog integration.
 3. **The Protocol Advantage**:
@@ -206,5 +206,5 @@ LanceDB is our most visible mindshare competitor in the "serverless/embedded dis
 | **Pinecone** | Managed vector pioneer | Ridiculous cost at scale, creates isolated data silos | **10x cheaper in-place S3 search without data movement** |
 | **Qdrant** | Rust vector database | Vector-only silo, does not speak SQL or Iceberg | **Emulates Qdrant wire protocol (Port 6333) over Iceberg** |
 | **Elasticsearch** | Enterprise search standard | JVM memory hog, complex clustering, high idle cost | **Emulates ES 7.10 (Port 9200) in Rust, scale-to-zero** |
-| **pgvector** | Relational vector extension | Cannot scale to petabyte data lakes without high RAM | **Lakehouse-scale O(1) sidecars on object storage** |
+| **pgvector** | Relational vector extension | Cannot index large data lakes without high RAM | **O(1) sidecars on object storage, TB-scale per node** |
 | **Databricks** | Managed lakehouse search | High DBU credit pricing, proprietary Delta lock-in | **Vendor-neutral, multi-cloud Iceberg core** |

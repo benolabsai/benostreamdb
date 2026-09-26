@@ -67,8 +67,7 @@ impl Table {
 
         // Load the latest manifest.
         let candidate_entries = self
-            .runtime()
-            .block_on(manifest_manager.load_latest_full())
+            .block_on_io(manifest_manager.load_latest_full())?
             .map(|(_manifest, entries, _)| entries)?;
 
         // NOTE: `prune_segments` and `execute_merge` are synchronous entry points that each
@@ -118,11 +117,11 @@ impl Table {
         }
 
         if !add_entries.is_empty() || !remove_paths.is_empty() {
-            self.runtime().block_on(manifest_manager.commit(
+            self.block_on_io(manifest_manager.commit(
                 &add_entries,
                 &remove_paths,
                 crate::core::manifest::CommitMetadata::default(),
-            ))?;
+            ))??;
         }
         Ok(())
     }

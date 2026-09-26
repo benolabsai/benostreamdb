@@ -118,6 +118,107 @@ pub enum FilterExpr {
 }
 
 impl FilterExpr {
+    /// Coerce literals in the expression to a type compatible with the column
+    /// they are compared against.
+    ///
+    /// `QueryFilter::to_expr` builds literals from JSON numbers, which are
+    /// always `Int64`/`Float64`. Comparing those against an `Int32`/`Float32`
+    /// column fails in Arrow (`Invalid comparison operation: Int32 >= Int64`),
+    /// which previously caused the whole batch to be dropped. Promote the
+    /// column to the literal's (wider) type so the comparison is valid and
+    /// lossless.
+    pub fn coerce_literals(&self, schema: &SchemaRef) -> FilterExpr {
+        match self {
+            FilterExpr::DataFusion(expr) => {
+                FilterExpr::DataFusion(coerce_expr_literals(expr.clone(), schema))
+            }
+        }
+    }
+}
+
+fn is_numeric_type(dt: &arrow::datatypes::DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    matches!(
+        dt,
+        Int8 | Int16
+            | Int32
+            | Int64
+            | UInt8
+            | UInt16
+            | UInt32
+            | UInt64
+            | Float16
+            | Float32
+            | Float64
+    )
+}
+
+fn coerce_expr_literals(expr: Expr, schema: &SchemaRef) -> Expr {
+    use datafusion::logical_expr::{BinaryExpr, Cast, Operator};
+    match expr {
+        Expr::BinaryExpr(b) => {
+            let left = coerce_expr_literals(*b.left, schema);
+            let right = coerce_expr_literals(*b.right, schema);
+            let (left, right) = if matches!(
+                b.op,
+                Operator::Eq
+                    | Operator::NotEq
+                    | Operator::Gt
+                    | Operator::GtEq
+                    | Operator::Lt
+                    | Operator::LtEq
+            ) {
+                coerce_comparison(left, right, schema)
+            } else {
+                (left, right)
+            };
+            Expr::BinaryExpr(BinaryExpr {
+                left: Box::new(left),
+                op: b.op,
+                right: Box::new(right),
+            })
+        }
+        Expr::Not(e) => Expr::Not(Box::new(coerce_expr_literals(*e, schema))),
+        Expr::Cast(c) => Expr::Cast(Cast {
+            expr: Box::new(coerce_expr_literals(*c.expr, schema)),
+            data_type: c.data_type,
+        }),
+        other => other,
+    }
+}
+
+/// Promote the column side of a `column <op> literal` comparison to the
+/// literal's type when both are numeric and the types differ.
+fn coerce_comparison(left: Expr, right: Expr, schema: &SchemaRef) -> (Expr, Expr) {
+    use datafusion::logical_expr::Cast;
+    let promote = |col: &Expr, lit: &Expr| -> Option<Expr> {
+        let (Expr::Column(c), Expr::Literal(lit_val, _)) = (col, lit) else {
+            return None;
+        };
+        let field = schema.field_with_name(&c.name).ok()?;
+        if is_numeric_type(field.data_type())
+            && is_numeric_type(&lit_val.data_type())
+            && lit_val.data_type() != *field.data_type()
+        {
+            Some(Expr::Cast(Cast {
+                expr: Box::new(col.clone()),
+                data_type: lit_val.data_type(),
+            }))
+        } else {
+            None
+        }
+    };
+
+    if let Some(casted) = promote(&left, &right) {
+        return (casted, right);
+    }
+    if let Some(casted) = promote(&right, &left) {
+        return (left, casted);
+    }
+    (left, right)
+}
+
+impl FilterExpr {
     /// Parse a SQL WHERE clause into a filter expression.
     ///
     /// Uses DataFusion's SQL parser and analyzer to handle type coercion.

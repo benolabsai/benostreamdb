@@ -70,7 +70,7 @@ This is the key fix for serverless: a 4 GB container on a 32 GB host reports
 **4 GB**, not 32 GB, so the guards trip at the right point instead of letting the
 container OOM.
 
-### 2. Derivation: the three memory knobs
+### 2. Derivation: the memory knobs
 
 Let `M = effective_memory_bytes()` and `F = MEMORY_BUDGET_FRACTION = 0.8`.
 
@@ -79,6 +79,11 @@ Let `M = effective_memory_bytes()` and `F = MEMORY_BUDGET_FRACTION = 0.8`.
 | `BSDB_MAX_INGEST_RAM_GB` | `F × M` (decimal GB) | **Admission.** `write_async` blocks before accepting more batches while RSS ≥ this. |
 | `BSDB_INGEST_MEMORY_BUDGET_GB` | `F × M` (bytes) | **Reclamation.** At each committed ingest unit, if RSS ≥ this, the heap is trimmed and blocked writers are notified. |
 | `BSDB_INDEX_BUILD_CONCURRENCY` | `clamp(M / 8 GiB, 1, nproc)` | **Concurrency.** Caps how many segment index builds run at once, which caps peak RSS. |
+| `BSDB_DATAFUSION_MEMORY_GB` | `DATAFUSION_MEMORY_FRACTION × M` (0.5) | **Query.** Caps DataFusion's working set for SQL sorts/joins/aggregations, which then spill to disk. Applied to `Table.execute_sql` (the graph-UDF path) and to `Session`. |
+
+Each knob is independent: there is deliberately **no fixed percentage split**
+across the subsystems, so an operator can tune one to the actual workload
+without being forced to rebalance the others.
 
 They reference the same `M`, so they move together:
 
@@ -116,6 +121,7 @@ They reference the same `M`, so they move together:
 | `BSDB_MAX_INGEST_RAM_GB` | `0.8 × effective memory` | Ingest RAM high-water mark. When RSS exceeds it, `write_async` blocks before accepting more batches and resumes the instant a background task frees memory (a segment index build finishing, or an ingest heap trim) — woken by `tokio::sync::Notify` with a 250 ms bounded fallback poll. |
 | `BSDB_INGEST_MEMORY_BUDGET_GB` | `0.8 × effective memory` | Heap-trim budget. Returning freed pages to the OS is an allocator concern, so see `core::memory` for the rationale. Also settable per ingest via `IngestOptions::memory_budget_bytes` / `bsdb table ingest --memory-budget-gb`. |
 | `BSDB_INDEX_BUILD_CONCURRENCY` | `clamp(effective memory / 8 GiB, 1, nproc)` | Maximum concurrent segment index builds. Each build holds its segment's vectors plus the HNSW/IVF/quantizer structures — several GB at a 1 GB flush size. Unbounded, the runtime fans out one build per worker thread, which is what OOM-killed the Wikipedia load at 105 GB RSS. Always bounded; a non-positive value is ignored. |
+| `BSDB_DATAFUSION_MEMORY_GB` | `0.5 × effective memory` | DataFusion query memory limit. SQL operators spill to disk at this limit instead of OOMing. Applied to `Table.execute_sql` — where the `subgraph`, `communities`, and BFS UDFs run — and to `Session` (which also accepts an explicit `limit_bytes`). Independent of the ingest budget; a non-positive value is ignored. |
 
 Observability: `benostreamdb_ingest_rss_bytes`,
 `benostreamdb_ingest_backpressure_pauses_total`,

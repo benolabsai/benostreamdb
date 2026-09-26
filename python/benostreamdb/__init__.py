@@ -457,6 +457,37 @@ class Table:
         uri = _resolve_uri(uri)
         return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri), device=device)
 
+    @classmethod
+    def from_arrow(cls, uri: str, table: 'pa.Table', device: Optional[Any] = None) -> 'Table':
+        """
+        Create (and commit) a table at `uri` from a pyarrow Table, inferring the
+        schema from the Arrow table.
+
+        The write-side complement of :meth:`to_arrow` — together they form the
+        Arrow interchange boundary for this table.
+        """
+        if pa is None:
+            raise ImportError("pyarrow is required; `pip install pyarrow`")
+        uri = _resolve_uri(uri)
+        t = cls.create(uri, table.schema, device=device)
+        t.insert(table)
+        t.commit()
+        return t
+
+    @classmethod
+    def from_pandas(cls, uri: str, df: pd.DataFrame, device: Optional[Any] = None) -> 'Table':
+        """Create a table at `uri` from a pandas DataFrame (via Arrow)."""
+        if pa is None:
+            raise ImportError("pyarrow is required; `pip install pyarrow`")
+        return cls.from_arrow(uri, pa.Table.from_pandas(df), device=device)
+
+    @classmethod
+    def from_polars(cls, uri: str, df: 'pl.DataFrame', device: Optional[Any] = None) -> 'Table':
+        """Create a table at `uri` from a polars DataFrame (zero-copy Arrow)."""
+        if pl is None:
+            raise ImportError("polars is not installed; `pip install polars`")
+        return cls.from_arrow(uri, df.to_arrow(), device=device)
+
     @property
     def columns(self) -> List[str]:
         """Return the list of column names in the table."""
@@ -520,16 +551,37 @@ class Table:
         time_column: Optional[str] = None,
         time_start: Optional[str] = None,
         time_end: Optional[str] = None,
+        max_degree: Optional[int] = None,
+        max_nodes: Optional[int] = None,
     ):
         """
         Extract multi-hop induced subgraph starting from seed nodes.
-        If `graph_column` is provided, uses the CSR graph index built on that
-        column and returns a list of (source, target) tuples.
+
+        If `graph_column` is provided, uses the memory-mapped CSR graph index
+        built on that column (the index's *source* column) and returns a table
+        of the induced edges with their payload columns. The CSR is
+        forward-directed (out-neighbours); for `directed=False` a reverse CSR is
+        used when the table has a graph index on the other endpoint column,
+        otherwise the call transparently falls back to the SQL BFS path so
+        undirected results are unchanged.
+
         If `allowed_relations` is provided, filters edge traversals to only the specified relations/predicates.
         If `time_column`/`time_start`/`time_end` are provided, filters edges by timestamp window.
+
+        `max_degree` enables *max-degree truncation* on the CSR fast path: any
+        node whose degree exceeds this threshold (e.g. Wikipedia "super-nodes"
+        such as `United States`) is reported but not expanded, bounding the
+        frontier explosion at each hop. It is ignored by the SQL BFS fallback.
+
+        `max_nodes` is a hard token-budget cap on the total visited set (seeds
+        included) on the CSR fast path: once reached, expansion stops. Unlike
+        `max_degree` it bounds memory regardless of graph density. It is ignored
+        by the SQL BFS fallback.
         """
         if graph_column is not None:
-            return self.graph_api.subgraph(graph_column, seeds)
+            return self._inner.subgraph(
+                seeds, hops, directed, graph_column, max_degree, max_nodes
+            )
 
         predicates = []
 
@@ -553,7 +605,7 @@ class Table:
             where_clause = " AND ".join(predicates)
             query = f"SELECT unnest(subgraph(arrow_cast({source_col}, 'UInt64'), arrow_cast({target_col}, 'UInt64'), {seed_sql}, arrow_cast({hops}, 'UInt32'), {str(directed).lower()})) FROM t WHERE {where_clause}"
             return self.execute_sql(query)
-        return self._inner.subgraph(seeds, hops, directed)
+        return self._inner.subgraph(seeds, hops, directed, None, max_degree, max_nodes)
 
     def connecting_paths(
         self,
@@ -581,6 +633,122 @@ class Table:
         Returns Arrow Table / DataFrame with 'community' column (lists of node IDs).
         """
         return self._inner.louvain_communities(resolution)
+
+    def leiden_communities(self, resolution: float = 1.0) -> Any:
+        """
+        Run Leiden community detection returning community groupings.
+
+        Leiden adds a connectivity-refinement phase on top of Louvain's greedy
+        modularity local move, so every returned community is internally
+        connected. Returns Arrow Table / DataFrame with a 'community' column
+        (lists of node IDs).
+        """
+        return self._inner.leiden_communities(resolution)
+
+    def communities(
+        self,
+        resolution: float = 1.0,
+        algorithm: str = "louvain",
+        graph_column: Optional[str] = None,
+    ) -> Any:
+        """
+        Run community detection with a selectable algorithm.
+
+        Args:
+            resolution: Modularity resolution parameter.
+            algorithm: 'louvain' (default) or 'leiden'. Leiden guarantees
+                connected communities; Louvain is faster.
+            graph_column: Optional CSR graph column. When given — or when the
+                table already has a graph index on `source` — community
+                detection runs over the memory-mapped CSR, keeping only O(V)
+                state resident instead of buffering every edge in RAM. Falls
+                back to the SQL UDAF when no CSR is available.
+        """
+        algo = algorithm.lower()
+        if algo not in ("louvain", "leiden"):
+            raise ValueError(
+                f"Unknown community algorithm '{algorithm}'. Supported: 'louvain', 'leiden'."
+            )
+        if graph_column is None and self.has_graph_index("source"):
+            graph_column = "source"
+        if graph_column is not None:
+            return self._inner.communities_csr(graph_column, resolution, algo)
+        if self.is_edge_table():
+            # No persisted graph index: build a temporary CSR on disk so the run
+            # is still bounded-memory (O(V) state) instead of the UDF accumulator.
+            src, dst = self.edge_endpoints()
+            return self._inner.communities_temp_csr(src, dst, resolution, algo, [], [], True)
+        if algo == "leiden":
+            return self.leiden_communities(resolution)
+        return self.louvain_communities(resolution)
+
+    def update_communities(
+        self,
+        previous: Optional[Any] = None,
+        resolution: float = 1.0,
+        algorithm: str = "louvain",
+        graph_column: Optional[str] = None,
+    ) -> Any:
+        """
+        Recompute communities, preserving **stable community IDs** across updates.
+
+        Args:
+            previous: The result of a prior call (a DataFrame or pyarrow Table
+                with `community_id` and `community` columns). Communities that do
+                not change keep their IDs. When None, a full computation assigns
+                IDs 0..n-1.
+            resolution: Modularity resolution parameter.
+            algorithm: 'louvain' (default) or 'leiden'.
+            graph_column: Optional CSR graph column (defaults to 'source' when a
+                graph index exists).
+
+        Returns:
+            pyarrow Table / DataFrame with `community_id` and `community`
+            (list of node IDs) columns. Warm-starting works with a persisted
+            graph index and, for edge tables without one, by building a
+            temporary CSR on disk — so IDs stay stable either way.
+        """
+        algo = algorithm.lower()
+        if algo not in ("louvain", "leiden"):
+            raise ValueError(
+                f"Unknown community algorithm '{algorithm}'. Supported: 'louvain', 'leiden'."
+            )
+        if graph_column is None and self.has_graph_index("source"):
+            graph_column = "source"
+
+        # Extract the seed (node -> community id) from the previous partition.
+        seed_nodes: List[int] = []
+        seed_ids: List[int] = []
+        if previous is not None:
+            import pandas as pd
+
+            prev_df = (
+                previous
+                if isinstance(previous, pd.DataFrame)
+                else (previous.to_pandas() if hasattr(previous, "to_pandas") else pd.DataFrame(previous))
+            )
+            if {"community_id", "community"}.issubset(prev_df.columns):
+                for _, row in prev_df.iterrows():
+                    cid = int(row["community_id"])
+                    for n in row["community"]:
+                        seed_nodes.append(int(n))
+                        seed_ids.append(cid)
+
+        if graph_column is not None:
+            return self._inner.communities_csr_seeded(
+                graph_column, resolution, algo, seed_nodes, seed_ids
+            )
+
+        if self.is_edge_table():
+            # No persisted graph index: build a temporary CSR on disk and
+            # warm-start from it, so IDs stay stable without an index.
+            src, dst = self.edge_endpoints()
+            return self._inner.communities_temp_csr(
+                src, dst, resolution, algo, seed_nodes, seed_ids, True
+            )
+
+        # Not an edge table: fall back to a full run (no warm start possible).
+        return self.communities(resolution=resolution, algorithm=algo)
 
     def degree_centrality(self) -> Any:
         """
@@ -640,18 +808,54 @@ class Table:
         """
         return self._inner.topological_sort()
 
-    def graph_neighbors(self, node: int, hops: int = 1, graph_column: Optional[str] = None) -> Any:
+    def graph_neighbors(
+        self,
+        node: int,
+        hops: int = 1,
+        graph_column: Optional[str] = None,
+        max_degree: Optional[int] = None,
+        max_nodes: Optional[int] = None,
+    ) -> Any:
         """
         Find all nodes reachable from `node` within `hops` steps.
 
-        If `graph_column` is provided, uses the CSR graph index built on that
-        column (1 hop) and returns a list of neighbor node IDs. Otherwise runs
-        the SQL UDF over the table's `source`/`target` columns and returns a
-        pyarrow Table with a 'neighbor' column.
+        Both paths return a pyarrow Table with a 'neighbor' column. If
+        `graph_column` is provided, the memory-mapped CSR graph index built on
+        that column is used; otherwise the SQL UDF runs over the table's
+        `source`/`target` columns.
+
+        `max_degree` enables max-degree truncation on the CSR fast path (see
+        `subgraph`); it is ignored by the SQL BFS fallback. `max_nodes` is a hard
+        token-budget cap on the visited set (see `subgraph`).
         """
         if graph_column is not None:
-            return self.graph_api.neighbors(graph_column, node)
+            return self._inner.graph_neighbors(
+                node, hops, graph_column, max_degree, max_nodes
+            )
         return self._inner.graph_neighbors(node, hops)
+
+    def subgraph_nodes(
+        self,
+        seeds: List[int],
+        hops: int = 1,
+        directed: bool = False,
+        graph_column: Optional[str] = None,
+        max_degree: Optional[int] = None,
+        max_nodes: Optional[int] = None,
+    ) -> List[int]:
+        """
+        Return the BFS visited node IDs reachable from `seeds` within `hops`,
+        **without** materializing the induced edges.
+
+        Same traversal as `subgraph` (CSR fast path, else frontier SQL BFS).
+        Use this to compute a neighbourhood set without loading millions of
+        edges into memory — Graph RAG's local mode does exactly this.
+        """
+        return list(
+            self._inner.subgraph_nodes(
+                seeds, hops, directed, graph_column, max_degree, max_nodes
+            )
+        )
 
     def label_propagation_communities(self) -> Any:
         """
@@ -858,12 +1062,17 @@ class Table:
         except Exception:
             return 0.0
 
-    def avg_path_length(self, sample_size: int = 100) -> float:
+    def avg_path_length(
+        self, sample_size: int = 100, graph_column: Optional[str] = None
+    ) -> float:
         """
         Estimate the average shortest path length by BFS from a sample of nodes.
-        Uses the shortest_path UDF on sampled node pairs.
-        Returns the mean path length across sampled reachable pairs.
+        Uses the CSR graph index when `graph_column` is given (or when the table
+        has one on 'source'), else the SQL `shortest_path` UDF, on sampled node
+        pairs. Returns the mean path length across sampled reachable pairs.
         """
+        if graph_column is None and self.has_graph_index("source"):
+            graph_column = "source"
         try:
             import random
             df_nodes = self.execute_sql(
@@ -884,7 +1093,7 @@ class Table:
 
             for (a, b) in pairs:
                 try:
-                    result = self.shortest_path(a, b)
+                    result = self.shortest_path(a, b, graph_column=graph_column)
                     path_df = result.to_pandas()
                     if len(path_df) > 0:
                         path_len = len(path_df) - 1
@@ -925,7 +1134,11 @@ class Table:
 
         # Collect edges (optionally filtered by subgraph)
         if seeds:
-            subgraph_result = self.subgraph(seeds, hops=hops)
+            # Use the CSR fast path when the table has a graph index.
+            if self.has_graph_index("source"):
+                subgraph_result = self.subgraph(seeds, hops=hops, graph_column="source")
+            else:
+                subgraph_result = self.subgraph(seeds, hops=hops)
             subgraph_df = subgraph_result.to_pandas()
             if subgraph_df.empty:
                 node_set: Optional[set] = set()
@@ -1091,6 +1304,11 @@ class Table:
         time_column: Optional[str] = None,
         time_start: Optional[str] = None,
         time_end: Optional[str] = None,
+        max_degree: Optional[int] = None,
+        traversal_max_nodes: Optional[int] = None,
+        community_algorithm: str = "louvain",
+        llm_router: Optional[Any] = None,
+        relevance_threshold: float = 0.0,
     ) -> 'GraphRagResult':
         """
         Execute end-to-end Graph RAG search combining vector retrieval and topological graph reasoning.
@@ -1126,6 +1344,24 @@ class Table:
             seed_weights: Optional explicit continuous seed weights for HippoRAG-style PPR.
             search_edges: If True, executes Dual Vector-Graph RAG by searching edge embeddings in parallel.
             edge_vector_column: Embedding column name in edge_table when search_edges=True.
+            max_degree: Optional out-degree cap for the CSR subgraph fast path. Nodes
+                above the cap (Wikipedia "super-nodes") are reported but not expanded,
+                preventing the 2-hop frontier from exploding to tens of millions of rows.
+                Ignored when the SQL BFS fallback is used (relation/time filters).
+            traversal_max_nodes: Optional hard token-budget cap on the total visited
+                set during subgraph extraction (seeds included). Once reached, the
+                CSR traversal stops expanding. Unlike `max_degree` it bounds memory
+                regardless of graph density. Distinct from `max_nodes`, which caps
+                the number of enriched nodes returned. Ignored by the SQL fallback.
+            community_algorithm: Community detection algorithm for global mode:
+                'louvain' (default) or 'leiden' (connected communities).
+            llm_router: Optional callable `llm_router(query, community_summary) -> float`
+                used in global mode to rate each community's relevance before
+                descending. Communities scoring below `relevance_threshold` are
+                pruned, so irrelevant subtrees are never expanded. When None, the
+                existing `seed_overlap`/`member_count` heuristic is used.
+            relevance_threshold: Minimum router score for a community to be kept
+                (default 0.0). Only used when `llm_router` is provided.
             
         Returns:
             GraphRagResult object with `.nodes`, `.edges`, `.seeds`, and `.format_context()` for prompt injection.
@@ -1168,8 +1404,35 @@ class Table:
                     id_column = doc_table.columns[0]
 
         # 1. Seed Discovery via vector or keyword search
-        if isinstance(query, str) and vector_column not in doc_table._embedding_configs and not isinstance(query, list):
-            seed_res = doc_table.vector_search(column=vector_column, query=query, k=top_k, device=device)
+        #
+        # A raw text query cannot be searched against a vector column. If the
+        # requested `vector_column` is a configured embedding column, fall back
+        # to BM25/keyword search on a real text column (title/summary/content/
+        # ...). If no text column exists, raise a clear error telling the caller
+        # to pass an embedding vector instead of a string.
+        if isinstance(query, str):
+            if vector_column in doc_table._embedding_configs:
+                text_col = next(
+                    (
+                        c
+                        for c in ["title", "summary", "content", "text", "body", "description"]
+                        if c in doc_table.columns
+                    ),
+                    None,
+                )
+                if text_col is None:
+                    raise ValueError(
+                        f"graph_rag_search received a text query but '{vector_column}' is a "
+                        f"vector column and no text column (title/summary/content/...) exists "
+                        f"to run keyword search against. Pass an embedding vector as `query`."
+                    )
+                seed_res = doc_table.vector_search(
+                    column=text_col, query=query, k=top_k, device=device
+                )
+            else:
+                seed_res = doc_table.vector_search(
+                    column=vector_column, query=query, k=top_k, device=device
+                )
         else:
             seed_res = doc_table.search(column=vector_column, query=query, k=top_k, device=device)
 
@@ -1226,24 +1489,52 @@ class Table:
             if not seeds:
                 return GraphRagResult(mode="local", nodes=pd.DataFrame(), edges=pd.DataFrame(), seeds=[])
 
-            # 2. Multi-hop Induced Subgraph
-            sub_res = edge_table.subgraph(
-                seeds,
-                hops=hops,
-                directed=directed,
-                allowed_relations=allowed_relations,
-                time_column=time_column,
-                time_start=time_start,
-                time_end=time_end,
-            )
-            subgraph_df = sub_res if isinstance(sub_res, pd.DataFrame) else (sub_res.to_pandas() if hasattr(sub_res, "to_pandas") else pd.DataFrame(sub_res))
+            # 2. Neighbourhood discovery.
+            #
+            # Fast path: when the edge table has a CSR graph index on "source"
+            # (and no relation/time filters the CSR path cannot push down), get
+            # the visited NODE SET only. `subgraph_nodes` skips the edge join, so
+            # millions of induced edges are never materialized. The CSR is
+            # forward-directed, so we request `directed=True` for exact
+            # semantics; tables without a CSR keep the original call.
+            neighborhood_nodes = None
+            if not allowed_relations and not time_column:
+                try:
+                    if edge_table.has_graph_index("source"):
+                        neighborhood_nodes = set(
+                            edge_table.subgraph_nodes(
+                                seeds,
+                                hops=hops,
+                                directed=True,
+                                graph_column="source",
+                                max_degree=max_degree,
+                                max_nodes=traversal_max_nodes,
+                            )
+                        )
+                except Exception:
+                    neighborhood_nodes = None
 
-            neighborhood_nodes = set(seeds)
-            if not subgraph_df.empty:
-                if "source" in subgraph_df.columns:
-                    neighborhood_nodes.update([int(x) for x in subgraph_df["source"]])
-                if "target" in subgraph_df.columns:
-                    neighborhood_nodes.update([int(x) for x in subgraph_df["target"]])
+            used_csr_nodes = neighborhood_nodes is not None
+            subgraph_df = pd.DataFrame()
+            if neighborhood_nodes is None:
+                sub_res = edge_table.subgraph(
+                    seeds,
+                    hops=hops,
+                    directed=directed,
+                    allowed_relations=allowed_relations,
+                    time_column=time_column,
+                    time_start=time_start,
+                    time_end=time_end,
+                )
+                subgraph_df = sub_res if isinstance(sub_res, pd.DataFrame) else (sub_res.to_pandas() if hasattr(sub_res, "to_pandas") else pd.DataFrame(sub_res))
+                neighborhood_nodes = set(seeds)
+                if not subgraph_df.empty:
+                    if "source" in subgraph_df.columns:
+                        neighborhood_nodes.update([int(x) for x in subgraph_df["source"]])
+                    if "target" in subgraph_df.columns:
+                        neighborhood_nodes.update([int(x) for x in subgraph_df["target"]])
+            else:
+                neighborhood_nodes |= set(seeds)
 
             # 3. Personalized PageRank Topological Grounding
             try:
@@ -1258,6 +1549,24 @@ class Table:
                 ppr_df = pd.DataFrame({"node": list(neighborhood_nodes), "score": [1.0 if n in seeds else 0.5 for n in neighborhood_nodes]})
 
             ranked_nodes = ppr_df["node"].head(max_nodes).tolist() if not ppr_df.empty else list(neighborhood_nodes)[:max_nodes]
+
+            # Materialize the induced subgraph of the RANKED nodes only. On the
+            # CSR node-set path this keeps the returned edges bounded by
+            # `max_nodes` instead of the full (potentially millions-of-rows)
+            # neighbourhood.
+            if used_csr_nodes and len(ranked_nodes) > 1:
+                res = edge_table.subgraph(
+                    ranked_nodes,
+                    hops=1,
+                    directed=directed,
+                    allowed_relations=allowed_relations,
+                    time_column=time_column,
+                    time_start=time_start,
+                    time_end=time_end,
+                )
+                subgraph_df = res if isinstance(res, pd.DataFrame) else (
+                    res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+                )
 
             # 4. Context Enrichment
             if ranked_nodes:
@@ -1339,7 +1648,9 @@ class Table:
                 comm_res = community_table.execute_sql("SELECT * FROM t")
                 comm_df = comm_res if isinstance(comm_res, pd.DataFrame) else (comm_res.to_pandas() if hasattr(comm_res, "to_pandas") else pd.DataFrame(comm_res))
             else:
-                louvain_res = edge_table.louvain_communities(resolution=resolution)
+                louvain_res = edge_table.communities(
+                    resolution=resolution, algorithm=community_algorithm
+                )
                 louvain_df = louvain_res if isinstance(louvain_res, pd.DataFrame) else (louvain_res.to_pandas() if hasattr(louvain_res, "to_pandas") else pd.DataFrame(louvain_res))
                 deg_res = edge_table.degree_centrality()
                 deg_df = deg_res if isinstance(deg_res, pd.DataFrame) else (deg_res.to_pandas() if hasattr(deg_res, "to_pandas") else pd.DataFrame(deg_res))
@@ -1362,7 +1673,25 @@ class Table:
                 comm_df = pd.DataFrame(comm_records)
 
             if not comm_df.empty:
-                if "seed_overlap" in comm_df.columns and comm_df["seed_overlap"].sum() > 0:
+                if llm_router is not None:
+                    # Dynamic community selection: rate each branch with a cheap
+                    # model and prune irrelevant subtrees before descending.
+                    if not callable(llm_router):
+                        raise TypeError(
+                            "llm_router must be a callable (query, community_summary) -> float"
+                        )
+                    scores = []
+                    for _, row in comm_df.iterrows():
+                        summary = str(row.get("summary", row.get("title", "")))
+                        try:
+                            scores.append(float(llm_router(query, summary)))
+                        except Exception:
+                            scores.append(0.0)
+                    comm_df = comm_df.copy()
+                    comm_df["relevance"] = scores
+                    comm_df = comm_df[comm_df["relevance"] >= relevance_threshold]
+                    comm_df = comm_df.sort_values(by="relevance", ascending=False)
+                elif "seed_overlap" in comm_df.columns and comm_df["seed_overlap"].sum() > 0:
                     comm_df = comm_df.sort_values(by=["seed_overlap", "member_count"], ascending=[False, False])
                 else:
                     comm_df = comm_df.sort_values(by="member_count", ascending=False)
@@ -1384,14 +1713,21 @@ class Table:
                 nodes_df = pd.DataFrame()
 
             if len(selected_nodes) > 1:
-                sub_res = edge_table.subgraph(
-                    selected_nodes,
-                    hops=1,
-                    directed=directed,
-                    time_column=time_column,
-                    time_start=time_start,
-                    time_end=time_end,
-                )
+                # Prefer the CSR fast path when no time filter needs pushing down
+                # (the CSR path does not apply relation/time predicates).
+                if not time_column and edge_table.has_graph_index("source"):
+                    sub_res = edge_table.subgraph(
+                        selected_nodes, hops=1, graph_column="source"
+                    )
+                else:
+                    sub_res = edge_table.subgraph(
+                        selected_nodes,
+                        hops=1,
+                        directed=directed,
+                        time_column=time_column,
+                        time_start=time_start,
+                        time_end=time_end,
+                    )
                 edges_df = sub_res if isinstance(sub_res, pd.DataFrame) else (sub_res.to_pandas() if hasattr(sub_res, "to_pandas") else pd.DataFrame(sub_res))
             else:
                 edges_df = pd.DataFrame()
@@ -1417,9 +1753,13 @@ class Table:
         hierarchical: bool = False,
         top_entities_per_comm: int = 5,
         device: Optional[Any] = None,
+        algorithm: str = "louvain",
+        llm: Optional[Any] = None,
+        embed: Optional[Any] = None,
+        report_column: str = "report",
     ) -> 'Table':
         """
-        Summarize Louvain communities in this edge table using text context from doc_table,
+        Summarize communities in this edge table using text context from doc_table,
         and materialize the results as an Apache Iceberg table at target_uri.
         
         Supports both single-level clustering and hierarchical multi-resolution Louvain pyramids
@@ -1430,11 +1770,21 @@ class Table:
             target_uri: Target URI where the community Iceberg table will be materialized.
             id_column: Node/entity identifier column in doc_table. Auto-detected if None.
             content_column: Text content column in doc_table. Auto-detected if None.
-            resolution: Single-resolution Louvain modularity parameter (used when hierarchical=False).
+            resolution: Single-resolution modularity parameter (used when hierarchical=False).
             resolutions: List of resolutions across hierarchical levels (defaults to [0.5, 1.0, 2.0] if hierarchical=True).
             hierarchical: Whether to build a multi-level hierarchical community tree.
             top_entities_per_comm: Number of top central entities to feature per community.
             device: Optional compute device.
+            algorithm: Community detection algorithm: 'louvain' (default) or 'leiden'.
+            llm: Optional callable `llm(prompt: str) -> str` that generates a
+                model-authored report per community (Microsoft GraphRAG parity).
+                The report is stored in `report_column`.
+            embed: Optional callable `embed(texts: List[str]) -> List[List[float]]`
+                that embeds the reports (or summaries when `llm` is None). When
+                provided, an `embedding` column is written and an HNSW index is
+                built on it, making community reports first-class vector-retrieval
+                units.
+            report_column: Column name for the generated report (default 'report').
             
         Returns:
             Table instance pointing to the newly materialized Iceberg community table.
@@ -1473,8 +1823,14 @@ class Table:
         deg_df = deg_res if isinstance(deg_res, pd.DataFrame) else (deg_res.to_pandas() if hasattr(deg_res, "to_pandas") else pd.DataFrame(deg_res))
         deg_map = dict(zip(deg_df["node"].astype(int), deg_df["degree"])) if not deg_df.empty else {}
 
-        # Fetch doc text
-        docs_res = doc_table.execute_sql("SELECT * FROM t")
+        # Fetch only the columns the summarizer needs, instead of `SELECT *`
+        # over the whole document table (which can be millions of rows across
+        # many columns).
+        proj_cols = [id_column, content_column]
+        if "title" in doc_table.columns:
+            proj_cols.append("title")
+        proj_cols = list(dict.fromkeys(proj_cols))
+        docs_res = doc_table.execute_sql(f"SELECT {', '.join(proj_cols)} FROM t")
         docs_df = docs_res if isinstance(docs_res, pd.DataFrame) else (docs_res.to_pandas() if hasattr(docs_res, "to_pandas") else pd.DataFrame(docs_res))
 
         doc_map = {}
@@ -1496,7 +1852,7 @@ class Table:
         prev_level_comms = []
 
         for lvl, res in enumerate(active_resolutions):
-            louvain_res = self.louvain_communities(resolution=res)
+            louvain_res = self.communities(resolution=res, algorithm=algorithm)
             louvain_df = louvain_res if isinstance(louvain_res, pd.DataFrame) else (louvain_res.to_pandas() if hasattr(louvain_res, "to_pandas") else pd.DataFrame(louvain_res))
             current_level_comms = []
 
@@ -1536,7 +1892,44 @@ class Table:
 
             prev_level_comms = current_level_comms
 
-        schema = pa.schema([
+        # Optional LLM-generated community reports (Microsoft GraphRAG parity).
+        if llm is not None:
+            if not callable(llm):
+                raise TypeError(
+                    "llm must be a callable taking a prompt string and returning a report string"
+                )
+            for rec in records:
+                contexts = []
+                for m in rec["top_entities"]:
+                    txt = doc_map.get(m, "")
+                    if txt:
+                        contexts.append(f"[{title_map.get(m, f'Node {m}')}]: {txt}")
+                prompt = (
+                    f"You are summarizing a community of {rec['member_count']} entities "
+                    f"from a knowledge graph. Key entities: "
+                    f"{', '.join(map(str, rec['top_entities']))}.\n"
+                    f"Context:\n" + "\n".join(contexts) + "\n\n"
+                    "Write a concise report describing the community's theme, its key "
+                    "entities, and the relationships between them."
+                )
+                rec[report_column] = str(llm(prompt))
+
+        # Optional embeddings over the reports (or summaries) for vector retrieval.
+        if embed is not None:
+            if not callable(embed):
+                raise TypeError(
+                    "embed must be a callable taking a list of strings and returning a list of vectors"
+                )
+            texts = [rec.get(report_column) or rec["summary"] for rec in records]
+            vectors = list(embed(texts))
+            if len(vectors) != len(records):
+                raise ValueError(
+                    f"embed returned {len(vectors)} vectors for {len(records)} communities"
+                )
+            for rec, vec in zip(records, vectors):
+                rec["embedding"] = [float(x) for x in vec]
+
+        fields = [
             ("community_id", pa.uint64()),
             ("title", pa.string()),
             ("member_count", pa.uint32()),
@@ -1545,13 +1938,212 @@ class Table:
             ("summary", pa.string()),
             ("level", pa.uint32()),
             ("parent_community_id", pa.uint64()),
-        ])
+        ]
+        if llm is not None:
+            fields.append((report_column, pa.string()))
+        if embed is not None:
+            fields.append(("embedding", pa.list_(pa.float32())))
+        schema = pa.schema(fields)
 
         arrow_table = pa.Table.from_pylist(records, schema=schema)
         comm_table = Table.create(target_uri, schema, device=device)
+        if embed is not None:
+            try:
+                comm_table.add_index("embedding", "hnsw")
+            except Exception:
+                pass
         comm_table.insert(arrow_table)
         comm_table.commit()
         return comm_table
+
+    def extract_graph(
+        self,
+        doc_table: 'Table',
+        target_uri: str,
+        llm: Any,
+        id_column: Optional[str] = None,
+        content_column: Optional[str] = None,
+        claims_uri: Optional[str] = None,
+        max_docs: Optional[int] = None,
+        device: Optional[Any] = None,
+    ) -> 'Table':
+        """
+        Extract a knowledge graph (entities, relationships, claims) from a
+        document table using an LLM, and materialize it as an edge table.
+
+        `llm(prompt: str) -> str` must return JSON of the form::
+
+            {
+              "entities": ["Name", ...],
+              "relationships": [{"source": "A", "target": "B",
+                                 "relation": "rel", "weight": 1.0}, ...],
+              "claims": [{"subject": "A", "object": "B",
+                          "claim": "text", "confidence": 0.9}, ...]
+            }
+
+        Entity names are mapped to stable uint64 node IDs via SHA-256, so the
+        graph is reproducible across runs. The document's own `id_column` value
+        is used as the node ID for the document itself.
+
+        Args:
+            doc_table: Document/entity Table containing text.
+            target_uri: Target URI for the materialized edge table.
+            llm: Callable `llm(prompt) -> json_string`.
+            id_column: Node/entity identifier column in doc_table. Auto-detected.
+            content_column: Text content column in doc_table. Auto-detected.
+            claims_uri: Optional target URI for a claims table
+                (`subject`, `object`, `claim`, `source_doc`, `confidence`).
+            max_docs: Optional cap on the number of documents processed.
+            device: Optional compute device.
+
+        Returns:
+            The materialized edge Table (with a graph index on `source`).
+        """
+        import hashlib
+        import json as json_mod
+        import pyarrow as pa
+        import pandas as pd
+
+        target_uri = _resolve_uri(target_uri)
+        if not callable(llm):
+            raise TypeError(
+                "llm must be a callable taking a prompt string and returning JSON"
+            )
+
+        # Resolve id_column (same auto-detection as summarize_communities).
+        if id_column is None:
+            pk = doc_table.primary_key
+            if pk and isinstance(pk, str) and pk in doc_table.columns:
+                id_column = pk
+            elif pk and isinstance(pk, (list, tuple)) and len(pk) > 0 and pk[0] in doc_table.columns:
+                id_column = pk[0]
+            else:
+                for cand in ["id", "doc_id", "node_id", "node", "key"]:
+                    if cand in doc_table.columns:
+                        id_column = cand
+                        break
+                if not id_column:
+                    id_column = doc_table.columns[0]
+
+        if content_column is None:
+            for cand in ["content", "text", "body", "summary", "description", "title"]:
+                if cand in doc_table.columns:
+                    content_column = cand
+                    break
+            if not content_column:
+                content_column = doc_table.columns[-1]
+
+        docs_res = doc_table.execute_sql("SELECT * FROM t")
+        docs_df = docs_res if isinstance(docs_res, pd.DataFrame) else (
+            docs_res.to_pandas() if hasattr(docs_res, "to_pandas") else pd.DataFrame(docs_res)
+        )
+        if max_docs is not None:
+            docs_df = docs_df.head(max_docs)
+
+        def stable_id(name: str) -> int:
+            """Deterministic uint64 node ID for an entity name."""
+            return int.from_bytes(
+                hashlib.sha256(name.encode("utf-8")).digest()[:8], "big"
+            )
+
+        edges = []
+        claims = []
+        for _, row in docs_df.iterrows():
+            try:
+                doc_id = int(row[id_column])
+            except (ValueError, TypeError):
+                continue
+            text = (
+                str(row[content_column])
+                if content_column in row and pd.notna(row[content_column])
+                else ""
+            )
+            if not text:
+                continue
+            prompt = (
+                "Extract a knowledge graph from the following text. Return JSON "
+                "with keys 'entities' (list of names), 'relationships' (list of "
+                "{source, target, relation, weight}) and 'claims' (list of "
+                "{subject, object, claim, confidence}).\n\nText:\n" + text
+            )
+            try:
+                parsed = json_mod.loads(llm(prompt))
+            except Exception:
+                continue
+            for rel in parsed.get("relationships", []):
+                try:
+                    edges.append(
+                        (
+                            stable_id(str(rel["source"])),
+                            stable_id(str(rel["target"])),
+                            str(rel.get("relation", "related_to")),
+                            float(rel.get("weight", 1.0)),
+                        )
+                    )
+                except (KeyError, ValueError, TypeError):
+                    continue
+            for cl in parsed.get("claims", []):
+                try:
+                    claims.append(
+                        {
+                            "subject": stable_id(str(cl["subject"])),
+                            "object": stable_id(str(cl["object"])),
+                            "claim": str(cl.get("claim", "")),
+                            "source_doc": doc_id,
+                            "confidence": float(cl.get("confidence", 1.0)),
+                        }
+                    )
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+        edge_schema = pa.schema(
+            [
+                ("source", pa.uint64()),
+                ("target", pa.uint64()),
+                ("relation", pa.string()),
+                ("weight", pa.float64()),
+            ]
+        )
+        edge_table = Table.create(target_uri, edge_schema, device=device)
+        try:
+            edge_table.add_index(
+                "target",
+                {"type": "graph", "src_column": "source", "dst_column": "target"},
+            )
+        except Exception:
+            pass
+        if edges:
+            edge_table.insert(
+                pa.Table.from_pylist(
+                    [
+                        {"source": s, "target": t, "relation": r, "weight": w}
+                        for (s, t, r, w) in edges
+                    ],
+                    schema=edge_schema,
+                )
+            )
+        edge_table.commit()
+        # The graph index is built asynchronously; wait so the returned table is
+        # immediately usable via the CSR fast path.
+        edge_table.wait_for_background_tasks()
+
+        if claims_uri is not None:
+            claims_uri = _resolve_uri(claims_uri)
+            claims_schema = pa.schema(
+                [
+                    ("subject", pa.uint64()),
+                    ("object", pa.uint64()),
+                    ("claim", pa.string()),
+                    ("source_doc", pa.uint64()),
+                    ("confidence", pa.float64()),
+                ]
+            )
+            claims_table = Table.create(claims_uri, claims_schema, device=device)
+            if claims:
+                claims_table.insert(pa.Table.from_pylist(claims, schema=claims_schema))
+            claims_table.commit()
+
+        return edge_table
 
     def drift_search(
         self,
@@ -1823,6 +2415,19 @@ class Table:
         if not source_col or not target_col:
             raise ValueError(f"Table does not have standard edge endpoints. Columns: {cols}")
         return (source_col, target_col)
+
+    def has_graph_index(self, column: str = "source") -> bool:
+        """
+        Return True if a CSR graph index exists on `column`.
+
+        The CSR index is built on the index's *source* column, so `column`
+        should be the source endpoint (e.g. "source"). Used to decide whether
+        the memory-mapped CSR fast path is available before opting into it.
+        """
+        try:
+            return bool(self._inner.has_graph_index(column))
+        except Exception:
+            return False
 
     @classmethod
     def create_edge_table(
@@ -2171,6 +2776,15 @@ class Table:
     def autocommit(self, value: bool):
         self._inner.autocommit = value
 
+    @property
+    def format_version(self):
+        """Iceberg table format version (1, 2, or 3). v3 enables row lineage."""
+        return self._inner.format_version
+
+    @format_version.setter
+    def format_version(self, value: int):
+        self._inner.format_version = value
+
     def wait_for_background_tasks(self):
         """Wait for all background tasks (like index building) to complete."""
         return self._inner.wait_for_background_tasks()
@@ -2329,7 +2943,10 @@ class Table:
             print(self._inner.explain(filter, vf))
             
         filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ["k", "n_probe", "column"]}
-        return self._inner.to_pandas(filter, vf, columns, device=device, **filtered_kwargs)
+        # Arrow is the single Rust boundary; pandas is a thin Python adapter over
+        # it (the Rust `to_pandas` performed the identical call internally).
+        arrow_table = self._inner.to_arrow(filter, vf, columns, device=device)
+        return arrow_table.to_pandas(**filtered_kwargs)
 
     def to_arrow(self, filter: Optional[str] = None, vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):
         """
@@ -2354,6 +2971,51 @@ class Table:
         vf = self._prepare_vector_filter(vector_filter, **kwargs)
         # to_arrow in Rust doesn't currently take **kwargs
         return self._inner.to_arrow(filter, vf, columns, device=device)
+
+    def to_arrow_stream(
+        self,
+        filter: Optional[str] = None,
+        vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None,
+        columns: Optional[List[str]] = None,
+        device: Optional[Any] = None,
+        **kwargs,
+    ):
+        """
+        Return a ``pyarrow.RecordBatchReader`` over the result — the streaming
+        primitive recommended for datasets that do not fit in memory.
+
+        ``to_arrow()`` is ``to_arrow_stream().read_all()``. Arrow is the single
+        interchange surface: to get a ``pandas`` or ``polars`` frame, materialize
+        Arrow and convert there (``pl.from_arrow(table.to_arrow())`` is
+        zero-copy). Rust never emits a dataframe directly.
+        """
+        vf = self._prepare_vector_filter(vector_filter, **kwargs)
+        return self._inner.to_arrow_stream(filter, vf, columns, device=device)
+
+    def to_polars(
+        self,
+        filter: Optional[str] = None,
+        vector_filter: Optional[Union[Dict[str, Any], List[float]]] = None,
+        columns: Optional[List[str]] = None,
+        device: Optional[Any] = None,
+        **kwargs,
+    ):
+        """
+        Return the result as a ``polars.DataFrame``.
+
+        Python-side adapter over the Arrow boundary:
+        ``polars.from_arrow(...)`` is zero-copy for Arrow-backed data, and the
+        Rust layer only ever emits Arrow — polars never enters the binding.
+        """
+        if pl is None:
+            raise ImportError("polars is not installed; `pip install polars`")
+        arrow_table = self._inner.to_arrow(
+            filter,
+            self._prepare_vector_filter(vector_filter, **kwargs),
+            columns,
+            device=device,
+        )
+        return pl.from_arrow(arrow_table)
 
     def explain(self, filter: Optional[str] = None, vector_filter: Optional[Dict[str, Any]] = None) -> str:
         """Return the engine's query plan, including *why* segments were pruned.

@@ -1,7 +1,7 @@
-# Out-of-Core Dynamic Reasoning and Inference: Scaling Hybrid Graph Traversal to Petabyte-Scale Vector Databases
+# Out-of-Core Dynamic Reasoning and Inference: Scaling Hybrid Graph Traversal to Terabyte-Scale Vector Databases
 
 ## Abstract
-Briefly summarize the limitations of current GraphRAG implementations (memory bounds) and introduce the unified hybrid architecture (DataFusion + MMap CSR) that enables zero-copy, out-of-core DRIFT search at petabyte scale.
+Briefly summarize the limitations of current GraphRAG implementations (memory bounds) and introduce the unified hybrid architecture (DataFusion + MMap CSR) that enables zero-copy, out-of-core DRIFT search at terabyte scale on a single node, with petabyte corpora handled by fanning the same sidecars out across a distributed query engine.
 
 ## 1. Introduction
 * **The Rise of GraphRAG:** How LLMs rely on complex multi-hop retrieval to answer faceted queries.
@@ -35,7 +35,7 @@ Detail the core components of the BenoStreamDB engine:
   3. LLM Evaluation & Iteration
 
 ## 6. Evaluation & Benchmarks (The "Proof")
-* **Dataset:** A multi-terabyte/petabyte scale dataset (e.g., Wikipedia + citations, or CommonCrawl subsets).
+* **Dataset:** A multi-terabyte scale dataset (e.g., Wikipedia + citations, or CommonCrawl subsets).
 * **Baseline:** Compare against a standard Python orchestrator (LlamaIndex) querying Milvus (vectors) + Neo4j (graph) over a network.
 * **Metrics:**
   * Memory footprint (Peak RAM usage during traversal).

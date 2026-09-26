@@ -51,6 +51,9 @@ pub struct CommitMetadata {
     pub updated_sort_orders: Option<Vec<SortOrder>>,
     pub updated_default_sort_order_id: Option<i32>,
     pub updated_last_column_id: Option<i32>,
+    /// Iceberg table format version to set on the committed manifest. `None`
+    /// preserves the current version. Used to upgrade a table to v3 (row lineage).
+    pub format_version: Option<i32>,
     pub is_fast_append: bool,
     /// If true, verifies that all remove_paths still exist in the current snapshot version.
     /// Used by compaction to prevent removing files concurrently replaced or deleted.

@@ -8,6 +8,111 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **CSR-backed `subgraph()` / `graph_neighbors()` fast path.** `Table.subgraph`
+  and `Table.graph_neighbors` now accept an optional `graph_column` kwarg. When
+  a memory-mapped CSR graph index exists on that column, the multi-hop BFS runs
+  in Rust over `MultiSegmentCsrGraph::get_neighbors` (bounded, visited-set)
+  instead of the SQL `bfs_visited` path, which re-materialized the entire
+  deduplicated symmetric adjacency (`SELECT DISTINCT src,dst ... UNION ALL
+  SELECT DISTINCT dst,src ...`) to parquet on every call. On the 383M-edge wiki
+  demo this turns a ~100 s-class 1-hop `subgraph()` into a sub-second call.
+  `subgraph(..., graph_column=...)` returns the induced edges with payload
+  columns preserved. The CSR is forward-directed; for `directed=False` a reverse
+  CSR is used when the table has a graph index on the other endpoint column,
+  otherwise the call transparently falls back to the SQL path so undirected
+  results are unchanged. The default (`graph_column=None`) is byte-for-byte the
+  old behaviour.
+- **`Table.has_graph_index(column)`** — reports whether a CSR graph index exists
+  on a column, so callers can opt into the fast path.
+- **Shared CSR loader** `python::helpers::load_multi_csr` — one implementation
+  of the manifest → mmap → `MultiSegmentCsrGraph` block, now used by
+  `GraphAPI`, `Table.subgraph`, `Table.graph_neighbors` and `Table.drift_search`
+  (previously copy-pasted in three places).
+- **Graph RAG uses the CSR fast path.** `graph_rag_search` (local mode) now
+  routes its induced-subgraph extraction through the CSR when the edge table has
+  a graph index on `source` and no relation/time filters are requested, with a
+  fallback to the original call for tables without a CSR.
+- **Max-degree truncation for CSR traversal.** `Table.subgraph`,
+  `Table.graph_neighbors` and `Table.graph_rag_search` accept an optional
+  `max_degree` kwarg. Nodes whose degree exceeds the cap (Wikipedia
+  "super-nodes" such as `United States`) are reported but not expanded, bounding
+  the frontier explosion at each hop. On the wiki demo an unconstrained 2-hop
+  BFS from 5 seeds reached ~44M rows; truncation keeps it bounded.
+- **Token-budget cap for CSR traversal.** `Table.subgraph` and
+  `Table.graph_neighbors` accept an optional `max_nodes` kwarg, and
+  `Table.graph_rag_search` accepts `traversal_max_nodes` (distinct from its
+  existing output `max_nodes`). It is a hard cap on the total visited set (seeds
+  included): once reached, expansion stops mid-hop. Unlike `max_degree` it
+  bounds memory regardless of graph density.
+- **Leiden community detection.** `Table.leiden_communities(resolution)` and the
+  `leiden_communities` SQL UDAF add a connectivity-refinement phase on top of
+  Louvain's greedy modularity local move, so every returned community is
+  internally connected. `Table.communities(resolution, algorithm=...)` selects
+  between `'louvain'` (default) and `'leiden'`; `summarize_communities` and
+  `graph_rag_search` (global mode) accept the same selector.
+- **LLM-generated community reports.** `summarize_communities` accepts optional
+  `llm` and `embed` callables. `llm(prompt) -> str` generates a model-authored
+  report per community (stored in `report_column`); `embed(texts) -> vectors`
+  embeds the reports and writes an `embedding` column with an HNSW index, making
+  community reports first-class vector-retrieval units.
+- **Dynamic community selection via an LLM router.** `graph_rag_search` (global
+  mode) accepts `llm_router(query, community_summary) -> float` and
+  `relevance_threshold`. Communities scoring below the threshold are pruned
+  before descending, so irrelevant subtrees are never expanded. Without a
+  router, the existing `seed_overlap`/`member_count` heuristic is used.
+- **`Table.extract_graph()`.** Builds a knowledge graph from a document table
+  using an LLM: `llm(prompt) -> json` returns entities, relationships, and
+  claims, which are materialized as an edge table (with a graph index on
+  `source`) plus an optional claims table (`subject`, `object`, `claim`,
+  `source_doc`, `confidence`). Entity names map to stable uint64 node IDs via
+  SHA-256, so the graph is reproducible across runs.
+- **Bounded, configurable DataFusion memory.** `BenoStreamSession::new(None)`
+  and `Table.execute_sql` (the path the graph UDFs run on) now apply a query
+  memory limit instead of leaving it unbounded, so SQL sorts/joins/aggregations
+  spill to disk rather than OOMing. The limit is derived from the effective
+  (cgroup-aware) memory at `DATAFUSION_MEMORY_FRACTION` of it, and is
+  independently configurable via `BSDB_DATAFUSION_MEMORY_GB`; an explicit limit
+  still wins. Deliberately its own knob, not part of a fixed split — see
+  `docs/RESOURCE_LIMITS.md`.
+- **CSR-backed community detection.** `Table.communities()` now runs Louvain or
+  Leiden over the memory-mapped CSR when the table has a graph index, keeping
+  only **O(V)** state resident (`community`, `degree`, `comm_tot`) instead of
+  buffering every edge in RAM. On a 6M-node graph that is ~72 MB versus ~7.7 GB
+  for the 383M-edge accumulator path. The SQL UDAF remains the fallback for
+  tables without a CSR.
+- **`Table.subgraph_nodes()` and bounded Graph RAG materialization.** New
+  `subgraph_nodes(seeds, hops, ...)` returns the BFS visited node IDs without
+  the edge join. `graph_rag_search` (local mode) now uses it to compute the
+  neighbourhood set, and materializes induced edges only for the ranked
+  `max_nodes` nodes — so peak memory scales with `max_nodes`, not the graph
+  size. `summarize_communities` fetches only `(id, content, title)` instead of
+  `SELECT *` over the whole document table.
+- **Incremental communities with stable IDs.** `Table.communities()` and the
+  new `Table.update_communities(previous=...)` now return a `community_id`
+  column alongside `community`. `update_communities` warm-starts the CSR
+  algorithm from a previous partition, so a graph that grows by a few edges
+  does not renumber every community; unchanged communities keep their IDs.
+  Without a CSR it falls back to a full recompute.
+- **`build_profile()` / `is_debug_build()`** — report whether the loaded
+  extension was compiled with optimisations, so benchmarks can refuse to report
+  timings from a `maturin develop` (debug) build.
+
+### Fixed
+- **CSR graph index direction mismatch.** `add_index` registered a graph index
+  under both its `src_column` and the original `column` argument, so two graph
+  indexes (forward + reverse) collided in `index_configs`, clobbering each other
+  and mislabeling the physical CSR files. The CSR fast path could then follow
+  the wrong direction, returning a different induced subgraph than the SQL
+  `bfs_visited` path. Graph indexes are now keyed solely by `src_column`. The
+  on-disk format is bumped to `graph_v2`; legacy v1 files are ignored (the table
+  falls back to the correct SQL path) and rebuilt in the background on open.
+- **`graph_rag_search` text query against a vector column.** Passing a raw
+  string query when `vector_column` is a configured embedding column previously
+  routed to `search(column=<vector col>, query=<str>)` and failed with
+  `No keyword/inverted index found for column 'embedding'`. It now falls back to
+  BM25/keyword search on a real text column (`title`/`summary`/`content`/...),
+  or raises a clear `ValueError` telling the caller to pass an embedding vector
+  when no text column exists.
 - **OpenSearch/Elasticsearch aggregations in `bsdb-search`.** `POST
   /{index}/_search` now accepts an `aggs` (or `aggregations`) object, compiled
   to SQL and executed with DataFusion: `terms`, `histogram`, `date_histogram`,

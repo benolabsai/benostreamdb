@@ -26,13 +26,13 @@ pub struct HybridSegmentWriter {
     pub store: Option<Arc<dyn ObjectStore>>,
     pub primary_key: Vec<String>,
     pub index_configs: HashMap<String, crate::core::table::ColumnIndexConfig>,
-    // Add additive buffers for multi-batch indexing. These `Mutex`es are
-    // uncontended in practice: the writer is constructed per-flush, driven from
-    // a single task, and `parking_lot::Mutex` is nearly free when uncontended.
-    // TODO(perf): if profiling ever shows contention on `inverted_data` under
-    // high-cardinality multi-column indexing, replace it with a per-thread
-    // accumulator merged in `finish_indexing` (or a lock-free map) rather than
-    // widening this lock.
+    // Additive buffers for multi-batch indexing. The writer is constructed
+    // per-flush and driven from a single task, but `build_indexes` fans columns
+    // out through a rayon `into_par_iter`, so these locks can be touched
+    // concurrently. `inverted_data` is therefore only held for a short merge
+    // after each column tokenizes into a task-local map (see
+    // `build_inverted_index`); the remaining buffers are written briefly, once
+    // per column, and are effectively uncontended.
     pub(crate) inverted_data:
         parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
@@ -151,8 +151,8 @@ impl HybridSegmentWriter {
                     offset: None,
                     length: None,
                 });
-            } else if filename.ends_with(".graph.csr.offsets")
-                || filename.ends_with(".graph.csr.edges")
+            } else if filename.ends_with(".graph_v2.csr.offsets")
+                || filename.ends_with(".graph_v2.csr.edges")
             {
                 let parts: Vec<&str> = filename.split('.').collect();
                 if parts.len() >= 4 {
@@ -160,7 +160,7 @@ impl HybridSegmentWriter {
                     let manifest_path_raw = format!("{}.{}", parts[0], parts[1]);
                     let new_index_file = crate::core::manifest::IndexFile {
                         file_path: manifest_path_raw.clone(),
-                        index_type: "graph".to_string(),
+                        index_type: "graph_v2".to_string(),
                         column_name: Some(col),
                         blob_type: Some("csr_graph".to_string()),
                         offset: None,
@@ -230,6 +230,7 @@ impl HybridSegmentWriter {
             normalization_mins: None,
             normalization_maxs: None,
             file_checksum: self.file_checksum.lock().clone(),
+            first_row_id: None,
         }
     }
 

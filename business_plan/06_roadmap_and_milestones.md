@@ -103,7 +103,7 @@ The active development backlog directly maps the core engine milestones into com
 ## 4. Detailed Engineering Backlog (From `ROADMAP.md`)
 
 ### 4.1 Connector & Pushdown Enhancements
-- [ ] **Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing and incremental batching. Allows ingesting terabytes of data directly via the core Rust library without OOM errors, while maintaining Spark distributed ingestion support. (Target: v0.8.0)
+- [ ] **Out-of-Core Index Ingestion**: Rework HNSW and inverted index building to use out-of-core (on-disk) processing and incremental batching. Allows ingesting **TB-scale** data directly via the core Rust library without OOM errors; petabyte corpora are ingested through the Spark distributed path, not a single embedded process. (Target: v0.8.0)
 - [ ] **HNSW Hot Cache Optimization**: Update `IndexFileCache` to store fully deserialized `Arc<Hnsw>` graphs in memory rather than raw `Vec<u8>` bytes. Eliminates per-query deserialization overhead and brings kNN latency down to ~3–5ms (on par with OpenSearch). (Target: v0.8.0)
 - [ ] **Trino Connector Sidecar Pushdown**: Enhance `trino-benostream` SPI implementation to evaluate filter predicates directly against sidecar `.hnsw` and `.idx` files before scanning parquet splits.
 - [ ] **Micro-Batch Streaming Ingest Buffer**: Native 5–30s Iceberg snapshot buffer for streaming ingestion from Kafka and Kinesis.

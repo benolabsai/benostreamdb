@@ -164,6 +164,12 @@ impl Compactor {
             return Ok(());
         }
 
+        // WS2 crash boundary: compaction has selected candidates but has not
+        // written any replacement file yet.
+        crate::core::fault_injection::check(
+            crate::core::fault_injection::CrashPoint::CompactionStart,
+        )?;
+
         // 2. BinPack
         //
         // Cross-partition compaction merges small files from *different*
@@ -259,6 +265,11 @@ impl Compactor {
                 skip_missing_remove_paths: true,
                 ..Default::default()
             };
+            // WS2 crash boundary: replacement files are written but the manifest
+            // swap has not happened — the old files must still be the live set.
+            crate::core::fault_injection::check(
+                crate::core::fault_injection::CrashPoint::CompactionManifestSwap,
+            )?;
             self.manifest
                 .commit(&all_new_entries, &all_old_paths, commit_meta)
                 .await?;
@@ -304,7 +315,12 @@ impl Compactor {
                 .ok_or_else(|| anyhow::anyhow!("Invalid segment file path: {:?}", path))?;
             let rel_parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
 
-            let config = SegmentConfig::new(rel_parent, segment_id);
+            // Carry the segment's delete files into the reader so compaction
+            // physically removes deleted rows. Without this, compaction reads
+            // the raw data files, and the deleted rows are **resurrected** into
+            // the compacted output.
+            let config = SegmentConfig::new(rel_parent, segment_id)
+                .with_delete_files(entry.delete_files.clone());
             let reader = HybridReader::new(config, self.store.clone(), &self.root_uri);
 
             // Compaction reads all columns to preserve full data
@@ -454,8 +470,15 @@ impl Compactor {
 
             let mut main_parquet_path = String::new();
             let mut main_parquet_size = 0;
-            let mut index_files = Vec::new();
             let mut file_checksum = None;
+
+            // Identify the DATA parquet by its exact name. A name-based heuristic
+            // (`ends_with(".parquet")`) also matches index sidecar parquets such
+            // as `<seg>.<col>.tq8.cluster_1.mapping.parquet`, which would then
+            // overwrite `main_parquet_path` and make the segment's manifest
+            // `file_path` point at an index sidecar — the reader then reads a
+            // 0-column file and every column comes back NULL.
+            let data_parquet_name = format!("{}.parquet", new_segment_id);
 
             for local_path in generated_files {
                 let file_name = std::path::Path::new(&local_path)
@@ -464,6 +487,8 @@ impl Compactor {
                     .ok_or_else(|| {
                         anyhow::anyhow!("Invalid generated file path: {}", local_path)
                     })?;
+
+                let is_data_parquet = file_name == data_parquet_name;
                 // finish_indexing uploads some artifacts itself (e.g. the BM25
                 // inverted sidecars) and removes their local staging copies, so
                 // a listed path may already be gone — skip rather than fail.
@@ -486,7 +511,7 @@ impl Compactor {
 
                 let content = fs::read(&local_path).await?;
 
-                if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
+                if is_data_parquet {
                     use sha2::{Digest, Sha256};
                     let mut hasher = Sha256::new();
                     hasher.update(&content);
@@ -495,53 +520,27 @@ impl Compactor {
 
                 self.store.put(&remote_path, content.into()).await?;
 
-                let remote_path_str = remote_path.to_string();
-
-                if file_name.ends_with(".parquet") && !file_name.contains(".inv.parquet") {
-                    main_parquet_path = remote_path_str;
+                if is_data_parquet {
+                    main_parquet_path = remote_path.to_string();
                     main_parquet_size = file_size;
                     metrics::counter!("benostreamdb_compaction_bytes_written").increment(file_size);
-                } else if file_name.ends_with(".inv.parquet") {
-                    let parts: Vec<&str> = file_name.split('.').collect();
-                    let column_name = if parts.len() >= 4 {
-                        Some(parts[1].to_string())
-                    } else {
-                        None
-                    };
-                    index_files.push(crate::core::manifest::IndexFile {
-                        file_path: remote_path_str,
-                        index_type: "inverted".to_string(),
-                        column_name,
-                        blob_type: None,
-                        offset: None,
-                        length: None,
-                    });
-                } else {
-                    let index_type = if file_name.contains(".hnsw") {
-                        "vector"
-                    } else if file_name.contains(".idx") {
-                        "scalar"
-                    } else {
-                        "unknown"
-                    }
-                    .to_string();
-
-                    let parts: Vec<&str> = file_name.split('.').collect();
-                    let column_name = if parts.len() >= 3 {
-                        Some(parts[parts.len() - 2].to_string())
-                    } else {
-                        None
-                    };
-
-                    index_files.push(crate::core::manifest::IndexFile {
-                        file_path: remote_path_str,
-                        index_type,
-                        column_name,
-                        blob_type: None,
-                        offset: None,
-                        length: None,
-                    });
                 }
+            }
+
+            // Index files: use the segment writer's own classification — it knows
+            // the algorithm/blob_type and the base-path convention the reader
+            // expects — then map the staging paths to the remote prefix. The
+            // previous ad-hoc name parsing mislabelled vector indexes (e.g.
+            // `column_name = "hnsw"`, the full `.hnsw.graph` filename, no
+            // blob_type), so the reader could not find them and recall collapsed.
+            let mut index_files = Vec::new();
+            for mut idx in writer.to_manifest_entry().index_files {
+                idx.file_path = if remote_prefix.is_empty() {
+                    idx.file_path
+                } else {
+                    format!("{}/{}", remote_prefix, idx.file_path)
+                };
+                index_files.push(idx);
             }
 
             let column_stats = writer.get_stats();
@@ -681,6 +680,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_vacuum_old_versions() -> Result<()> {
+        // This test asserts that vacuum reaps unreferenced data files. The
+        // GC-vs-writer grace period (default 60s) would protect the just-written
+        // files, so disable it for the test. This is the only vacuum test in the
+        // lib, so the process-global env var is safe here.
+        std::env::set_var("BSDB_VACUUM_MIN_FILE_AGE_SECS", "0");
+
         let temp_dir = tempfile::tempdir()?;
         let uri = format!("file://{}", temp_dir.path().to_str().unwrap());
         let table = crate::Table::new_async(uri.clone()).await?;

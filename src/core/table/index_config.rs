@@ -200,7 +200,15 @@ impl Table {
 
         self.set_index_columns(updates).await?;
 
-        if target_col != column {
+        // A CSR graph index is identified solely by its `src_column` (the column
+        // whose out-neighbours it stores), which is what `set_index_columns`
+        // above already keyed it under. Registering a second entry under the
+        // original `column` argument would make two graph indexes (forward and
+        // reverse) collide in `index_configs`, clobbering each other and
+        // mislabeling the physical CSR files — the CSR fast path would then
+        // follow the wrong direction. Composite indexes still need the virtual
+        // `column` entry, so only CsrGraph is excluded here.
+        if target_col != column && !matches!(algorithm, IndexAlgorithm::CsrGraph { .. }) {
             let mut index_configs = self.indexing.index_configs.write();
             let config = index_configs.entry(column.clone()).or_default();
             config.enabled = true;
@@ -237,17 +245,31 @@ impl Table {
     /// Remove all indexing strategies from a column.
     /// This is an atomic operation that commits a new manifest version.
     pub async fn drop_index(&self, column: String) -> Result<()> {
-        // Collect all file paths associated with this index from the current manifest
+        // Collect all file paths associated with this index from the current manifest.
+        // NOTE: entries live in the tiered manifest list, not inline in
+        // `Manifest.entries` (which is empty for tiered manifests), so we must
+        // resolve them through `load_all_entries` — otherwise `drop_index` would
+        // silently leave every index file orphaned on disk.
         let manifest = self.manifest().await?;
+        let manager = crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let entries = manager.load_all_entries(&manifest).await?;
         let mut paths_to_delete = Vec::new();
 
-        for entry in &manifest.entries {
+        for entry in &entries {
             for idx in &entry.index_files {
                 if idx.column_name.as_deref() == Some(column.as_str()) {
                     match idx.index_type.as_str() {
-                        "graph" => {
+                        // Both the legacy v1 and the current v2 graph formats
+                        // must be cleaned up so a drop leaves no orphaned CSRs.
+                        // The CSR is a triple (offsets, edges, dict) — omitting
+                        // the `.dict` sidecar left it orphaned on every drop.
+                        "graph" | "graph_v2" => {
                             paths_to_delete.push(format!("{}.graph.csr.offsets", idx.file_path));
                             paths_to_delete.push(format!("{}.graph.csr.edges", idx.file_path));
+                            paths_to_delete.push(format!("{}.graph.csr.dict", idx.file_path));
+                            paths_to_delete.push(format!("{}.graph_v2.csr.offsets", idx.file_path));
+                            paths_to_delete.push(format!("{}.graph_v2.csr.edges", idx.file_path));
+                            paths_to_delete.push(format!("{}.graph_v2.csr.dict", idx.file_path));
                         }
                         "vector" => {
                             // Base paths for vector indexes
@@ -585,10 +607,15 @@ impl Table {
             .map(|f| f.name.clone())
             .collect();
 
-        // Scan latest manifest entries for physical index files
+        // Scan latest manifest entries for physical index files. Entries live in
+        // the tiered manifest list, so resolve them via `load_all_entries` — a
+        // direct `manifest.entries` scan is always empty for tiered manifests and
+        // would make inference a no-op.
+        let manager = crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let entries = manager.load_all_entries(&manifest).await?;
         let mut inferred_specs: HashMap<String, Vec<IndexAlgorithm>> = HashMap::new();
 
-        for entry in &manifest.entries {
+        for entry in &entries {
             for index_file in &entry.index_files {
                 if let Some(col_name) = &index_file.column_name {
                     // Skip composite index virtual columns (they are managed via CompositeBitmap)
@@ -641,7 +668,7 @@ impl Table {
 /// Physical `index_type` string a configured algorithm produces in the manifest.
 ///
 /// Mirrors the values written by the segment writer (`"vector"`, `"inverted"`,
-/// `"scalar"`, `"graph"`, `"bloom"`) so backfill can tell whether a segment
+/// `"scalar"`, `"graph_v2"`, `"bloom"`) so backfill can tell whether a segment
 /// already carries the index a column needs.
 fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
     match alg {
@@ -652,7 +679,10 @@ fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
         IndexAlgorithm::Bm25 { .. } => "inverted",
         IndexAlgorithm::Bloom { .. } => "bloom",
         IndexAlgorithm::Bitmap | IndexAlgorithm::CompositeBitmap { .. } => "scalar",
-        IndexAlgorithm::CsrGraph { .. } => "graph",
+        // The v2 suffix is the on-disk graph format version. Reporting it here
+        // makes `backfill_indexes_async` treat a segment carrying only legacy
+        // v1 graph files as incomplete, so it is rebuilt in the correct format.
+        IndexAlgorithm::CsrGraph { .. } => "graph_v2",
     }
 }
 

@@ -60,6 +60,159 @@ pub static TOKIO_RUNTIME: Lazy<Arc<Runtime>> = Lazy::new(|| {
     Arc::new(Runtime::new().expect("Failed to create unified Tokio runtime for BenoStreamDB"))
 });
 
+/// Load a memory-mapped [`MultiSegmentCsrGraph`] for `graph_column` from the
+/// table's graph-index sidecars (`{file}.graph_v2.csr.{offsets,edges,dict}`).
+///
+/// This is the single source of truth for the CSR fast path, shared by
+/// [`crate::python::graph::PyGraphAPI`], `PyTable::subgraph`,
+/// `PyTable::graph_neighbors` and `PyTable::drift_search`.
+///
+/// Returns `Ok(None)` when the table has no graph index on that column, so
+/// callers can fall back to the SQL `bfs_visited` path. The CSR is built on the
+/// index's *source* column, so `get_neighbors` yields forward (out-)neighbours.
+pub(crate) fn load_multi_csr(
+    table: &crate::core::table::Table,
+    graph_column: &str,
+) -> anyhow::Result<Option<crate::core::index::csr_graph::MultiSegmentCsrGraph>> {
+    let entries = TOKIO_RUNTIME.block_on(async {
+        let manifest = table.manifest().await?;
+        let manifest_manager =
+            crate::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
+        manifest_manager.load_all_entries(&manifest).await
+    })?;
+
+    let segments = TOKIO_RUNTIME.block_on(async {
+        let mut segments = Vec::new();
+        let cache = crate::core::cache::DiskCache::new(table.store.clone());
+
+        for entry in &entries {
+            for idx in &entry.index_files {
+                // Only the v2 on-disk format is trusted. v1 files were written
+                // by a buggy `add_index` that could mislabel the CSR direction;
+                // ignoring them makes a legacy table fall back to the SQL BFS
+                // path (correct, just slower) until its graph indexes are
+                // rebuilt. See `csr_graph::build_from_file`.
+                if idx.index_type == "graph_v2" && idx.column_name.as_deref() == Some(graph_column) {
+                    let offsets_str = format!("{}.graph_v2.csr.offsets", idx.file_path);
+                    let edges_str = format!("{}.graph_v2.csr.edges", idx.file_path);
+                    let dict_str = format!("{}.graph_v2.csr.dict", idx.file_path);
+
+                    if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
+                        cache.get_mmap(&offsets_str).await,
+                        cache.get_mmap(&edges_str).await,
+                        cache.get_mmap(&dict_str).await,
+                    ) {
+                        segments.push(crate::core::index::csr_graph::MmapCsrGraph::from_mmaps(
+                            offsets_mmap,
+                            edges_mmap,
+                            dict_mmap,
+                        ));
+                    }
+                }
+            }
+        }
+        segments
+    });
+
+    if segments.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(
+            crate::core::index::csr_graph::MultiSegmentCsrGraph::new(segments),
+        ))
+    }
+}
+
+/// Multi-hop BFS over a CSR graph, returning the sorted visited node set
+/// (seeds included).
+///
+/// `directed == true` follows out-edges only (exact for a forward CSR).
+/// `directed == false` follows both out- and in-edges and therefore requires
+/// `reverse` to be `Some`; callers must fall back to the SQL path when no
+/// reverse CSR is available.
+///
+/// `max_degree` implements *max-degree truncation* to tame the combinatorial
+/// explosion of real-world graphs (e.g. the English Wikipedia link network,
+/// where a handful of "super-nodes" such as `United States` or `World War II`
+/// link to millions of pages). When `Some(limit)`, any node whose degree
+/// exceeds `limit` is still reported as visited but is **not expanded** — its
+/// neighbours are never enqueued. This bounds the frontier growth at each hop
+/// without changing the semantics for ordinary nodes. For undirected traversal
+/// the degree is the sum of the forward and reverse degrees.
+///
+/// `max_nodes` is a hard *token-budget* cap on the total visited set (seeds
+/// included). Once `visited.len()` reaches the cap, expansion stops — no
+/// further neighbours are enqueued. This is the true budget control that
+/// `max_degree` only approximates: it bounds memory regardless of graph
+/// density. The cap is applied mid-hop, so the result never exceeds it.
+pub(crate) fn csr_bfs_visited(
+    forward: &crate::core::index::csr_graph::MultiSegmentCsrGraph,
+    reverse: Option<&crate::core::index::csr_graph::MultiSegmentCsrGraph>,
+    seeds: &[u64],
+    hops: u32,
+    directed: bool,
+    max_degree: Option<usize>,
+    max_nodes: Option<usize>,
+) -> Vec<u64> {
+    use crate::core::sql::graph_udf::drift_search::DriftGraph;
+    use std::collections::HashSet;
+
+    let mut visited: HashSet<u64> = seeds.iter().copied().collect();
+    let mut frontier: Vec<u64> = visited.iter().copied().collect();
+
+    // True once the visited set has reached the token budget.
+    let budget_exhausted = |visited: &HashSet<u64>| max_nodes.is_some_and(|l| visited.len() >= l);
+
+    for _ in 0..hops {
+        let mut next: Vec<u64> = Vec::new();
+        for &node in &frontier {
+            if budget_exhausted(&visited) {
+                break;
+            }
+            // Max-degree truncation: report super-nodes but do not expand them.
+            if let Some(limit) = max_degree {
+                let mut degree = forward.get_degree(node);
+                if !directed {
+                    if let Some(rev) = reverse {
+                        degree += rev.get_degree(node);
+                    }
+                }
+                if degree > limit {
+                    continue;
+                }
+            }
+            for n in forward.get_neighbors(node) {
+                if budget_exhausted(&visited) {
+                    break;
+                }
+                if visited.insert(n) {
+                    next.push(n);
+                }
+            }
+            if !directed {
+                if let Some(rev) = reverse {
+                    for n in rev.get_neighbors(node) {
+                        if budget_exhausted(&visited) {
+                            break;
+                        }
+                        if visited.insert(n) {
+                            next.push(n);
+                        }
+                    }
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+
+    let mut out: Vec<u64> = visited.into_iter().collect();
+    out.sort_unstable();
+    out
+}
+
 /// Helper function to parse metric string to VectorMetric enum
 /// Uses native Rust names: L2, Cosine, InnerProduct, L1, Hamming, Jaccard
 /// Also accepts lowercase aliases for backward compatibility
@@ -325,6 +478,29 @@ pub fn init_logging(level: &str) -> PyResult<()> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
     Box::leak(Box::new(guard));
     Ok(())
+}
+
+/// Return the Rust build profile of the loaded extension: `"release"` or
+/// `"debug"`.
+///
+/// `maturin develop` (without `--release`) produces an unoptimised debug build
+/// whose graph traversal and vector kernels can be an order of magnitude
+/// slower. Benchmarks and Graph RAG pipelines should assert on this before
+/// trusting any latency numbers.
+#[pyfunction]
+pub fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
+/// Return `true` when the loaded extension was compiled without optimisations
+/// (i.e. `maturin develop` instead of `maturin develop --release`).
+#[pyfunction]
+pub fn is_debug_build() -> bool {
+    cfg!(debug_assertions)
 }
 
 // ============================================================================
