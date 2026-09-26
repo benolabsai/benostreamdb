@@ -311,6 +311,23 @@ impl HybridReader {
 
     pub(crate) async fn load_equality_deletes(&self) -> Result<Vec<EqualityDelete>> {
         let t_eq = std::time::Instant::now();
+        let unique = self.unique_delete_files();
+
+        // Fast path: no equality delete files at all — skip the cache and the
+        // per-file reads entirely (this is the common case).
+        let has_equality = unique.iter().any(|d| {
+            if let crate::core::manifest::DeleteContent::Equality { .. } = &d.content {
+                true
+            } else {
+                false
+            }
+        });
+        if !has_equality {
+            crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS
+                .with_label_values(&["equality"])
+                .observe(t_eq.elapsed().as_secs_f64());
+            return Ok(Vec::new());
+        }
 
         // Equality deletes depend only on the delete-file set, so cache the
         // parsed values (same key as the merged position-delete cache). This
@@ -331,7 +348,7 @@ impl HybridReader {
 
         let mut results = Vec::new();
 
-        for delete_file in self.unique_delete_files().iter().copied() {
+        for delete_file in unique.iter().copied() {
             if let crate::core::manifest::DeleteContent::Equality { equality_ids } =
                 &delete_file.content
             {
