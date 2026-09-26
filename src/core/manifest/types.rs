@@ -183,6 +183,10 @@ pub struct ManifestEntry {
     pub normalization_mins: Option<Vec<Value>>,
     #[serde(default)]
     pub normalization_maxs: Option<Vec<Value>>,
+    /// Iceberg V3 Row Lineage: the first `_row_id` assigned to the first row in
+    /// this data file. A row's `_row_id` is `first_row_id + row_position`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_row_id: Option<i64>,
 }
 
 impl From<&ManifestValue> for Value {
@@ -913,6 +917,15 @@ pub struct Manifest {
     pub manifest_list_path: Option<String>,
     /// List of active entries (Directly in manifest for small tables, otherwise in ManifestList)
     pub entries: Vec<ManifestEntry>,
+    /// Authoritative, partition-scoped list of merge-on-read delete files.
+    ///
+    /// Delete files are stored **once** here (not attached to every data
+    /// entry). `ManifestEntry::delete_files` is a read-time *derived view*:
+    /// the reader resolves it by matching `partition_values`, and the commit
+    /// never persists it. This avoids the read-attach -> commit-persist cycle
+    /// that previously made the per-entry list grow without bound.
+    #[serde(default)]
+    pub delete_files: Vec<DeleteFile>,
     /// Pointer to previous version (for history/rollback)
     pub prev_version: Option<u64>,
     /// Explicit Schema Tracking (Iceberg-style)
@@ -950,6 +963,7 @@ impl Manifest {
             timestamp_ms: Utc::now().timestamp_millis(),
             manifest_list_path: None,
             entries,
+            delete_files: Vec::new(),
             prev_version,
             schemas: Vec::new(),
             current_schema_id: 0,
@@ -981,6 +995,7 @@ impl Manifest {
             timestamp_ms: Utc::now().timestamp_millis(),
             manifest_list_path: None,
             entries,
+            delete_files: Vec::new(),
             prev_version,
             schemas,
             current_schema_id,
@@ -1014,6 +1029,7 @@ impl Manifest {
             timestamp_ms: Utc::now().timestamp_millis(),
             manifest_list_path: None,
             entries,
+            delete_files: Vec::new(),
             prev_version,
             schemas: schema_list,
             current_schema_id,
