@@ -30,6 +30,24 @@ fn vacuum_min_file_age_secs() -> i64 {
         .unwrap_or(60)
 }
 
+/// Maximum number of manifest files the append-only fast path will accumulate
+/// before it consolidates with a full rewrite.
+///
+/// The append-only path writes only the new entries and references the previous
+/// manifest files, so each commit adds one manifest file to the list. Reads walk
+/// every referenced manifest file, so an unbounded list would make reads
+/// O(number of commits). Once the list reaches this many files the next commit
+/// falls back to the full rewrite, which re-encodes the live entries into a
+/// single (chunked) manifest file and resets the list. This bounds read cost
+/// while still amortizing the common burst of small appends.
+fn max_manifest_files_before_consolidation() -> usize {
+    std::env::var("BSDB_MANIFEST_MAX_FILES_BEFORE_CONSOLIDATION")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(32)
+}
+
 impl ManifestManager {
     /// Commit a change to the timeline.
     /// Uses optimistic concurrency control with retries and PutMode::Create
@@ -84,6 +102,34 @@ impl ManifestManager {
                 active_map.remove(path);
             }
 
+            // Append-only fast path: no removes and every added entry is a brand
+            // new file. In that case we can write only the new entries to a new
+            // manifest file and reference the unchanged previous manifest files,
+            // instead of re-encoding every entry.
+            let mut is_append_only = remove_paths.is_empty();
+            if is_append_only {
+                for e in add_entries {
+                    if active_map.contains_key(&e.file_path) {
+                        is_append_only = false;
+                        break;
+                    }
+                }
+            }
+            // Bound manifest-list growth: if the previous list already holds many
+            // manifest files, consolidate with a full rewrite instead of appending
+            // another. `load_manifest_list` is cached, so this is a cheap hit.
+            let mut prev_manifest_files: Vec<ManifestListEntry> = Vec::new();
+            if is_append_only {
+                if let Some(prev_list_path) = &current_manifest.manifest_list_path {
+                    let prev_list = self.load_manifest_list(prev_list_path).await?;
+                    if prev_list.manifest_files.len() >= max_manifest_files_before_consolidation() {
+                        is_append_only = false;
+                    } else {
+                        prev_manifest_files = prev_list.manifest_files;
+                    }
+                }
+            }
+
             // Add new entries to state (overwrites if path exists, but preserves indexes if we are adding unindexed version)
             for entry in add_entries {
                 // BenoStream Optimization: If the existing entry already has indexes,
@@ -120,6 +166,99 @@ impl ManifestManager {
             // BenoStreamDB v0.4: Always use Tiered Manifests (ManifestList -> ManifestFile)
             // chunked by 8MB to ensure 100% Iceberg Spec compatibility.
             let (final_entries, manifest_list_path) = if !new_entries.is_empty() {
+                if is_append_only && !add_entries.is_empty() {
+                    // Append-only fast path: write only the new entries to a new
+                    // manifest file and reference the unchanged previous manifest
+                    // files, instead of re-encoding every entry.
+                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let default_schema = crate::core::manifest::Schema::default();
+                    let table_schema = metadata
+                        .updated_schemas
+                        .as_ref()
+                        .and_then(|s| s.last())
+                        .or_else(|| current_manifest.schemas.last())
+                        .unwrap_or(&default_schema)
+                        .clone();
+                    let table_spec = current_manifest.partition_spec.clone();
+                    let new_ver_i64 = new_ver as i64;
+                    let store = self.store.clone();
+                    let root_uri = self.root_uri.clone();
+
+                    let mut qualified_new = add_entries.to_vec();
+                    for e in &mut qualified_new {
+                        if !e.file_path.contains("://") && !e.file_path.starts_with('/') {
+                            e.file_path = format!(
+                                "{}/{}",
+                                root_uri.trim_end_matches('/'),
+                                e.file_path.trim_start_matches('/')
+                            );
+                        }
+                        e.delete_files.clear();
+                    }
+
+                    let chunks = writer.write_manifest_chunks(
+                        &qualified_new,
+                        &global_delete_files,
+                        &table_spec,
+                        &table_schema,
+                        new_ver_i64,
+                        new_ver_i64,
+                        crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES,
+                    )?;
+
+                    let mut new_manifest_files = Vec::new();
+                    let mut futures = futures::stream::FuturesUnordered::new();
+                    for (chunk_idx, (bytes, file_count, row_count)) in
+                        chunks.into_iter().enumerate()
+                    {
+                        let uuid = uuid::Uuid::new_v4();
+                        let filename = format!("{}-m{}.avro", uuid, chunk_idx);
+                        let path = self.manifest_dir.child(filename);
+                        let store = store.clone();
+                        let partition_spec_id = table_spec.spec_id;
+                        let manifest_path_abs = format!(
+                            "{}/{}",
+                            root_uri.trim_end_matches('/'),
+                            path.to_string().trim_start_matches('/')
+                        );
+                        futures.push(async move {
+                            let manifest_length = bytes.len() as i64;
+                            store.put(&path, bytes.into()).await?;
+                            Result::<ManifestListEntry>::Ok(ManifestListEntry {
+                                manifest_path: manifest_path_abs,
+                                manifest_length,
+                                partition_spec_id,
+                                content: 0, // Data
+                                sequence_number: new_ver_i64,
+                                min_sequence_number: new_ver_i64,
+                                added_snapshot_id: new_ver_i64,
+                                added_files_count: file_count as i32,
+                                existing_files_count: 0,
+                                deleted_files_count: 0,
+                                added_rows_count: row_count,
+                                existing_rows_count: 0,
+                                deleted_rows_count: 0,
+                                partition_stats: HashMap::new(),
+                            })
+                        });
+                    }
+                    while let Some(res) = futures.next().await {
+                        new_manifest_files.push(res?);
+                    }
+
+                    // Reference the unchanged previous manifest files + the new ones.
+                    let mut manifest_files = prev_manifest_files;
+                    manifest_files.extend(new_manifest_files);
+
+                    let list_uuid = uuid::Uuid::new_v4();
+                    let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
+                    let list_path_loc = self.manifest_dir.child(list_filename);
+                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let list_bytes = writer.write_manifest_list(&manifest_files)?;
+                    self.store.put(&list_path_loc, list_bytes.into()).await?;
+
+                    (Vec::new(), Some(list_path_loc.to_string()))
+                } else {
                 let mut manifest_files = Vec::new();
                 let mut futures = futures::stream::FuturesUnordered::new();
 
@@ -225,6 +364,7 @@ impl ManifestManager {
                 self.store.put(&list_path_loc, list_bytes.into()).await?;
 
                 (Vec::new(), Some(list_path_loc.to_string()))
+                }
             } else {
                 (Vec::new(), None)
             };
