@@ -52,6 +52,11 @@ impl HybridReader {
     /// Build a cache key from the delete file list. Delete files are immutable
     /// and identified by path, so the sorted list of paths + the target data
     /// file is a stable fingerprint for the merged bitmap.
+    ///
+    /// The previous key concatenated every delete-file path into one giant
+    /// string (hundreds of KB at scale) and sorted it on every call. Instead we
+    /// fold the sorted paths into a 128-bit FNV-1a hash (two 64-bit lanes with
+    /// different offsets), which is O(n) and collision-negligible.
     fn merged_deletes_cache_key(&self) -> Option<String> {
         if self.config.delete_files.is_empty() {
             return None;
@@ -70,7 +75,22 @@ impl HybridReader {
             .map(|d| d.file_path.as_str())
             .collect();
         parts.sort_unstable();
-        Some(format!("{}::{}", target_path, parts.join(",")))
+
+        let mut h1: u64 = 0xcbf29ce484222325;
+        let mut h2: u64 = 0x84222325cbf29ce4;
+        for part in parts {
+            for b in part.as_bytes() {
+                h1 = (h1 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+                h2 = (h2 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+            }
+            h1 = (h1 ^ 0xff).wrapping_mul(0x100000001b3);
+            h2 = (h2 ^ 0xff).wrapping_mul(0x100000001b3);
+        }
+        for b in target_path.as_bytes() {
+            h1 = (h1 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+            h2 = (h2 ^ (*b as u64)).wrapping_mul(0x100000001b3);
+        }
+        Some(format!("{}:{}:{}", target_path.len(), h1, h2))
     }
 
     async fn load_merged_deletes_inner(&self) -> Result<RoaringBitmap> {
