@@ -773,3 +773,34 @@ workload stays green.
 `test_chaos`, `test_durability_robust`, `test_concurrent_writers`,
 `test_multi_writer_concurrency`, `test_crash_injection`, `test_merge_integration`,
 and `verify_delete_correctness` all pass.
+
+### 8.9 S3/MinIO delete path — delete files were written to the local FS
+
+**Symptom.** Running the WS3 harness against a real MinIO found that
+`delete_async` had no effect on an S3-backed table: the row count was unchanged
+after a delete, and no delete file appeared in the bucket.
+
+**Root cause.** [`IcebergDeleteWriter`](../src/core/iceberg/delete.rs:466) built
+the delete-file path from the table URI and wrote it with
+`std::fs::File::create`. For `file://` that happens to work (the URI is a local
+path), but for any remote store it wrote to a bogus local path — the test left a
+`./s3:/mstar-staging/…/del-pos-….avro` directory in the workspace — and the
+delete file never reached the object store. The reader had a matching bug: it
+only relativized `file://` delete paths against the table root, so an `s3://`
+path was passed to the store verbatim.
+
+**Fix.** `IcebergDeleteWriter` now takes the table's `ObjectStore`, builds the
+Avro bytes in memory, and writes them with `store.put` at a path relative to the
+table root; the manifest records the full URI. The reader relativizes the
+delete-file URI against the table root for any scheme. Callers updated:
+[`delete_async`](../src/core/table/maintenance.rs:112),
+[`MergePlanner::execute_merge`](../src/core/merge.rs:139), and
+[`verify_mor_reads`](../tests/verify_mor_reads.rs:43).
+
+**Verification.** New gated tests
+[`s3_shared_store_multi_writer_no_lost_updates`](../tests/test_multi_writer_concurrency.rs:465)
+and [`s3_full_lifecycle_round_trip`](../tests/test_multi_writer_concurrency.rs:530)
+run against MinIO (`docker compose -f docker-compose-minio-nessie.yml up -d`,
+`AWS_ENDPOINT_URL=http://localhost:9000`, bucket `mstar-staging`) and pass:
+write → delete → compact → vacuum over a real S3 store. The delete file now
+lands in the bucket. The full local-FS suite stays green.
