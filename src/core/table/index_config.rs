@@ -251,7 +251,8 @@ impl Table {
         // resolve them through `load_all_entries` — otherwise `drop_index` would
         // silently leave every index file orphaned on disk.
         let manifest = self.manifest().await?;
-        let manager = crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let manager =
+            crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manager.load_all_entries(&manifest).await?;
         let mut paths_to_delete = Vec::new();
 
@@ -611,7 +612,8 @@ impl Table {
         // the tiered manifest list, so resolve them via `load_all_entries` — a
         // direct `manifest.entries` scan is always empty for tiered manifests and
         // would make inference a no-op.
-        let manager = crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
+        let manager =
+            crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manager.load_all_entries(&manifest).await?;
         let mut inferred_specs: HashMap<String, Vec<IndexAlgorithm>> = HashMap::new();
 

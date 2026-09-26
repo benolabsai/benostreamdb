@@ -45,10 +45,9 @@ fn embedding_batch(schema: Arc<Schema>, n: i32, dim: usize) -> anyhow::Result<Re
         schema,
         vec![
             Arc::new(Int32Array::from(ids)),
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                vectors,
-                dim as i32,
-            )),
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vectors, dim as i32),
+            ),
         ],
     )?)
 }

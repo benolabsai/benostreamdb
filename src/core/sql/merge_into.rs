@@ -54,10 +54,7 @@ use crate::core::table::{MergeMode, Table};
 /// Parse `sql` and, if it is a single `MERGE INTO` statement, execute it and
 /// return the affected-rows batch. Returns `Ok(None)` for anything else (or if
 /// the statement does not parse, so DataFusion can report its own error).
-pub async fn try_parse_and_execute(
-    ctx: &SessionContext,
-    sql: &str,
-) -> Result<Option<RecordBatch>> {
+pub async fn try_parse_and_execute(ctx: &SessionContext, sql: &str) -> Result<Option<RecordBatch>> {
     // `GenericDialect` (not PostgreSQL) so `INSERT ROW` parses; the session's
     // own planner still uses the PostgreSQL dialect for non-MERGE statements.
     let dialect = GenericDialect {};
@@ -167,7 +164,9 @@ async fn execute_merge(
         let df = ctx
             .sql(&format!("SELECT * FROM {source_sql} LIMIT 0"))
             .await
-            .with_context(|| format!("MERGE: failed to resolve source schema for `{source_sql}`"))?;
+            .with_context(|| {
+                format!("MERGE: failed to resolve source schema for `{source_sql}`")
+            })?;
         Arc::new(df.schema().as_arrow().clone())
     };
 
@@ -258,7 +257,10 @@ async fn execute_merge(
     }
 
     // --- 8. Apply upserts via the key-based merge primitive -------------
-    rows_affected += upsert_batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+    rows_affected += upsert_batches
+        .iter()
+        .map(|b| b.num_rows() as i64)
+        .sum::<i64>();
     if !upsert_batches.is_empty() {
         let key = keys.join(",");
         let table_for_merge = target_table.clone();
@@ -317,11 +319,7 @@ fn clause_predicate(clause: &MergeClause) -> String {
 
 /// Build the `SELECT` list for the matched (UPDATE) rows: each target column is
 /// either the assignment expression or the existing target value.
-fn matched_select_list(
-    target: &SchemaRef,
-    assignments: &[Assignment],
-    target_ref: &str,
-) -> String {
+fn matched_select_list(target: &SchemaRef, assignments: &[Assignment], target_ref: &str) -> String {
     let map = assignment_map(assignments);
     target
         .fields()
@@ -433,7 +431,10 @@ fn key_select_list(keys: &[String], target_ref: &str) -> String {
 
 /// Build a `WHERE` filter that matches the key values in `batches`, plus the
 /// number of rows it covers. Returns `(None, 0)` when there are no rows.
-fn build_delete_filter(keys: &[String], batches: &[RecordBatch]) -> Result<(Option<String>, usize)> {
+fn build_delete_filter(
+    keys: &[String],
+    batches: &[RecordBatch],
+) -> Result<(Option<String>, usize)> {
     let mut clauses = Vec::new();
     let mut count = 0usize;
     for batch in batches {
@@ -759,8 +760,11 @@ mod tests {
     async fn merge_into_matched_delete() -> Result<()> {
         let dir = tempdir()?;
         let base = dir.path().to_str().unwrap();
-        let target =
-            make_table(&format!("file://{base}/target"), &[(1, "a"), (2, "b"), (3, "c")]).await?;
+        let target = make_table(
+            &format!("file://{base}/target"),
+            &[(1, "a"), (2, "b"), (3, "c")],
+        )
+        .await?;
         let source = make_table(&format!("file://{base}/source"), &[(2, "x")]).await?;
 
         let session = BenoStreamSession::new(None);
@@ -785,8 +789,11 @@ mod tests {
     async fn merge_into_not_matched_by_source_delete() -> Result<()> {
         let dir = tempdir()?;
         let base = dir.path().to_str().unwrap();
-        let target =
-            make_table(&format!("file://{base}/target"), &[(1, "a"), (2, "b"), (3, "c")]).await?;
+        let target = make_table(
+            &format!("file://{base}/target"),
+            &[(1, "a"), (2, "b"), (3, "c")],
+        )
+        .await?;
         let source = make_table(&format!("file://{base}/source"), &[(2, "x")]).await?;
 
         let session = BenoStreamSession::new(None);
@@ -839,10 +846,16 @@ mod tests {
         // deletes everything else. First-match-wins must not delete id = 2.
         let dir = tempdir()?;
         let base = dir.path().to_str().unwrap();
-        let target =
-            make_table(&format!("file://{base}/target"), &[(1, "a"), (2, "b"), (3, "c")]).await?;
-        let source = make_table(&format!("file://{base}/source"), &[(1, "x"), (2, "y"), (3, "z")])
-            .await?;
+        let target = make_table(
+            &format!("file://{base}/target"),
+            &[(1, "a"), (2, "b"), (3, "c")],
+        )
+        .await?;
+        let source = make_table(
+            &format!("file://{base}/source"),
+            &[(1, "x"), (2, "y"), (3, "z")],
+        )
+        .await?;
 
         let session = BenoStreamSession::new(None);
         session.register_table("target", target.clone())?;

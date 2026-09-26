@@ -103,7 +103,7 @@ impl Lcg {
         }
     }
     /// A model key chosen at random (or `None` if the model is empty).
-    fn pick<'a>(&mut self, model: &'a BTreeMap<i32, Vec<f32>>) -> Option<i32> {
+    fn pick(&mut self, model: &BTreeMap<i32, Vec<f32>>) -> Option<i32> {
         if model.is_empty() {
             return None;
         }
@@ -159,9 +159,13 @@ async fn assert_model_agrees(
     let start_count = std::time::Instant::now();
     eprintln!("[rdw]   check count (step {step})");
     let n = count(table).await?;
-    assert_eq!(n, model.len(), "step {step}: row count diverged from the model");
+    assert_eq!(
+        n,
+        model.len(),
+        "step {step}: row count diverged from the model"
+    );
     eprintln!("[rdw]   check count done in {:?}", start_count.elapsed());
-    
+
     let start_scalar = std::time::Instant::now();
     eprintln!("[rdw]   check scalar (step {step})");
 
@@ -170,7 +174,10 @@ async fn assert_model_agrees(
     let hi = lo + rng.below(2_000) as i32 + 1;
     let expected: Vec<i32> = model.range(lo..hi).map(|(k, _)| *k).collect();
     let got = query_ids(table, Some(&format!("id >= {lo} AND id < {hi}"))).await?;
-    eprintln!("[rdw]   scalar done (step {step}) in {:?}", start_scalar.elapsed());
+    eprintln!(
+        "[rdw]   scalar done (step {step}) in {:?}",
+        start_scalar.elapsed()
+    );
     assert_eq!(
         got, expected,
         "step {step}: scalar predicate [{lo}, {hi}) diverged from the model"
@@ -200,7 +207,10 @@ async fn assert_model_agrees(
             "step {step}: vector recall miss — id {picked} (distance 0, exactly nearest) \
              was not in the top-{k}: {got:?}"
         );
-        eprintln!("[rdw]   vector done (step {step}) in {:?}", start_vec.elapsed());
+        eprintln!(
+            "[rdw]   vector done (step {step}) in {:?}",
+            start_vec.elapsed()
+        );
     }
 
     Ok(())

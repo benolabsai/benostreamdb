@@ -157,7 +157,7 @@ impl HybridReader {
 
         // Separate tasks into native deletes and iceberg position deletes for concurrent fetching
         let mut futures = Vec::new();
-        
+
         for delete_file in unique.iter().copied() {
             if let crate::core::manifest::DeleteContent::Position = &delete_file.content {
                 crate::telemetry::metrics::MERGED_DELETES_FILES_TOTAL
@@ -166,7 +166,7 @@ impl HybridReader {
                 let path_str = delete_file.file_path.clone();
                 let store = self.store.clone();
                 let root_uri = self.root_uri.clone();
-                
+
                 futures.push(async move {
                     // Relativize the delete-file URI against the table root so
                     // the object store (rooted at the table URI) can resolve it.
@@ -192,8 +192,14 @@ impl HybridReader {
                         match reader.fetch_deletes_map(&resolved_path).await {
                             Ok(map) => FileDeletes::Map(map),
                             Err(e) => {
-                                tracing::warn!("Failed to read Iceberg delete file {}: {}", path_str, e);
-                                FileDeletes::Map(std::sync::Arc::new(std::collections::HashMap::new()))
+                                tracing::warn!(
+                                    "Failed to read Iceberg delete file {}: {}",
+                                    path_str,
+                                    e
+                                );
+                                FileDeletes::Map(std::sync::Arc::new(
+                                    std::collections::HashMap::new(),
+                                ))
                             }
                         }
                     } else {
@@ -201,7 +207,8 @@ impl HybridReader {
                         let path = Path::from(path_str.as_str());
                         if let Ok(ret) = store.get(&path).await {
                             if let Ok(bytes) = ret.bytes().await {
-                                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(bytes.len() as u64);
+                                crate::telemetry::metrics::IO_BYTES_READ_TOTAL
+                                    .inc_by(bytes.len() as u64);
                                 if let Ok(bm) = RoaringBitmap::deserialize_from(&bytes[..]) {
                                     local_bitmap |= bm;
                                 }
@@ -212,7 +219,7 @@ impl HybridReader {
                 });
             }
         }
-        
+
         // Wait for all Position deletes concurrently
         let t_join = std::time::Instant::now();
         let results = futures::future::join_all(futures).await;
@@ -235,15 +242,11 @@ impl HybridReader {
             }
         }
 
-        let target_clean = target_path
-            .strip_prefix("file://")
-            .unwrap_or(&target_path);
+        let target_clean = target_path.strip_prefix("file://").unwrap_or(&target_path);
         let mut merged_from_maps = RoaringBitmap::new();
         for m in &maps {
-            merged_from_maps |= crate::core::iceberg::PositionDeleteReader::filter_map_to_bitmap(
-                m,
-                target_clean,
-            );
+            merged_from_maps |=
+                crate::core::iceberg::PositionDeleteReader::filter_map_to_bitmap(m, target_clean);
         }
         crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS
             .with_label_values(&["position_convert"])
@@ -337,11 +340,10 @@ impl HybridReader {
         // Fast path: no equality delete files at all — skip the cache and the
         // per-file reads entirely (this is the common case).
         let has_equality = unique.iter().any(|d| {
-            if let crate::core::manifest::DeleteContent::Equality { .. } = &d.content {
-                true
-            } else {
-                false
-            }
+            matches!(
+                &d.content,
+                crate::core::manifest::DeleteContent::Equality { .. }
+            )
         });
         if !has_equality {
             crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS

@@ -77,11 +77,8 @@ async fn graph_csr_index_is_registered_as_v2_with_files_on_disk() -> anyhow::Res
     eprintln!("manifest version: {}", manifest.version);
 
     // Resolve the tiered manifest list exactly as the reader does.
-    let manager = benostreamdb::core::manifest::ManifestManager::new(
-        table.store.clone(),
-        "",
-        &table.uri,
-    );
+    let manager =
+        benostreamdb::core::manifest::ManifestManager::new(table.store.clone(), "", &table.uri);
     let entries = manager.load_all_entries(&manifest).await?;
 
     let all_index_files: Vec<_> = entries

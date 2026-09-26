@@ -153,8 +153,10 @@ impl ManifestManager {
             // cycle that previously grew the list without bound.
             let mut global_delete_files: Vec<crate::core::manifest::DeleteFile> =
                 current_manifest.delete_files.clone();
-            let mut seen_delete_paths: std::collections::HashSet<String> =
-                global_delete_files.iter().map(|d| d.file_path.clone()).collect();
+            let mut seen_delete_paths: std::collections::HashSet<String> = global_delete_files
+                .iter()
+                .map(|d| d.file_path.clone())
+                .collect();
             for entry in add_entries {
                 for df in &entry.delete_files {
                     if seen_delete_paths.insert(df.file_path.clone()) {
@@ -259,111 +261,113 @@ impl ManifestManager {
 
                     (Vec::new(), Some(list_path_loc.to_string()))
                 } else {
-                let mut manifest_files = Vec::new();
-                let mut futures = futures::stream::FuturesUnordered::new();
+                    let mut manifest_files = Vec::new();
+                    let mut futures = futures::stream::FuturesUnordered::new();
 
-                let writer = crate::core::iceberg::IcebergWriter::new();
-                let default_schema = crate::core::manifest::Schema::default();
-                // Prefer the schema being written in this commit. On the very
-                // first commit `current_manifest.schemas` is still empty, so
-                // falling back to it would hand the manifest writer an empty
-                // schema — `bounds_avro_values` then finds no field ids, writes
-                // no lower/upper bounds, and the reader reconstructs empty
-                // `column_stats` for the first segment (making stats pruning
-                // silently miss it).
-                let table_schema = metadata
-                    .updated_schemas
-                    .as_ref()
-                    .and_then(|s| s.last())
-                    .or_else(|| current_manifest.schemas.last())
-                    .unwrap_or(&default_schema)
-                    .clone();
-                let table_spec = current_manifest.partition_spec.clone();
-                let new_ver_i64 = new_ver as i64;
-                let store = self.store.clone();
-                // The `manifest_path` written into the manifest list must be an
-                // absolute location: the Iceberg spec defines it as the manifest
-                // file's location, and external readers (PyIceberg) resolve a
-                // relative path against the process CWD, not the table root.
-                let root_uri = self.root_uri.clone();
+                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let default_schema = crate::core::manifest::Schema::default();
+                    // Prefer the schema being written in this commit. On the very
+                    // first commit `current_manifest.schemas` is still empty, so
+                    // falling back to it would hand the manifest writer an empty
+                    // schema — `bounds_avro_values` then finds no field ids, writes
+                    // no lower/upper bounds, and the reader reconstructs empty
+                    // `column_stats` for the first segment (making stats pruning
+                    // silently miss it).
+                    let table_schema = metadata
+                        .updated_schemas
+                        .as_ref()
+                        .and_then(|s| s.last())
+                        .or_else(|| current_manifest.schemas.last())
+                        .unwrap_or(&default_schema)
+                        .clone();
+                    let table_spec = current_manifest.partition_spec.clone();
+                    let new_ver_i64 = new_ver as i64;
+                    let store = self.store.clone();
+                    // The `manifest_path` written into the manifest list must be an
+                    // absolute location: the Iceberg spec defines it as the manifest
+                    // file's location, and external readers (PyIceberg) resolve a
+                    // relative path against the process CWD, not the table root.
+                    let root_uri = self.root_uri.clone();
 
-                // Iceberg requires `data_file.file_path` to be a full URI.
-                // Qualify the relative store paths for the manifest; the internal
-                // reader relativizes them back against the root URI (see
-                // `load_avro_manifest_static`), so `entry.file_path` stays
-                // store-relative everywhere else.
-                let mut qualified_entries = new_entries.clone();
-                for e in &mut qualified_entries {
-                    if !e.file_path.contains("://") && !e.file_path.starts_with('/') {
-                        e.file_path = format!(
+                    // Iceberg requires `data_file.file_path` to be a full URI.
+                    // Qualify the relative store paths for the manifest; the internal
+                    // reader relativizes them back against the root URI (see
+                    // `load_avro_manifest_static`), so `entry.file_path` stays
+                    // store-relative everywhere else.
+                    let mut qualified_entries = new_entries.clone();
+                    for e in &mut qualified_entries {
+                        if !e.file_path.contains("://") && !e.file_path.starts_with('/') {
+                            e.file_path = format!(
+                                "{}/{}",
+                                root_uri.trim_end_matches('/'),
+                                e.file_path.trim_start_matches('/')
+                            );
+                        }
+                        // The per-entry delete list is a read-time derived view; the
+                        // authoritative list is `global_delete_files`.
+                        e.delete_files.clear();
+                    }
+
+                    let chunks = writer.write_manifest_chunks(
+                        &qualified_entries,
+                        &global_delete_files,
+                        &table_spec,
+                        &table_schema,
+                        new_ver_i64,
+                        new_ver_i64,
+                        crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES,
+                    )?;
+
+                    for (chunk_idx, (bytes, file_count, row_count)) in
+                        chunks.into_iter().enumerate()
+                    {
+                        let uuid = uuid::Uuid::new_v4();
+                        let filename = format!("{}-m{}.avro", uuid, chunk_idx);
+                        let path = self.manifest_dir.child(filename);
+                        let store = store.clone();
+                        let partition_spec_id = table_spec.spec_id;
+                        let manifest_path_abs = format!(
                             "{}/{}",
                             root_uri.trim_end_matches('/'),
-                            e.file_path.trim_start_matches('/')
+                            path.to_string().trim_start_matches('/')
                         );
+
+                        futures.push(async move {
+                            let manifest_length = bytes.len() as i64;
+                            store.put(&path, bytes.into()).await?;
+
+                            Result::<ManifestListEntry>::Ok(ManifestListEntry {
+                                manifest_path: manifest_path_abs,
+                                manifest_length,
+                                partition_spec_id,
+                                content: 0, // Data
+                                sequence_number: new_ver_i64,
+                                min_sequence_number: new_ver_i64,
+                                added_snapshot_id: new_ver_i64,
+                                added_files_count: file_count as i32,
+                                existing_files_count: 0,
+                                deleted_files_count: 0,
+                                added_rows_count: row_count,
+                                existing_rows_count: 0,
+                                deleted_rows_count: 0,
+                                partition_stats: HashMap::new(),
+                            })
+                        });
                     }
-                    // The per-entry delete list is a read-time derived view; the
-                    // authoritative list is `global_delete_files`.
-                    e.delete_files.clear();
-                }
 
-                let chunks = writer.write_manifest_chunks(
-                    &qualified_entries,
-                    &global_delete_files,
-                    &table_spec,
-                    &table_schema,
-                    new_ver_i64,
-                    new_ver_i64,
-                    crate::core::manifest::types::MANIFEST_TARGET_SIZE_BYTES,
-                )?;
+                    while let Some(res) = futures.next().await {
+                        manifest_files.push(res?);
+                    }
 
-                for (chunk_idx, (bytes, file_count, row_count)) in chunks.into_iter().enumerate() {
-                    let uuid = uuid::Uuid::new_v4();
-                    let filename = format!("{}-m{}.avro", uuid, chunk_idx);
-                    let path = self.manifest_dir.child(filename);
-                    let store = store.clone();
-                    let partition_spec_id = table_spec.spec_id;
-                    let manifest_path_abs = format!(
-                        "{}/{}",
-                        root_uri.trim_end_matches('/'),
-                        path.to_string().trim_start_matches('/')
-                    );
+                    let list_uuid = uuid::Uuid::new_v4();
+                    let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
+                    let list_path_loc = self.manifest_dir.child(list_filename);
 
-                    futures.push(async move {
-                        let manifest_length = bytes.len() as i64;
-                        store.put(&path, bytes.into()).await?;
+                    let writer = crate::core::iceberg::IcebergWriter::new();
+                    let list_bytes = writer.write_manifest_list(&manifest_files)?;
+                    self.store.put(&list_path_loc, list_bytes.into()).await?;
 
-                        Result::<ManifestListEntry>::Ok(ManifestListEntry {
-                            manifest_path: manifest_path_abs,
-                            manifest_length,
-                            partition_spec_id,
-                            content: 0, // Data
-                            sequence_number: new_ver_i64,
-                            min_sequence_number: new_ver_i64,
-                            added_snapshot_id: new_ver_i64,
-                            added_files_count: file_count as i32,
-                            existing_files_count: 0,
-                            deleted_files_count: 0,
-                            added_rows_count: row_count,
-                            existing_rows_count: 0,
-                            deleted_rows_count: 0,
-                            partition_stats: HashMap::new(),
-                        })
-                    });
-                }
-
-                while let Some(res) = futures.next().await {
-                    manifest_files.push(res?);
-                }
-
-                let list_uuid = uuid::Uuid::new_v4();
-                let list_filename = format!("snap-{}-{}.avro", new_ver, list_uuid);
-                let list_path_loc = self.manifest_dir.child(list_filename);
-
-                let writer = crate::core::iceberg::IcebergWriter::new();
-                let list_bytes = writer.write_manifest_list(&manifest_files)?;
-                self.store.put(&list_path_loc, list_bytes.into()).await?;
-
-                (Vec::new(), Some(list_path_loc.to_string()))
+                    (Vec::new(), Some(list_path_loc.to_string()))
                 }
             } else {
                 (Vec::new(), None)
@@ -723,9 +727,7 @@ impl ManifestManager {
         }
 
         // WS2 crash boundary: vacuum has started but has not deleted anything.
-        crate::core::fault_injection::check(
-            crate::core::fault_injection::CrashPoint::VacuumStart,
-        )?;
+        crate::core::fault_injection::check(crate::core::fault_injection::CrashPoint::VacuumStart)?;
 
         // 1. Identify active files in the retention window
         let mut active_files = HashSet::new();
@@ -808,9 +810,8 @@ impl ManifestManager {
                 || path_str.ends_with(".tmp");
 
             if is_data_file {
-                let modified =
-                    chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0)
-                        .unwrap_or_else(Utc::now);
+                let modified = chrono::DateTime::from_timestamp(meta.last_modified.timestamp(), 0)
+                    .unwrap_or_else(Utc::now);
                 data_candidates.push((meta.location, path_str, modified));
             }
         }
