@@ -207,16 +207,6 @@ impl Table {
             let mut total_hits = 0;
             let base_uri = self.uri.clone();
 
-            // Convert file:// URI to filesystem path for directory listing
-            let fs_path = if base_uri.starts_with("file://") {
-                base_uri
-                    .strip_prefix("file://")
-                    .unwrap_or(&base_uri)
-                    .to_string()
-            } else {
-                base_uri.clone()
-            };
-
             // Map to track which index type was used for each sub-filter
             let mut filter_index_types: HashMap<String, HashSet<&'static str>> = HashMap::new();
 
@@ -239,40 +229,25 @@ impl Table {
 
                 let mut seg_bm: Option<roaring::RoaringBitmap> = None;
                 for sub_f in &sub_filters {
-                    // Detect access path by checking for actual index files on disk
-                    let path = {
-                        // Check for inverted index (.inv.parquet files)
-                        let inv_pattern = format!("{}.{}.inv.parquet", segment_id, sub_f.column);
-                        let has_inverted = std::fs::read_dir(&fs_path)
-                            .ok()
-                            .and_then(|dir| {
-                                dir.flatten().find(|e| {
-                                    e.file_name().to_string_lossy().contains(&inv_pattern)
-                                })
-                            })
-                            .is_some();
-
-                        if has_inverted {
-                            "Inverted Index (Parquet)"
-                        } else {
-                            // Check for bitmap index (.idx files)
-                            let bitmap_pattern = format!("{}.{}.idx", segment_id, sub_f.column);
-                            let has_bitmap = std::fs::read_dir(&fs_path)
-                                .ok()
-                                .and_then(|dir| {
-                                    dir.flatten().find(|e| {
-                                        e.file_name().to_string_lossy().contains(&bitmap_pattern)
-                                    })
-                                })
-                                .is_some();
-
-                            if has_bitmap {
-                                "Bitmap Index (.idx)"
-                            } else {
-                                "Full Scan"
-                            }
-                        }
-                    };
+                    // Report the access path from the manifest's `index_files` —
+                    // the same source of truth the reader uses
+                    // (`HybridReader::get_scalar_filter_bitmap`). Do NOT glob the
+                    // filesystem: the writer's naming convention is the manifest's
+                    // `file_path`, and a glob can silently miss it.
+                    let path = entry
+                        .index_files
+                        .iter()
+                        .find(|f| {
+                            matches!(f.index_type.as_str(), "inverted" | "bitmap" | "bm25")
+                                && f.column_name.as_deref() == Some(sub_f.column.as_str())
+                        })
+                        .map(|f| match f.index_type.as_str() {
+                            "inverted" => "Inverted Index (Parquet)",
+                            "bm25" => "BM25 Inverted Index",
+                            "bitmap" => "Bitmap Index (.idx)",
+                            _ => "Full Scan",
+                        })
+                        .unwrap_or("Full Scan");
                     filter_index_types
                         .entry(sub_f.column.clone())
                         .or_default()
@@ -339,56 +314,32 @@ impl Table {
                 ));
             }
 
-            // Check for vector index by detecting .hnsw.graph files on disk
-            let mut has_vector_index = false;
-
-            // Convert file:// URI to filesystem path
-            let fs_path = if self.uri.starts_with("file://") {
-                self.uri.strip_prefix("file://").unwrap_or(&self.uri)
-            } else {
-                &self.uri
-            };
-
-            for (entry, _) in &pruned_entries {
-                let segment_id = entry
-                    .file_path
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(&entry.file_path)
-                    .strip_suffix(".parquet")
-                    .unwrap_or(&entry.file_path);
-
-                for vs in vss {
-                    let hnsw_pattern_prefix = format!("{}.{}.cluster_", segment_id, vs.column);
-                    let hnsw_pattern_suffix = ".hnsw.graph";
-
-                    // Try to list files in the table directory to detect index files
-                    if let Ok(dirs) = std::fs::read_dir(fs_path) {
-                        for entry in dirs.flatten() {
-                            if let Some(filename) = entry.file_name().to_str() {
-                                if filename.starts_with(&hnsw_pattern_prefix)
-                                    && filename.ends_with(hnsw_pattern_suffix)
-                                {
-                                    has_vector_index = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    if has_vector_index {
-                        break;
-                    }
-                }
-                if has_vector_index {
+            // Report the access path from the manifest's `index_files` — the
+            // same source of truth the search path uses (see
+            // `reader/scan.rs::vector_search`). Do NOT glob the filesystem:
+            // quantized indexes are written as
+            // `{seg}.{col}.tq8.cluster_*.hnsw.graph`, so a `{seg}.{col}.cluster_*`
+            // glob silently misses them and misreports a full scan.
+            let mut access_mode = "Brute Force Scan (No Index)";
+            for vs in vss {
+                if let Some(f) = pruned_entries
+                    .iter()
+                    .flat_map(|(e, _)| e.index_files.iter())
+                    .find(|f| {
+                        f.index_type == "vector"
+                            && f.column_name.as_deref() == Some(vs.column.as_str())
+                    })
+                {
+                    access_mode = match f.blob_type.as_deref() {
+                        Some("hnsw_tq8") => "HNSW-TQ8 Cluster Index",
+                        Some("hnsw_tq4") => "HNSW-TQ4 Cluster Index",
+                        Some("hnsw_pq") => "HNSW-PQ Cluster Index",
+                        Some("hnsw_ivf") => "HNSW-IVF Cluster Index",
+                        _ => "HNSW-IVF Cluster Index",
+                    };
                     break;
                 }
             }
-
-            let access_mode = if has_vector_index {
-                "HNSW-IVF Cluster Index"
-            } else {
-                "Brute Force Scan (No Index)"
-            };
             plan.push(format!(
                 "     [Access: {}] [Eligibility: {} rows]",
                 access_mode, scalar_hits
@@ -1061,6 +1012,10 @@ impl Table {
             Some(e) => e,
             None => return Ok(Vec::new()),
         };
+        // Coerce literals to the column types (e.g. an Int64 literal compared
+        // against an Int32 column) so the comparison is valid in Arrow.
+        let coerced_expr = expr.coerce_literals(&full_schema);
+        let expr = &coerced_expr;
         let and_filters = reader.rewrite_composite_filters(expr.extract_and_conditions());
 
         // Try to use index for the FIRST filter that has one
@@ -1136,7 +1091,25 @@ impl Table {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to evaluate filter expression on batch: {}", e);
+                    // The pushed-down filter could not be evaluated — e.g. an
+                    // Int32 column compared against an Int64 literal
+                    // (`Invalid comparison operation: Int32 >= Int64`). The
+                    // filter is `Inexact`, so DataFusion re-applies it above the
+                    // scan; keep the batch unfiltered rather than dropping rows.
+                    tracing::warn!(
+                        "Failed to evaluate pushed-down filter on batch: {e}; keeping batch unfiltered"
+                    );
+                    let projected = if let Some(ts) = &target_schema {
+                        let indices: Vec<usize> = ts
+                            .fields()
+                            .iter()
+                            .filter_map(|f| batch.schema().index_of(f.name()).ok())
+                            .collect();
+                        batch.project(&indices).unwrap_or_else(|_| batch.clone())
+                    } else {
+                        batch.clone()
+                    };
+                    filtered_batches.push(projected);
                 }
             }
         }

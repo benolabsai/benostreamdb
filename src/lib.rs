@@ -127,6 +127,8 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
     register_python_site_packages(m);
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::build_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::is_debug_build, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(
         python_binding::create_catalog_from_config,
@@ -281,7 +283,14 @@ impl SegmentConfig {
         mut self,
         delete_files: Vec<crate::core::manifest::DeleteFile>,
     ) -> Self {
-        self.delete_files = delete_files;
+        // Deduplicate by path: the manifest can attach the same physical
+        // delete file to a data entry many times, and every consumer would
+        // otherwise re-traverse the duplicates on each read.
+        let mut seen = std::collections::HashSet::with_capacity(delete_files.len());
+        self.delete_files = delete_files
+            .into_iter()
+            .filter(|d| seen.insert(d.file_path.clone()))
+            .collect();
         self
     }
 
