@@ -311,6 +311,24 @@ impl HybridReader {
 
     pub(crate) async fn load_equality_deletes(&self) -> Result<Vec<EqualityDelete>> {
         let t_eq = std::time::Instant::now();
+
+        // Equality deletes depend only on the delete-file set, so cache the
+        // parsed values (same key as the merged position-delete cache). This
+        // is called on every segment read; without the cache it re-reads and
+        // re-parses every equality delete file each time.
+        let cache_key_opt = self.merged_deletes_cache_key();
+        if let Some(cache_key) = &cache_key_opt {
+            if let Some(cached) = crate::core::cache::EQUALITY_DELETE_CACHE
+                .get(cache_key)
+                .await
+            {
+                crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS
+                    .with_label_values(&["equality"])
+                    .observe(t_eq.elapsed().as_secs_f64());
+                return Ok(cached.as_ref().clone());
+            }
+        }
+
         let mut results = Vec::new();
 
         for delete_file in self.unique_delete_files().iter().copied() {
@@ -393,6 +411,12 @@ impl HybridReader {
                 }
             }
         }
+        if let Some(cache_key) = cache_key_opt {
+            crate::core::cache::EQUALITY_DELETE_CACHE
+                .insert(cache_key, std::sync::Arc::new(results.clone()))
+                .await;
+        }
+
         crate::telemetry::metrics::MERGED_DELETES_PHASE_SECONDS
             .with_label_values(&["equality"])
             .observe(t_eq.elapsed().as_secs_f64());
