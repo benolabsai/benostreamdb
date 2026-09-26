@@ -59,11 +59,13 @@ async fn build_scalar_table(uri: String, algo: Option<IndexAlgorithm>) -> anyhow
     Ok(table)
 }
 
-async fn assert_scalar_matches_full_scan(algo: Option<IndexAlgorithm>, label: &str) -> anyhow::Result<()> {
+async fn assert_scalar_matches_full_scan(
+    algo: Option<IndexAlgorithm>,
+    label: &str,
+) -> anyhow::Result<()> {
     let d1 = tempdir()?;
     let d2 = tempdir()?;
-    let plain =
-        build_scalar_table(format!("file://{}", d1.path().to_str().unwrap()), None).await?;
+    let plain = build_scalar_table(format!("file://{}", d1.path().to_str().unwrap()), None).await?;
     let indexed =
         build_scalar_table(format!("file://{}", d2.path().to_str().unwrap()), algo).await?;
 
@@ -134,17 +136,15 @@ fn vector_batch(n: i32, dim: usize) -> anyhow::Result<RecordBatch> {
     let ids: Vec<i32> = (0..n).collect();
     // Distinct vectors: vector i is `[i, i, ...]`, so the nearest neighbour of
     // `[q, q, ...]` is unambiguously id = round(q).
-    let vectors: Vec<Option<Vec<Option<f32>>>> = (0..n)
-        .map(|i| Some(vec![Some(i as f32); dim]))
-        .collect();
+    let vectors: Vec<Option<Vec<Option<f32>>>> =
+        (0..n).map(|i| Some(vec![Some(i as f32); dim])).collect();
     Ok(RecordBatch::try_new(
         vector_schema(dim),
         vec![
             Arc::new(Int32Array::from(ids)),
-            Arc::new(FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
-                vectors,
-                dim as i32,
-            )),
+            Arc::new(
+                FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(vectors, dim as i32),
+            ),
         ],
     )?)
 }
@@ -192,8 +192,13 @@ async fn assert_ann_recall(algo: IndexAlgorithm, label: &str) -> anyhow::Result<
 
     let d1 = tempdir()?;
     let d2 = tempdir()?;
-    let plain =
-        build_vector_table(format!("file://{}", d1.path().to_str().unwrap()), None, n, dim).await?;
+    let plain = build_vector_table(
+        format!("file://{}", d1.path().to_str().unwrap()),
+        None,
+        n,
+        dim,
+    )
+    .await?;
     let indexed = build_vector_table(
         format!("file://{}", d2.path().to_str().unwrap()),
         Some(algo),

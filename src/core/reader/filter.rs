@@ -260,9 +260,10 @@ impl HybridReader {
             (f.index_type == "inverted" || f.index_type == "bm25")
                 && f.column_name.as_deref() == Some(filter_column)
         });
-        let bitmap_idx_info = self.config.index_files.iter().find(|f| {
-            f.index_type == "scalar" && f.column_name.as_deref() == Some(filter_column)
-        });
+        let bitmap_idx_info =
+            self.config.index_files.iter().find(|f| {
+                f.index_type == "scalar" && f.column_name.as_deref() == Some(filter_column)
+            });
 
         let matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;

@@ -92,7 +92,8 @@ pub(crate) fn load_multi_csr(
                 // ignoring them makes a legacy table fall back to the SQL BFS
                 // path (correct, just slower) until its graph indexes are
                 // rebuilt. See `csr_graph::build_from_file`.
-                if idx.index_type == "graph_v2" && idx.column_name.as_deref() == Some(graph_column) {
+                if idx.index_type == "graph_v2" && idx.column_name.as_deref() == Some(graph_column)
+                {
                     let offsets_str = format!("{}.graph_v2.csr.offsets", idx.file_path);
                     let edges_str = format!("{}.graph_v2.csr.edges", idx.file_path);
                     let dict_str = format!("{}.graph_v2.csr.dict", idx.file_path);

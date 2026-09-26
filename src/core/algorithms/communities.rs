@@ -37,10 +37,7 @@ struct CsrAdj<'a> {
 }
 
 impl<'a> CsrAdj<'a> {
-    fn build(
-        forward: &'a MultiSegmentCsrGraph,
-        reverse: Option<&'a MultiSegmentCsrGraph>,
-    ) -> Self {
+    fn build(forward: &'a MultiSegmentCsrGraph, reverse: Option<&'a MultiSegmentCsrGraph>) -> Self {
         // Enumerate every node once, assigning a dense index.
         let mut node_map: HashMap<u64, usize> = HashMap::new();
         let mut originals: Vec<u64> = Vec::new();
