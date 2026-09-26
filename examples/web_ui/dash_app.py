@@ -33,6 +33,13 @@ NODES_URI = f"file://{os.path.join(DB, 'nodes')}"
 EMBED_MODEL = os.environ.get("BSDB_DEMO_EMBED_MODEL", "all-MiniLM-L6-v2")
 
 # ── Tables (opened once) ────────────────────────────────────────────────────
+# Activate GPU for BenoStreamDB's vector search (HNSW distance computation,
+# TurboQuant decode). The embedder above uses SentenceTransformer on GPU;
+# this makes the engine itself use CUDA kernels too.
+_gpu = benostreamdb.Device.auto_detect()
+_gpu.activate()
+print(f"[dash] GPU context: {_gpu}", flush=True)
+
 edges_t = benostreamdb.Table(EDGES_URI)
 nodes_t = benostreamdb.Table(NODES_URI)
 
@@ -47,7 +54,7 @@ def get_embedder():
         if _embedder is None and not _embedder_failed:
             try:
                 from sentence_transformers import SentenceTransformer
-                _embedder = SentenceTransformer(EMBED_MODEL, device="cpu")
+                _embedder = SentenceTransformer(EMBED_MODEL, device="cuda")
             except Exception as e:  # pragma: no cover - optional dependency
                 print(f"embedder unavailable: {e}")
                 _embedder_failed = True
