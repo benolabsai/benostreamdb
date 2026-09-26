@@ -167,8 +167,8 @@ redirect filtering and endpoint resolution.
 | parse (streaming Rust) | ~2.6 h | **< 2 GB** | 66.1M pages + 498M edges; the old accumulate-then-write design OOM-killed at ~110 GB — streaming per-chunk flushes fixed it |
 | resolve (polars, chunked) | ~3–5 min | **~5–8 GB** | per-edge-chunk join against a single broadcast title→curid map; replaced a pandas pass that OOM'd at 47 GB / 17 min at ⅕ scale |
 | embed (all-MiniLM-L6-v2, 384-d, **RTX 3090**) | **2.1 h** | **8.3 GB peak RSS**, 5.9 GB VRAM reserved | fp16, batch 512, 256-char leads; **~6,300 sent/s avg** (measured 6,606 → 6,189) → 11 shards / ~40 GB (bge-large-1024: 279 sent/s = 50 h — rejected for the seed index) |
-| load — edges (383M + CSR) | **271 s** | ~6 GB | 15 GB table incl. CSR sidecars |
-| load — nodes (51.8M + HNSW-TQ8 + BM25) | **41 min** | **14.6–18.0 GB/chunk** (measured peak RSS, ~2.0 GB/M rows) | **~21k rows/s sustained**, flat ~34–53 s per M rows; the auto-sizer *estimated* ~36 GB/chunk (its `4.5 GB/M` constant is ~2.2× conservative) — builds overlap writes inside the chunk; shards deleted after all chunks commit |
+| load — edges (383M + CSR) | **245 s** | ~6 GB | 15 GB table incl. CSR sidecars |
+| load — nodes (51.8M + HNSW-TQ8 + BM25) | **38.7 min** | **13.3–16.2 GB/chunk (10M rows)** (measured peak RSS, ~1.5 GB/M rows) | **~22k rows/s sustained**, ~36–52 s per M rows; the auto-sizer *estimated* ~45 GB/chunk (its `4.5 GB/M` constant is ~3× conservative) — builds overlap writes inside the chunk; shards deleted after all chunks commit |
 
 Per-chunk node-load timings (from-scratch reload, post-fix) — note the flat rate
 and the real peak RSS vs the ~36 GB the auto-sizer predicted:
