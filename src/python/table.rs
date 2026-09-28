@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright. All rights reserved.
 
 use crate::core::compaction::CompactionOptions;
-use crate::core::table::{Table, VectorSearchParams};
+use crate::core::table::{PreloadOptions, Table, VectorSearchParams};
 use arrow::record_batch::RecordBatch;
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::prelude::*;
@@ -2287,6 +2287,46 @@ impl PyTable {
         let rt = self.table.runtime();
         rt.block_on(async { self.table.snapshot_version().await })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Warm the read-path index caches (HNSW/IVF, inverted/BM25, CSR graph,
+    /// manifest/parquet metadata) so the first query is served from memory
+    /// instead of the object store.
+    ///
+    /// `max_memory_bytes` bounds the in-memory warm; the overflow spills to the
+    /// mmap disk cache when `spill_to_disk` is true. Returns a dict with
+    /// `indexes_seen`, `indexes_warmed`, `indexes_skipped`, `bytes_in_memory`,
+    /// `bytes_on_disk`, and `elapsed_ms`.
+    #[pyo3(signature = (max_memory_bytes=None, include_vector=true, include_inverted=true, include_graph=true, spill_to_disk=true))]
+    fn preload_indexes(
+        &self,
+        py: Python<'_>,
+        max_memory_bytes: Option<u64>,
+        include_vector: bool,
+        include_inverted: bool,
+        include_graph: bool,
+        spill_to_disk: bool,
+    ) -> PyResult<pyo3::PyObject> {
+        let opts = PreloadOptions {
+            max_memory_bytes: max_memory_bytes.unwrap_or(4 * 1024 * 1024 * 1024),
+            include_vector,
+            include_inverted,
+            include_graph,
+            spill_to_disk,
+        };
+        let rt = self.table.runtime();
+        let stats = py
+            .allow_threads(move || rt.block_on(async { self.table.preload_indexes_async(opts).await }))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("indexes_seen", stats.indexes_seen)?;
+        dict.set_item("indexes_warmed", stats.indexes_warmed)?;
+        dict.set_item("indexes_skipped", stats.indexes_skipped)?;
+        dict.set_item("bytes_in_memory", stats.bytes_in_memory)?;
+        dict.set_item("bytes_on_disk", stats.bytes_on_disk)?;
+        dict.set_item("elapsed_ms", stats.elapsed_ms)?;
+        Ok(dict.into())
     }
 
     /// Native bulk ingest of parquet files: plan → bounded parallel execute →
