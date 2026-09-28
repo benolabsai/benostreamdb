@@ -157,8 +157,19 @@ BenoStreamDB competes across four distinct product categories in data infrastruc
 ├────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────┤
 │ 4. Big Cloud           │ • Databricks Vector Search     │ Multi-cloud & format neutrality vs. locked-in│
 │    Lakehouse Giants    │ • Snowflake Cortex Search      │ DBU consumption and proprietary credits.     │
+├────────────────────────┼────────────────────────────────┼──────────────────────────────────────────────┤
+│ 5. Graph Databases     │ • Neo4j, JanusGraph, Dgraph    │ Graph RAG on the same Iceberg table as the   │
+│    (Graph RAG)         │ • TigerGraph, Amazon Neptune   │ vectors — no second system, no data copy.    │
 └────────────────────────┴────────────────────────────────┴──────────────────────────────────────────────┘
 ```
+
+> **Note on the graph category:** Neo4j is the incumbent for Graph RAG, but
+> **JanusGraph** and **Dgraph** are the closest architectural competitors for
+> *lakehouse-adjacent* graph workloads. JanusGraph is a distributed graph layer
+> over Cassandra/HBase with a **separate Elasticsearch index backend**; Dgraph is
+> a native distributed graph store with in-memory posting lists. Both require a
+> second system alongside the lakehouse, which is exactly the sprawl BenoStreamDB
+> eliminates. See §6.1 for the teardown.
 
 ---
 
@@ -208,3 +219,62 @@ LanceDB is our most visible mindshare competitor in the "serverless/embedded dis
 | **Elasticsearch** | Enterprise search standard | JVM memory hog, complex clustering, high idle cost | **Emulates ES 7.10 (Port 9200) in Rust, scale-to-zero** |
 | **pgvector** | Relational vector extension | Cannot index large data lakes without high RAM | **O(1) sidecars on object storage, TB-scale per node** |
 | **Databricks** | Managed lakehouse search | High DBU credit pricing, proprietary Delta lock-in | **Vendor-neutral, multi-cloud Iceberg core** |
+| **Neo4j** | Graph database incumbent | Separate system + data copy; Graph RAG needs Neo4j **and** a vector DB | **Graph + vectors + BM25 in one Iceberg table, no copy** |
+| **JanusGraph** | Distributed graph over Cassandra/HBase | Needs a **separate Elasticsearch** index backend; two systems to run | **Indexes are Iceberg data files — no external index store** |
+| **Dgraph** | Native distributed graph store | In-memory posting lists need a hot cluster; no lakehouse integration | **Scale-to-zero sidecars on S3; reads Parquet in place** |
+| **TigerGraph** | Enterprise graph analytics | Expensive, proprietary, closed to the lakehouse | **Open Iceberg core; PageRank/communities as free SQL UDFs** |
+| **Amazon Neptune** | Managed graph service | AWS lock-in, separate from S3 lakehouse data | **Multi-cloud, format-neutral, co-located with the data** |
+
+---
+
+## 6.1 Graph-Space Teardown: BenoStreamDB vs. JanusGraph & Dgraph
+
+Neo4j is the Graph RAG incumbent, but **JanusGraph** and **Dgraph** are the
+closest *architectural* competitors for lakehouse-adjacent graph workloads. Both
+are excellent graph engines — and both prove the same point: **a graph database
+is a second system next to your lakehouse.**
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│              GRAPH RAG STACKS: TWO SYSTEMS vs. ONE TABLE                     │
+├───────────────────────────────────────┬──────────────────────────────────────┤
+│  JANUSGRAPH / DGRAPH / NEO4J          │  BENOSTREAMDB                        │
+├───────────────────────────────────────┼──────────────────────────────────────┤
+│ • Graph store (Cassandra/HBase/Badger)│ • One Apache Iceberg table           │
+│ • Separate index backend (Elastic)    │ • Sidecar indexes in the same bucket │
+│ • Separate vector DB for embeddings   │ • HNSW vectors in the same table     │
+│ • ETL to copy lakehouse → graph       │ • Zero copy: reads Parquet in place  │
+│ • Two consistency domains to reconcile│ • One manifest = one atomic commit   │
+└───────────────────────────────────────┴──────────────────────────────────────┘
+```
+
+### JanusGraph — the "two backends" problem
+JanusGraph is a graph *layer*, not a store: it runs on Cassandra/HBase/Bigtable
+for the graph and **requires a separate Elasticsearch/OpenSearch cluster** for
+mixed (text/range/geo) indexes. That is **two distributed systems** to operate,
+tune, and keep consistent — plus a third for vectors. BenoStreamDB's indexes
+(inverted, HNSW, CSR) are **just more Iceberg data files**, versioned and
+committed atomically with the data in the same manifest. There is no external
+index store to drift out of sync.
+
+### Dgraph — the "hot cluster" problem
+Dgraph keeps its posting lists **resident in RAM** for sub-millisecond traversal,
+which is fast but demands a permanently provisioned, memory-heavy cluster. It has
+no notion of a lakehouse: data must be ingested into Dgraph's own store. BenoStreamDB
+gets the same in-memory query speed **on demand** via `preload_indexes_async`
+(warm the caches at startup, spill the overflow to an mmap disk cache) while the
+source of truth stays in standard Parquet on S3 — scale-to-zero when idle.
+
+### What we borrow (and what we don't)
+- **Borrow:** Dgraph's in-memory index residency → our `preload_indexes_async`
+  with a memory budget and disk spillover. JanusGraph's vertex-centric indexing →
+  our CSR graph index on edge tables (O(1) `article → sections` traversal).
+- **Reject:** the external index backend (JanusGraph) and the always-on hot
+  cluster (Dgraph). Both reintroduce the sprawl — and the data copy — that
+  BenoStreamDB exists to eliminate.
+
+**Our Core Marketing Counter to the Graph Databases:**
+> *"JanusGraph needs Cassandra **and** Elasticsearch. Dgraph needs a hot RAM
+> cluster. Neo4j needs a second copy of your data. BenoStreamDB runs PageRank,
+> community detection, vector search, and BM25 on **one Iceberg table** — no
+> second system, no data copy, no external index store."*

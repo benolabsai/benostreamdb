@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sec_ends = Vec::new();
 
     let link_regex = Regex::new(r"\[\[(.*?)\]\]").unwrap();
-    let section_regex = Regex::new(r"^={2,6}\s*([^=]+?)\s*={2,6}").unwrap();
+    let section_regex = Regex::new(r"(?m)^={2,6}\s*([^=]+?)\s*={2,6}").unwrap();
 
     let mut paths: Vec<_> = std::fs::read_dir(&args.input_dir)?
         .filter_map(Result::ok)
@@ -91,8 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sections_writer =
         AsyncArrowWriter::try_new(sections_file, sections_schema.clone(), None)?;
 
-    const FLUSH_PAGES: usize = 1_000_000;
-    const FLUSH_EDGES: usize = 8_000_000;
+    let flush_pages: usize = if args.full_text { 50_000 } else { 1_000_000 };
+    let flush_edges: usize = if args.full_text { 400_000 } else { 8_000_000 };
 
     let mut total_pages: u64 = 0;
     let mut total_edges: u64 = 0;
@@ -231,27 +231,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nodes_texts.push(summary);
 
                         if args.sections {
-                            for caps in section_regex.captures_iter(&current_text) {
+                            // Collect every `== Header ==` in THIS page, then give
+                            // each section the byte range [header_end, next_header_start)
+                            // — or [header_end, text_len) for the last section.
+                            // Per-page (not accumulated across pages), so a page with
+                            // no headers cannot corrupt the previous page's last section.
+                            let matches: Vec<_> =
+                                section_regex.captures_iter(&current_text).collect();
+                            let text_len = current_text.len() as i64;
+                            for (i, caps) in matches.iter().enumerate() {
                                 let m = caps.get(0).unwrap();
                                 let title = caps.get(1).unwrap().as_str().trim().to_string();
-                                let level = m.as_str().chars().take_while(|c| *c == '=').count() as i32;
-                                let start = m.start() as i64;
-                                let end = m.end() as i64;
-                                // The text BEFORE this header belongs to the previous
-                                // section (or is the lead). For the previous section,
-                                // set its end = this header's start.
-                                if !sec_ends.is_empty() {
-                                    *sec_ends.last_mut().unwrap() = start;
-                                }
+                                let level =
+                                    m.as_str().chars().take_while(|c| *c == '=').count() as i32;
+                                let start = m.end() as i64; // text starts after the header
+                                let end = if i + 1 < matches.len() {
+                                    matches[i + 1].get(0).unwrap().start() as i64
+                                } else {
+                                    text_len
+                                };
                                 sec_page_ids.push(current_id.clone());
                                 sec_titles.push(current_title.clone());
                                 sec_names.push(title);
                                 sec_levels.push(level);
-                                sec_starts.push(end); // section text starts after header
-                                sec_ends.push(end); // will be updated by next header
-                            }
-                            if !sec_ends.is_empty() {
-                                *sec_ends.last_mut().unwrap() = current_text.len() as i64;
+                                sec_starts.push(start);
+                                sec_ends.push(end);
                             }
                         }
 
@@ -271,13 +275,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         total_pages += 1;
 
-                        if nodes_titles.len() >= FLUSH_PAGES {
+                        if nodes_titles.len() >= flush_pages {
                             flush_nodes!();
                         }
-                        if edges_sources.len() >= FLUSH_EDGES {
+                        if edges_sources.len() >= flush_edges {
                             flush_edges!();
                         }
-                        if args.sections && sec_page_ids.len() >= FLUSH_PAGES {
+                        if args.sections && sec_page_ids.len() >= flush_pages {
                             flush_sections!();
                         }
 
