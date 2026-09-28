@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-28
 
 ### Added
 - **Index preload (`Table::preload_indexes_async`)** — warms the read-path
@@ -124,6 +124,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timings from a `maturin develop` (debug) build.
 
 ### Fixed
+- **Binary literal parser panicked on a bare `B'` prefix (fuzz-found).**
+  `parse_binary_vector` sliced `&trimmed[2..trimmed.len() - 1]` after only
+  checking that the input started with `B'`/`b'` and ended with `'`. For the
+  two-character input `B'` (or `b'`, including with surrounding whitespace) the
+  opening prefix and the closing quote overlap, so the slice range was reversed
+  (`2..1`) and panicked with *"byte range starts at 2 but ends at 1"*. A length
+  guard now rejects such inputs with a `Plan` error; `B''` (a well-formed empty
+  literal) still parses. The crash input is added to
+  `fuzz/corpus/parse_binary/prefix_only` as a permanent regression seed.
 - **CSR graph index direction mismatch.** `add_index` registered a graph index
   under both its `src_column` and the original `column` argument, so two graph
   indexes (forward + reverse) collided in `index_configs`, clobbering each other
