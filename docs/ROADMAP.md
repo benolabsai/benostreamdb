@@ -61,6 +61,7 @@ maintained is the full-site Wikipedia Graph RAG demo
 5. **Query Planner Pruning** - Skips segments based on column statistics
 6. **Configurable Parallelism** - `table.set_max_parallel_readers(n)` for memory-constrained environments
 7. **Column Projection** - Skip reading unused columns (e.g., embeddings) → 142x faster scalar queries
+8. **Index Preload** - `table.preload_indexes()` warms HNSW/IVF, inverted/BM25, CSR graph, and metadata caches at startup (memory budget + mmap disk spillover) so the first query is instant
 
 ### Performance Baseline
 
@@ -552,6 +553,7 @@ Ensure that all BenoStreamDB features maintain mathematical correctness and benc
     - **Catastrophic tail collapse eliminated**: OpenSearch suffers severe memory thrashing under 4GB RAM, causing P99 latency to spike to **478.77ms** (128x slower).
     - **Zero data duplication**: Requires only ~280MB storage vs OpenSearch's ~1,852MB (6.6x disk savings).
     - Documented comprehensively in [`docs/BENCHMARKING.md`](docs/BENCHMARKING.md).
+- [x] **Index preload (warm start)**: `Table::preload_indexes_async` warms the read-path caches (HNSW/IVF, inverted/BM25, CSR graph, manifest/parquet metadata) at table-open time, with an explicit memory budget and mmap disk spillover for the overflow. Exposed in Python (`Table.preload_indexes`) and called by the `benostream-search` gateway on open (`BENOSEARCH_PRELOAD`, `BENOSEARCH_PRELOAD_GB`). ✅ (v0.10.0)
 
 **Next Steps**
 - [ ] (none outstanding)

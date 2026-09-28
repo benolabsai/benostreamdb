@@ -4,7 +4,7 @@
 //! Prometheus collectors behind plan-5.2.2 telemetry.
 
 use arrow::datatypes::SchemaRef;
-use benostreamdb::core::table::WalDurability;
+use benostreamdb::core::table::{PreloadOptions, WalDurability};
 use benostreamdb::{BenoStreamError, Table};
 use futures::TryStreamExt;
 use object_store::ObjectStore;
@@ -50,6 +50,28 @@ pub struct AppState {
     /// Serializes open/create so concurrent first-use requests for the same
     /// index share one `Table` instance (no forked write buffers / WALs).
     open_gate: Arc<Mutex<()>>,
+}
+
+/// Whether index preload-on-open is enabled (`BENOSEARCH_PRELOAD`, default on).
+fn preload_enabled() -> bool {
+    match std::env::var("BENOSEARCH_PRELOAD") {
+        Ok(v) => !matches!(v.as_str(), "0" | "false" | "no" | "off"),
+        Err(_) => true,
+    }
+}
+
+/// Preload options for the gateway: in-memory budget from
+/// `BENOSEARCH_PRELOAD_GB` (default 4 GiB), overflow spilled to the mmap
+/// disk cache.
+fn preload_options() -> PreloadOptions {
+    let budget_gb: u64 = std::env::var("BENOSEARCH_PRELOAD_GB")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    PreloadOptions {
+        max_memory_bytes: budget_gb * 1024 * 1024 * 1024,
+        ..PreloadOptions::default()
+    }
 }
 
 impl AppState {
@@ -237,6 +259,31 @@ impl AppState {
                         "failed to build vector index for '{index}': {e}"
                     ))
                 })?;
+        }
+
+        // 2b. Warm the read-path index caches so the first query is served
+        // from memory (or the mmap disk cache) instead of the object store.
+        // Dgraph-style in-memory residency, bounded by `BENOSEARCH_PRELOAD_GB`
+        // with the overflow spilled to the disk cache. Disable with
+        // `BENOSEARCH_PRELOAD=0`.
+        if preload_enabled() {
+            let opts = preload_options();
+            match table.preload_indexes_async(opts).await {
+                Ok(stats) => tracing::info!(
+                    index = %index,
+                    seen = stats.indexes_seen,
+                    warmed = stats.indexes_warmed,
+                    mem_mb = stats.bytes_in_memory / (1024 * 1024),
+                    disk_mb = stats.bytes_on_disk / (1024 * 1024),
+                    elapsed_ms = stats.elapsed_ms,
+                    "preloaded index caches"
+                ),
+                Err(e) => tracing::warn!(
+                    index = %index,
+                    error = %e,
+                    "index preload failed; queries will warm caches on demand"
+                ),
+            }
         }
 
         // 3. Publish (first instance wins) and hand back the shared handle.

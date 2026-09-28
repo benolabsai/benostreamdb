@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Index preload (`Table::preload_indexes_async`)** — warms the read-path
+  caches (HNSW/IVF vector, inverted/BM25, CSR graph, manifest/PARQUET metadata)
+  at table-open time so the first query is served from memory instead of the
+  object store — the Dgraph-style "in-memory posting list" residency, but on
+  demand. `PreloadOptions` takes an explicit `max_memory_bytes` budget: indexes
+  are warmed into RAM until the budget is exhausted, then the remainder spills
+  into the mmap disk cache (`BENOSTREAM_DISK_CACHE_DIR`, `MADV_RANDOM`) for
+  out-of-core serving. The bounded moka caches evict by LRU/TinyLFU + TTI, so
+  overflow simply evicts the least-recently-used entries. Type filters
+  (`include_vector` / `include_inverted` / `include_graph`) and idempotent
+  re-warm are supported. Exposed via `Table.preload_indexes(...)` in Python.
+  The `benostream-search` gateway calls it on open, controlled by
+  `BENOSEARCH_PRELOAD` (default on) and `BENOSEARCH_PRELOAD_GB` (default 4 GiB;
+  overflow spills to disk). 5 tests cover budget, disk spill, correctness,
+  idempotency, and type filters.
+- **Wikipedia section extraction (`ingest_wikipedia --sections`)** — extracts
+  every `== Section ==` header with byte ranges so a downstream build can carve
+  full wikitext into a 3-tier dataset (article → section → section text). The
+  regex is now multiline and the extraction is per-page, fixing two bugs: the
+  non-multiline anchor only matched a page's leading header, and the running
+  `end_byte` state accumulated across pages, corrupting every section's range.
+- **3-tier Wikipedia build scripts** — `scripts/build_three_tier.py` (streaming
+  articles/sections/section_texts), `scripts/embed_sections.py` (GPU
+  SentenceTransformer embeddings), and `scripts/load_three_tier.py` (edge-table
+  load with pre-sort for sequential I/O, vertex-centric CSR traversal, and
+  preload).
 - **CSR-backed `subgraph()` / `graph_neighbors()` fast path.** `Table.subgraph`
   and `Table.graph_neighbors` now accept an optional `graph_column` kwarg. When
   a memory-mapped CSR graph index exists on that column, the multi-hop BFS runs
