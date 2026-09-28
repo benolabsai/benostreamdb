@@ -29,11 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regex is now multiline and the extraction is per-page, fixing two bugs: the
   non-multiline anchor only matched a page's leading header, and the running
   `end_byte` state accumulated across pages, corrupting every section's range.
-- **3-tier Wikipedia build scripts** — `scripts/build_three_tier.py` (streaming
-  articles/sections/section_texts), `scripts/embed_sections.py` (GPU
-  SentenceTransformer embeddings), and `scripts/load_three_tier.py` (edge-table
-  load with pre-sort for sequential I/O, vertex-centric CSR traversal, and
-  preload).
+- **3-tier Wikipedia build pipeline (`scripts/build_three_tier.py`)** — a single
+  end-to-end, idempotent script with resumable stages (`download`, `parse`,
+  `merge`, `tier`, `embed`, `load`): fetch the enwiki XML chunks, run
+  `ingest_wikipedia --sections --full-text` in parallel, merge the per-worker
+  parquets, build the articles / sections / section_texts tiers, compute GPU
+  SentenceTransformer embeddings over section text, then load into BenoStreamDB
+  with an edge table (CSR) + HNSW and preload the index caches. It replaces the
+  earlier separate `embed_sections.py` and `load_three_tier.py` helpers.
 - **CSR-backed `subgraph()` / `graph_neighbors()` fast path.** `Table.subgraph`
   and `Table.graph_neighbors` now accept an optional `graph_column` kwarg. When
   a memory-mapped CSR graph index exists on that column, the multi-hop BFS runs

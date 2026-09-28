@@ -16,7 +16,7 @@
 //! See `plans/production_readiness_plan.md` §WS2.
 
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
@@ -25,6 +25,20 @@ use benostreamdb::core::fault_injection::{arm, disarm, CrashPoint};
 use benostreamdb::core::manifest::IndexAlgorithm;
 use benostreamdb::Table;
 use tempfile::tempdir;
+
+/// The fault injector (`benostreamdb::core::fault_injection`) uses a single
+/// process-global armed point, so tests that arm it must not run concurrently.
+/// Cargo runs the tests in this binary on parallel threads by default, which
+/// previously let one case's `arm`/`disarm` clobber another's and made the
+/// suite flaky (e.g. `case_e` failing only on some runs). Serialize them with a
+/// process-wide lock.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+/// Acquire the serialization lock, recovering from poisoning so one failing
+/// case does not cascade into spurious failures in the others.
+fn serial_guard() -> MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn batch(start: i32, n: i32) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -51,6 +65,7 @@ async fn read_ids(table: &Table) -> anyhow::Result<Vec<i32>> {
 /// full-scan fallback even though the index was never uploaded.
 #[tokio::test]
 async fn case_a_data_without_index_is_readable() -> anyhow::Result<()> {
+    let _guard = serial_guard();
     let dir = tempdir()?;
     let uri = format!("file://{}", dir.path().display());
 
@@ -87,6 +102,7 @@ async fn case_a_data_without_index_is_readable() -> anyhow::Result<()> {
 /// still leave the rows durable and visible on reopen.
 #[tokio::test]
 async fn case_c_delayed_visibility_is_durable() -> anyhow::Result<()> {
+    let _guard = serial_guard();
     let dir = tempdir()?;
     let uri = format!("file://{}", dir.path().display());
 
@@ -117,6 +133,7 @@ async fn case_c_delayed_visibility_is_durable() -> anyhow::Result<()> {
 /// table must be at the post-write state.
 #[tokio::test]
 async fn case_d_wal_before_manifest_recovers() -> anyhow::Result<()> {
+    let _guard = serial_guard();
     let dir = tempdir()?;
     let uri = format!("file://{}", dir.path().display());
 
@@ -147,6 +164,7 @@ async fn case_d_wal_before_manifest_recovers() -> anyhow::Result<()> {
 /// already-committed batch. Before the fix this produced duplicate rows.
 #[tokio::test]
 async fn case_e_manifest_before_wal_truncation_is_idempotent() -> anyhow::Result<()> {
+    let _guard = serial_guard();
     let dir = tempdir()?;
     let uri = format!("file://{}", dir.path().display());
 
@@ -188,6 +206,7 @@ async fn case_e_manifest_before_wal_truncation_is_idempotent() -> anyhow::Result
 /// Case F — two concurrent writers must not lose updates.
 #[tokio::test]
 async fn case_f_two_writers_no_lost_updates() -> anyhow::Result<()> {
+    let _guard = serial_guard();
     let dir = tempdir()?;
     let uri = format!("file://{}", dir.path().display());
 
