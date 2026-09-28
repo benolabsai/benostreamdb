@@ -3207,6 +3207,47 @@ class Table:
         """
         return self._inner.snapshot_version()
 
+    def preload_indexes(
+        self,
+        max_memory_bytes: Optional[int] = None,
+        include_vector: bool = True,
+        include_inverted: bool = True,
+        include_graph: bool = True,
+        spill_to_disk: bool = True,
+    ) -> Dict[str, Any]:
+        """Warm the read-path index caches so the first query is instant.
+
+        Loads every index file in the current manifest through the same cache
+        path a query would use — HNSW/IVF vector, inverted/BM25, CSR graph, and
+        the manifest/parquet metadata caches. This is the Dgraph-style
+        "in-memory posting list" residency, but on demand and bounded.
+
+        Indexes are warmed into RAM until ``max_memory_bytes`` is exhausted;
+        the remainder spills into the mmap disk cache (``BENOSTREAM_DISK_CACHE_DIR``)
+        for out-of-core serving when ``spill_to_disk`` is true. The bounded
+        caches evict by LRU/TinyLFU + TTI, so overflow evicts the
+        least-recently-used entries.
+
+        Args:
+            max_memory_bytes: In-memory warm budget. Defaults to 4 GiB.
+            include_vector: Warm vector (HNSW/IVF/TQ) indexes.
+            include_inverted: Warm inverted (BM25/exact) indexes.
+            include_graph: Warm CSR graph indexes.
+            spill_to_disk: Warm the overflow into the mmap disk cache.
+
+        Returns:
+            A dict with ``indexes_seen``, ``indexes_warmed``,
+            ``indexes_skipped``, ``bytes_in_memory``, ``bytes_on_disk``, and
+            ``elapsed_ms``.
+        """
+        return self._inner.preload_indexes(
+            max_memory_bytes,
+            include_vector,
+            include_inverted,
+            include_graph,
+            spill_to_disk,
+        )
+
     def ingest(
         self,
         paths: Union[str, List[str]],
