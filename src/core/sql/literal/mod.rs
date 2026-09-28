@@ -556,6 +556,25 @@ mod tests {
             .contains("must be in format"));
     }
 
+    // Regression test for a fuzz-discovered panic: an input consisting of only
+    // the `B'` prefix (no closing quote) previously produced a reversed slice
+    // (`&trimmed[2..1]`) and panicked with "byte range starts at 2 but ends at 1".
+    #[test]
+    fn test_parse_binary_prefix_only_does_not_panic() {
+        for input in ["B'", "b'", " B'", "B' "] {
+            let result = VectorLiteralParser::parse_binary(input, None);
+            assert!(result.is_err(), "expected error for input {input:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_binary_empty_literal() {
+        // `B''` is a well-formed (empty) literal and must not panic.
+        let result = VectorLiteralParser::parse_binary("B''", None);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
     #[test]
     fn test_parse_binary_no_expected_bits() {
         let result = VectorLiteralParser::parse_binary("B'10110101'", None);
