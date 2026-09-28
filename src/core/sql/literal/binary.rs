@@ -33,6 +33,15 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
             ));
         }
 
+        // Guard against inputs such as `B'` where the opening prefix and the
+        // closing quote overlap. Without this, the slice below would have a
+        // start index greater than its end index and panic.
+        if trimmed.len() < 3 {
+            return Err(DataFusionError::Plan(
+                "Binary literal must be in format B'...'".to_string(),
+            ));
+        }
+
         // Extract binary string between quotes
         let binary_str = &trimmed[2..trimmed.len() - 1];
 
@@ -77,6 +86,14 @@ pub fn parse_binary_vector(input: &str, expected_bits: Option<usize>) -> Result<
         if !trimmed.ends_with('\'') {
             return Err(DataFusionError::Plan(
                 "Hex literal must end with single quote: '\\x...'".to_string(),
+            ));
+        }
+
+        // Guard against inputs such as `'\x'` where the prefix and closing
+        // quote overlap, which would make the slice below panic (start > end).
+        if trimmed.len() < 4 {
+            return Err(DataFusionError::Plan(
+                "Hex literal must be in format '\\x...'".to_string(),
             ));
         }
 
