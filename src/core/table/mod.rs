@@ -33,6 +33,8 @@ pub use ingest::{IngestOptions, IngestReport};
 pub mod maintenance;
 pub mod merge;
 pub use merge::MergeMode;
+pub mod preload;
+pub use preload::{PreloadOptions, PreloadStats};
 pub mod primary_key;
 pub mod read;
 pub mod schema;
