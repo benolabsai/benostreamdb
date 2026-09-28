@@ -2316,7 +2316,9 @@ impl PyTable {
         };
         let rt = self.table.runtime();
         let stats = py
-            .allow_threads(move || rt.block_on(async { self.table.preload_indexes_async(opts).await }))
+            .allow_threads(move || {
+                rt.block_on(async { self.table.preload_indexes_async(opts).await })
+            })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let dict = pyo3::types::PyDict::new(py);
