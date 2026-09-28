@@ -522,6 +522,27 @@ table.add_index("body", "bm25")
 
 The authoritative Parquet files stay where they are. The overlays are derived, reconstructible state: if they are lost or stale, queries degrade to Parquet scanning and the indexes can be rebuilt (see the Overlay Invariant above).
 
+### Index Preload (Warm Start)
+
+Indexes are served through bounded caches, so the first query after a cold
+start pays the object-store fetch + decode cost. `Table.preload_indexes()`
+pays it up front — the Dgraph-style "in-memory posting list" residency, but on
+demand and bounded:
+
+```python
+# Warm HNSW/IVF, inverted/BM25, CSR graph, and metadata caches at startup.
+stats = table.preload_indexes(max_memory_bytes=8 * 1024**3)
+# {'indexes_seen': 42, 'indexes_warmed': 42, 'bytes_in_memory': 6_100_000_000,
+#  'bytes_on_disk': 0, 'elapsed_ms': 1840, ...}
+```
+
+Indexes are warmed into RAM until `max_memory_bytes` is exhausted; the
+remainder **spills into the mmap disk cache** (`BENOSTREAM_DISK_CACHE_DIR`,
+`MADV_RANDOM`) for out-of-core serving. The bounded caches evict by
+LRU/TinyLFU + TTI, so overflow evicts the least-recently-used entries. The
+`benostream-search` gateway calls this on open, controlled by
+`BENOSEARCH_PRELOAD` (default on) and `BENOSEARCH_PRELOAD_GB` (default 4 GiB).
+
 ## 🔌 Connectors
 
 > [!NOTE]
