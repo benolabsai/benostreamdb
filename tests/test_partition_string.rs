@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{DictionaryArray, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema as ArrowSchema};
