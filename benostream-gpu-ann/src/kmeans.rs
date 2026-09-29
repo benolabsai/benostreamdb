@@ -66,8 +66,8 @@ pub fn train_kmeans(
             .collect();
 
         while centroids_flat.len() / dim < k {
-            let total: f64 = min_d2.iter().map(|&d| d as f64).sum();
-            let next_idx = if total <= 0.0 {
+            let total: f64 = min_d2.iter().filter(|d| d.is_finite()).map(|&d| d as f64).sum();
+            let next_idx = if !total.is_finite() || total <= 0.0 {
                 training_indices[rng.gen_range(0..training_indices.len())]
             } else {
                 let threshold = rng.gen_range(0.0..total);

@@ -26,9 +26,7 @@ impl PartialOrd for SearchResult {
 impl Ord for SearchResult {
     fn cmp(&self, other: &Self) -> Ordering {
         // Max-heap by distance so smallest distances remain
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(Ordering::Equal)
+        self.distance.total_cmp(&other.distance)
     }
 }
 
@@ -65,7 +63,7 @@ impl IvfFlatIndex {
 
         // Optimal cluster count heuristic if not specified
         let n_lists = n_lists
-            .unwrap_or_else(|| ((n_vectors as f64).sqrt() as usize).max(1).min(4096))
+            .unwrap_or_else(|| ((n_vectors as f64).sqrt() as usize).clamp(1, 4096))
             .min(n_vectors);
 
         tracing::info!(
@@ -138,7 +136,7 @@ impl IvfFlatIndex {
 
         let mut ranked_centroids: Vec<(usize, f32)> =
             centroid_distances.into_iter().enumerate().collect();
-        ranked_centroids.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+        ranked_centroids.sort_by(|a, b| a.1.total_cmp(&b.1));
 
         // Step 2: Fine Search - scan vectors inside top n_probe buckets
         let mut heap: BinaryHeap<SearchResult> = BinaryHeap::with_capacity(k);
@@ -181,7 +179,7 @@ impl IvfFlatIndex {
 
         let mut results = heap.into_sorted_vec();
         // into_sorted_vec returns in ascending order for min-comparison or descending for max
-        results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         Ok(results)
     }
 
