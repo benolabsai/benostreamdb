@@ -3,6 +3,7 @@ name = "benostream-gpu-ann"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
+authors = ["Richard Albright and BenoStreamDB Contributors"]
 description = "Universal GPU-accelerated vector indexing & ANN search for Rust (CUDA, Apple Metal, WGPU/Vulkan)"
 repository = "https://github.com/benolabsai/benostreamdb"
 homepage = "https://github.com/benolabsai/benostreamdb"

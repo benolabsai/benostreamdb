@@ -1,0 +1,13 @@
+BenoStream GPU ANN
+Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
+
+This product includes software developed by Richard Albright and contributors.
+
+Attributions & Algorithmic References:
+- CAGRA (CUDA Anisotropic Graph-based Approximate Nearest Neighbor Search)
+  Algorithmic architecture inspired by NVIDIA Corporation (RAPIDS cuVS).
+  The implementation in this crate is a clean-room Rust development licensed under MIT/Apache-2.0.
+- Hierarchical Navigable Small World (HNSW)
+  Algorithmic concept based on Malkov & Yashunin (2018).
+- IVF-Flat (Inverted File Flat)
+  Algorithmic concept based on Jegou, Douze, & Schmid (2011).
