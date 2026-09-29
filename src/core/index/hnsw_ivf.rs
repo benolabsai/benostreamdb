@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Modified by Richard Albright / BenoStreamDB on 2026-03-29 to add pre-filtering support and better integration with Iceberg manifests.
 // This file contains derivative work from the Apache 2.0 licensed project(s).
 

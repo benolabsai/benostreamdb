@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! ES `_mapping` endpoints: `GET /{index}/_mapping` and `PUT /{index}/_mapping`.
 //!

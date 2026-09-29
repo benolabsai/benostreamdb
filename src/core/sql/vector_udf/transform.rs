@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Vector transform UDFs: add, sub, mul, concat, dims, norm, normalize, quantize, subvector, to_binary.
 

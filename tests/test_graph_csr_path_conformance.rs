@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! WS1: the graph CSR index must be registered in the manifest under the **v2**
 //! on-disk format, and the files the reader looks for must actually exist.
