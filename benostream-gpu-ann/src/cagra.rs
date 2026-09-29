@@ -27,10 +27,7 @@ impl PartialOrd for Candidate {
 // Min-heap ordering (smallest distance first)
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .distance
-            .partial_cmp(&self.distance)
-            .unwrap_or(Ordering::Equal)
+        other.distance.total_cmp(&self.distance)
     }
 }
 
@@ -314,7 +311,7 @@ impl CagraIndex {
 
         for i in 0..n {
             let cands = &mut candidates[i];
-            cands.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+            cands.sort_by(|a, b| a.1.total_cmp(&b.1));
             cands.dedup_by(|a, b| a.0 == b.0);
 
             // Anisotropic pruning: prioritize closest, then reject candidates too close in angle
@@ -394,7 +391,7 @@ impl CagraIndex {
             candidates.push(Candidate { node_idx: seed, distance: d });
             best_results.push(Candidate { node_idx: seed, distance: d });
         }
-        best_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        best_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
 
         while let Some(curr) = candidates.pop() {
             // Early stopping condition
@@ -426,7 +423,7 @@ impl CagraIndex {
                 best_results.push(Candidate { node_idx: nbr_idx, distance: d });
             }
 
-            best_results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+            best_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
             best_results.dedup_by(|a, b| a.node_idx == b.node_idx);
             if best_results.len() > search_width {
                 best_results.truncate(search_width);
@@ -462,7 +459,7 @@ impl CagraIndex {
             }
         }
 
-        results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         results.truncate(k);
         Ok(results)
     }

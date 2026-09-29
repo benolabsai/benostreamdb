@@ -1225,6 +1225,7 @@ dependencies = [
  "aws-sdk-glue",
  "axum 0.7.9",
  "base64 0.22.1",
+ "benostream-gpu-ann",
  "bincode",
  "bytemuck",
  "bytes",
