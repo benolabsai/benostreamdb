@@ -1,6 +1,6 @@
 [package]
 name = "benostreamdb"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 authors = ["Richard Albright and BenoStreamDB Contributors"]
