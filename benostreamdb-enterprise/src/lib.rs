@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // BenoStreamDB Enterprise Edition
 
 /// TurboQuant (FWHT + Scalar Quantization) is part of the free community core crate.

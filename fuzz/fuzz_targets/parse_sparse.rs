@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Fuzz the sparse vector literal parser (`{1:0.5, 10:0.3}`), which validates
 //! index bounds and duplicate indices against a dimension.

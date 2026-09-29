@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Index join optimizer rule.
 //! Rewrites HashJoinExec nodes with BenoStreamExec on the right side
