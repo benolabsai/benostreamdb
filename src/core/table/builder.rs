@@ -371,10 +371,9 @@ impl TableBuilder {
         let _ = wal.spawn_worker();
 
         // Replay WAL (Recovery) - single pass to avoid double reads
-        let (recovered_batches, recovered_paths) = wal.replay().unwrap_or_else(|e| {
-            tracing::warn!("WAL Recovery Warning: {}", e);
-            (vec![], vec![])
-        });
+        let (recovered_batches, recovered_paths) = wal.replay().map_err(|e| {
+            anyhow::anyhow!("WAL Recovery Error: {}. The WAL is corrupted. Manual intervention required to prevent silent data loss.", e)
+        })?;
 
         // Idempotent recovery: skip WAL records whose transaction was already
         // committed to the manifest. This is the "manifest-before-WAL-truncation"

@@ -17,9 +17,9 @@ ignore = [
     "RUSTSEC-2026-0177", # pyo3: missing Sync bound
     "RUSTSEC-2026-0176", # pyo3: out-of-bounds read in iterator
     "RUSTSEC-2023-0071", # rsa: Marvin attack
-    "RUSTSEC-2026-0258", # h2: unbounded empty DATA frames
-    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace allocation
-    "RUSTSEC-2026-0194", # quick-xml: quadratic run time in duplicate attribute check
+    "RUSTSEC-2026-0258", # h2: unbounded empty DATA frames (DoS vulnerability). Acceptable risk for a backend DB as we assume deployment behind a mitigating reverse proxy.
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace allocation. Only reachable in the offline `ingest_wikipedia.rs` utility, not in the production database paths.
+    "RUSTSEC-2026-0194", # quick-xml: quadratic run time in duplicate attribute check. Only reachable in the offline `ingest_wikipedia.rs` utility.
     "RUSTSEC-2025-0134", # rustls-pemfile: unmaintained advisory
     "RUSTSEC-2026-0190", # anyhow: Error::downcast_mut unsoundness
     "RUSTSEC-2026-0221", # event-listener: !Send tags across thread boundaries
