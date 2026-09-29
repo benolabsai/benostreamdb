@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Portions Copyright The Apache Software Foundation.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

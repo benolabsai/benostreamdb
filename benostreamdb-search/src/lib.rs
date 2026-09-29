@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 #![deny(warnings)]
 // No-panic policy for production paths (see NO_PANIC_POLICY.md). Staged behind

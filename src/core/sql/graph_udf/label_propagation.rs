@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
 use arrow::array::{

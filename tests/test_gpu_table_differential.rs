@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! GPU table-level differential: a vector search executed with a GPU compute
 //! context must return the same top-k as the CPU path.

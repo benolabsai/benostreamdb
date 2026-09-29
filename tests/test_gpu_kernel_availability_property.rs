@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 // Feature: python-vector-api-gpu-acceleration, Property 7: GPU Kernel Availability
 // **Validates: Requirements 4.1, 4.2, 4.3, 4.4, 4.5**

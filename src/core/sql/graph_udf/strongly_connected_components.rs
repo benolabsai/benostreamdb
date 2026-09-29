@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{Array, ArrayRef, ListBuilder, StructBuilder, UInt64Array, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Fields};
