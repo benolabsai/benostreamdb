@@ -33,6 +33,7 @@ crate-type = ["cdylib", "rlib"]
 members = [
     ".", "benostreamdb-flight",
     "benostreamdb-search",
+    "benostream-gpu-ann",
 ]
 
 
