@@ -65,8 +65,7 @@ impl GpuBackend for CpuBackend {
                         }
                     }
                     Metric::InnerProduct => {
-                        let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
-                        -dot
+                        query.iter().zip(v.iter()).map(|(a, b)| a * b).sum()
                     }
                     Metric::L1 => query
                         .iter()
@@ -86,12 +85,10 @@ impl GpuBackend for CpuBackend {
                         let mut intersection = 0.0f32;
                         let mut union_count = 0.0f32;
                         for (&a, &b) in query.iter().zip(v.iter()) {
-                            let a_non = a > 0.0;
-                            let b_non = b > 0.0;
-                            if a_non && b_non {
-                                intersection += 1.0;
-                            }
-                            if a_non || b_non {
+                            if a > 0.0 || b > 0.0 {
+                                if a == b && a > 0.0 {
+                                    intersection += 1.0;
+                                }
                                 union_count += 1.0;
                             }
                         }
