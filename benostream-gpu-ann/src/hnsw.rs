@@ -14,7 +14,7 @@ use crate::metric::Metric;
 pub struct HnswNode {
     /// Maximum layer this node exists on (0 <= layer <= max_layer)
     pub layer: usize,
-    /// Per-layer neighbor indices: neighbors[l] is the list of node IDs at layer l
+    /// Per-layer neighbor indices: `neighbors[l]` is the list of node IDs at layer `l`
     pub neighbors: Vec<Vec<usize>>,
 }
 
@@ -36,10 +36,7 @@ impl PartialOrd for Candidate {
 // Min-heap ordering (smallest distance first)
 impl Ord for Candidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        other
-            .distance
-            .partial_cmp(&self.distance)
-            .unwrap_or(Ordering::Equal)
+        other.distance.total_cmp(&self.distance)
     }
 }
 
@@ -60,9 +57,7 @@ impl PartialOrd for FurthestCandidate {
 
 impl Ord for FurthestCandidate {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.distance
-            .partial_cmp(&other.distance)
-            .unwrap_or(Ordering::Equal)
+        self.distance.total_cmp(&other.distance)
     }
 }
 
@@ -261,7 +256,7 @@ impl HnswIndex {
 
     /// Select M closest neighbors from candidate list.
     fn select_neighbors(&self, candidates: &mut [Candidate], m: usize) -> Vec<usize> {
-        candidates.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         candidates.iter().take(m).map(|c| c.node_idx).collect()
     }
 
@@ -462,7 +457,7 @@ impl HnswIndex {
             }
         }
 
-        results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
+        results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         results.truncate(k);
         Ok(results)
     }

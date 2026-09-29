@@ -1120,6 +1120,32 @@ impl ComputeContext {
             }
         }
     }
+
+    /// Bridge this database ComputeContext to the standalone benostream-gpu-ann accelerator context.
+    pub fn to_gpu_ann_context(&self) -> benostream_gpu_ann::ComputeContext {
+        match self.backend {
+            ComputeBackend::Cpu => benostream_gpu_ann::ComputeContext::cpu(),
+            ComputeBackend::Cuda => {
+                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                {
+                    benostream_gpu_ann::ComputeContext::cuda(self.device_id.max(0) as usize)
+                        .unwrap_or_else(|_| benostream_gpu_ann::ComputeContext::auto_detect())
+                }
+                #[cfg(any(target_os = "macos", not(feature = "cuda")))]
+                benostream_gpu_ann::ComputeContext::auto_detect()
+            }
+            ComputeBackend::Mps => {
+                #[cfg(target_os = "macos")]
+                {
+                    benostream_gpu_ann::ComputeContext::metal()
+                        .unwrap_or_else(|_| benostream_gpu_ann::ComputeContext::auto_detect())
+                }
+                #[cfg(not(target_os = "macos"))]
+                benostream_gpu_ann::ComputeContext::auto_detect()
+            }
+            _ => benostream_gpu_ann::ComputeContext::auto_detect(),
+        }
+    }
 }
 
 #[derive(Debug)]

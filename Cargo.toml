@@ -55,13 +55,14 @@ proptest = []
 observability = ["dep:metrics-exporter-prometheus"]
 
 # GPU Acceleration Features
-wgpu = ["dep:wgpu"]
+wgpu = ["dep:wgpu", "benostream-gpu-ann/wgpu"]
 pollster = ["dep:pollster"]
-cuda = ["dep:cudarc", "dep:libloading"]
+cuda = ["dep:cudarc", "dep:libloading", "benostream-gpu-ann/cuda"]
 metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 
 [dependencies]
+benostream-gpu-ann = { path = "benostream-gpu-ann", default-features = false }
 libc = "0.2"
 # core columnar memory format
 arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }

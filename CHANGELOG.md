@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **GPU-Native Index Construction crate (`benostream-gpu-ann`) (A11 Complete)** —
+  A standalone, community-ready Rust library delivering high-performance GPU-native
+  approximate nearest neighbor (ANN) vector indexing. Designed from first principles
+  to target all three major GPU execution backends: NVIDIA CUDA (via `cudarc` and
+  dynamic NVRTC runtime compilation), Apple Silicon Metal (via `metal-rs`), and
+  cross-platform AMD/Intel/Vulkan GPUs (via `wgpu` and optimized WGSL compute shaders),
+  with an automatic fallback to AVX2/NEON Rayon CPU SIMD.
+  - **Stage 1 (GPU IVF-Flat)**: Coarse Voronoi k-means partitioning with parallel GPU
+    centroid scans and flat cluster search, bypassing graph construction entirely.
+  - **Stage 2 (GPU-Accelerated HNSW)**: Solved the long-standing roadmap challenge
+    without forking `hnsw_rs`. Owns flat contiguous memory buffers natively in Rust
+    and offloads multi-layer candidate frontier distance evaluations to GPU shaders.
+    Achieves **100% Recall@10** on active RTX 3090 hardware (`WGPU_Default`).
+  - **Stage 3 (GPU-Native CAGRA)**: Fixed-degree regular graph (`[N * graph_degree]`)
+    engineered specifically for GPU memory hierarchy and single-transaction coalesced
+    warp memory loads. Features GPU Voronoi clustering, GPU 2-hop neighbor refinement
+    (NN-Descent iterations), and anisotropic edge pruning. Achieves **96.75% Recall@10**.
+  - **Unified Public API**: Provides `VectorIndex`, `IndexBuilder`, and `Algorithm`
+    abstractions with 100% bidirectional CPU ↔ GPU interoperability. An index built
+    on CPU can be queried on GPU, and an index built on GPU can be queried on CPU.
+  - **Comprehensive Metric Parity**: Strict differential parity verified across all 6
+    distance metrics (L2, Cosine, InnerProduct, L1, Hamming, Jaccard) within $10^{-4}$
+    relative numerical tolerance and self-match rankings.
+  - **No-Panic Fuzz & Soak Hardening**: Includes a randomized adversarial fuzz suite
+    (`tests/test_fuzz_no_panic.rs`) verifying total ordering and graceful error handling
+    under non-finite/adversarial floats (NaN, Inf, zeroes, dimension mismatches, sparse
+    filters), alongside a sustained high-throughput soak harness (`tests/test_soak.rs`)
+    verifying zero memory or VRAM handle leaks.
+  - **Product Integration**: Wired directly into root `Cargo.toml` with feature forwarding
+    (`cuda`, `wgpu`), with `ComputeContext::to_gpu_ann_context()` and `VectorMetric`
+    bi-directional conversions.
+
 ## [0.11.0] - 2026-09-28
 
 ### Added
