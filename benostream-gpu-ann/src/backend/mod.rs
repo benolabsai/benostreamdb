@@ -1,4 +1,4 @@
-// Copyright (c) 2026 BenoStreamDB Contributors.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
 pub mod cpu;
