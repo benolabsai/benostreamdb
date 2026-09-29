@@ -24,6 +24,6 @@ kernel void inner_product_kernel(
         dot_product += query[i] * current_vector[i];
     }
     
-    // Inner product is the dot product itself (no normalization)
-    distances[row] = dot_product;
+    // Inner product is negated dot product (smaller = closer)
+    distances[row] = -dot_product;
 }

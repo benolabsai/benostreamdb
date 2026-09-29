@@ -65,7 +65,8 @@ impl GpuBackend for CpuBackend {
                         }
                     }
                     Metric::InnerProduct => {
-                        query.iter().zip(v.iter()).map(|(a, b)| a * b).sum()
+                        let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
+                        -dot
                     }
                     Metric::L1 => query
                         .iter()
