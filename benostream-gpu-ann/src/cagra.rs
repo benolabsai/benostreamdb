@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
-use anyhow::Result;
-use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet};
 use crate::backend::{ComputeContext, GpuBackend};
 use crate::ivf_flat::SearchResult;
 use crate::kmeans::train_kmeans;
 use crate::metric::Metric;
+use anyhow::Result;
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashSet};
 
 /// Single candidate neighbor during CAGRA graph traversal.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,10 +36,14 @@ impl Ord for Candidate {
 pub(crate) fn compute_single_distance(a: &[f32], b: &[f32], metric: Metric) -> f32 {
     match metric {
         Metric::L2 => {
-            let sum: f32 = a.iter().zip(b.iter()).map(|(x, y)| {
-                let diff = x - y;
-                diff * diff
-            }).sum();
+            let sum: f32 = a
+                .iter()
+                .zip(b.iter())
+                .map(|(x, y)| {
+                    let diff = x - y;
+                    diff * diff
+                })
+                .sum();
             sum.sqrt()
         }
         Metric::Cosine => {
@@ -62,7 +66,9 @@ pub(crate) fn compute_single_distance(a: &[f32], b: &[f32], metric: Metric) -> f
         Metric::Hamming => {
             let mut d = 0.0f32;
             for (&x, &y) in a.iter().zip(b.iter()) {
-                if x != y { d += 1.0; }
+                if x != y {
+                    d += 1.0;
+                }
             }
             d
         }
@@ -71,11 +77,17 @@ pub(crate) fn compute_single_distance(a: &[f32], b: &[f32], metric: Metric) -> f
             let mut union_c = 0.0f32;
             for (&x, &y) in a.iter().zip(b.iter()) {
                 if x > 0.0 || y > 0.0 {
-                    if x == y && x > 0.0 { inter += 1.0; }
+                    if x == y && x > 0.0 {
+                        inter += 1.0;
+                    }
                     union_c += 1.0;
                 }
             }
-            if union_c == 0.0 { 0.0 } else { 1.0 - (inter / union_c) }
+            if union_c == 0.0 {
+                0.0
+            } else {
+                1.0 - (inter / union_c)
+            }
         }
     }
 }
@@ -144,12 +156,18 @@ impl CagraIndex {
             for &idx in candidate_nodes {
                 flat_buf.extend_from_slice(&self.vectors[idx * self.dim..(idx + 1) * self.dim]);
             }
-            if let Ok(gpu_dists) = self.ctx.compute_distance(q, &flat_buf, self.dim, self.metric) {
+            if let Ok(gpu_dists) = self
+                .ctx
+                .compute_distance(q, &flat_buf, self.dim, self.metric)
+            {
                 return gpu_dists;
             }
         }
 
-        candidate_nodes.iter().map(|&idx| self.dist(q, idx)).collect()
+        candidate_nodes
+            .iter()
+            .map(|&idx| self.dist(q, idx))
+            .collect()
     }
 
     /// Build a GPU-native CAGRA graph index from vectors.
@@ -200,7 +218,8 @@ impl CagraIndex {
         let vectors_vec = vectors.to_vec();
 
         // Step 1: Initial k-NN Candidate Graph
-        let mut candidates: Vec<Vec<(usize, f32)>> = vec![Vec::with_capacity(intermediate_degree * 2); n];
+        let mut candidates: Vec<Vec<(usize, f32)>> =
+            vec![Vec::with_capacity(intermediate_degree * 2); n];
 
         if n <= 1024 {
             for i in 0..n {
@@ -253,7 +272,9 @@ impl CagraIndex {
             let all_indices: Vec<usize> = (0..n).collect();
 
             for i in 0..n {
-                let needed = intermediate_degree.saturating_sub(candidates[i].len()).max(4);
+                let needed = intermediate_degree
+                    .saturating_sub(candidates[i].len())
+                    .max(4);
                 let random_picks = all_indices.choose_multiple(&mut rng, needed.min(n - 1));
                 let vec_i = &vectors[i * dim..(i + 1) * dim];
                 for &rnd_idx in random_picks {
@@ -273,7 +294,8 @@ impl CagraIndex {
             let mut updates: Vec<Vec<(usize, f32)>> = vec![Vec::new(); n];
 
             for i in 0..n {
-                let current_nbrs: Vec<usize> = candidates[i].iter().map(|(nbr, _)| *nbr).take(16).collect();
+                let current_nbrs: Vec<usize> =
+                    candidates[i].iter().map(|(nbr, _)| *nbr).take(16).collect();
                 let mut checked: HashSet<usize> = current_nbrs.iter().copied().collect();
                 checked.insert(i);
 
@@ -358,7 +380,11 @@ impl CagraIndex {
         filter: Option<&roaring::RoaringBitmap>,
     ) -> Result<Vec<SearchResult>> {
         if query.len() != self.dim {
-            anyhow::bail!("Query dimension {} does not match index {}", query.len(), self.dim);
+            anyhow::bail!(
+                "Query dimension {} does not match index {}",
+                query.len(),
+                self.dim
+            );
         }
 
         let n = self.ids.len();
@@ -388,8 +414,14 @@ impl CagraIndex {
         for &seed in &seeds {
             let d = self.dist(query, seed);
             visited.insert(seed);
-            candidates.push(Candidate { node_idx: seed, distance: d });
-            best_results.push(Candidate { node_idx: seed, distance: d });
+            candidates.push(Candidate {
+                node_idx: seed,
+                distance: d,
+            });
+            best_results.push(Candidate {
+                node_idx: seed,
+                distance: d,
+            });
         }
         best_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
 
@@ -419,8 +451,14 @@ impl CagraIndex {
             let dists = self.dist_batch(query, &unvisited);
 
             for (&nbr_idx, &d) in unvisited.iter().zip(dists.iter()) {
-                candidates.push(Candidate { node_idx: nbr_idx, distance: d });
-                best_results.push(Candidate { node_idx: nbr_idx, distance: d });
+                candidates.push(Candidate {
+                    node_idx: nbr_idx,
+                    distance: d,
+                });
+                best_results.push(Candidate {
+                    node_idx: nbr_idx,
+                    distance: d,
+                });
             }
 
             best_results.sort_by(|a, b| a.distance.total_cmp(&b.distance));
@@ -440,7 +478,10 @@ impl CagraIndex {
                         return None;
                     }
                 }
-                Some(SearchResult { id, distance: c.distance })
+                Some(SearchResult {
+                    id,
+                    distance: c.distance,
+                })
             })
             .collect();
 
@@ -452,7 +493,10 @@ impl CagraIndex {
                     if !existing.contains(&id64) {
                         if let Some(node_idx) = self.ids.iter().position(|&x| x == id64) {
                             let d = self.dist(query, node_idx);
-                            results.push(SearchResult { id: id64, distance: d });
+                            results.push(SearchResult {
+                                id: id64,
+                                distance: d,
+                            });
                         }
                     }
                 }

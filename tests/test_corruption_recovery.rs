@@ -3,8 +3,8 @@
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use benostreamdb::Table;
 use benostreamdb::core::manifest::IndexAlgorithm;
+use benostreamdb::Table;
 use std::fs;
 use std::io::Write;
 use std::sync::Arc;
@@ -101,7 +101,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
     // 2. Corrupt the index files (in this case, .inv.parquet)
     let mut corrupted = false;
     let mut dirs_to_visit = vec![dir.path().to_path_buf()];
-    
+
     while let Some(current_dir) = dirs_to_visit.pop() {
         if let Ok(entries) = fs::read_dir(&current_dir) {
             for entry in entries.flatten() {
@@ -123,7 +123,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
 
     // 3. Reopen table and verify fallback behavior
     let table = Table::new_async(uri.clone()).await?;
-    
+
     // We should be able to read data despite the corrupt index (graceful fallback)
     let batches = table.read_async(None, None, None).await?;
     let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -131,7 +131,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
         total_rows, 10,
         "Data must be readable via full scan despite corrupted index"
     );
-    
+
     // 4. Drop the corrupted index
     table.drop_index("id".to_string()).await?;
 

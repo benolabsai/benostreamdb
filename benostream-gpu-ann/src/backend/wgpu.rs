@@ -2,11 +2,11 @@
 // Licensed under MIT OR Apache-2.0.
 
 #[cfg(feature = "wgpu")]
-use anyhow::Result;
+use super::GpuBackend;
 #[cfg(feature = "wgpu")]
 use crate::metric::Metric;
 #[cfg(feature = "wgpu")]
-use super::GpuBackend;
+use anyhow::Result;
 
 #[cfg(feature = "wgpu")]
 #[derive(Debug)]

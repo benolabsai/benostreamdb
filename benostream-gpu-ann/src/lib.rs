@@ -58,7 +58,10 @@ pub enum Algorithm {
     /// GPU-accelerated Hierarchical Navigable Small World graph (Stage 2: batched frontier evaluation)
     Hnsw { m: usize, ef_construction: usize },
     /// GPU-Native Anisotropic Graph (Stage 3: CAGRA fixed-degree graph built entirely on GPU)
-    Cagra { graph_degree: usize, intermediate_degree: usize },
+    Cagra {
+        graph_degree: usize,
+        intermediate_degree: usize,
+    },
 }
 
 impl Default for Algorithm {
@@ -195,7 +198,10 @@ impl IndexBuilder {
     /// Build a GPU-native CAGRA fixed-degree index specifically (Stage 3).
     pub fn build_cagra(self, vectors: &[f32], ids: Option<&[u64]>) -> anyhow::Result<CagraIndex> {
         let (graph_degree, intermediate_degree) = match self.algorithm {
-            Algorithm::Cagra { graph_degree, intermediate_degree } => (graph_degree, intermediate_degree),
+            Algorithm::Cagra {
+                graph_degree,
+                intermediate_degree,
+            } => (graph_degree, intermediate_degree),
             _ => (32, 64),
         };
         CagraIndex::build(
@@ -212,7 +218,9 @@ impl IndexBuilder {
     /// Build the configured index variant wrapped in `VectorIndex`.
     pub fn build(self, vectors: &[f32], ids: Option<&[u64]>) -> anyhow::Result<VectorIndex> {
         match self.algorithm {
-            Algorithm::IvfFlat { .. } => Ok(VectorIndex::IvfFlat(self.build_ivf_flat(vectors, ids)?)),
+            Algorithm::IvfFlat { .. } => {
+                Ok(VectorIndex::IvfFlat(self.build_ivf_flat(vectors, ids)?))
+            }
             Algorithm::Hnsw { .. } => Ok(VectorIndex::Hnsw(self.build_hnsw(vectors, ids)?)),
             Algorithm::Cagra { .. } => Ok(VectorIndex::Cagra(self.build_cagra(vectors, ids)?)),
         }

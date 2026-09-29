@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
+use super::GpuBackend;
+use crate::metric::Metric;
 use anyhow::Result;
 use rayon::prelude::*;
-use crate::metric::Metric;
-use super::GpuBackend;
 
 pub struct CpuBackend;
 
@@ -68,11 +68,7 @@ impl GpuBackend for CpuBackend {
                         let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
                         -dot
                     }
-                    Metric::L1 => query
-                        .iter()
-                        .zip(v.iter())
-                        .map(|(a, b)| (a - b).abs())
-                        .sum(),
+                    Metric::L1 => query.iter().zip(v.iter()).map(|(a, b)| (a - b).abs()).sum(),
                     Metric::Hamming => {
                         let mut dist = 0.0f32;
                         for (&a, &b) in query.iter().zip(v.iter()) {

@@ -2,11 +2,11 @@
 // Licensed under MIT OR Apache-2.0.
 
 #[cfg(target_os = "macos")]
-use anyhow::Result;
+use super::GpuBackend;
 #[cfg(target_os = "macos")]
 use crate::metric::Metric;
 #[cfg(target_os = "macos")]
-use super::GpuBackend;
+use anyhow::Result;
 
 #[cfg(target_os = "macos")]
 const MSL_L2: &str = include_str!("../kernels/metal/l2_distance.metal");

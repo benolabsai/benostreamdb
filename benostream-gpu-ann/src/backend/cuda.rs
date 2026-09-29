@@ -2,15 +2,15 @@
 // Licensed under MIT OR Apache-2.0.
 
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+use super::GpuBackend;
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+use crate::metric::Metric;
+#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use anyhow::Result;
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use cudarc::driver::{CudaDevice, LaunchAsync, LaunchConfig};
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 use std::sync::Arc;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
-use crate::metric::Metric;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
-use super::GpuBackend;
 
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 const CUDA_SRC_L2: &str = include_str!("../kernels/cuda/l2_distance.cu");
@@ -52,13 +52,43 @@ impl CudaBackend {
         }
 
         compile_and_load!(device, CUDA_SRC_L2, "l2_distance", "l2_distance_kernel");
-        compile_and_load!(device, CUDA_SRC_COSINE, "cosine_distance", "cosine_distance_kernel");
-        compile_and_load!(device, CUDA_SRC_INNER_PRODUCT, "inner_product", "inner_product_kernel");
+        compile_and_load!(
+            device,
+            CUDA_SRC_COSINE,
+            "cosine_distance",
+            "cosine_distance_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_INNER_PRODUCT,
+            "inner_product",
+            "inner_product_kernel"
+        );
         compile_and_load!(device, CUDA_SRC_L1, "l1_distance", "l1_distance_kernel");
-        compile_and_load!(device, CUDA_SRC_HAMMING, "hamming_distance", "hamming_distance_kernel");
-        compile_and_load!(device, CUDA_SRC_JACCARD, "jaccard_distance", "jaccard_distance_kernel");
-        compile_and_load!(device, CUDA_SRC_HAMMING_PACKED, "hamming_packed", "hamming_packed_kernel");
-        compile_and_load!(device, CUDA_SRC_JACCARD_PACKED, "jaccard_packed", "jaccard_packed_kernel");
+        compile_and_load!(
+            device,
+            CUDA_SRC_HAMMING,
+            "hamming_distance",
+            "hamming_distance_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_JACCARD,
+            "jaccard_distance",
+            "jaccard_distance_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_HAMMING_PACKED,
+            "hamming_packed",
+            "hamming_packed_kernel"
+        );
+        compile_and_load!(
+            device,
+            CUDA_SRC_JACCARD_PACKED,
+            "jaccard_packed",
+            "jaccard_packed_kernel"
+        );
         compile_and_load!(device, CUDA_SRC_KMEANS, "kmeans", "kmeans_assignment");
 
         Ok(Self { device })
