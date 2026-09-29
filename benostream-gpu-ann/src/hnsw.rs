@@ -149,7 +149,7 @@ impl HnswIndex {
                     1.0 - (dot / (nq.sqrt() * nv.sqrt()))
                 }
             }
-            Metric::InnerProduct => q.iter().zip(v.iter()).map(|(a, b)| a * b).sum(),
+            Metric::InnerProduct => -q.iter().zip(v.iter()).map(|(a, b)| a * b).sum::<f32>(),
             Metric::L1 => q.iter().zip(v.iter()).map(|(a, b)| (a - b).abs()).sum(),
             Metric::Hamming => {
                 let mut dist = 0.0f32;
@@ -446,6 +446,21 @@ impl HnswIndex {
                 })
             })
             .collect();
+
+        if let Some(f) = filter {
+            if results.len() < k && (f.len() as usize) <= 1024 {
+                let existing: HashSet<u64> = results.iter().map(|r| r.id).collect();
+                for id in f.iter() {
+                    let id64 = id as u64;
+                    if !existing.contains(&id64) {
+                        if let Some(node_idx) = self.ids.iter().position(|&x| x == id64) {
+                            let d = self.dist(query, node_idx);
+                            results.push(SearchResult { id: id64, distance: d });
+                        }
+                    }
+                }
+            }
+        }
 
         results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(Ordering::Equal));
         results.truncate(k);

@@ -33,8 +33,8 @@ extern "C" __global__ void inner_product_kernel(
     }
 
     // 3. Write result to global memory (only thread 0)
-    // Inner product is just the dot product (no normalization)
+    // Negated dot product for distance ranking (smaller = closer)
     if (threadIdx.x == 0) {
-        distances[row] = sdata[0];
+        distances[row] = -sdata[0];
     }
 }
