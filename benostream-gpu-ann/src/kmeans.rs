@@ -1,10 +1,10 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
+use crate::backend::{ComputeContext, GpuBackend};
 use anyhow::Result;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
-use crate::backend::{ComputeContext, GpuBackend};
 
 /// Compute L2 squared distance between two vectors.
 #[inline(always)]
@@ -66,7 +66,11 @@ pub fn train_kmeans(
             .collect();
 
         while centroids_flat.len() / dim < k {
-            let total: f64 = min_d2.iter().filter(|d| d.is_finite()).map(|&d| d as f64).sum();
+            let total: f64 = min_d2
+                .iter()
+                .filter(|d| d.is_finite())
+                .map(|&d| d as f64)
+                .sum();
             let next_idx = if !total.is_finite() || total <= 0.0 {
                 training_indices[rng.gen_range(0..training_indices.len())]
             } else {
@@ -87,7 +91,10 @@ pub fn train_kmeans(
             centroids_flat.extend_from_slice(next_centroid);
 
             for (d, &orig_idx) in min_d2.iter_mut().zip(training_indices.iter()) {
-                let d2 = l2_dist_sq(&vectors[orig_idx * dim..(orig_idx + 1) * dim], next_centroid);
+                let d2 = l2_dist_sq(
+                    &vectors[orig_idx * dim..(orig_idx + 1) * dim],
+                    next_centroid,
+                );
                 if d2 < *d {
                     *d = d2;
                 }
@@ -113,7 +120,10 @@ pub fn train_kmeans(
             if c < k {
                 counts[c] += 1;
                 let v = &flat_training_set[i * dim..(i + 1) * dim];
-                for (sum, &val) in new_centroids[c * dim..(c + 1) * dim].iter_mut().zip(v.iter()) {
+                for (sum, &val) in new_centroids[c * dim..(c + 1) * dim]
+                    .iter_mut()
+                    .zip(v.iter())
+                {
                     *sum += val;
                 }
             }

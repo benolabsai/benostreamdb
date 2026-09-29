@@ -10,13 +10,19 @@ fn create_test_vectors(n: usize, dim: usize, metric: Metric, seed: u64) -> Vec<f
     let binary = matches!(metric, Metric::Hamming | Metric::Jaccard);
     let mut v = Vec::with_capacity(n * dim);
     for _ in 0..n {
-        let mut row: Vec<f32> = (0..dim).map(|_| {
-            if binary {
-                if rng.gen_bool(0.5) { 1.0 } else { 0.0 }
-            } else {
-                rng.gen_range(-1.0..1.0)
-            }
-        }).collect();
+        let mut row: Vec<f32> = (0..dim)
+            .map(|_| {
+                if binary {
+                    if rng.gen_bool(0.5) {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                } else {
+                    rng.gen_range(-1.0..1.0)
+                }
+            })
+            .collect();
 
         // Inner product embeddings are unit-normalized in practice
         if metric == Metric::InnerProduct {
@@ -39,8 +45,20 @@ fn test_all_algorithms_across_all_metrics_cpu_and_gpu() {
 
     let algorithms = [
         ("IVF-Flat", Algorithm::IvfFlat { n_lists: Some(16) }),
-        ("HNSW", Algorithm::Hnsw { m: 12, ef_construction: 50 }),
-        ("CAGRA", Algorithm::Cagra { graph_degree: 16, intermediate_degree: 32 }),
+        (
+            "HNSW",
+            Algorithm::Hnsw {
+                m: 12,
+                ef_construction: 50,
+            },
+        ),
+        (
+            "CAGRA",
+            Algorithm::Cagra {
+                graph_degree: 16,
+                intermediate_degree: 32,
+            },
+        ),
     ];
 
     let metrics = [
@@ -64,14 +82,18 @@ fn test_all_algorithms_across_all_metrics_cpu_and_gpu() {
                 .algorithm(algo.clone())
                 .context(cpu_ctx.clone())
                 .build(&vectors, None)
-                .unwrap_or_else(|e| panic!("CPU build failed for {} {:?}: {:?}", algo_name, metric, e));
+                .unwrap_or_else(|e| {
+                    panic!("CPU build failed for {} {:?}: {:?}", algo_name, metric, e)
+                });
 
             // 2. Build GPU index
             let gpu_index: VectorIndex = IndexBuilder::new(dim, metric)
                 .algorithm(algo.clone())
                 .context(gpu_ctx.clone())
                 .build(&vectors, None)
-                .unwrap_or_else(|e| panic!("GPU build failed for {} {:?}: {:?}", algo_name, metric, e));
+                .unwrap_or_else(|e| {
+                    panic!("GPU build failed for {} {:?}: {:?}", algo_name, metric, e)
+                });
 
             assert_eq!(cpu_index.len(), n_vectors);
             assert_eq!(gpu_index.len(), n_vectors);
@@ -84,8 +106,18 @@ fn test_all_algorithms_across_all_metrics_cpu_and_gpu() {
             let cpu_res = cpu_index.search(query, k, beam, None).expect("CPU search");
             let gpu_res = gpu_index.search(query, k, beam, None).expect("GPU search");
 
-            assert!(!cpu_res.is_empty(), "CPU search returned empty for {} {:?}", algo_name, metric);
-            assert!(!gpu_res.is_empty(), "GPU search returned empty for {} {:?}", algo_name, metric);
+            assert!(
+                !cpu_res.is_empty(),
+                "CPU search returned empty for {} {:?}",
+                algo_name,
+                metric
+            );
+            assert!(
+                !gpu_res.is_empty(),
+                "GPU search returned empty for {} {:?}",
+                algo_name,
+                metric
+            );
 
             // In all algorithms, the nearest neighbor to a point already in the index should be itself
             assert_eq!(
@@ -104,20 +136,27 @@ fn test_all_algorithms_across_all_metrics_cpu_and_gpu() {
             assert!(
                 (cpu_res[0].distance - gpu_res[0].distance).abs() <= tol,
                 "Distance mismatch for {} {:?}: cpu={} gpu={}",
-                algo_name, metric, cpu_res[0].distance, gpu_res[0].distance
+                algo_name,
+                metric,
+                cpu_res[0].distance,
+                gpu_res[0].distance
             );
 
             // Verify monotonic ascending distance order
             for i in 1..cpu_res.len() {
                 assert!(
                     cpu_res[i].distance >= cpu_res[i - 1].distance - 1e-5,
-                    "CPU distances not sorted for {} {:?}", algo_name, metric
+                    "CPU distances not sorted for {} {:?}",
+                    algo_name,
+                    metric
                 );
             }
             for i in 1..gpu_res.len() {
                 assert!(
                     gpu_res[i].distance >= gpu_res[i - 1].distance - 1e-5,
-                    "GPU distances not sorted for {} {:?}", algo_name, metric
+                    "GPU distances not sorted for {} {:?}",
+                    algo_name,
+                    metric
                 );
             }
         }

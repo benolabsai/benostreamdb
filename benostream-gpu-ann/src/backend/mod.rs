@@ -11,9 +11,9 @@ pub mod nvrtc;
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
 
+use crate::metric::Metric;
 use anyhow::Result;
 use std::sync::Arc;
-use crate::metric::Metric;
 
 /// Trait implemented by all hardware backends (CUDA, Apple Metal, WGPU, CPU).
 pub trait GpuBackend: Send + Sync {
@@ -152,7 +152,8 @@ impl ComputeContext {
         centroids: &[f32],
         dim: usize,
     ) -> Result<Vec<u32>> {
-        self.backend.compute_kmeans_assignment(vectors, centroids, dim)
+        self.backend
+            .compute_kmeans_assignment(vectors, centroids, dim)
     }
 }
 

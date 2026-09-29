@@ -111,14 +111,18 @@ fn test_cagra_gpu_accelerated_recall() {
         let query = &vectors[q_idx * dim..(q_idx + 1) * dim];
 
         // 1. Ground truth exact scan
-        let all_dists = cpu.compute_distance(query, &vectors, dim, Metric::L2).expect("CPU scan");
+        let all_dists = cpu
+            .compute_distance(query, &vectors, dim, Metric::L2)
+            .expect("CPU scan");
         let mut exact: Vec<(usize, f32)> = all_dists.into_iter().enumerate().collect();
         exact.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let exact_ids: std::collections::HashSet<u64> =
             exact.iter().take(k).map(|(id, _)| *id as u64).collect();
 
         // 2. GPU CAGRA search
-        let results = cagra.search(query, k, search_width, None).expect("CAGRA search");
+        let results = cagra
+            .search(query, k, search_width, None)
+            .expect("CAGRA search");
         let found_ids: std::collections::HashSet<u64> = results.iter().map(|r| r.id).collect();
 
         let hits = exact_ids.intersection(&found_ids).count();
@@ -158,6 +162,8 @@ fn test_cagra_unified_vector_index() {
     assert_eq!(index.dim(), dim);
 
     let query = vec![0.3f32; dim];
-    let results = index.search(&query, 5, 16, None).expect("Search on VectorIndex CAGRA");
+    let results = index
+        .search(&query, 5, 16, None)
+        .expect("Search on VectorIndex CAGRA");
     assert!(!results.is_empty());
 }

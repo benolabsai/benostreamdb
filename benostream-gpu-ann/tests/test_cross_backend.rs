@@ -44,7 +44,10 @@ fn get_active_backends() -> Vec<Box<dyn GpuBackend>> {
 #[test]
 fn test_gpu_matches_cpu_all_metrics() {
     let backends = get_active_backends();
-    println!("Active backends for differential testing: {:?}", backends.iter().map(|b| b.name()).collect::<Vec<_>>());
+    println!(
+        "Active backends for differential testing: {:?}",
+        backends.iter().map(|b| b.name()).collect::<Vec<_>>()
+    );
 
     let cpu = CpuBackend::new();
     let dim = 64;
@@ -61,7 +64,9 @@ fn test_gpu_matches_cpu_all_metrics() {
     ];
 
     for metric in metrics {
-        let gold = cpu.compute_distance(&query, &vectors, dim, metric).expect("CPU gold standard");
+        let gold = cpu
+            .compute_distance(&query, &vectors, dim, metric)
+            .expect("CPU gold standard");
 
         for b in &backends {
             if b.name() == cpu.name() {
@@ -69,7 +74,8 @@ fn test_gpu_matches_cpu_all_metrics() {
             }
 
             println!("Testing metric {:?} on backend {}", metric, b.name());
-            let got = b.compute_distance(&query, &vectors, dim, metric)
+            let got = b
+                .compute_distance(&query, &vectors, dim, metric)
                 .unwrap_or_else(|e| panic!("Failed on {}: {:?}", b.name(), e));
 
             assert_eq!(got.len(), gold.len(), "{}: length mismatch", b.name());
@@ -100,13 +106,17 @@ fn test_gpu_matches_cpu_odd_dimensions() {
     for odd_dim in [13, 37, 71, 127] {
         let n_vectors = 250;
         let (query, vectors) = generate_random_vectors(n_vectors, odd_dim, 100 + odd_dim as u64);
-        let gold = cpu.compute_distance(&query, &vectors, odd_dim, Metric::L2).expect("CPU gold");
+        let gold = cpu
+            .compute_distance(&query, &vectors, odd_dim, Metric::L2)
+            .expect("CPU gold");
 
         for b in &backends {
             if b.name() == cpu.name() {
                 continue;
             }
-            let got = b.compute_distance(&query, &vectors, odd_dim, Metric::L2).expect("GPU distance");
+            let got = b
+                .compute_distance(&query, &vectors, odd_dim, Metric::L2)
+                .expect("GPU distance");
             assert_eq!(got.len(), gold.len());
             for (i, (g, c)) in gold.iter().zip(got.iter()).enumerate() {
                 let tol = 1e-3 * g.abs().max(1.0);
@@ -133,18 +143,31 @@ fn test_kmeans_assignment_parity() {
     let n_clusters = 16;
 
     let mut rng = ChaCha8Rng::seed_from_u64(888);
-    let vectors: Vec<f32> = (0..n_vectors * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
-    let centroids: Vec<f32> = (0..n_clusters * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+    let vectors: Vec<f32> = (0..n_vectors * dim)
+        .map(|_| rng.gen_range(-1.0..1.0))
+        .collect();
+    let centroids: Vec<f32> = (0..n_clusters * dim)
+        .map(|_| rng.gen_range(-1.0..1.0))
+        .collect();
 
-    let gold = cpu.compute_kmeans_assignment(&vectors, &centroids, dim).expect("CPU assignment");
+    let gold = cpu
+        .compute_kmeans_assignment(&vectors, &centroids, dim)
+        .expect("CPU assignment");
 
     for b in &backends {
         if b.name() == cpu.name() {
             continue;
         }
-        let got = b.compute_kmeans_assignment(&vectors, &centroids, dim).expect("GPU assignment");
+        let got = b
+            .compute_kmeans_assignment(&vectors, &centroids, dim)
+            .expect("GPU assignment");
         assert_eq!(got.len(), gold.len(), "{}: count mismatch", b.name());
-        assert_eq!(got, gold, "{}: assignments did not match CPU reference", b.name());
+        assert_eq!(
+            got,
+            gold,
+            "{}: assignments did not match CPU reference",
+            b.name()
+        );
     }
 }
 
@@ -181,7 +204,9 @@ fn test_ivf_flat_gpu_vs_cpu_recall() {
         let query = &vectors[q_idx * dim..(q_idx + 1) * dim];
 
         // 1. Ground truth exact scan on CPU
-        let all_dists = cpu.compute_distance(query, &vectors, dim, Metric::L2).expect("CPU scan");
+        let all_dists = cpu
+            .compute_distance(query, &vectors, dim, Metric::L2)
+            .expect("CPU scan");
         let mut exact: Vec<(usize, f32)> = all_dists.into_iter().enumerate().collect();
         exact.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let exact_ids: std::collections::HashSet<u64> =
@@ -196,6 +221,16 @@ fn test_ivf_flat_gpu_vs_cpu_recall() {
     }
 
     let recall = total_hits as f64 / (n_queries * k) as f64;
-    println!("Measured Recall@{}: {:.2}% on {}", k, recall * 100.0, index.backend_name());
-    assert!(recall >= 0.90, "Recall@{} was {:.2}%, expected >= 90%", k, recall * 100.0);
+    println!(
+        "Measured Recall@{}: {:.2}% on {}",
+        k,
+        recall * 100.0,
+        index.backend_name()
+    );
+    assert!(
+        recall >= 0.90,
+        "Recall@{} was {:.2}%, expected >= 90%",
+        k,
+        recall * 100.0
+    );
 }

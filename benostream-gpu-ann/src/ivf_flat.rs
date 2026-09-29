@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
-use anyhow::Result;
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 use crate::backend::{ComputeContext, GpuBackend};
 use crate::kmeans::train_kmeans;
 use crate::metric::Metric;
+use anyhow::Result;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
 
 /// Search result item containing the vector ID and distance to query.
 #[derive(Debug, Clone, PartialEq)]
@@ -120,19 +120,20 @@ impl IvfFlatIndex {
         filter: Option<&roaring::RoaringBitmap>,
     ) -> Result<Vec<SearchResult>> {
         if query.len() != self.dim {
-            anyhow::bail!("Query dimension {} does not match index {}", query.len(), self.dim);
+            anyhow::bail!(
+                "Query dimension {} does not match index {}",
+                query.len(),
+                self.dim
+            );
         }
 
         let n_clusters = self.centroids.len() / self.dim;
         let n_probe = n_probe.max(1).min(n_clusters);
 
         // Step 1: Coarse Search - rank centroids on GPU
-        let centroid_distances = self.ctx.compute_distance(
-            query,
-            &self.centroids,
-            self.dim,
-            self.metric,
-        )?;
+        let centroid_distances =
+            self.ctx
+                .compute_distance(query, &self.centroids, self.dim, self.metric)?;
 
         let mut ranked_centroids: Vec<(usize, f32)> =
             centroid_distances.into_iter().enumerate().collect();
@@ -150,12 +151,9 @@ impl IvfFlatIndex {
             }
 
             // GPU distance evaluation for the entire cluster in parallel
-            let distances = self.ctx.compute_distance(
-                query,
-                bucket_vecs,
-                self.dim,
-                self.metric,
-            )?;
+            let distances = self
+                .ctx
+                .compute_distance(query, bucket_vecs, self.dim, self.metric)?;
 
             for (local_idx, &dist) in distances.iter().enumerate() {
                 let id = bucket_ids[local_idx];
