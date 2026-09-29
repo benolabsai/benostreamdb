@@ -27,7 +27,9 @@ fn test_ivf_flat_basic_cpu() {
 
     // Query with the 10th vector: exact match should have distance ~ 0.0 and id == 10
     let query = &vectors[10 * dim..11 * dim];
-    let results = index.search(query, 5, 16, None).expect("Search should succeed");
+    let results = index
+        .search(query, 5, 16, None)
+        .expect("Search should succeed");
 
     assert!(!results.is_empty());
     assert_eq!(results[0].id, 10);
@@ -89,7 +91,9 @@ fn test_ivf_flat_auto_detect_hardware() {
         .expect("Build on hardware should succeed");
 
     let query = &vectors[42 * dim..43 * dim];
-    let results = index.search(query, 5, 32, None).expect("Search should succeed");
+    let results = index
+        .search(query, 5, 32, None)
+        .expect("Search should succeed");
 
     assert!(!results.is_empty());
     assert_eq!(results[0].id, 42);
