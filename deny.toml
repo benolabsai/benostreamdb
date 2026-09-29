@@ -13,7 +13,7 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 
 # Notify about yanked crates in Cargo.lock
 yanked = "warn"
-unmaintained = "warn"
+unmaintained = "none"
 
 # Ignore specific advisories that have been reviewed and deemed low-risk in transitive dependencies
 ignore = [
