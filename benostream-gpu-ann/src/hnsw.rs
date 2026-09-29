@@ -1,13 +1,13 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
+use crate::backend::ComputeContext;
+use crate::ivf_flat::SearchResult;
+use crate::metric::Metric;
 use anyhow::Result;
 use rand::{thread_rng, Rng};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
-use crate::backend::ComputeContext;
-use crate::ivf_flat::SearchResult;
-use crate::metric::Metric;
 
 /// Single node in the HNSW multilayer graph.
 #[derive(Debug, Clone)]
@@ -123,10 +123,14 @@ impl HnswIndex {
         let v = &self.vectors[node_idx * self.dim..(node_idx + 1) * self.dim];
         match self.metric {
             Metric::L2 => {
-                let sum: f32 = q.iter().zip(v.iter()).map(|(a, b)| {
-                    let d = a - b;
-                    d * d
-                }).sum();
+                let sum: f32 = q
+                    .iter()
+                    .zip(v.iter())
+                    .map(|(a, b)| {
+                        let d = a - b;
+                        d * d
+                    })
+                    .sum();
                 sum.sqrt()
             }
             Metric::Cosine => {
@@ -166,7 +170,11 @@ impl HnswIndex {
                         union_count += 1.0;
                     }
                 }
-                if union_count == 0.0 { 0.0 } else { 1.0 - (inter / union_count) }
+                if union_count == 0.0 {
+                    0.0
+                } else {
+                    1.0 - (inter / union_count)
+                }
             }
         }
     }
@@ -180,18 +188,22 @@ impl HnswIndex {
             // Gather candidate vectors into a flat contiguous buffer
             let mut flat_buf = Vec::with_capacity(candidate_nodes.len() * self.dim);
             for &c_idx in candidate_nodes {
-                flat_buf.extend_from_slice(
-                    &self.vectors[c_idx * self.dim..(c_idx + 1) * self.dim]
-                );
+                flat_buf.extend_from_slice(&self.vectors[c_idx * self.dim..(c_idx + 1) * self.dim]);
             }
 
-            if let Ok(gpu_dists) = self.ctx.compute_distance(q, &flat_buf, self.dim, self.metric) {
+            if let Ok(gpu_dists) = self
+                .ctx
+                .compute_distance(q, &flat_buf, self.dim, self.metric)
+            {
                 return gpu_dists;
             }
         }
 
         // Fallback to inline calculation
-        candidate_nodes.iter().map(|&idx| self.dist(q, idx)).collect()
+        candidate_nodes
+            .iter()
+            .map(|&idx| self.dist(q, idx))
+            .collect()
     }
 
     /// Search layer `lc` for the `ef` closest neighbors to `q` starting from `entry_points`.
@@ -209,8 +221,14 @@ impl HnswIndex {
         for &ep in entry_points {
             let d = self.dist(q, ep);
             visited.insert(ep);
-            candidates.push(Candidate { node_idx: ep, distance: d });
-            w.push(FurthestCandidate { node_idx: ep, distance: d });
+            candidates.push(Candidate {
+                node_idx: ep,
+                distance: d,
+            });
+            w.push(FurthestCandidate {
+                node_idx: ep,
+                distance: d,
+            });
         }
 
         while let Some(c) = candidates.pop() {
@@ -237,8 +255,14 @@ impl HnswIndex {
             for (&n_idx, &dist) in unvisited.iter().zip(dists.iter()) {
                 let furthest_dist = w.peek().map(|f| f.distance).unwrap_or(f32::MAX);
                 if dist < furthest_dist || w.len() < ef {
-                    candidates.push(Candidate { node_idx: n_idx, distance: dist });
-                    w.push(FurthestCandidate { node_idx: n_idx, distance: dist });
+                    candidates.push(Candidate {
+                        node_idx: n_idx,
+                        distance: dist,
+                    });
+                    w.push(FurthestCandidate {
+                        node_idx: n_idx,
+                        distance: dist,
+                    });
                     if w.len() > ef {
                         w.pop();
                     }
@@ -263,7 +287,11 @@ impl HnswIndex {
     /// Insert a single vector into the HNSW graph.
     pub fn insert(&mut self, vector: &[f32], id: u64) -> Result<usize> {
         if vector.len() != self.dim {
-            anyhow::bail!("Vector dimension {} does not match index {}", vector.len(), self.dim);
+            anyhow::bail!(
+                "Vector dimension {} does not match index {}",
+                vector.len(),
+                self.dim
+            );
         }
 
         let new_idx = self.nodes.len();
@@ -318,7 +346,9 @@ impl HnswIndex {
 
                     // Shrink neighbor connections if exceeding max_m
                     if self.nodes[neighbor_idx].neighbors[l].len() > max_m {
-                        let n_vec = self.vectors[neighbor_idx * self.dim..(neighbor_idx + 1) * self.dim].to_vec();
+                        let n_vec = self.vectors
+                            [neighbor_idx * self.dim..(neighbor_idx + 1) * self.dim]
+                            .to_vec();
                         let nbrs = self.nodes[neighbor_idx].neighbors[l].clone();
                         let mut n_cands: Vec<Candidate> = nbrs
                             .iter()
@@ -395,7 +425,11 @@ impl HnswIndex {
         filter: Option<&roaring::RoaringBitmap>,
     ) -> Result<Vec<SearchResult>> {
         if query.len() != self.dim {
-            anyhow::bail!("Query dimension {} does not match index {}", query.len(), self.dim);
+            anyhow::bail!(
+                "Query dimension {} does not match index {}",
+                query.len(),
+                self.dim
+            );
         }
 
         let Some(mut ep) = self.entry_point else {
@@ -450,7 +484,10 @@ impl HnswIndex {
                     if !existing.contains(&id64) {
                         if let Some(node_idx) = self.ids.iter().position(|&x| x == id64) {
                             let d = self.dist(query, node_idx);
-                            results.push(SearchResult { id: id64, distance: d });
+                            results.push(SearchResult {
+                                id: id64,
+                                distance: d,
+                            });
                         }
                     }
                 }

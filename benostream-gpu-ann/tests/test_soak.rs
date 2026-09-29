@@ -22,7 +22,10 @@ fn test_long_running_ann_soak() {
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(30);
 
-    println!("Starting benostream-gpu-ann soak test for {} seconds...", soak_seconds);
+    println!(
+        "Starting benostream-gpu-ann soak test for {} seconds...",
+        soak_seconds
+    );
 
     let start = Instant::now();
     let duration = Duration::from_secs(soak_seconds);
@@ -62,8 +65,14 @@ fn test_long_running_ann_soak() {
 
         let algo = match iterations % 3 {
             0 => Algorithm::IvfFlat { n_lists: Some(8) },
-            1 => Algorithm::Hnsw { m: 8, ef_construction: 24 },
-            _ => Algorithm::Cagra { graph_degree: 8, intermediate_degree: 16 },
+            1 => Algorithm::Hnsw {
+                m: 8,
+                ef_construction: 24,
+            },
+            _ => Algorithm::Cagra {
+                graph_degree: 8,
+                intermediate_degree: 16,
+            },
         };
 
         // Build index under load
@@ -78,7 +87,8 @@ fn test_long_running_ann_soak() {
         // Run batch queries
         for q_idx in 0..10 {
             let query = &vectors[q_idx * dim..(q_idx + 1) * dim];
-            let results = index.search(query, 5, 20, None)
+            let results = index
+                .search(query, 5, 20, None)
                 .expect("Soak query must succeed");
             assert_eq!(results.len(), 5);
             assert!(results[0].distance.is_finite());

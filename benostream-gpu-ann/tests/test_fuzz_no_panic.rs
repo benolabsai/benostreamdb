@@ -46,7 +46,11 @@ fn test_fuzz_random_adversarial_inputs_no_panic() {
         let algo_choice = rng.gen_range(0..3);
         let algo = match algo_choice {
             0 => Algorithm::IvfFlat {
-                n_lists: if rng.gen_bool(0.5) { Some(rng.gen_range(1..=8)) } else { None },
+                n_lists: if rng.gen_bool(0.5) {
+                    Some(rng.gen_range(1..=8))
+                } else {
+                    None
+                },
             },
             1 => Algorithm::Hnsw {
                 m: rng.gen_range(2..=16),
@@ -69,7 +73,10 @@ fn test_fuzz_random_adversarial_inputs_no_panic() {
         assert!(
             build_result.is_ok(),
             "Panic caught during index build at iteration {} with n={}, dim={}, metric={:?}",
-            iteration, n, dim, metric
+            iteration,
+            n,
+            dim,
+            metric
         );
 
         if let Ok(Ok(index)) = build_result {
@@ -104,7 +111,9 @@ fn test_fuzz_random_adversarial_inputs_no_panic() {
             assert!(
                 search_result.is_ok(),
                 "Panic caught during search at iteration {} with k={}, search_width={}",
-                iteration, k, search_width
+                iteration,
+                k,
+                search_width
             );
         }
     }

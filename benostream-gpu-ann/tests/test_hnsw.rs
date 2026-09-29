@@ -108,7 +108,9 @@ fn test_hnsw_gpu_accelerated_recall() {
         let query = &vectors[q_idx * dim..(q_idx + 1) * dim];
 
         // 1. Exact ground truth linear scan
-        let all_dists = cpu.compute_distance(query, &vectors, dim, Metric::L2).expect("CPU scan");
+        let all_dists = cpu
+            .compute_distance(query, &vectors, dim, Metric::L2)
+            .expect("CPU scan");
         let mut exact: Vec<(usize, f32)> = all_dists.into_iter().enumerate().collect();
         exact.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let exact_ids: std::collections::HashSet<u64> =
