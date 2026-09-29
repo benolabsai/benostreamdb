@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use crate::core::index::gpu::{compute_distance, ComputeBackend};
 use crate::core::index::{distance, VectorMetric};

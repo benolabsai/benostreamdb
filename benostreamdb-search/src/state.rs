@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Shared server state: storage root, the open table cache, and the
 //! Prometheus collectors behind plan-5.2.2 telemetry.

@@ -23,7 +23,7 @@
     all(not(test), feature = "no-panic"),
     deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)
 )]
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #[cfg(target_os = "linux")]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;

@@ -3,6 +3,7 @@ name = "benostreamdb-search"
 version = "0.7.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
+authors = ["Richard Albright and BenoStreamDB Contributors"]
 description = "BenoStreamDB Search - OpenSearch/ES 7.10-compatible REST API over BenoStreamDB"
 repository = "https://github.com/benolabsai/benostreamdb"
 homepage = "https://github.com/benolabsai/benostreamdb"

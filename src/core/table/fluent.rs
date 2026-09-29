@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use crate::core::index::gpu::{set_thread_gpu_context, ComputeContext};
 use crate::core::planner::VectorSearchParams;

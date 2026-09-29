@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Heap memory discipline for long-lived processes that rebuild indexes
 //! in-process (the A4 ingest orchestrator, the compaction daemon).

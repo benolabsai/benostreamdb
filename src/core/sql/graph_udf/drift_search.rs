@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 //
 // Portions of this file are adapted from the Microsoft GraphRAG project
 // (https://github.com/microsoft/graphrag), which is licensed under the

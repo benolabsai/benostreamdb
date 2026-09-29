@@ -3,6 +3,7 @@ name = "benostreamdb"
 version = "0.11.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
+authors = ["Richard Albright and BenoStreamDB Contributors"]
 description = "BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search"
 repository = "https://github.com/benolabsai/benostreamdb"
 homepage = "https://github.com/benolabsai/benostreamdb"
