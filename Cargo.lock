@@ -1209,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "ahash",
  "anyhow",
