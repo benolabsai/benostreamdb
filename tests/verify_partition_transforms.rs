@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{Date32Array, StringArray, TimestampMicrosecondArray};
 use benostreamdb::core::iceberg::{murmur3_32_x86, IcebergTransform};

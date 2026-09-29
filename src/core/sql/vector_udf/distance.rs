@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Distance UDFs: L2, Cosine, Inner Product, L1, Hamming, Jaccard.
 //! Also includes sparse distance helpers and GPU acceleration routing.

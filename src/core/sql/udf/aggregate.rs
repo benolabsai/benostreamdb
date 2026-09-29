@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{
     Array, FixedSizeListArray, Float32Array, Float32Builder, ListArray, ListBuilder, UInt64Array,

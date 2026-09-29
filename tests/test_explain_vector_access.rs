@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! WS1 regression: `Table::explain()` must report the vector access path from
 //! the manifest's `index_files` — the same source of truth the search path uses

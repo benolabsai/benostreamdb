@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use crate::core::manifest::{ManifestEntry, ManifestManager, Schema};
 use crate::core::planner::{FilterExpr, QueryFilter, QueryPlanner};

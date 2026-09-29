@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! WS1 regression: index-management code paths must resolve the **tiered**
 //! manifest list, not the (always-empty) inline `Manifest.entries`.

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Fuzz the Qdrant-compatible request-body deserialization. These types use
 //! `#[serde(untagged)]` enums (`PointId`, `Condition`), which are a classic

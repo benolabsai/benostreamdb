@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Plan node construction for vector search optimization.
 //! Builds VectorScanExec and VectorMergeExec nodes from detected patterns.

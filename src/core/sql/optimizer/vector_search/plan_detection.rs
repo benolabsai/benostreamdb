@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Pattern detection for vector search optimization.
 //! Detects `Limit -> Sort -> Filter -> BenoStreamExec` patterns
