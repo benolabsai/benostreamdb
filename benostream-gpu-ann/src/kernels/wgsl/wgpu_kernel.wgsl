@@ -31,10 +31,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         dist = sqrt(dist);
         
     } else if (mt == 1u) {
-        // Inner Product
+        // Inner Product (negated for distance ranking: smaller = closer)
         for (var i = 0u; i < dim; i++) {
             dist += query[i] * vectors[offset + i];
         }
+        dist = -dist;
         
     } else if (mt == 2u) {
         // Cosine Distance
