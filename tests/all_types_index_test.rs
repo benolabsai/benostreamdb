@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{
     BinaryArray, BooleanArray, Decimal128Array, DictionaryArray, Int32Array, Int8Array,

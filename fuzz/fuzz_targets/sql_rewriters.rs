@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Fuzz the SQL string rewriters applied to user SQL before planning:
 //! `strip_partitioned_by` (regex-based) and `rewrite_sql_string` (pgvector

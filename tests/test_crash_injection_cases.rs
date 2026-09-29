@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! WS2: explicit crash-injection tests for the production-readiness review's
 //! cases A–F. Each test kills the write at one named boundary and asserts the

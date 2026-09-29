@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Richard Albright. All rights reserved.
+# Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 """Mixed-workload soak: continuous write/search/read churn for a wall-clock
 budget. The pass criteria are the GA-relevant ones — the process stays alive,
