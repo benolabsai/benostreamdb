@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(deprecated)]
 
 use crate::core::sql::session::BenoStreamSession;

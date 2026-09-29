@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Cluster-level endpoints: `GET /`, `GET /_health`, `GET /_cluster/health`,
 //! `GET /_cluster/stats`, and `GET /_cat/indices`.

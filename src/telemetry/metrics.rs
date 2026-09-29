@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 // Metric registration uses static, compile-time-constant names and help strings.
 // The `prometheus` `register_*` macros are only fallible on an invalid name or a

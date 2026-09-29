@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! ES-style document handlers: `POST /{index}/_doc[/{id}]` and
 //! `POST /{index}/_refresh`.

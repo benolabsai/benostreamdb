@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 // Integration tests for pgvector-compatible SQL support
 // Feature: pgvector-sql-support

@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Richard Albright. All rights reserved.
+// Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 //! Fuzz the binary/bit-vector literal parser (`B'10110101'`, `'\xB5'`), with and
 //! without an expected bit count (the bit-count check is a common crash source).
