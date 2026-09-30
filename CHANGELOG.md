@@ -36,6 +36,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conflict, preserves delete files).
 - **`docs/architecture_review_response.md`** — evaluation and remediation plan
   for the concurrency review (H1–H3) and the repository restructuring.
+- **Full SQL DDL / maintenance surface over the core `Table` API** — a new
+  interception layer (`src/core/sql/catalog_ddl.rs`) parses with `GenericDialect`
+  and dispatches to the core `Table` API before DataFusion planning (mirroring
+  `merge_into`), wired into `session.sql_to_df` / `is_ddl` / `get_schema`.
+  Reachable from Rust, Python, and the Flight SQL gateway:
+  - **Catalog**: `CREATE/DROP DATABASE`, `CREATE/DROP SCHEMA` (DataFusion +
+    external catalog via the new `Catalog::create_namespace` / `drop_table`).
+  - **Tables**: `CREATE TABLE` (catalog-backed, `LOCATION`, `WITH` options),
+    `DROP TABLE` (drops from the catalog too), `TRUNCATE`.
+  - **Indexes**: `CREATE INDEX` (single/composite, default Bitmap),
+    `ALTER TABLE ADD INDEX`, `DROP INDEX`.
+  - **Primary keys**: `ALTER TABLE ADD/DROP PRIMARY KEY`.
+  - **Schema evolution**: `ADD/DROP/RENAME/ALTER COLUMN`.
+  - **Maintenance**: `OPTIMIZE`/`COMPACT`, `VACUUM`, `MSCK REPAIR TABLE`,
+    `DELETE FROM`, and `ALTER TABLE ... EXECUTE <action>` procedures.
+  - **Session settings**: `SET/SHOW benostream.<key>` — allowlisted,
+    session-scoped, and never writes process environment variables.
+- **Vector companion aggregates** — `centroid`, `vector_min`, `vector_max`,
+  `vector_stddev`, `vector_median` (`src/core/sql/udf/vector_stats.rs`), the
+  natural companions to `vector_sum` / `vector_avg`.
+- **Text-scoring UDFs** — `bm25_score(text, query)` and `tf_idf(text)`
+  (`src/core/sql/udf/text.rs`), corpus-free variants for ranking rows against a
+  single query.
+- **Python bindings for the new aggregates** — `centroid`, `vector_min`,
+  `vector_max`, `vector_stddev`, `vector_median`, `bm25_score`, `tf_idf` in
+  `python/benostreamdb/__init__.py`, keeping the Rust, Python, and SQL surfaces
+  1:1.
+- **`plans/sql_ddl_surface.md`** — design spec for the SQL surface, and a full
+  SQL language guide (all statements, UDFs, and pgvector syntax) in
+  `server/flight_sql/README.md`.
 
 ### Changed
 - **Repository restructured into a three-tier layout.** The core workspace is
@@ -57,6 +87,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-process.
 - ROADMAP condensed from ~811 to ~100 lines, removing stale historical
   benchmarks.
+- **Flight SQL executes DDL and DML inside `GetFlightInfo`** — ADBC cancels the
+  follow-up `DoGet` for DML, so the statement would otherwise never run.
+- **`BenoStreamTableProvider::insert_into`** — `INSERT INTO` now writes and
+  commits the rows, so they are immediately visible to subsequent scans.
+- **Flight SQL startup loads `CatalogConfig` and `BSDB_WAREHOUSE`** so
+  `CREATE TABLE` lands in the instance's catalog.
+- **`Table::checkpoint_async`** — an async WAL checkpoint safe to call from
+  within a Tokio runtime (the sync `checkpoint` uses `blocking_lock`).
+- **`Catalog` trait** gains `create_namespace` and `drop_table` (default no-ops;
+  implemented for REST, JDBC, Glue, Hive, and Unity).
 
 ### Fixed
 - **H1 — write/WAL atomicity**: `write_buffer` and `pending_wal_tx_ids` unified
@@ -90,6 +130,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error bubbling).
 - Orphan-cleanup-preserves-delete-files, `commit_synced_snapshot` reconciliation,
   and vacuum fail-closed tests.
+- `tests/test_catalog_ddl.rs` — 28 tests covering every statement group, error
+  cases, idempotency, whitespace robustness, and the `SET`/`SHOW` allowlist.
+- `tests/test_vector_aggregates.rs` — 5 tests for the new aggregates and UDFs.
+- `tests/python/test_vector_aggregates.py` — correctness of the Python helpers
+  against numpy (vector aggregates) and hand-computed references (BM25/TF-IDF).
+- `server/flight_sql/tests/test_flight_randomized_workload.py` — a randomized
+  differential workload over the wire (INSERT/DELETE/OPTIMIZE/VACUUM/index/PK),
+  asserting the visible id set matches an independent model after every step.
 
 ## [0.11.1] - 2026-09-29
 
