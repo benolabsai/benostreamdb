@@ -169,7 +169,23 @@ jobs:
           fi
       - name: Publish to crates.io
         run: |
-          if ! cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> publish_err.log; then
+          # 1. Publish standalone accelerator crate first
+          echo "Publishing benostream-gpu-ann to crates.io..."
+          if ! cargo publish -p benostream-gpu-ann --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> ann_err.log; then
+            cat ann_err.log
+            if grep -qi "already exists on crates.io" ann_err.log; then
+              echo "benostream-gpu-ann already exists on crates.io, continuing."
+            else
+              echo "Warning: benostream-gpu-ann publish returned an error:"
+            fi
+          fi
+
+          # Brief pause for crates.io index update
+          sleep 10
+
+          # 2. Publish main database crate
+          echo "Publishing benostreamdb to crates.io..."
+          if ! cargo publish -p benostreamdb --token ${{ secrets.CARGO_REGISTRY_TOKEN }} --allow-dirty 2> publish_err.log; then
             cat publish_err.log
             if grep -qi "already exists on crates.io" publish_err.log; then
               echo "Version already exists on crates.io, safely continuing."
