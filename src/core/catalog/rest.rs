@@ -44,6 +44,13 @@ pub struct RestCatalogClient {
 
 // Request structures
 #[derive(Serialize)]
+struct CreateNamespaceRequest {
+    namespace: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize)]
 struct CreateTableRequest {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -235,6 +242,28 @@ impl RestCatalogClient {
 
 #[async_trait]
 impl Catalog for RestCatalogClient {
+    async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        let url = self.build_url("/namespaces");
+        let req = CreateNamespaceRequest {
+            namespace: vec![namespace.to_string()],
+            properties: None,
+        };
+        let builder = self
+            .prepare_request(self.client.post(&url).json(&req))
+            .await?;
+        let resp = builder.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await?;
+            return Err(anyhow!(
+                "Failed to create namespace ({}): {}",
+                status,
+                error
+            ));
+        }
+        Ok(())
+    }
+
     async fn create_table(
         &self,
         namespace: &str,

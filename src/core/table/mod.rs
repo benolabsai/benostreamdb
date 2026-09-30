@@ -371,6 +371,56 @@ impl Table {
             .await
     }
 
+    /// Create a new table at `uri` and attach an external catalog so that
+    /// subsequent commits perform the Iceberg atomic swap through it.
+    ///
+    /// This is the catalog-backed counterpart of [`Table::create_async`], used
+    /// by the SQL `CREATE TABLE` path so a table created over Flight SQL lands
+    /// in the same catalog the instance is configured with.
+    pub async fn create_with_catalog_async(
+        uri: String,
+        schema: SchemaRef,
+        catalog: Arc<dyn crate::core::catalog::Catalog>,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<Self> {
+        let store = create_object_store(&uri)?;
+        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
+
+        let (_, version) = manifest_manager.load_latest().await?;
+        if version > 0 {
+            return Err(anyhow::anyhow!("Table already exists at {}", uri));
+        }
+
+        let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
+        let max_id = manifest_schema
+            .fields
+            .iter()
+            .map(|f| f.id)
+            .max()
+            .unwrap_or(0);
+
+        manifest_manager
+            .update_schema(vec![manifest_schema.clone()], 1, Some(max_id))
+            .await?;
+
+        let mut metadata = TableMetadata::new(
+            2,
+            uuid::Uuid::new_v4().to_string(),
+            uri.clone(),
+            manifest_schema,
+            PartitionSpec::default(),
+            SortOrder::default(),
+        );
+        metadata.save_to_store(store.as_ref(), 1).await?;
+
+        TableBuilder::new(uri)
+            .with_index_all(false)
+            .with_catalog(catalog, namespace, table_name)
+            .build_async()
+            .await
+    }
+
     pub async fn create_partitioned_async(
         uri: String,
         schema: SchemaRef,
