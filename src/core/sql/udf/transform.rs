@@ -86,12 +86,20 @@ macro_rules! create_vector_binary_op_udf {
                             let v1 = v1_array
                                 .as_any()
                                 .downcast_ref::<Float32Array>()
-                                .unwrap()
+                                .ok_or_else(|| {
+                                    datafusion::error::DataFusionError::Execution(
+                                        "vector binary op: expected Float32 values".to_string(),
+                                    )
+                                })?
                                 .values();
                             let v2 = v2_array
                                 .as_any()
                                 .downcast_ref::<Float32Array>()
-                                .unwrap()
+                                .ok_or_else(|| {
+                                    datafusion::error::DataFusionError::Execution(
+                                        "vector binary op: expected Float32 values".to_string(),
+                                    )
+                                })?
                                 .values();
                             builder.append_slice(&$op_fn(v1, v2));
                         }

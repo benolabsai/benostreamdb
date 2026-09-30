@@ -11,7 +11,9 @@
 pub mod aggregate;
 pub mod distance;
 pub mod sparse;
+pub mod text;
 pub mod transform;
+pub mod vector_stats;
 
 use datafusion::logical_expr::{AggregateUDF, ScalarUDF};
 
@@ -33,6 +35,17 @@ pub use transform::{
 // -- Re-exports from aggregate --
 
 pub use aggregate::{VectorAvgAccumulator, VectorAvgUDF, VectorSumAccumulator, VectorSumUDF};
+
+// -- Re-exports from vector_stats --
+
+pub use vector_stats::{
+    CentroidAccumulator, CentroidUDF, VectorMaxAccumulator, VectorMaxUDF, VectorMedianAccumulator,
+    VectorMedianUDF, VectorMinAccumulator, VectorMinUDF, VectorStddevAccumulator, VectorStddevUDF,
+};
+
+// -- Re-exports from text --
+
+pub use text::{Bm25ScoreUDF, TfIdfUDF};
 
 // -- Re-exports from sparse --
 
@@ -63,6 +76,9 @@ pub fn all_vector_udfs() -> Vec<ScalarUDF> {
         ScalarUDF::new_from_impl(VectorToSparseUDF::new()),
         ScalarUDF::new_from_impl(SparseToVectorUDF::new()),
         ScalarUDF::new_from_impl(VectorToBinaryUDF::new()),
+        // Text scoring UDFs
+        ScalarUDF::new_from_impl(Bm25ScoreUDF::new()),
+        ScalarUDF::new_from_impl(TfIdfUDF::new()),
     ]
 }
 
@@ -71,5 +87,10 @@ pub fn all_vector_aggregates() -> Vec<AggregateUDF> {
     vec![
         AggregateUDF::new_from_impl(VectorSumUDF::new()),
         AggregateUDF::new_from_impl(VectorAvgUDF::new()),
+        AggregateUDF::new_from_impl(CentroidUDF::new()),
+        AggregateUDF::new_from_impl(VectorMinUDF::new()),
+        AggregateUDF::new_from_impl(VectorMaxUDF::new()),
+        AggregateUDF::new_from_impl(VectorStddevUDF::new()),
+        AggregateUDF::new_from_impl(VectorMedianUDF::new()),
     ]
 }

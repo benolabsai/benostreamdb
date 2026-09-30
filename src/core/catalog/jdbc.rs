@@ -67,6 +67,18 @@ impl JdbcCatalogClient {
 
 #[async_trait]
 impl Catalog for JdbcCatalogClient {
+    async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO namespaces (catalog_name, namespace) VALUES (?, ?)
+             ON CONFLICT (catalog_name, namespace) DO NOTHING",
+        )
+        .bind(&self.catalog_name)
+        .bind(namespace)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     async fn create_table(
         &self,
         namespace: &str,

@@ -102,6 +102,130 @@ _Device.device_id = property(lambda self: self.index)
 ComputeContext = Device
 GPUContext = Device
 
+# ---------------------------------------------------------------------------
+# Vector aggregate helpers
+#
+# These mirror the SQL aggregates registered on the session (`centroid`,
+# `vector_min`, `vector_max`, `vector_stddev`, `vector_median`) and the text
+# scoring UDFs (`bm25_score`, `tf_idf`), so the Rust, Python, and Flight SQL
+# surfaces stay 1:1.
+# ---------------------------------------------------------------------------
+
+def _as_rows(vectors):
+    """Normalize input to a list of equal-length float lists."""
+    rows = [list(map(float, v)) for v in vectors]
+    if not rows:
+        return rows
+    dim = len(rows[0])
+    for r in rows:
+        if len(r) != dim:
+            raise ValueError(
+                f"Cannot aggregate vectors of different dimensions: "
+                f"expected {dim}, got {len(r)}"
+            )
+    return rows
+
+
+def centroid(vectors):
+    """Element-wise mean of a group of vectors (alias of ``vector_avg``)."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    n = len(rows)
+    dim = len(rows[0])
+    return [sum(r[d] for r in rows) / n for d in range(dim)]
+
+
+def vector_min(vectors):
+    """Element-wise minimum of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    return [min(r[d] for r in rows) for d in range(dim)]
+
+
+def vector_max(vectors):
+    """Element-wise maximum of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    return [max(r[d] for r in rows) for d in range(dim)]
+
+
+def vector_stddev(vectors):
+    """Element-wise population standard deviation of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    n = len(rows)
+    dim = len(rows[0])
+    out = []
+    for d in range(dim):
+        mean = sum(r[d] for r in rows) / n
+        var = sum((r[d] - mean) ** 2 for r in rows) / n
+        out.append(var ** 0.5)
+    return out
+
+
+def vector_median(vectors):
+    """Element-wise median of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    out = []
+    for d in range(dim):
+        col = sorted(r[d] for r in rows)
+        n = len(col)
+        if n % 2 == 1:
+            out.append(col[n // 2])
+        else:
+            out.append((col[n // 2 - 1] + col[n // 2]) / 2.0)
+    return out
+
+
+def _tokenize(text):
+    import re
+    return [t for t in re.sub(r"[^0-9a-zA-Z]+", " ", text).lower().split() if t]
+
+
+def bm25_score(text, query, k1=1.2):
+    """Corpus-free BM25 score of ``text`` against ``query`` (TF saturation only).
+
+    Mirrors the SQL ``bm25_score(text, query)`` UDF: IDF is fixed at 1.0 and
+    there is no length penalty, so the score is the BM25 term-frequency
+    saturation summed over the query terms.
+    """
+    from collections import Counter
+    tf = Counter(_tokenize(text))
+    score = 0.0
+    for term in _tokenize(query):
+        f = tf.get(term, 0)
+        if f:
+            score += f * (k1 + 1.0) / (f + k1)
+    return score
+
+
+def tf_idf(text):
+    """Corpus-free TF-IDF weights over ``text``'s tokens (IDF fixed at 1.0).
+
+    Mirrors the SQL ``tf_idf(text)`` UDF: returns the normalized term
+    frequencies in first-appearance order.
+    """
+    from collections import Counter
+    tokens = _tokenize(text)
+    if not tokens:
+        return []
+    counts = Counter(tokens)
+    total = len(tokens)
+    seen = []
+    for t in tokens:
+        if t not in seen:
+            seen.append(t)
+    return [counts[t] / total for t in seen]
+
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd
 try:

@@ -110,6 +110,12 @@ impl Table {
         wal.compact()
     }
 
+    /// Async WAL checkpoint, safe to call from within a Tokio runtime.
+    pub async fn checkpoint_async(&self) -> Result<()> {
+        let mut wal = self.wal.lock().await;
+        wal.compact()
+    }
+
     // Schema evolution logic moved to schema.rs
 
     /// Async implementation of write using the table's configured durability mode.

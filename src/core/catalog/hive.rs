@@ -47,6 +47,17 @@ impl HiveMetastoreClient {
 
 #[async_trait]
 impl Catalog for HiveMetastoreClient {
+    async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        let database = hive_metastore::Database {
+            name: Some(FastStr::new(namespace)),
+            ..Default::default()
+        };
+        match self.client.create_database(database).await {
+            Ok(_) => Ok(()),
+            Err(e) => Err(anyhow!("Failed to create Hive database: {:?}", e)),
+        }
+    }
+
     async fn create_table(
         &self,
         namespace: &str,
