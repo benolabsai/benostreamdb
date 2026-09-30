@@ -20,7 +20,7 @@ with flight_sql.connect(uri="grpc://localhost:50051") as conn:
         # ADBC returns a stream of metadata which dbapi handles.
         # But wait, adbc_get_objects is low level. 
         # Using standard DBAPI to get tables
-        tables = cur.adbc_get_table_schema(None, None, "test_table")
+        tables = conn.adbc_get_table_schema("test_table")
         print(f"Table Schema for 'test_table': {tables}")
 
         # Execute a query
