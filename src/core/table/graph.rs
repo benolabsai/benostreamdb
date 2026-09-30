@@ -55,7 +55,8 @@ impl Table {
         let manifest = self.manifest().await?;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manifest_manager.load_all_entries(&manifest).await?;
-        self.load_graph_indices_from_entries(&entries, columns).await
+        self.load_graph_indices_from_entries(&entries, columns)
+            .await
     }
 
     async fn load_graph_indices_from_entries(
@@ -136,7 +137,10 @@ impl Table {
                     vec![col.as_str()]
                 };
 
-                let mut indices = self.load_graph_indices(&cols_to_load).await.unwrap_or_default();
+                let mut indices = self
+                    .load_graph_indices(&cols_to_load)
+                    .await
+                    .unwrap_or_default();
                 if let Some(forward) = indices.remove(col) {
                     let reverse = if !options.directed {
                         indices.remove(&rev_col)
@@ -165,7 +169,10 @@ impl Table {
         self.graph_neighborhood_scan(options).await
     }
 
-    async fn graph_neighborhood_scan(&self, options: &GraphNeighborhoodOptions) -> Result<Vec<u64>> {
+    async fn graph_neighborhood_scan(
+        &self,
+        options: &GraphNeighborhoodOptions,
+    ) -> Result<Vec<u64>> {
         let schema = self.arrow_schema();
 
         // 1. Resolve source and target columns
@@ -254,9 +261,8 @@ impl Table {
             }
         }
 
-        let budget_exhausted = |visited: &HashSet<u64>| {
-            options.max_nodes.is_some_and(|cap| visited.len() >= cap)
-        };
+        let budget_exhausted =
+            |visited: &HashSet<u64>| options.max_nodes.is_some_and(|cap| visited.len() >= cap);
 
         while let Some((node, depth)) = queue.pop_front() {
             if budget_exhausted(&visited) {
@@ -323,7 +329,10 @@ impl Table {
             vec![col_to_check]
         };
 
-        let mut indices = self.load_graph_indices(&cols_to_load).await.unwrap_or_default();
+        let mut indices = self
+            .load_graph_indices(&cols_to_load)
+            .await
+            .unwrap_or_default();
         if let Some(forward) = indices.remove(col_to_check) {
             let reverse = if !directed {
                 indices.remove(&rev_col)
@@ -353,7 +362,11 @@ impl Table {
                         break;
                     }
 
-                    for neighbor in forward.get_neighbors(current).into_iter().take(MAX_BFS_DEGREE) {
+                    for neighbor in forward
+                        .get_neighbors(current)
+                        .into_iter()
+                        .take(MAX_BFS_DEGREE)
+                    {
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             visited.entry(neighbor)
                         {
@@ -363,7 +376,8 @@ impl Table {
                     }
 
                     if let Some(ref rev) = reverse {
-                        for neighbor in rev.get_neighbors(current).into_iter().take(MAX_BFS_DEGREE) {
+                        for neighbor in rev.get_neighbors(current).into_iter().take(MAX_BFS_DEGREE)
+                        {
                             if let std::collections::hash_map::Entry::Vacant(entry) =
                                 visited.entry(neighbor)
                             {
@@ -670,7 +684,8 @@ impl Table {
 
             while let Some(curr) = q.pop_front() {
                 for neighbor in graph.get_neighbors(curr) {
-                    if let std::collections::hash_map::Entry::Vacant(e) = community_map.entry(neighbor)
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        community_map.entry(neighbor)
                     {
                         e.insert(current_comm);
                         q.push_back(neighbor);
@@ -796,7 +811,11 @@ fn extract_u64_values(col: &dyn Array) -> Vec<Option<u64>> {
 
     if let Some(arr) = col.as_any().downcast_ref::<UInt64Array>() {
         for i in 0..n {
-            out.push(if arr.is_null(i) { None } else { Some(arr.value(i)) });
+            out.push(if arr.is_null(i) {
+                None
+            } else {
+                Some(arr.value(i))
+            });
         }
     } else if let Some(arr) = col.as_any().downcast_ref::<Int64Array>() {
         for i in 0..n {

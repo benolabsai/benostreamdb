@@ -681,7 +681,10 @@ impl Table {
             let pending = self.pending_writes.read();
 
             // Calculate size in bytes (approximate)
-            let total_bytes: usize = pending.iter().map(|p| p.batch.get_array_memory_size()).sum();
+            let total_bytes: usize = pending
+                .iter()
+                .map(|p| p.batch.get_array_memory_size())
+                .sum();
 
             let cache_gb: usize = std::env::var("BENOSTREAM_CACHE_GB")
                 .unwrap_or_else(|_| "1".to_string())
@@ -777,9 +780,7 @@ impl Table {
         // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage).
         // `load_latest_full` (not `load_latest`) so sharded manifest entries are
         // included — `row_id_base` must see every existing data file.
-        let (manifest, existing_entries, _) = manifest_manager
-            .load_latest_full()
-            .await?;
+        let (manifest, existing_entries, _) = manifest_manager.load_latest_full().await?;
         let sequence_number = manifest.version as i64;
         let format_version = self.get_format_version();
 
