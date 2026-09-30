@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+#[allow(clippy::expect_used)] // Thread-pool construction only fails on OS resource exhaustion; unrecoverable at startup.
 fn indexing_pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -803,7 +804,7 @@ impl HybridSegmentWriter {
     /// Build indexes for a batch (can be called asynchronously after write_batch).
     /// This is the expensive operation that should run in background.
     pub fn build_indexes(&self, batch: &RecordBatch, row_offset: usize) -> Result<()> {
-        tokio::task::block_in_place(|| {
+        crate::core::run_blocking(|| {
             indexing_pool().install(|| {
                 tracing::info!(
                     "Building indexes for batch of {} rows at offset {}",
