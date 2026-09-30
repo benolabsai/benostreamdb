@@ -617,7 +617,10 @@ impl ManifestManager {
     /// The provided entries represent the authoritative active data files of the snapshot.
     /// Files that were deleted or compacted away by the external lakehouse engine are retired,
     /// while local secondary indexes (HNSW, BM25) on surviving files are preserved.
-    pub async fn commit_synced_snapshot(&self, snapshot_entries: Vec<ManifestEntry>) -> Result<Manifest> {
+    pub async fn commit_synced_snapshot(
+        &self,
+        snapshot_entries: Vec<ManifestEntry>,
+    ) -> Result<Manifest> {
         let max_retries = 10;
         let mut attempt = 0;
         loop {
@@ -853,18 +856,25 @@ impl ManifestManager {
                 Ok(m) => m,
                 Err(e) => {
                     // Only skip if the version file genuinely does not exist (e.g. gap in history)
-                    if let Some(object_store::Error::NotFound { .. }) = e.downcast_ref::<object_store::Error>() {
+                    if let Some(object_store::Error::NotFound { .. }) =
+                        e.downcast_ref::<object_store::Error>()
+                    {
                         continue;
                     }
-                    return Err(anyhow::anyhow!("Vacuum aborted: failed to load manifest v{}: {}", v, e));
+                    return Err(anyhow::anyhow!(
+                        "Vacuum aborted: failed to load manifest v{}: {}",
+                        v,
+                        e
+                    ));
                 }
             };
 
             // Collect all data, index, and delete files.
             // If reading entries fails, abort immediately (fail-closed) so we never
             // compute an incomplete live-file set and delete live data.
-            let entries = self.load_all_entries(&m).await
-                .map_err(|e| anyhow::anyhow!("Vacuum aborted: failed to load entries for v{}: {}", v, e))?;
+            let entries = self.load_all_entries(&m).await.map_err(|e| {
+                anyhow::anyhow!("Vacuum aborted: failed to load entries for v{}: {}", v, e)
+            })?;
 
             for entry in entries {
                 active_files.insert(entry.file_path.clone());
@@ -939,8 +949,12 @@ impl ManifestManager {
         //    version) after we computed the retention window above.
         //    Must fail-closed if re-validation fails.
         let (latest_m, latest_ver_now) = self.load_latest().await?;
-        let latest_entries = self.load_all_entries(&latest_m).await
-            .map_err(|e| anyhow::anyhow!("Vacuum aborted: failed to load latest manifest entries during revalidation: {}", e))?;
+        let latest_entries = self.load_all_entries(&latest_m).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Vacuum aborted: failed to load latest manifest entries during revalidation: {}",
+                e
+            )
+        })?;
 
         for entry in latest_entries {
             active_files.insert(entry.file_path.clone());
@@ -1024,7 +1038,9 @@ mod tests {
             ..Default::default()
         };
 
-        manager.commit(&[entry_a, entry_b], &[], CommitMetadata::default()).await?;
+        manager
+            .commit(&[entry_a, entry_b], &[], CommitMetadata::default())
+            .await?;
 
         // 2. External engine compacted: file_b was deleted, file_c was created, file_a was preserved.
         let new_snapshot_entries = vec![
@@ -1044,14 +1060,29 @@ mod tests {
         let synced_manifest = manager.commit_synced_snapshot(new_snapshot_entries).await?;
         assert_eq!(synced_manifest.entries.len(), 2);
 
-        let files: Vec<String> = synced_manifest.entries.iter().map(|e| e.file_path.clone()).collect();
+        let files: Vec<String> = synced_manifest
+            .entries
+            .iter()
+            .map(|e| e.file_path.clone())
+            .collect();
         assert!(files.contains(&"file_a.parquet".to_string()));
         assert!(files.contains(&"file_c.parquet".to_string()));
-        assert!(!files.contains(&"file_b.parquet".to_string()), "file_b was compacted away and must be retired");
+        assert!(
+            !files.contains(&"file_b.parquet".to_string()),
+            "file_b was compacted away and must be retired"
+        );
 
         // Verify local secondary index on file_a was preserved
-        let entry_a_synced = synced_manifest.entries.iter().find(|e| e.file_path == "file_a.parquet").unwrap();
-        assert_eq!(entry_a_synced.index_files.len(), 1, "local secondary index on file_a must be carried forward");
+        let entry_a_synced = synced_manifest
+            .entries
+            .iter()
+            .find(|e| e.file_path == "file_a.parquet")
+            .unwrap();
+        assert_eq!(
+            entry_a_synced.index_files.len(),
+            1,
+            "local secondary index on file_a must be carried forward"
+        );
         assert_eq!(entry_a_synced.index_files[0].index_type, "hnsw");
 
         Ok(())
@@ -1071,7 +1102,9 @@ mod tests {
             ..Default::default()
         };
         // Commit v1
-        manager.commit(&[entry.clone()], &[], CommitMetadata::default()).await?;
+        manager
+            .commit(&[entry.clone()], &[], CommitMetadata::default())
+            .await?;
 
         // Write live data file in store
         let data_path = object_store::path::Path::from(format!("{base}/live_data.parquet"));
@@ -1079,19 +1112,29 @@ mod tests {
 
         // Corrupt v1 manifest to trigger load failure
         let m_v1_path = object_store::path::Path::from(format!("{base}/_manifest/v1.json"));
-        store.put(&m_v1_path, b"invalid json content".to_vec().into()).await?;
+        store
+            .put(&m_v1_path, b"invalid json content".to_vec().into())
+            .await?;
 
         // Invalidate caches for this specific dir
         let dir_key = manager.get_dir_cache_key();
-        crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+        crate::core::cache::LATEST_VERSION_CACHE
+            .invalidate(&dir_key)
+            .await;
         crate::core::cache::MANIFEST_CACHE.invalidate_all();
 
         // Vacuum should fail-closed!
         let res = manager.vacuum(1).await;
-        assert!(res.is_err(), "vacuum must abort when manifest is unreadable");
+        assert!(
+            res.is_err(),
+            "vacuum must abort when manifest is unreadable"
+        );
 
         // Live data file MUST NOT be deleted!
-        assert!(store.get(&data_path).await.is_ok(), "live data file must be intact when vacuum aborts");
+        assert!(
+            store.get(&data_path).await.is_ok(),
+            "live data file must be intact when vacuum aborts"
+        );
 
         Ok(())
     }

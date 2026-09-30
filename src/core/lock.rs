@@ -134,10 +134,8 @@ impl FileBasedLock {
                                     tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
                                     let _ = self.store.delete(&self.path).await;
                                     let jitter = rand::random::<u64>() % 50;
-                                    tokio::time::sleep(std::time::Duration::from_millis(
-                                        jitter,
-                                    ))
-                                    .await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(jitter))
+                                        .await;
 
                                     match self
                                         .store

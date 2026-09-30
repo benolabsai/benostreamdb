@@ -202,7 +202,10 @@ async fn test_truncate_error_propagation_h3() -> Result<()> {
 
     // truncate_async should bubble up the I/O error rather than silently succeeding
     let result = table.truncate_async().await;
-    assert!(result.is_err(), "truncate_async must propagate storage errors");
+    assert!(
+        result.is_err(),
+        "truncate_async must propagate storage errors"
+    );
 
     Ok(())
 }
@@ -272,9 +275,12 @@ async fn test_compaction_rewrite_data_files_no_deadlock() -> Result<()> {
 
     // rewrite_data_files_async acquires maintenance_lock.write() and calls flush_unlocked_async()
     // It should complete promptly without deadlocking.
-    tokio::time::timeout(Duration::from_secs(10), table.rewrite_data_files_async(None))
-        .await
-        .expect("compaction timed out - deadlock detected")?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        table.rewrite_data_files_async(None),
+    )
+    .await
+    .expect("compaction timed out - deadlock detected")?;
 
     let rows = table.read_async(None, None, None).await?;
     let total: usize = rows.iter().map(|b| b.num_rows()).sum();

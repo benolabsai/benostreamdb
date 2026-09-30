@@ -300,7 +300,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_orphan_cleanup_preserves_delete_files() -> Result<()> {
-        let temp_dir = std::env::temp_dir().join(format!("test_orphan_del_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_orphan_del_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir)?;
         let uri = format!("file://{}", temp_dir.to_str().unwrap());
 
@@ -335,22 +336,26 @@ mod tests {
         };
         entry.delete_files.push(del_file.clone());
 
-        manager.commit(
-            &[entry],
-            &[],
-            crate::core::manifest::CommitMetadata::default(),
-        ).await?;
+        manager
+            .commit(
+                &[entry],
+                &[],
+                crate::core::manifest::CommitMetadata::default(),
+            )
+            .await?;
 
         // 3. Run remove_orphan_files with older_than_ms = -1 (treat all non-referenced as candidates)
         maintenance.remove_orphan_files(-1).await?;
 
         // 4. Verify data file and delete file are preserved, while orphan file is reaped
         assert!(data_path.exists(), "live data file must be preserved");
-        assert!(delete_path.exists(), "live position delete file must be preserved");
+        assert!(
+            delete_path.exists(),
+            "live position delete file must be preserved"
+        );
         assert!(!orphan_path.exists(), "true orphan file must be removed");
 
         std::fs::remove_dir_all(&temp_dir)?;
         Ok(())
     }
 }
-

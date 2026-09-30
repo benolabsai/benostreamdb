@@ -22,8 +22,8 @@ use crate::core::planner::{FilterExpr, QueryPlanner};
 use crate::core::reader::HybridReader;
 use crate::SegmentConfig;
 
-use std::sync::OnceLock;
 use rayon::ThreadPool;
+use std::sync::OnceLock;
 
 fn maintenance_pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
@@ -31,7 +31,12 @@ fn maintenance_pool() -> &'static ThreadPool {
         rayon::ThreadPoolBuilder::new()
             .thread_name(|i| format!("maintenance-rayon-{}", i))
             // Limit threads to not overwhelm system during heavy background compactions
-            .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8))
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .clamp(2, 8),
+            )
             .build()
             .expect("Failed to build maintenance thread pool")
     })
@@ -357,7 +362,9 @@ impl Table {
                     .column(col_idx)
                     .as_any()
                     .downcast_ref::<arrow::array::FixedSizeListArray>()
-                    .ok_or_else(|| anyhow::anyhow!("Column '{}' must be a FixedSizeListArray", col_name))?;
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Column '{}' must be a FixedSizeListArray", col_name)
+                    })?;
 
                 let n = list_array.len();
                 if n < 1024 {
@@ -428,7 +435,8 @@ impl Table {
             let _ = tx.send(result);
         });
 
-        rx.await.unwrap_or_else(|_| Err(anyhow::anyhow!("Maintenance thread pool panicked")))
+        rx.await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("Maintenance thread pool panicked")))
     }
 
     /// Re-indexes data files that are missing overlay index sidecars.

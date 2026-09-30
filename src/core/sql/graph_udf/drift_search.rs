@@ -376,11 +376,11 @@ impl DriftSearchUDF {
         Self {
             signature: Signature::exact(
                 vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                    DataType::Utf8,   // query
+                    DataType::UInt64,                                                     // source
+                    DataType::UInt64,                                                     // target
+                    DataType::Utf8,                                                       // query
                     DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))), // top_communities
-                    DataType::UInt32, // n_depth
+                    DataType::UInt32,                                                     // n_depth
                 ],
                 Volatility::Immutable,
             ),
@@ -495,12 +495,18 @@ impl Accumulator for DriftSearchAccumulator {
             return Ok(());
         }
 
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
-            DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-        })?;
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
-            DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-        })?;
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
+            })?;
 
         for i in 0..sources.len() {
             if sources.is_valid(i) && targets.is_valid(i) {
@@ -544,12 +550,18 @@ impl Accumulator for DriftSearchAccumulator {
             return Ok(());
         }
 
-        let sources_list = states[0].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-            DataFusionError::Execution("Expected ListArray for sources state".to_string())
-        })?;
-        let targets_list = states[1].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-            DataFusionError::Execution("Expected ListArray for targets state".to_string())
-        })?;
+        let sources_list = states[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for sources state".to_string())
+            })?;
+        let targets_list = states[1]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for targets state".to_string())
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -636,7 +648,9 @@ impl Accumulator for DriftSearchAccumulator {
 
             while let Some(curr) = q.pop_front() {
                 for neighbor in graph.get_neighbors(curr) {
-                    if let std::collections::hash_map::Entry::Vacant(e) = community_map.entry(neighbor) {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        community_map.entry(neighbor)
+                    {
                         e.insert(current_comm);
                         q.push_back(neighbor);
                     }
@@ -706,12 +720,12 @@ impl RegionalDriftUDF {
         Self {
             signature: Signature::exact(
                 vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                    DataType::Utf8,   // query
+                    DataType::UInt64,                                                     // source
+                    DataType::UInt64,                                                     // target
+                    DataType::Utf8,                                                       // query
                     DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))), // seeds
-                    DataType::UInt32, // hops
-                    DataType::UInt32, // n_depth
+                    DataType::UInt32,                                                     // hops
+                    DataType::UInt32,                                                     // n_depth
                 ],
                 Volatility::Immutable,
             ),
@@ -830,12 +844,18 @@ impl Accumulator for RegionalDriftAccumulator {
             return Ok(());
         }
 
-        let sources = values[0].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
-            DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-        })?;
-        let targets = values[1].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| {
-            DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-        })?;
+        let sources = values[0]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
+            })?;
+        let targets = values[1]
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
+            })?;
 
         for i in 0..sources.len() {
             if sources.is_valid(i) && targets.is_valid(i) {
@@ -887,12 +907,18 @@ impl Accumulator for RegionalDriftAccumulator {
             return Ok(());
         }
 
-        let sources_list = states[0].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-            DataFusionError::Execution("Expected ListArray for sources state".to_string())
-        })?;
-        let targets_list = states[1].as_any().downcast_ref::<ListArray>().ok_or_else(|| {
-            DataFusionError::Execution("Expected ListArray for targets state".to_string())
-        })?;
+        let sources_list = states[0]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for sources state".to_string())
+            })?;
+        let targets_list = states[1]
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("Expected ListArray for targets state".to_string())
+            })?;
 
         for i in 0..sources_list.len() {
             if sources_list.is_valid(i) {
@@ -962,7 +988,10 @@ impl Accumulator for RegionalDriftAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut list_builder = ListBuilder::new(UInt64Builder::new());
 
-        if self.sources.is_empty() || self.query.is_none() || self.seeds.as_ref().is_none_or(|s| s.is_empty()) {
+        if self.sources.is_empty()
+            || self.query.is_none()
+            || self.seeds.as_ref().is_none_or(|s| s.is_empty())
+        {
             list_builder.append(true);
             return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
         }
@@ -1020,7 +1049,9 @@ impl Accumulator for RegionalDriftAccumulator {
             }
         }
 
-        let regional_graph = SimpleGraph { adjacency: regional_adj };
+        let regional_graph = SimpleGraph {
+            adjacency: regional_adj,
+        };
 
         // Community partitioning over regional subgraph
         let mut community_map: HashMap<u64, u64> = HashMap::new();
@@ -1036,7 +1067,9 @@ impl Accumulator for RegionalDriftAccumulator {
 
             while let Some(curr) = q.pop_front() {
                 for neighbor in regional_graph.get_neighbors(curr) {
-                    if let std::collections::hash_map::Entry::Vacant(e) = community_map.entry(neighbor) {
+                    if let std::collections::hash_map::Entry::Vacant(e) =
+                        community_map.entry(neighbor)
+                    {
                         e.insert(current_comm);
                         q.push_back(neighbor);
                     }
@@ -1074,7 +1107,13 @@ impl Accumulator for RegionalDriftAccumulator {
             confidence_threshold: 0.0,
         };
 
-        let result = execute_drift_search(query, &regional_graph, &top_communities, &generator, &params);
+        let result = execute_drift_search(
+            query,
+            &regional_graph,
+            &top_communities,
+            &generator,
+            &params,
+        );
         let mut nodes = result.all_discovered_nodes;
         nodes.sort_unstable();
 
@@ -1092,4 +1131,3 @@ impl Accumulator for RegionalDriftAccumulator {
             + self.seeds.as_ref().map(|s| s.capacity() * 8).unwrap_or(0)
     }
 }
-

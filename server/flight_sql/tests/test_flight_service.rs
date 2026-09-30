@@ -271,5 +271,8 @@ async fn test_flight_stream_cancellation() {
         .await
         .expect("subsequent query succeeds");
     let mut stream2 = resp2.into_inner();
-    assert!(stream2.next().await.is_some(), "service is healthy after stream cancel");
+    assert!(
+        stream2.next().await.is_some(),
+        "service is healthy after stream cancel"
+    );
 }
