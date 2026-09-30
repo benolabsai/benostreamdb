@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-29
+
 ### Added
 - **GPU-Native Index Construction crate (`benostream-gpu-ann`) (A11 Complete)** —
   A standalone, community-ready Rust library delivering high-performance GPU-native
@@ -1244,7 +1246,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/benolabsai/benostreamdb/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/benolabsai/benostreamdb/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/benolabsai/benostreamdb/compare/v0.9.0...v0.11.0
 [0.9.0]: https://github.com/benolabsai/benostreamdb/compare/v0.8.1...v0.9.0
 [0.5.3]: https://github.com/benolabsai/benostreamdb/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/benolabsai/benostreamdb/compare/v0.5.1...v0.5.2

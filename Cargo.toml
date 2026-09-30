@@ -63,7 +63,7 @@ metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 
 
 [dependencies]
-benostream-gpu-ann = { path = "benostream-gpu-ann", default-features = false }
+benostream-gpu-ann = { version = "0.1.0", path = "benostream-gpu-ann", default-features = false }
 libc = "0.2"
 # core columnar memory format
 arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }
