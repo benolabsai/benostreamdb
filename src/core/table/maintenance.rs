@@ -25,6 +25,7 @@ use crate::SegmentConfig;
 use rayon::ThreadPool;
 use std::sync::OnceLock;
 
+#[allow(clippy::expect_used)] // Thread-pool construction only fails on OS resource exhaustion; unrecoverable at startup.
 fn maintenance_pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {

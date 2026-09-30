@@ -620,12 +620,14 @@ impl Accumulator for DriftSearchAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut list_builder = ListBuilder::new(UInt64Builder::new());
 
-        if self.sources.is_empty() || self.query.is_none() {
+        if self.sources.is_empty() {
             list_builder.append(true);
             return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
         }
-
-        let query = self.query.as_ref().unwrap();
+        let Some(query) = self.query.as_ref() else {
+            list_builder.append(true);
+            return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
+        };
 
         let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
         for (&s, &t) in self.sources.iter().zip(self.targets.iter()) {
@@ -988,16 +990,17 @@ impl Accumulator for RegionalDriftAccumulator {
     fn evaluate(&mut self) -> Result<ScalarValue> {
         let mut list_builder = ListBuilder::new(UInt64Builder::new());
 
-        if self.sources.is_empty()
-            || self.query.is_none()
-            || self.seeds.as_ref().is_none_or(|s| s.is_empty())
-        {
+        if self.sources.is_empty() {
             list_builder.append(true);
             return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
         }
-
-        let query = self.query.as_ref().unwrap();
-        let seeds = self.seeds.as_ref().unwrap();
+        let (Some(query), Some(seeds)) = (
+            self.query.as_ref(),
+            self.seeds.as_ref().filter(|s| !s.is_empty()),
+        ) else {
+            list_builder.append(true);
+            return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
+        };
         let hops = self.hops.unwrap_or(1);
 
         // Build full adjacency
