@@ -13,17 +13,22 @@ use crate::core::index::gpu::{set_thread_gpu_context, ComputeContext};
 use crate::core::manifest::{ColumnStats, ManifestEntry, ManifestValue, VectorStats};
 use object_store::ObjectStore;
 use parquet::file::statistics::Statistics as ParquetStats;
+use rayon::ThreadPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use rayon::ThreadPool;
 
 fn indexing_pool() -> &'static ThreadPool {
     static POOL: OnceLock<ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .thread_name(|i| format!("indexing-rayon-{}", i))
-            .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8))
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .clamp(2, 8),
+            )
             .build()
             .expect("Failed to build indexing thread pool")
     })
@@ -816,123 +821,130 @@ impl HybridSegmentWriter {
                     .iter()
                     .enumerate()
                     .collect::<Vec<_>>()
-            .into_par_iter()
-            .try_for_each(|(i, field)| {
-                let col_name = field.name();
-                let col = batch.column(i);
+                    .into_par_iter()
+                    .try_for_each(|(i, field)| {
+                        let col_name = field.name();
+                        let col = batch.column(i);
 
-                let is_pk = self.primary_key.contains(&col_name.to_string());
-                let is_vector = matches!(
-                    col.data_type(),
-                    arrow::datatypes::DataType::FixedSizeList(_, _)
-                        | arrow::datatypes::DataType::List(_)
-                );
-                let in_config_list = self
-                    .config
-                    .columns_to_index
-                    .as_ref()
-                    .map(|cols| cols.contains(&col_name.to_string()))
-                    .unwrap_or(false);
+                        let is_pk = self.primary_key.contains(&col_name.to_string());
+                        let is_vector = matches!(
+                            col.data_type(),
+                            arrow::datatypes::DataType::FixedSizeList(_, _)
+                                | arrow::datatypes::DataType::List(_)
+                        );
+                        let in_config_list = self
+                            .config
+                            .columns_to_index
+                            .as_ref()
+                            .map(|cols| cols.contains(&col_name.to_string()))
+                            .unwrap_or(false);
 
-                if self.config.index_all || is_pk || is_vector || in_config_list {
-                    self.index_column(col_name, col, row_offset)
-                } else {
-                    Ok(())
-                }
-            })?;
-
-        // 2. Build Composite Indexes (Virtual Columns)
-        let mut composite_tasks = Vec::new();
-        let mut graph_tasks = Vec::new();
-        for (col_name, config) in &self.index_configs {
-            if !config.enabled {
-                continue;
-            }
-            for alg in &config.algorithms {
-                if let crate::core::manifest::IndexAlgorithm::CompositeBitmap { columns } = alg {
-                    composite_tasks.push((col_name.clone(), columns.clone()));
-                } else if let crate::core::manifest::IndexAlgorithm::CsrGraph {
-                    src_column,
-                    dst_column,
-                } = alg
-                {
-                    graph_tasks.push((col_name.clone(), src_column.clone(), dst_column.clone()));
-                }
-            }
-        }
-
-        composite_tasks
-            .into_par_iter()
-            .try_for_each(|(col_name, columns)| {
-                let mut builder = arrow::array::StringBuilder::new();
-                let num_rows = batch.num_rows();
-
-                let mut arrays = Vec::new();
-                for col in &columns {
-                    if let Some(arr) = batch.column_by_name(col) {
-                        arrays.push(arr);
-                    } else {
-                        return Err(anyhow::anyhow!(
-                            "Column {} not found for composite index",
-                            col
-                        ));
-                    }
-                }
-
-                for row in 0..num_rows {
-                    let mut joined = String::new();
-                    for (i, arr) in arrays.iter().enumerate() {
-                        if i > 0 {
-                            joined.push('\0');
+                        if self.config.index_all || is_pk || is_vector || in_config_list {
+                            self.index_column(col_name, col, row_offset)
+                        } else {
+                            Ok(())
                         }
-                        let val =
-                            crate::core::manifest::ManifestValue::from_array(arr, row).to_string();
-                        joined.push_str(&val);
+                    })?;
+
+                // 2. Build Composite Indexes (Virtual Columns)
+                let mut composite_tasks = Vec::new();
+                let mut graph_tasks = Vec::new();
+                for (col_name, config) in &self.index_configs {
+                    if !config.enabled {
+                        continue;
                     }
-                    builder.append_value(&joined);
+                    for alg in &config.algorithms {
+                        if let crate::core::manifest::IndexAlgorithm::CompositeBitmap { columns } =
+                            alg
+                        {
+                            composite_tasks.push((col_name.clone(), columns.clone()));
+                        } else if let crate::core::manifest::IndexAlgorithm::CsrGraph {
+                            src_column,
+                            dst_column,
+                        } = alg
+                        {
+                            graph_tasks.push((
+                                col_name.clone(),
+                                src_column.clone(),
+                                dst_column.clone(),
+                            ));
+                        }
+                    }
                 }
-                let composite_array =
-                    std::sync::Arc::new(builder.finish()) as std::sync::Arc<dyn Array>;
 
-                self.index_column(&col_name, &composite_array, row_offset)
-            })?;
+                composite_tasks
+                    .into_par_iter()
+                    .try_for_each(|(col_name, columns)| {
+                        let mut builder = arrow::array::StringBuilder::new();
+                        let num_rows = batch.num_rows();
 
-        // 3. Build Graph Indexes
-        graph_tasks
-            .into_par_iter()
-            .try_for_each(|(col_name, src_col, dst_col)| {
-                let is_remote = self.config.base_path.contains("://")
-                    && !self.config.base_path.starts_with("file://");
-                let local_staging_dir = if is_remote {
-                    let temp_dir = std::env::temp_dir()
-                        .join("benostream_staging")
-                        .join(uuid::Uuid::new_v4().to_string());
-                    std::fs::create_dir_all(&temp_dir)?;
-                    temp_dir
-                } else {
-                    let path = self
-                        .config
-                        .base_path
-                        .strip_prefix("file://")
-                        .unwrap_or(&self.config.base_path);
-                    let p = std::path::PathBuf::from(path);
-                    if !path.is_empty() {
-                        std::fs::create_dir_all(&p)?;
-                    }
-                    p
-                };
+                        let mut arrays = Vec::new();
+                        for col in &columns {
+                            if let Some(arr) = batch.column_by_name(col) {
+                                arrays.push(arr);
+                            } else {
+                                return Err(anyhow::anyhow!(
+                                    "Column {} not found for composite index",
+                                    col
+                                ));
+                            }
+                        }
 
-                std::fs::create_dir_all(&local_staging_dir)?;
+                        for row in 0..num_rows {
+                            let mut joined = String::new();
+                            for (i, arr) in arrays.iter().enumerate() {
+                                if i > 0 {
+                                    joined.push('\0');
+                                }
+                                let val =
+                                    crate::core::manifest::ManifestValue::from_array(arr, row)
+                                        .to_string();
+                                joined.push_str(&val);
+                            }
+                            builder.append_value(&joined);
+                        }
+                        let composite_array =
+                            std::sync::Arc::new(builder.finish()) as std::sync::Arc<dyn Array>;
 
-                self.build_graph_index(
-                    &col_name,
-                    batch,
-                    &src_col,
-                    &dst_col,
-                    row_offset,
-                    &local_staging_dir,
-                )
-            })?;
+                        self.index_column(&col_name, &composite_array, row_offset)
+                    })?;
+
+                // 3. Build Graph Indexes
+                graph_tasks
+                    .into_par_iter()
+                    .try_for_each(|(col_name, src_col, dst_col)| {
+                        let is_remote = self.config.base_path.contains("://")
+                            && !self.config.base_path.starts_with("file://");
+                        let local_staging_dir = if is_remote {
+                            let temp_dir = std::env::temp_dir()
+                                .join("benostream_staging")
+                                .join(uuid::Uuid::new_v4().to_string());
+                            std::fs::create_dir_all(&temp_dir)?;
+                            temp_dir
+                        } else {
+                            let path = self
+                                .config
+                                .base_path
+                                .strip_prefix("file://")
+                                .unwrap_or(&self.config.base_path);
+                            let p = std::path::PathBuf::from(path);
+                            if !path.is_empty() {
+                                std::fs::create_dir_all(&p)?;
+                            }
+                            p
+                        };
+
+                        std::fs::create_dir_all(&local_staging_dir)?;
+
+                        self.build_graph_index(
+                            &col_name,
+                            batch,
+                            &src_col,
+                            &dst_col,
+                            row_offset,
+                            &local_staging_dir,
+                        )
+                    })?;
 
                 Ok(())
             }) // end indexing_pool

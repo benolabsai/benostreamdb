@@ -489,7 +489,7 @@ impl TableBuilder {
                     .into_iter()
                     .zip(recovered_tx_ids)
                     .map(|(batch, tx_id)| crate::core::table::PendingWrite { batch, tx_id })
-                    .collect()
+                    .collect(),
             )),
             maintenance_lock: Arc::new(tokio::sync::RwLock::new(())),
             wal: Arc::new(Mutex::new(wal)),
