@@ -1680,11 +1680,12 @@ impl HnswIvfIndex {
 
         // Phase 2: Deserialize all HNSW graphs in parallel (CPU-bound, via rayon).
         let quantizer_for_deser = quantizer.clone();
-        let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> = cluster_bytes
-            .into_par_iter()
-            .map(|cb_res| {
-                let cb = cb_res?;
-                let cluster_id = cb.cluster_id;
+        let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> = tokio::task::block_in_place(|| {
+            cluster_bytes
+                .into_par_iter()
+                .map(|cb_res| {
+                    let cb = cb_res?;
+                    let cluster_id = cb.cluster_id;
 
                 let hnsw = if let Some(q_impl) = quantizer_for_deser.clone() {
                     match q_impl {
@@ -1780,7 +1781,8 @@ impl HnswIvfIndex {
 
                 Ok((cluster_id, (hnsw, row_id_mapping)))
             })
-            .collect();
+            .collect()
+        });
 
         let mut cluster_graphs = HashMap::new();
         for res in deser_results {

@@ -55,26 +55,25 @@ use crate::core::table::{MergeMode, Table};
 /// return the affected-rows batch. Returns `Ok(None)` for anything else (or if
 /// the statement does not parse, so DataFusion can report its own error).
 pub async fn try_parse_and_execute(ctx: &SessionContext, sql: &str) -> Result<Option<RecordBatch>> {
-    // `GenericDialect` (not PostgreSQL) so `INSERT ROW` parses; the session's
-    // own planner still uses the PostgreSQL dialect for non-MERGE statements.
-    let dialect = GenericDialect {};
-    let mut parser = match DFParserBuilder::new(sql).with_dialect(&dialect).build() {
-        Ok(p) => p,
-        Err(_) => return Ok(None),
+    let stmt = {
+        let dialect = GenericDialect {};
+        let mut parser = match DFParserBuilder::new(sql).with_dialect(&dialect).build() {
+            Ok(p) => p,
+            Err(_) => return Ok(None),
+        };
+        let statements = match parser.parse_statements() {
+            Ok(s) => s,
+            Err(_) => return Ok(None),
+        };
+        if statements.len() != 1 {
+            return Ok(None);
+        }
+        match &statements[0] {
+            DFStatement::Statement(inner) => inner.as_ref().clone(),
+            _ => return Ok(None),
+        }
     };
-    let statements = match parser.parse_statements() {
-        Ok(s) => s,
-        Err(_) => return Ok(None),
-    };
-    if statements.len() != 1 {
-        return Ok(None);
-    }
-    // Unwrap DataFusion's statement wrapper to the underlying sqlparser AST.
-    let stmt = match &statements[0] {
-        DFStatement::Statement(inner) => inner.as_ref(),
-        _ => return Ok(None),
-    };
-    try_execute_merge(ctx, stmt).await
+    try_execute_merge(ctx, &stmt).await
 }
 
 /// Execute a `MERGE INTO` statement if `stmt` is one; otherwise return `None`.

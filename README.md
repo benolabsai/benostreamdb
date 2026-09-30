@@ -5,7 +5,28 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
+> **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
+>
+> **Flight SQL currently provides single-process server access. Distributed/clustered execution is not implied by Flight support.**
+
 An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructible, persistent secondary indexes — scalar bitmaps, BM25 Okapi full-text, HNSW/IVF vector search, and CSR graph indexes — onto Parquet data that already lives in object storage, and exposes all of it through standard SQL (DataFusion) with pgvector-compatible syntax.
+
+### Deployment Modes
+
+1. **Embedded (Core)**:
+   ```
+   Application (Python / Rust / JVM) ──► BenoStreamDB Engine ──► Object Storage (S3/GCS/Azure/Local)
+   ```
+   Direct in-process database engine. Zero operational overhead, serverless-native, scales to zero.
+
+2. **Server Mode (Optional Arrow Flight SQL)**:
+   ```
+   Remote Clients ──► Arrow Flight SQL (gRPC) ──► BenoStreamDB (Single Process) ──► Object Storage
+   ```
+   Standard, high-performance network database access for polyglot clients and BI tools.
+
+3. **Distributed / Clustered**:
+   *Status: Future / Experimental (Not currently supported).* Distributed coordinator and multi-node write/compaction scheduling are under design.
 
 It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table you do not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
 
@@ -85,10 +106,10 @@ Upgrading to V3 enables row-level operations and enhanced tracking:
 
 ## 🌐 REST APIs (OpenSearch & Qdrant)
 
-BenoStreamDB includes a highly optimized HTTP frontend (`benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
+BenoStreamDB includes an optional contrib HTTP search gateway (`contrib/benostreamdb-search`, crate `benostreamdb-search`) that exposes the core engine over standard REST protocols. By translating incoming requests into native BenoStreamDB columnar operations, it allows you to use existing tools without running traditional clustered databases.
 
-- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search. (e.g., connect Kibana or Grafana directly). See the [OpenSearch compatibility matrix](docs/OPENSEARCH_COMPATIBILITY.md).
-- **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation covering collections, points, payloads, vectors, aliases, and the universal query API. Qdrant's unstructured JSON payloads are dynamically inferred and converted into highly compressed Arrow columns on write. See the [Qdrant compatibility matrix](docs/QDRANT_COMPATIBILITY.md) for the exact supported surface and known approximations.
+- **OpenSearch / Elasticsearch 7.10 API (Port 9200)**: Drop-in compatibility for standard text indexing, bulk writes, and keyword search (e.g., connect Kibana or Grafana directly). See the [OpenSearch compatibility matrix](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md).
+- **Qdrant Vector API (Port 6333)**: Qdrant v1.x REST emulation covering collections, points, payloads, vectors, aliases, and the universal query API. Qdrant's unstructured JSON payloads are dynamically inferred and converted into highly compressed Arrow columns on write. See the [Qdrant compatibility matrix](contrib/benostreamdb-search/docs/QDRANT_COMPATIBILITY.md) for the exact supported surface and known approximations.
 
 Both APIs are hosted concurrently from a single binary, completely share the exact same underlying `AppState` and data files, and require zero data duplication. You can write a collection of embeddings via the Qdrant API and instantly query it via the OpenSearch API!
 
@@ -112,7 +133,7 @@ docker run -d --name benostreamdb \
   -p 50051:50051 \
   benostreamdb/quickstart:latest
 
-# Or Full-Stack Compose (MinIO S3 + Nessie Catalog + BenoStreamDB)
+# Or Full-Stack Compose (RustFS S3 + Nessie Catalog + BenoStreamDB)
 docker compose -f docker/docker-compose.quickstart.yml up -d
 ```
 
@@ -623,7 +644,7 @@ benostream.gpu-device=cuda
 ```
 
 ### Arrow Flight SQL Gateway
-BenoStreamDB provides a high-performance Arrow Flight SQL server (`benostreamdb-flight`) running over gRPC (port 50051). This enables any JDBC, ODBC, ADBC, or Arrow-native client (including BI tools and distributed query engines) to query BenoStreamDB with zero-copy Arrow serialization and native index pushdown.
+BenoStreamDB provides an optional high-performance Arrow Flight SQL server (`server/flight_sql`, crate `benostreamdb-flight`) running over gRPC (port 50051). This enables any JDBC, ODBC, ADBC, or Arrow-native client (including BI tools and distributed query engines) to query BenoStreamDB with zero-copy Arrow serialization and native index pushdown.
 
 ```bash
 cargo run -p benostreamdb-flight
@@ -719,12 +740,14 @@ benostreamdb/
 │   ├── python/                 # PyO3 bindings (table, graph, session, catalogs)
 │   ├── python_distance.rs      # Vector distance API
 │   └── python_gpu_context.rs   # GPU device management
-├── benostreamdb-flight/        # Arrow Flight SQL gRPC server
-├── benostreamdb-search/        # OpenSearch 7.10 & Qdrant REST search gateway
+├── benostream-gpu-ann/         # GPU-accelerated ANN kernels (CUDA, Metal, Vulkan)
+├── server/
+│   └── flight_sql/             # Arrow Flight SQL gRPC server (`benostreamdb-flight`)
+├── contrib/
+│   └── benostreamdb-search/    # OpenSearch 7.10 & Qdrant REST gateway (`benostreamdb-search`)
 ├── dbt-benostreamdb/           # Official dbt adapter (Arrow Flight SQL)
-├── REDACTED/    # Enterprise extensions (Continuous Indexing, Enterprise Security)
-├── spark-benostreamdb/         # Spark connector (Java)
-├── trino-benostreamdb/         # Trino connector (Java)
+├── spark-benostreamdb/         # Apache Spark connector (Java, Spark 3.5 / 4.0 / 4.1)
+├── trino-benostreamdb/         # Trino connector (Java SPI) + `etc/` configuration templates
 ├── tests/
 │   ├── integration/            # Infrastructure integration tests
 │   ├── benchmarks/             # Performance benchmarks
@@ -734,7 +757,7 @@ benostreamdb/
 
 ## 🔎 Search API (OpenSearch / Elasticsearch 7.10-compatible)
 
-BenoStreamDB ships an optional add-on, **`bsdb-search`** (`benostreamdb-search`),
+BenoStreamDB ships an optional contrib add-on, **`bsdb-search`** (`contrib/benostreamdb-search`, crate `benostreamdb-search`),
 that serves an **OpenSearch 1.x / Elasticsearch 7.10**-compatible REST API on top of
 the engine — plus a **Qdrant**-compatible API for vector workloads. It is built for
 website search, document catalogs, and knowledge bases where a 50–200 ms query latency
@@ -769,32 +792,25 @@ This will automatically generate the configuration file and start the service. S
 
 **Not supported (v1):** per-document delete (501, append-only), aggregations, aliases,
 reindex, ILM, snapshots, auth, multi-node. See
-[docs/OPENSEARCH_COMPATIBILITY.md](docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
+[contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
 [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete quickstart.
 
 ## 📈 Roadmap
 
-### ✅ Completed (Core Foundation & Scale Testing)
-- [x] **Core Storage**: Hybrid segment format (Parquet + indexes) & Iceberg V2/V3 Manifest management.
-- [x] **Operations**: Compaction engine, Maintenance operations, Cloud-agnostic distributed locking, & Optimistic Concurrency Control (OCC).
-- [x] **Query Engine**: Native SQL support (DataFusion), Index Nested Loop Join, pgvector-compatible operators.
-- [x] **Catalog**: Multi-catalog support (Nessie, REST, AWS Glue, Hive Metastore, Unity; Polaris & Lakekeeper via the REST catalog's OAuth2 client-credentials flow).
-- [x] **Vector Search**: Multi-backend GPU support (CUDA, ROCm, Metal, XPU), TurboQuant™ (TQ4/TQ8), Hybrid vector + BM25 search (RRF).
-- [x] **Advanced Search & Query**: Zero-Copy Arrow IPC Vector Index traversal, LRU index caching, Async Ingest Memory Buffer & WAL.
-- [x] **Graph RAG & Analytics**: Native graph analytics on Iceberg edge tables (PageRank, personalized PageRank, connected components, Louvain/Leiden communities, shortest paths, and GraphRAG-style DRIFT search).
-- [x] **APIs & Gateways**: OpenSearch 7.10 & Qdrant REST APIs (`benostreamdb-search`), Arrow Flight SQL Gateway (`benostreamdb-flight`).
-- [x] **Connectors**: Spark (V2) & Trino (SPI) connectors, Python Vector Distance API, Official dbt adapter.
-- [x] **Benchmarking & Validation**: Historical 100k / 1M doc runs vs OpenSearch and the 4 GB RAM matrix — **superseded**; the only benchmark we stand behind is the full-site Wikipedia Graph-RAG demo (see the Performance section above).
-- [x] **Lifecycle Verification**: Streaming Commit & Delete Lifecycle Verification (Iceberg V2 position delete masking in vector graph scans).
+### ✅ Production Ready Foundations
+- [x] **Core Storage & Concurrency**: Hybrid segment format (Parquet + indexes), Iceberg V2/V3 manifests, atomic `PendingWrite` WAL buffer, `maintenance_lock` barriers, OCC commits.
+- [x] **Vector Search Overlays**: Zero-copy Arrow IPC HNSW & IVF-PQ, TurboQuant™ (TQ4/TQ8), SIMD intrinsics, GPU acceleration (`benostream-gpu-ann`: CUDA, Metal, Vulkan).
+- [x] **Text & Scalar Overlays**: Inverted BM25 Okapi indexes, Roaring Bitmap scalar indexes, Composite multi-column filters, Statistics pruning.
+- [x] **Core Graph Engine**: Zero-copy Memory-Mapped CSR Graph Index (`MmapCsrGraph`), Core Graph Traversal operator (`Table::graph_neighborhood`), Graph SQL UDFs.
+- [x] **Connectors & Gateways**: Apache Spark (`spark-benostreamdb`), Trino (`trino-benostreamdb`), dbt (`dbt-benostreamdb`), Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`).
 
-### 🔄 Active & In Progress
-- [ ] **Codebase Intelligence**: MCP Server Implementation, Git-Diff Incremental CI Indexer.
+### 📋 Active Roadmap Themes
+- [ ] **Reactive Lakehouse Streaming & Flight Subscriptions**: `Table::subscribe()` core API with live Arrow Flight push streams ("Live Queries") and predicate pushdown.
+- [ ] **Declarative Edge Tables & Multi-Table Graph Overlays**: `table_type = 'edge'` DDL, typed global URNs (`table:id`), and native DataFusion SQL graph walk functions.
+- [ ] **Domain-Specific BM25 Analyzers**: Configurable table tokenizers (CamelCase code tokenizer, multilingual Snowball stemmers, CJK segmentation).
+- [ ] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`), LangChain/LlamaIndex vector store adapters.
 
-### 📋 Planned
-- [ ] **Client Ecosystem & Packaged Distribution**: LangChain & LlamaIndex integrations.
-- [ ] **Enterprise Features [Paid]**: Row-Level Security (RLS), Dynamic Column Masking, Customer-Managed Encryption Keys (CMEK), SIEM Export, Fused SIMD Kernels.
-
-*For a detailed breakdown of all phases, see [docs/ROADMAP.md](docs/ROADMAP.md).*
+*For the complete detailed roadmap and architecture status, see [docs/ROADMAP.md](docs/ROADMAP.md).*
 
 ## 🤝 Contributing
 

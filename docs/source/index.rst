@@ -6,19 +6,20 @@ Welcome to BenoStreamDB
    :width: 300px
    :alt: BenoStreamDB Logo
 
-BenoStreamDB is a serverless, hybrid-search database optimized for high-performance vector and scalar queries directly on data lakes (S3, GCS, Azure, Local).
+BenoStreamDB is an index-overlay engine for the lakehouse. We layer reconstructible, persistent secondary indexes—HNSW/IVF vector search, BM25 full-text, and CSR graphs—directly onto Apache Iceberg tables in object storage.
 
-Built on Rust with Apache Arrow and DataFusion, it provides ultra-fast indexing and retrieval without the overhead of traditional database servers.
+Built on Rust with Apache Arrow and DataFusion, it provides ultra-fast indexing and retrieval without the overhead of traditional database servers or data duplication.
 
 Key Features
 ------------
 
-*   **Hybrid Vector Search**: Approximate Nearest Neighbor (ANN) search with HNSW-IVF.
-*   **Vectorized SQL**: Full SQL support with pgvector-compatible operators.
-*   **Storage-Native**: Native support for Iceberg and Parquet formats.
-*   **Hardware Acceleration**: Blazing fast search using CUDA, Metal, ROCm, and AVX-512.
-*   **Transactional Snapshots**: ACID-compliant updates via Optimistic Concurrency Control.
-*   **Multi-Catalog Support**: Seamless integration with AWS Glue, Nessie, and Hive Metastore.
+*   **Serverless by Default**: Run directly against object storage via an embedded library. Zero operational overhead, scales to zero.
+*   **Overlay Indexing**: Point BenoStreamDB at an existing Apache Iceberg table you do not own, and build indexes over that data in place. No data duplication.
+*   **Compatible REST APIs**: Optional HTTP search gateway that is fully compatible with OpenSearch (Elasticsearch 7.10) and Qdrant Vector REST APIs.
+*   **Hardware Accelerated**: Out-of-the-box GPU acceleration using NVIDIA CUDA, AMD ROCm, Apple Metal, and Intel XPU. Includes TurboQuant (TQ8/TQ4).
+*   **SQL & pgvector**: Unified DataFusion SQL interface. Execute vector searches using familiar pgvector syntax directly over your lakehouse.
+*   **Graph Analytics**: Traverse large-scale CSR graph indexes natively using SQL UDFs directly on your edge tables without a separate graph database.
+*   **Ecosystem Connectors**: Native connectors for Apache Spark, Trino, and a complete dbt adapter for seamless data engineering.
 
 .. toctree::
    :maxdepth: 2
@@ -39,6 +40,7 @@ Key Features
    guides/monitoring
    guides/admin_cli
    guides/graph_rag_edge_tables
+   guides/iceberg_compatibility
    guides/iceberg_v2_v3_api
    guides/pgvector_sql_guide
    guides/opensearch_compatibility

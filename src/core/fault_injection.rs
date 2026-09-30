@@ -174,8 +174,11 @@ pub fn check(point: CrashPoint) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn disarmed_check_is_ok() {
+        let _guard = TEST_LOCK.lock().unwrap();
         disarm();
         assert!(check(CrashPoint::ManifestCommit).is_ok());
         assert!(armed().is_none());
@@ -183,6 +186,7 @@ mod tests {
 
     #[test]
     fn armed_check_fires_once_then_disarms() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_hits();
         arm(CrashPoint::WalFlush);
         assert!(check(CrashPoint::WalFlush).is_err());
@@ -195,6 +199,7 @@ mod tests {
 
     #[test]
     fn armed_point_does_not_fire_at_other_points() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_hits();
         arm(CrashPoint::DataUpload);
         assert!(check(CrashPoint::ManifestCommit).is_ok());

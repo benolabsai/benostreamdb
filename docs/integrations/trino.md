@@ -7,7 +7,7 @@ The BenoStreamDB Trino connector allows you to query your datasets using distrib
 The connector is a standard Maven project.
 
 ```bash
-cd trino-benostream
+cd trino-benostreamdb
 mvn clean install -DskipTests
 ```
 

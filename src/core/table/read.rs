@@ -558,11 +558,12 @@ impl Table {
                 let idx = self.indexing.memory_index.read();
                 if let Some(mem_idx) = idx.as_ref() {
                     let filter_bitmap = if let Some(ref e) = expr {
-                        let buffer = self.write_buffer.read();
+                        let pending = self.pending_writes.read();
                         let mut bitmap = RoaringBitmap::new();
                         let mut offset = 0;
                         let planner = QueryPlanner::new();
-                        for batch in buffer.iter() {
+                        for p in pending.iter() {
+                            let batch = &p.batch;
                             if let Ok(mask) = planner.evaluate_expr(batch, e) {
                                 for i in 0..batch.num_rows() {
                                     if mask.value(i) {
@@ -589,14 +590,14 @@ impl Table {
             };
 
             if !memory_hits.is_empty() {
-                let buffer = self.write_buffer.read();
-                if let Some(first) = buffer.first() {
-                    let schema = first.schema();
-                    let batch_offsets: Vec<usize> = buffer
+                let pending = self.pending_writes.read();
+                if let Some(first) = pending.first() {
+                    let schema = first.batch.schema();
+                    let batch_offsets: Vec<usize> = pending
                         .iter()
-                        .scan(0, |state, b| {
+                        .scan(0, |state, p| {
                             let start = *state;
-                            *state += b.num_rows();
+                            *state += p.batch.num_rows();
                             Some(start)
                         })
                         .collect();
@@ -606,8 +607,8 @@ impl Table {
                         for (i, offset) in batch_offsets.iter().enumerate().rev() {
                             if *id >= *offset {
                                 let row_idx = *id - offset;
-                                if i < buffer.len() && row_idx < buffer[i].num_rows() {
-                                    result_rows.push(buffer[i].slice(row_idx, 1));
+                                if i < pending.len() && row_idx < pending[i].batch.num_rows() {
+                                    result_rows.push(pending[i].batch.slice(row_idx, 1));
                                 }
                                 break;
                             }
@@ -743,12 +744,13 @@ impl Table {
         // --- Read from In-Memory Write Buffer ---
         let mut mem_batches = Vec::new();
         {
-            let buffer = self.write_buffer.read();
-            if !buffer.is_empty() {
+            let pending = self.pending_writes.read();
+            if !pending.is_empty() {
                 let table_schema = self.arrow_schema();
                 // Align batches to the full evolved schema first
-                let mut aligned_buffer = Vec::with_capacity(buffer.len());
-                for b in buffer.iter() {
+                let mut aligned_buffer = Vec::with_capacity(pending.len());
+                for p in pending.iter() {
+                    let b = &p.batch;
                     let aligned = if b.schema() != table_schema {
                         let mut cols = Vec::with_capacity(table_schema.fields().len());
                         for field in table_schema.fields() {

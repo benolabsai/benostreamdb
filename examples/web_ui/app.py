@@ -593,19 +593,6 @@ def _render_graphrag_results(run: "LiveRun") -> None:
         st.text(context[:4000])
 
 
-def _csr_or_sql(csr_fn, sql_fn, what: str):
-    """Run the CSR fast path; if the graph index isn't available yet — the
-    one-time v1→v2 graph-index migration runs in the background on first open —
-    fall back to the SQL BFS path and say so, instead of erroring."""
-    try:
-        return csr_fn()
-    except Exception as e:
-        if "CSR graph index" in str(e):
-            st.info(f"{what}: CSR index not ready yet (background migration in "
-                    f"progress) — using the SQL BFS fallback.")
-            return sql_fn()
-        raise
-
 
 def find_pages(term: str, limit: int = 5):
     """Engine-side entity resolution: BM25 if available, LIKE fallback."""
@@ -769,6 +756,7 @@ with TAB_GRAPHRAG:
                     edge_table=edges_t, doc_table=nodes_t,
                     mode="local", vector_column="embedding",
                     id_column="id", top_k=int(top_k), hops=int(hops),
+                    rerank_vector=True, rerank_k=int(rerank_n),
                 )
             except Exception as e:
                 r.error = e
@@ -791,45 +779,26 @@ with TAB_DRIFT:
     seeds_n = st.slider("Region seeds", 2, 10, 4, key="d_seeds")
     if st.button("Build region + search", key="d_go", type="primary") and q:
         t_e2e = time.time()
-        tmp_edges = "/tmp/hdb_demo_region"
-        tmp_comm = "file:///tmp/hdb_demo_communities"
-        shutil.rmtree(tmp_edges, ignore_errors=True)
-        shutil.rmtree("/tmp/hdb_demo_communities", ignore_errors=True)
-        with st.status("Preparing regional graph...", expanded=True) as status:
+        with st.status("Executing regional DRIFT search (Rust core + CSR)...", expanded=True) as status:
             try:
                 vec = embed_text(q)
                 hits = as_df(nodes_t.vector_search("embedding", vec, k=seeds_n)
                              if vec else find_pages(q, seeds_n))
                 seed_ids = [int(i) for i in hits["id"]][:seeds_n]
                 st.write(f"Seeds: {[lookup_titles(seed_ids).get(i, i) for i in seed_ids]}")
-                # 1-hop region via the CSR graph index (memory-mapped, ~ms/seed).
-                # The generic edges_t.subgraph() runs a SQL frontier BFS over the
-                # whole 383M-edge table (100 s+); for a 1-hop region the CSR path
-                # is the same intent and orders of magnitude faster.
-                t_expand = time.time()
-                pairs = [(int(s), int(n)) for s in seed_ids
-                         for n in edges_t.graph_neighbors(int(s), 1, graph_column="source")]
-                region = pd.DataFrame(pairs, columns=["source", "target"])
-                st.write(f"Region expansion: {time.time() - t_expand:.2f}s "
-                         f"({len(region):,} edges from {len(seed_ids)} seeds)")
-                if region.empty:
-                    st.error("Empty region.");  status.update(label="No region", state="error")
-                    st.stop()
-                region = region.head(60_000)
-                st.write(f"Region: {len(region):,} edges")
-                import pyarrow as pa
-                schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
-                rt = benostreamdb.Table.create(f"file://{tmp_edges}", schema)
-                rt.insert(pa.Table.from_pandas(region.astype("int64"), schema=schema, preserve_index=False))
-                rt.commit(); rt.wait_for_background_tasks()
-                st.write("Summarizing communities (Louvain + text rollup)...")
-                comm = rt.summarize_communities(doc_table=nodes_t,
-                                                target_uri=tmp_comm,
-                                                id_column="id", content_column="summary")
-                st.write("Running DRIFT search...")
-                res = rt.drift_search(query=q, community_table=comm,
-                                      follow_up_llm=None, n_depth=1,
-                                      k_followups=2, top_k=5, hops=1)
+                st.write("Expanding 1-hop region & summarizing communities via native Rust core...")
+                res = edges_t.regional_drift_search(
+                    query=q,
+                    doc_table=nodes_t,
+                    seed_ids=seed_ids,
+                    content_column="summary",
+                    id_column="id",
+                    max_region_edges=60_000,
+                    n_depth=1,
+                    k_followups=2,
+                    top_k=5,
+                    hops=1,
+                )
                 status.update(label="DRIFT complete", state="complete")
                 nodes_found = res.get("all_discovered_nodes", [])
                 titles = lookup_titles([int(n) for n in nodes_found][:80])
@@ -867,26 +836,19 @@ with TAB_TRAVERSAL:
             st.write("Resolved:", [titles.get(i, i) for i in ids])
             try:
                 if op == "shortest_path" and len(ids) == 2:
-                    path = _csr_or_sql(
-                        lambda: [int(n) for n in edges_t.shortest_path(ids[0], ids[1], graph_column="source")],
-                        lambda: [int(n) for n in as_df(edges_t.shortest_path(ids[0], ids[1]))["node"].tolist()],
-                        "shortest_path")
+                    res = edges_t.shortest_path(ids[0], ids[1], graph_column="source")
+                    path = [int(n) for n in res.nodes]
                     pt = lookup_titles(path)
                     st.write(f"Path ({len(path)} hops):", " → ".join(str(pt.get(p, p)) for p in path))
                     st.graphviz_chart(graphviz_from_edges(list(zip(path[:-1], path[1:])), pt))
                 elif op == "connecting_paths" and len(ids) == 2:
-                    eps = _csr_or_sql(
-                        lambda: [(int(u), int(v)) for u, v in edges_t.connecting_paths(ids, graph_column="source")],
-                        lambda: [(int(r["source"]), int(r["target"]))
-                                 for _, r in as_df(edges_t.connecting_paths(ids)).iterrows()],
-                        "connecting_paths")
+                    res = edges_t.connecting_paths(ids, graph_column="source")
+                    eps = [(int(u), int(v)) for u, v in res.edges]
                     st.write(f"{len(eps)} connecting edges")
                     st.graphviz_chart(graphviz_from_edges(eps[:120], lookup_titles({u for u, v in eps} | {v for u, v in eps})))
                 elif op == "graph_neighbors":
-                    ns = _csr_or_sql(
-                        lambda: [int(n) for n in edges_t.graph_neighbors(ia, graph_column="source")],
-                        lambda: [int(n) for n in as_df(edges_t.graph_neighbors(ia))["neighbor"].tolist()],
-                        "graph_neighbors")
+                    res = edges_t.graph_neighbors(ia, graph_column="source")
+                    ns = [int(n) for n in res.neighbors]
                     nt = lookup_titles(ns)
                     st.write("Neighbors:", ", ".join(str(nt.get(n, n)) for n in ns[:50]))
                     st.graphviz_chart(graphviz_from_edges([(ia, n) for n in ns[:60]], {**nt, ia: titles.get(ia, ia)}))
