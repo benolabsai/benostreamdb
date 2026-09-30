@@ -150,6 +150,14 @@ impl BenoStreamSession {
             rewritten_plan,
             datafusion::logical_expr::LogicalPlan::Ddl(_)
         ) {
+            // DDL statements have no result set. Execute them here so the side
+            // effect is applied: ADBC's ExecuteQuery cancels the follow-up DoGet
+            // when the schema is empty, so the statement would otherwise never run.
+            self.ctx
+                .execute_logical_plan(rewritten_plan)
+                .await?
+                .collect()
+                .await?;
             return Ok(std::sync::Arc::new(arrow::datatypes::Schema::empty()));
         }
         // We can create a DataFrame without executing the plan to get the schema
