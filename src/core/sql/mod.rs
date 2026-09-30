@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+pub mod catalog_ddl;
 pub mod graph_udf;
 pub mod literal;
 pub mod merge_into;
@@ -269,6 +270,49 @@ impl TableProvider for BenoStreamTableProvider {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    /// Support `INSERT INTO` by writing the input rows to the table and
+    /// committing them, so they are immediately visible to subsequent scans.
+    async fn insert_into(
+        &self,
+        state: &dyn datafusion::catalog::Session,
+        input: Arc<dyn ExecutionPlan>,
+        _insert_op: datafusion::logical_expr::dml::InsertOp,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let task_ctx = state.task_ctx();
+        let batches = datafusion::physical_plan::collect(input, task_ctx)
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        self.table
+            .write_async(batches)
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+        self.table
+            .commit_async()
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+
+        // Report the affected row count as a single-column result.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "count",
+            datafusion::arrow::datatypes::DataType::UInt64,
+            false,
+        )]));
+        let array: datafusion::arrow::array::ArrayRef =
+            Arc::new(datafusion::arrow::array::UInt64Array::from(vec![
+                rows as u64,
+            ]));
+        let batch = arrow::record_batch::RecordBatch::try_new(schema.clone(), vec![array])
+            .map_err(|e| datafusion::error::DataFusionError::Execution(e.to_string()))?;
+        let exec = datafusion::datasource::memory::MemorySourceConfig::try_new_exec(
+            &[vec![batch]],
+            schema,
+            None,
+        )?;
+        Ok(exec as Arc<dyn ExecutionPlan>)
     }
 
     async fn scan(
