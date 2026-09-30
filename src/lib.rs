@@ -32,8 +32,6 @@ use std::sync::Arc;
 extern crate log;
 pub mod core;
 
-pub mod enterprise;
-
 pub mod telemetry;
 
 // Include the generated version from build.rs
@@ -54,7 +52,7 @@ pub mod python_distance;
 pub use crate::core::catalog::{create_catalog, create_catalog_async, Catalog, CatalogType};
 pub use crate::core::error::{BenoStreamError, Result};
 pub use crate::core::index::VectorMetric;
-pub use crate::core::table::{Table, VectorSearchParams};
+pub use crate::core::table::{GraphNeighborhoodOptions, Table, VectorSearchParams};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

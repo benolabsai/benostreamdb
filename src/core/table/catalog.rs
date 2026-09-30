@@ -580,7 +580,7 @@ impl Table {
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         manifest_manager
-            .commit_imported_entries(all_entries)
+            .commit_synced_snapshot(all_entries)
             .await?;
 
         Ok(())

@@ -90,7 +90,7 @@ BenoStreamDB is designed to be highly configurable through environment variables
 
 | Variable | Description | Default |
 |:---|:---|:---|
-| `AWS_ENDPOINT_URL` | Custom S3 endpoint URL (used for MinIO, LocalStack, Ceph). | AWS default |
+| `AWS_ENDPOINT_URL` | Custom S3 endpoint URL (used for RustFS, LocalStack, Ceph). | AWS default |
 | `JAEGER_ENABLED` | Enable distributed OpenTelemetry tracing via Jaeger / OTLP. | `false` |
 
 ---
@@ -111,7 +111,7 @@ BenoStreamDB looks for this file in the following order:
 type = "s3"
 bucket = "my-data-lake"
 region = "us-east-1"
-endpoint = "http://minio:9000"
+endpoint = "http://rustfs:9000"
 
 [cache]
 memory_limit_gb = 8

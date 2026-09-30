@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # BenoStreamDB Quickstart — Full Stack
-# Single command to launch MinIO + Nessie + BenoStreamDB (all APIs)
+# Single command to launch RustFS + Nessie + BenoStreamDB (all APIs)
 #
 # Usage:
 #   docker compose -f docker-compose.quickstart.yml up
@@ -9,50 +9,50 @@
 #   http://localhost:9200   — Elasticsearch 7.10 REST API
 #   http://localhost:6333   — Qdrant REST API
 #   grpc://localhost:50051  — Arrow Flight SQL (ADBC/JDBC/ODBC)
-#   http://localhost:9000   — MinIO Console (minioadmin/minioadmin)
+#   http://localhost:9000   — RustFS Console (rustfsadmin/rustfsadmin)
 #   http://localhost:19120  — Nessie REST Catalog
 # ---------------------------------------------------------------------------
 
 services:
   # ---------------------
-  # 1. MinIO (S3)
+  # 1. RustFS (S3)
   # ---------------------
-  minio:
-    image: minio/minio:latest
-    container_name: bsdb-minio
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: bsdb-rustfs
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      - RUSTFS_ROOT_USER=rustfsadmin
+      - RUSTFS_ROOT_PASSWORD=rustfsadmin
     ports:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio-data:/data
+      - rustfs-data:/data
     command: server /data --console-address ":9001"
     networks:
       - benostream_net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/rustfs/health/live"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # MinIO bucket initialization
-  minio-init:
-    image: minio/mc:latest
-    container_name: bsdb-minio-init
+  # RustFS bucket initialization
+  rustfs-init:
+    image: rustfs/mc:latest
+    container_name: bsdb-rustfs-init
     networks:
       - benostream_net
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
-      mc alias set minio http://minio:9000 minioadmin minioadmin;
-      mc mb minio/warehouse --ignore-existing;
-      mc mb minio/benostream --ignore-existing;
-      mc policy set public minio/warehouse;
-      mc policy set public minio/benostream;
+      mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin;
+      mc mb rustfs/warehouse --ignore-existing;
+      mc mb rustfs/benostream --ignore-existing;
+      mc policy set public rustfs/warehouse;
+      mc policy set public rustfs/benostream;
       exit 0;
       "
 
@@ -71,15 +71,15 @@ services:
       - nessie.catalog.iceberg-rest.enabled=true
       - nessie.catalog.default-warehouse=warehouse
       - nessie.catalog.warehouses.warehouse.location=s3://warehouse/
-      - nessie.catalog.s3.endpoint=http://minio:9000/
-      - nessie.catalog.s3.access-key=minioadmin
-      - nessie.catalog.s3.secret-key=minioadmin
+      - nessie.catalog.s3.endpoint=http://rustfs:9000/
+      - nessie.catalog.s3.access-key=rustfsadmin
+      - nessie.catalog.s3.secret-key=rustfsadmin
       - nessie.catalog.s3.path-style-access=true
       - nessie.server.authentication.enabled=false
     networks:
       - benostream_net
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:19120/api/v2/config"]
@@ -108,9 +108,9 @@ services:
       - QDRANT_PORT=6333
       - BENOSEARCH_STORAGE_URI=s3://benostream/
       - BENOSEARCH_AUTO_REFRESH_SECS=5
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
-      - AWS_ENDPOINT=http://minio:9000
+      - AWS_ACCESS_KEY_ID=rustfsadmin
+      - AWS_SECRET_ACCESS_KEY=rustfsadmin
+      - AWS_ENDPOINT=http://rustfs:9000
       - AWS_REGION=us-east-1
       - AWS_ALLOW_HTTP=true
       - RUST_LOG=info
@@ -124,11 +124,11 @@ services:
     networks:
       - benostream_net
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
 
 volumes:
-  minio-data:
+  rustfs-data:
     driver: local
   bsdb-cache:
     driver: local

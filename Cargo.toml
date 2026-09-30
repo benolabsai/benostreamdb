@@ -1,6 +1,6 @@
 [package]
 name = "benostreamdb"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2021"
 license = "MIT AND Apache-2.0"
 authors = ["Richard Albright and BenoStreamDB Contributors"]
@@ -23,7 +23,8 @@ exclude = [
     "demo",
     "docker",
     "benchmarks",
-    "examples"
+    "examples",
+    "contrib/*"
 ]
 
 [lib]
@@ -32,9 +33,10 @@ crate-type = ["cdylib", "rlib"]
 
 [workspace]
 members = [
-    ".", "benostreamdb-flight",
-    "benostreamdb-search",
+    ".",
     "benostream-gpu-ann",
+    "server/flight_sql",
+    "contrib/benostreamdb-search",
 ]
 
 
@@ -49,7 +51,6 @@ default = []
 # NO_PANIC_POLICY.md). Off during Phase 1 remediation; CI enables it once the
 # `scripts/no_panic_check.sh` baseline reaches the documented invariant set.
 no-panic = []
-enterprise = []
 python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
 proptest = []
@@ -82,7 +83,6 @@ zstd = "0.13"
 bzip2 = "0.4.4"
 quick-xml = { version = "0.31", features = ["serialize"] }
 hex = "0.4"
-ed25519-dalek = "2.1"
 bytemuck = "1.16"
 
 # async runtime

@@ -102,6 +102,7 @@ impl Table {
     }
 
     pub async fn add_index(&self, column: String, algorithm: IndexAlgorithm) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         let manifest = self.manifest().await?;
         let latest_schema = match manifest.schemas.last() {
             Some(s) => s,
@@ -245,6 +246,7 @@ impl Table {
     /// Remove all indexing strategies from a column.
     /// This is an atomic operation that commits a new manifest version.
     pub async fn drop_index(&self, column: String) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         // Collect all file paths associated with this index from the current manifest.
         // NOTE: entries live in the tiered manifest list, not inline in
         // `Manifest.entries` (which is empty for tiered manifests), so we must
@@ -385,7 +387,7 @@ impl Table {
     // Backfill
     // -----------------------------------------------------------------------
 
-    pub(crate) fn backfill_indexes(&self, target_columns: Vec<String>) -> Result<()> {
+    pub fn backfill_indexes(&self, target_columns: Vec<String>) -> Result<()> {
         self.runtime()
             .block_on(self.backfill_indexes_async(target_columns))
     }

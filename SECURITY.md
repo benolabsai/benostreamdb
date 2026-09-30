@@ -52,7 +52,7 @@ PGP key will be published at [https://benostreamdb.org/.well-known/security.txt]
 - Social engineering or physical attacks
 - Denial-of-service attacks against demo/development infrastructure
 - Issues requiring physical access to deployment hardware
-- Browser-based vulnerabilities in the MinIO web console (upstream MinIO issue)
+- Browser-based vulnerabilities in the RustFS web console (upstream RustFS issue)
 
 ### Response Expectations
 

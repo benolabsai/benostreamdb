@@ -17,6 +17,7 @@ setup(
     include_package_data=True,
     install_requires=[
         "dbt-core>=1.8.0",
+        "benostreamdb>=0.11.1",
         "adbc-driver-flightsql>=1.12.0",
         "pyarrow>=15.0.0",
         "pandas",

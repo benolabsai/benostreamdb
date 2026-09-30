@@ -150,16 +150,6 @@ pub enum BenoStreamError {
     /// Iceberg equality-delete position mismatch.
     IcebergDeleteError { reason: String },
 
-    // ─── License errors ─────────────────────────────────────────────
-    /// Invalid license key format.
-    InvalidLicense { reason: String },
-
-    /// License has expired.
-    LicenseExpired { expired_at: String },
-
-    /// Enterprise feature requires valid license.
-    EnterpriseFeatureRequired { feature: String },
-
     // ─── Embedding errors ───────────────────────────────────────────
     /// Embedding API returned invalid / unexpected response.
     EmbeddingApiError { reason: String },
@@ -306,14 +296,6 @@ impl fmt::Display for BenoStreamError {
             }
             Self::IcebergDeleteError { reason } => {
                 write!(f, "Iceberg delete error: {reason}")
-            }
-
-            Self::InvalidLicense { reason } => write!(f, "Invalid license: {reason}"),
-            Self::LicenseExpired { expired_at } => {
-                write!(f, "License expired at {expired_at}")
-            }
-            Self::EnterpriseFeatureRequired { feature } => {
-                write!(f, "Enterprise feature '{feature}' requires valid license")
             }
 
             Self::EmbeddingApiError { reason } => {

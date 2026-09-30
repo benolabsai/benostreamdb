@@ -466,7 +466,7 @@ writers against shared object storage, under randomized failure.
   compact/vacuum) with injected commit conflicts and object-store errors.
 - Assert: no lost updates, no torn snapshots, no orphaned-but-referenced
   artifacts, deterministic conflict resolution.
-- A shared-object-store variant (MinIO/S3) rather than only local FS.
+- A shared-object-store variant (RustFS/S3) rather than only local FS.
 
 **Existing assets:** [`tests/test_concurrent_writers.rs`](../tests/test_concurrent_writers.rs:44),
 [`tests/test_concurrency_robust.rs`](../tests/test_concurrency_robust.rs),
@@ -774,9 +774,9 @@ workload stays green.
 `test_multi_writer_concurrency`, `test_crash_injection`, `test_merge_integration`,
 and `verify_delete_correctness` all pass.
 
-### 8.9 S3/MinIO delete path — delete files were written to the local FS
+### 8.9 S3/RustFS delete path — delete files were written to the local FS
 
-**Symptom.** Running the WS3 harness against a real MinIO found that
+**Symptom.** Running the WS3 harness against a real RustFS found that
 `delete_async` had no effect on an S3-backed table: the row count was unchanged
 after a delete, and no delete file appeared in the bucket.
 
@@ -800,7 +800,7 @@ delete-file URI against the table root for any scheme. Callers updated:
 **Verification.** New gated tests
 [`s3_shared_store_multi_writer_no_lost_updates`](../tests/test_multi_writer_concurrency.rs:465)
 and [`s3_full_lifecycle_round_trip`](../tests/test_multi_writer_concurrency.rs:530)
-run against MinIO (`docker compose -f docker-compose-minio-nessie.yml up -d`,
+run against RustFS (`docker compose -f docker-compose-rustfs-nessie.yml up -d`,
 `AWS_ENDPOINT_URL=http://localhost:9000`, bucket `mstar-staging`) and pass:
 write → delete → compact → vacuum over a real S3 store. The delete file now
 lands in the bucket. The full local-FS suite stays green.

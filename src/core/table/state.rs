@@ -104,7 +104,7 @@ impl Table {
 
     /// Get the number of rows currently in the write buffer (not yet flushed).
     pub fn write_buffer_row_count(&self) -> usize {
-        self.write_buffer.read().iter().map(|b| b.num_rows()).sum()
+        self.pending_writes.read().iter().map(|p| p.batch.num_rows()).sum()
     }
 
     /// Get the list of currently indexed column names.

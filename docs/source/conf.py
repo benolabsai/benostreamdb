@@ -73,8 +73,7 @@ html_theme = 'furo'
 html_static_path = ['_static']
 
 html_theme_options = {
-    "light_logo": "logo.png",
-    "dark_logo": "logo.png",
+    "default_mode": "light",
     "footer_icons": [
         {
             "name": "GitHub",
@@ -88,6 +87,10 @@ html_theme_options = {
         },
     ],
 }
+
+html_css_files = [
+    'custom.css',
+]
 
 # Autodoc configuration
 autodoc_member_order = 'bysource'

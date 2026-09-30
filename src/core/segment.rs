@@ -15,6 +15,19 @@ use object_store::ObjectStore;
 use parquet::file::statistics::Statistics as ParquetStats;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::OnceLock;
+use rayon::ThreadPool;
+
+fn indexing_pool() -> &'static ThreadPool {
+    static POOL: OnceLock<ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("indexing-rayon-{}", i))
+            .num_threads(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 8))
+            .build()
+            .expect("Failed to build indexing thread pool")
+    })
+}
 
 pub struct HybridSegmentWriter {
     pub(crate) config: SegmentConfig,
@@ -785,22 +798,24 @@ impl HybridSegmentWriter {
     /// Build indexes for a batch (can be called asynchronously after write_batch).
     /// This is the expensive operation that should run in background.
     pub fn build_indexes(&self, batch: &RecordBatch, row_offset: usize) -> Result<()> {
-        tracing::info!(
-            "Building indexes for batch of {} rows at offset {}",
-            batch.num_rows(),
-            row_offset
-        );
-        let schema = batch.schema();
-        let _fields = schema.fields();
+        tokio::task::block_in_place(|| {
+            indexing_pool().install(|| {
+                tracing::info!(
+                    "Building indexes for batch of {} rows at offset {}",
+                    batch.num_rows(),
+                    row_offset
+                );
+                let schema = batch.schema();
+                let _fields = schema.fields();
 
-        // Build Indexes
+                // Build Indexes
 
-        batch
-            .schema()
-            .fields()
-            .iter()
-            .enumerate()
-            .collect::<Vec<_>>()
+                batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .collect::<Vec<_>>()
             .into_par_iter()
             .try_for_each(|(i, field)| {
                 let col_name = field.name();
@@ -919,7 +934,9 @@ impl HybridSegmentWriter {
                 )
             })?;
 
-        Ok(())
+                Ok(())
+            }) // end indexing_pool
+        }) // end block_in_place
     }
 
     /// Build index for a single column.

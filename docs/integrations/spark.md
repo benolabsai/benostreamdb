@@ -4,10 +4,10 @@ The BenoStreamDB Spark connector enables you to use Apache Spark for Batch Proce
 
 ## Building
 
-The connector is a Maven project located in `spark-benostream`.
+The connector is a Maven project located in `spark-benostreamdb`.
 
 ```bash
-cd spark-benostream
+cd spark-benostreamdb
 mvn clean install -DskipTests
 ```
 

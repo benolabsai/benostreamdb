@@ -16,11 +16,12 @@ pub mod shortest_path;
 pub mod strongly_connected_components;
 pub mod subgraph;
 use datafusion::logical_expr::AggregateUDF;
-pub use jaccard_coefficient::JaccardCoefficientUDF;
 
 pub use connected_components::ConnectedComponentsUDF;
 pub use degree_centrality::DegreeCentralityUDF;
+pub use drift_search::{DriftSearchUDF, RegionalDriftUDF};
 pub use graph_neighbors::GraphNeighborsUDF;
+pub use jaccard_coefficient::JaccardCoefficientUDF;
 pub use label_propagation::LabelPropagationUDF;
 pub use leiden_communities::LeidenCommunitiesUDF;
 pub use louvain_communities::LouvainCommunitiesUDF;
@@ -40,6 +41,8 @@ pub fn all_graph_aggregates() -> Vec<AggregateUDF> {
         AggregateUDF::new_from_impl(subgraph::SubgraphUDF::new()),
         AggregateUDF::new_from_impl(subgraph::ConnectingPathsUDF::new()),
         AggregateUDF::new_from_impl(shortest_path::ShortestPathUDF::new()),
+        AggregateUDF::new_from_impl(drift_search::DriftSearchUDF::new()),
+        AggregateUDF::new_from_impl(drift_search::RegionalDriftUDF::new()),
         AggregateUDF::new_from_impl(connected_components::ConnectedComponentsUDF::new()),
         AggregateUDF::new_from_impl(degree_centrality::DegreeCentralityUDF::new()),
         AggregateUDF::new_from_impl(jaccard_coefficient::JaccardCoefficientUDF::new()),

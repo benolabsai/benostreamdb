@@ -13,7 +13,11 @@ use super::super::types::*;
 use super::{CommitMetadata, ManifestManager};
 
 fn is_already_exists(err: &object_store::Error) -> bool {
-    err.to_string().contains("already exists")
+    matches!(err, object_store::Error::AlreadyExists { .. })
+        || err.to_string().contains("already exists")
+        || err.to_string().contains("409")
+        || err.to_string().contains("Conflict")
+        || err.to_string().contains("PreconditionFailed")
 }
 
 /// Minimum age (seconds) before vacuum will delete an unreferenced file.
@@ -521,7 +525,18 @@ impl ManifestManager {
                 .collect();
 
             for entry in &entries {
-                entry_map.insert(entry.file_path.clone(), entry.clone());
+                // BUGFIX: Only update the entry if it STILL exists in the latest manifest.
+                // If it doesn't exist, it means a concurrent compaction or delete removed it
+                // while we were building indexes in the background. Blindly inserting it
+                // here would resurrect deleted data and duplicate records!
+                if entry_map.contains_key(&entry.file_path) {
+                    entry_map.insert(entry.file_path.clone(), entry.clone());
+                } else {
+                    tracing::debug!(
+                        "Skipping index update for segment {} because it was concurrently removed",
+                        entry.file_path
+                    );
+                }
             }
 
             let merged_entries: Vec<ManifestEntry> = entry_map.into_values().collect();
@@ -594,6 +609,102 @@ impl ManifestManager {
         }
         Err(anyhow::anyhow!(
             "Failed to commit imported entries after {} attempts",
+            max_retries
+        ))
+    }
+
+    /// Commit an externally synchronized Iceberg snapshot with full reconciliation.
+    /// The provided entries represent the authoritative active data files of the snapshot.
+    /// Files that were deleted or compacted away by the external lakehouse engine are retired,
+    /// while local secondary indexes (HNSW, BM25) on surviving files are preserved.
+    pub async fn commit_synced_snapshot(&self, snapshot_entries: Vec<ManifestEntry>) -> Result<Manifest> {
+        let max_retries = 10;
+        let mut attempt = 0;
+        loop {
+            let (current_manifest, current_ver) = self.load_latest().await?;
+            let all_existing = self.load_all_entries(&current_manifest).await?;
+
+            let mut existing_map: HashMap<String, ManifestEntry> = all_existing
+                .into_iter()
+                .map(|e| (e.file_path.clone(), e))
+                .collect();
+
+            let mut final_entries = Vec::with_capacity(snapshot_entries.len());
+            for mut entry in snapshot_entries.clone() {
+                if let Some(existing) = existing_map.remove(&entry.file_path) {
+                    if entry.index_files.is_empty() && !existing.index_files.is_empty() {
+                        entry.index_files = existing.index_files;
+                    }
+                }
+                final_entries.push(entry);
+            }
+
+            let new_ver = current_ver + 1;
+            let mut new_manifest = Manifest::new_with_spec(
+                new_ver,
+                final_entries,
+                Some(current_ver),
+                current_manifest.schemas.clone(),
+                current_manifest.current_schema_id,
+                current_manifest.partition_spec.clone(),
+            );
+
+            new_manifest.partition_specs = current_manifest.partition_specs.clone();
+            new_manifest.default_spec_id = current_manifest.default_spec_id;
+            new_manifest.properties = current_manifest.properties.clone();
+            new_manifest.sort_orders = current_manifest.sort_orders.clone();
+            new_manifest.default_sort_order_id = current_manifest.default_sort_order_id;
+            new_manifest.manifest_list_path = current_manifest.manifest_list_path.clone();
+            new_manifest.format_version = current_manifest.format_version;
+            new_manifest.delete_files = current_manifest.delete_files.clone();
+
+            let filename = format!("v{}.json", new_ver);
+            let path = self.manifest_dir.child(filename);
+            let bytes = serde_json::to_vec_pretty(&new_manifest)?;
+
+            use object_store::{PutMode, PutOptions};
+            let opts = PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            };
+
+            match self.store.put_opts(&path, bytes.into(), opts).await {
+                Ok(_) => {
+                    tracing::info!(
+                        "Synchronized Iceberg snapshot: {} active files in Manifest v{}",
+                        snapshot_entries.len(),
+                        new_ver
+                    );
+                    let dir_key = self.get_dir_cache_key();
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
+                    let file_key = self.get_cache_key(&path);
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
+                    return Ok(new_manifest);
+                }
+                Err(e) if is_already_exists(&e) => {
+                    attempt += 1;
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    tracing::warn!(
+                        "Manifest conflict during snapshot sync. Retrying attempt {}/{}",
+                        attempt,
+                        max_retries
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "Failed to commit synchronized snapshot after {} attempts",
             max_retries
         ))
     }
@@ -740,17 +851,21 @@ impl ManifestManager {
         for v in start_ver..=latest_ver {
             let m = match self.load_version(v).await {
                 Ok(m) => m,
-                Err(_) => continue, // Skip missing versions in history gaps
+                Err(e) => {
+                    // Only skip if the version file genuinely does not exist (e.g. gap in history)
+                    if let Some(object_store::Error::NotFound { .. }) = e.downcast_ref::<object_store::Error>() {
+                        continue;
+                    }
+                    return Err(anyhow::anyhow!("Vacuum aborted: failed to load manifest v{}: {}", v, e));
+                }
             };
 
-            // Collect all data and index files. Entries live in the tiered
-            // manifest list, NOT inline in `Manifest.entries` (which is empty
-            // for tiered manifests) — iterating `m.entries` directly would leave
-            // `active_files` empty and make vacuum delete EVERY data file.
-            let entries = match self.load_all_entries(&m).await {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+            // Collect all data, index, and delete files.
+            // If reading entries fails, abort immediately (fail-closed) so we never
+            // compute an incomplete live-file set and delete live data.
+            let entries = self.load_all_entries(&m).await
+                .map_err(|e| anyhow::anyhow!("Vacuum aborted: failed to load entries for v{}: {}", v, e))?;
+
             for entry in entries {
                 active_files.insert(entry.file_path.clone());
                 for index in entry.index_files {
@@ -766,10 +881,13 @@ impl ManifestManager {
                 active_files.insert(del.file_path.clone());
             }
 
-            // Keep the manifest file itself
+            // Keep the manifest file itself and its manifest list (if tiered)
             let m_name = format!("v{}.json", v);
             let m_path = self.manifest_dir.child(m_name);
             manifest_files_to_keep.insert(m_path.to_string());
+            if let Some(ref mlp) = m.manifest_list_path {
+                manifest_files_to_keep.insert(mlp.clone());
+            }
         }
 
         // WS2 crash boundary: the delete set is decided but nothing is deleted
@@ -819,20 +937,25 @@ impl ManifestManager {
         // 3. Re-validate against the LATEST manifest to close the GC-vs-writer
         //    race: a writer may have committed a new file (or a new manifest
         //    version) after we computed the retention window above.
+        //    Must fail-closed if re-validation fails.
         let (latest_m, latest_ver_now) = self.load_latest().await?;
-        if let Ok(latest_entries) = self.load_all_entries(&latest_m).await {
-            for entry in latest_entries {
-                active_files.insert(entry.file_path.clone());
-                for index in entry.index_files {
-                    active_files.insert(index.file_path.clone());
-                }
-                for del in entry.delete_files {
-                    active_files.insert(del.file_path.clone());
-                }
+        let latest_entries = self.load_all_entries(&latest_m).await
+            .map_err(|e| anyhow::anyhow!("Vacuum aborted: failed to load latest manifest entries during revalidation: {}", e))?;
+
+        for entry in latest_entries {
+            active_files.insert(entry.file_path.clone());
+            for index in entry.index_files {
+                active_files.insert(index.file_path.clone());
+            }
+            for del in entry.delete_files {
+                active_files.insert(del.file_path.clone());
             }
         }
         for del in &latest_m.delete_files {
             active_files.insert(del.file_path.clone());
+        }
+        if let Some(ref mlp) = latest_m.manifest_list_path {
+            manifest_files_to_keep.insert(mlp.clone());
         }
         let start_ver_now = latest_ver_now
             .saturating_sub(retention_versions as u64 - 1)
@@ -868,5 +991,108 @@ impl ManifestManager {
         }
 
         Ok(deleted_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    #[tokio::test]
+    async fn test_commit_synced_snapshot_reconciles() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let manager = ManifestManager::new(store.clone(), "", "memory:///table");
+
+        // 1. Initial snapshot with files A and B
+        let entry_a = ManifestEntry {
+            file_path: "file_a.parquet".to_string(),
+            file_size_bytes: 100,
+            index_files: vec![crate::core::manifest::IndexFile {
+                file_path: "file_a.hnsw".to_string(),
+                index_type: "hnsw".to_string(),
+                column_name: Some("vector".to_string()),
+                blob_type: None,
+                offset: None,
+                length: None,
+            }],
+            ..Default::default()
+        };
+        let entry_b = ManifestEntry {
+            file_path: "file_b.parquet".to_string(),
+            file_size_bytes: 200,
+            ..Default::default()
+        };
+
+        manager.commit(&[entry_a, entry_b], &[], CommitMetadata::default()).await?;
+
+        // 2. External engine compacted: file_b was deleted, file_c was created, file_a was preserved.
+        let new_snapshot_entries = vec![
+            ManifestEntry {
+                file_path: "file_a.parquet".to_string(),
+                file_size_bytes: 100,
+                // Note: external engine does not know about BenoStreamDB's local hnsw index
+                ..Default::default()
+            },
+            ManifestEntry {
+                file_path: "file_c.parquet".to_string(),
+                file_size_bytes: 300,
+                ..Default::default()
+            },
+        ];
+
+        let synced_manifest = manager.commit_synced_snapshot(new_snapshot_entries).await?;
+        assert_eq!(synced_manifest.entries.len(), 2);
+
+        let files: Vec<String> = synced_manifest.entries.iter().map(|e| e.file_path.clone()).collect();
+        assert!(files.contains(&"file_a.parquet".to_string()));
+        assert!(files.contains(&"file_c.parquet".to_string()));
+        assert!(!files.contains(&"file_b.parquet".to_string()), "file_b was compacted away and must be retired");
+
+        // Verify local secondary index on file_a was preserved
+        let entry_a_synced = synced_manifest.entries.iter().find(|e| e.file_path == "file_a.parquet").unwrap();
+        assert_eq!(entry_a_synced.index_files.len(), 1, "local secondary index on file_a must be carried forward");
+        assert_eq!(entry_a_synced.index_files[0].index_type, "hnsw");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_fail_closed_on_error() -> Result<()> {
+        let store = Arc::new(InMemory::new());
+        let test_id = uuid::Uuid::new_v4();
+        let base = format!("table_vac_{test_id}");
+        let uri = format!("memory:///{base}");
+        let manager = ManifestManager::new(store.clone(), &base, &uri);
+
+        let entry = ManifestEntry {
+            file_path: format!("{base}/live_data.parquet"),
+            file_size_bytes: 100,
+            ..Default::default()
+        };
+        // Commit v1
+        manager.commit(&[entry.clone()], &[], CommitMetadata::default()).await?;
+
+        // Write live data file in store
+        let data_path = object_store::path::Path::from(format!("{base}/live_data.parquet"));
+        store.put(&data_path, b"live data".to_vec().into()).await?;
+
+        // Corrupt v1 manifest to trigger load failure
+        let m_v1_path = object_store::path::Path::from(format!("{base}/_manifest/v1.json"));
+        store.put(&m_v1_path, b"invalid json content".to_vec().into()).await?;
+
+        // Invalidate caches for this specific dir
+        let dir_key = manager.get_dir_cache_key();
+        crate::core::cache::LATEST_VERSION_CACHE.invalidate(&dir_key).await;
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+
+        // Vacuum should fail-closed!
+        let res = manager.vacuum(1).await;
+        assert!(res.is_err(), "vacuum must abort when manifest is unreadable");
+
+        // Live data file MUST NOT be deleted!
+        assert!(store.get(&data_path).await.is_ok(), "live data file must be intact when vacuum aborts");
+
+        Ok(())
     }
 }

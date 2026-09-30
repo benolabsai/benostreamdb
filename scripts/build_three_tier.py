@@ -621,15 +621,17 @@ def _write_batched(table, df, name: str, batch: int) -> None:
 def main():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+    default_data_dir = os.environ.get("BENOSTREAM_DATA", os.path.expanduser("~/data/benostreamdb"))
+
     ap = argparse.ArgumentParser(description="3-tier Wikipedia Graph-RAG pipeline")
     ap.add_argument("--stages", default=",".join(ALL_STAGES),
                     help=f"comma-separated subset of {ALL_STAGES}")
-    ap.add_argument("--data-dir", default=os.path.expanduser("~/data/benostreamdb"),
+    ap.add_argument("--data-dir", default=default_data_dir,
                     help="HDD: dumps + parsed nodes/edges/sections")
-    ap.add_argument("--out-dir", default=os.path.join(repo_root, "data", "three_tier"),
-                    help="tier parquet output (SSD recommended)")
-    ap.add_argument("--table-dir", default=os.path.join(repo_root, "data", "three_tier_db"),
-                    help="BenoStreamDB table directory")
+    ap.add_argument("--out-dir", default=None,
+                    help="tier parquet output (default: <data-dir>/three_tier)")
+    ap.add_argument("--table-dir", default=None,
+                    help="BenoStreamDB table directory (default: <repo>/data/three_tier_db)")
     ap.add_argument("--workers", type=int, default=4, help="parallel parse/download workers")
     ap.add_argument("--dump-date", default=DEFAULT_DUMP_DATE)
     ap.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL)
@@ -639,7 +641,18 @@ def main():
     args = ap.parse_args()
 
     args.data_dir = os.path.abspath(args.data_dir)
+    if args.out_dir is None:
+        args.out_dir = os.environ.get(
+            "BENOSTREAM_THREE_TIER_OUT",
+            os.path.join(args.data_dir, "three_tier"),
+        )
     args.out_dir = os.path.abspath(args.out_dir)
+
+    if args.table_dir is None:
+        args.table_dir = os.environ.get(
+            "BENOSTREAM_TABLE_DIR",
+            os.path.join(repo_root, "data", "three_tier_db"),
+        )
     args.table_dir = os.path.abspath(args.table_dir)
 
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]

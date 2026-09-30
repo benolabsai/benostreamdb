@@ -16,18 +16,18 @@ WORKDIR /app
 
 # Copy workspace manifests for dependency caching
 COPY Cargo.toml Cargo.lock ./
-COPY benostreamdb-search/Cargo.toml benostreamdb-search/Cargo.toml
-COPY benostreamdb-flight/Cargo.toml benostreamdb-flight/Cargo.toml
+COPY contrib/benostreamdb-search/Cargo.toml contrib/benostreamdb-search/Cargo.toml
+COPY server/flight_sql/Cargo.toml server/flight_sql/Cargo.toml
 
 # Create stub sources for dependency layer caching and manifest validation
 RUN mkdir -p src \
     && echo "pub fn stub() {}" > src/lib.rs \
     && echo "fn main() {}" > build.rs \
-    && mkdir -p benostreamdb-search/src \
-    && echo "fn main() {}" > benostreamdb-search/src/main.rs \
-    && echo "pub fn stub() {}" > benostreamdb-search/src/lib.rs \
-    && mkdir -p benostreamdb-flight/src \
-    && echo "fn main() {}" > benostreamdb-flight/src/main.rs \
+    && mkdir -p contrib/benostreamdb-search/src \
+    && echo "fn main() {}" > contrib/benostreamdb-search/src/main.rs \
+    && echo "pub fn stub() {}" > contrib/benostreamdb-search/src/lib.rs \
+    && mkdir -p server/flight_sql/src \
+    && echo "fn main() {}" > server/flight_sql/src/main.rs \
     && mkdir -p tests/bin benches \
     && echo "fn main() {}" > tests/test_connector_ffi.rs \
     && echo "fn main() {}" > tests/bin/generate_iceberg_manifests.rs \
@@ -44,7 +44,7 @@ RUN mkdir -p src \
 # Copy actual source
 COPY build.rs ./
 COPY src ./src
-COPY benostreamdb-search/src ./benostreamdb-search/src
+COPY contrib/benostreamdb-search/src ./contrib/benostreamdb-search/src
 
 # Build the bsdb-search binary
 RUN cargo build --release -p benostreamdb-search

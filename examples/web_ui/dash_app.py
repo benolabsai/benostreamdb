@@ -297,16 +297,6 @@ def find_pages(term, limit=5):
         return pd.DataFrame()
 
 
-def _csr_or_sql(csr_fn, sql_fn, what):
-    """Run the CSR fast path; fall back to SQL BFS if the graph index isn't
-    ready yet (the one-time v1→v2 migration runs in the background on open)."""
-    try:
-        return csr_fn(), None
-    except Exception as e:
-        if "CSR graph index" in str(e):
-            return sql_fn(), f"{what}: CSR index not ready (background migration) — SQL BFS fallback."
-        raise
-
 
 def explain_block(run: RunState, label: str, vector_filter: dict):
     if "explain" not in run.result:
@@ -567,6 +557,7 @@ def _start_gr(_n, q, top_k, hops, rerank_n):
                 edge_table=edges_t, doc_table=nodes_t,
                 mode="local", vector_column="embedding",
                 id_column="id", top_k=int(top_k or 5), hops=int(hops or 2),
+                rerank_vector=True, rerank_k=int(rerank_n or 8),
             )
         except Exception as e:
             r.error = e
@@ -714,12 +705,6 @@ def _browse_detail(active_cell, data):
 def _drift(_n, q, seeds_n):
     if not q:
         return html.Div()
-    import shutil
-    import pyarrow as pa
-    tmp_edges = "/tmp/hdb_dash_region"
-    tmp_comm = "file:///tmp/hdb_dash_communities"
-    shutil.rmtree(tmp_edges, ignore_errors=True)
-    shutil.rmtree("/tmp/hdb_dash_communities", ignore_errors=True)
     out = []
     try:
         vec = embed_text(q)
@@ -727,22 +712,18 @@ def _drift(_n, q, seeds_n):
         hits = hits.to_pandas() if hasattr(hits, "to_pandas") else pd.DataFrame(hits)
         seed_ids = [int(i) for i in hits["id"]][:seeds_n]
         out.append(html.Div(f"Seeds: {[lookup_titles(seed_ids).get(i, i) for i in seed_ids]}"))
-        pairs = [(int(s), int(n)) for s in seed_ids
-                 for n in edges_t.graph_neighbors(int(s), 1, graph_column="source")]
-        region = pd.DataFrame(pairs, columns=["source", "target"]).head(60_000)
-        out.append(html.Div(f"Region: {len(region):,} edges"))
-        if region.empty:
-            out.append(html.Div("Empty region."))
-            return html.Div(out)
-        schema = pa.schema([("source", pa.int64()), ("target", pa.int64())])
-        rt = benostreamdb.Table.create(f"file://{tmp_edges}", schema)
-        rt.insert(pa.Table.from_pandas(region.astype("int64"), schema=schema, preserve_index=False))
-        rt.commit()
-        rt.wait_for_background_tasks()
-        comm = rt.summarize_communities(doc_table=nodes_t, target_uri=tmp_comm,
-                                        id_column="id", content_column="summary")
-        res = rt.drift_search(query=q, community_table=comm, follow_up_llm=None,
-                              n_depth=1, k_followups=2, top_k=5, hops=1)
+        res = edges_t.regional_drift_search(
+            query=q,
+            doc_table=nodes_t,
+            seed_ids=seed_ids,
+            content_column="summary",
+            id_column="id",
+            max_region_edges=60_000,
+            n_depth=1,
+            k_followups=2,
+            top_k=5,
+            hops=1,
+        )
         nodes_found = res.get("all_discovered_nodes", [])
         titles = lookup_titles([int(n) for n in nodes_found][:80])
         out.append(html.Div("Discovered nodes: " + ", ".join(
@@ -776,31 +757,18 @@ def _trav(_n, a, b, op):
     out = [html.Div(f"Resolved: {[titles.get(i, i) for i in ids]}")]
     try:
         if op == "shortest_path" and len(ids) == 2:
-            path, note = _csr_or_sql(
-                lambda: [int(n) for n in edges_t.shortest_path(ids[0], ids[1], graph_column="source")],
-                lambda: [int(n) for n in edges_t.shortest_path(ids[0], ids[1]).to_pandas()["node"].tolist()],
-                "shortest_path")
-            if note:
-                out.append(html.Div(note, className="caption"))
+            res = edges_t.shortest_path(ids[0], ids[1], graph_column="source")
+            path = [int(n) for n in res.nodes]
             pt = lookup_titles(path)
             out.append(html.Div(f"Path ({len(path)} hops): " +
                                 " → ".join(str(pt.get(p, p)) for p in path)))
         elif op == "connecting_paths" and len(ids) == 2:
-            eps, note = _csr_or_sql(
-                lambda: [(int(u), int(v)) for u, v in edges_t.connecting_paths(ids, graph_column="source")],
-                lambda: [(int(r["source"]), int(r["target"]))
-                         for _, r in edges_t.connecting_paths(ids).to_pandas().iterrows()],
-                "connecting_paths")
-            if note:
-                out.append(html.Div(note, className="caption"))
+            res = edges_t.connecting_paths(ids, graph_column="source")
+            eps = [(int(u), int(v)) for u, v in res.edges]
             out.append(html.Div(f"{len(eps)} connecting edges"))
         elif op == "graph_neighbors":
-            ns, note = _csr_or_sql(
-                lambda: [int(n) for n in edges_t.graph_neighbors(ia, graph_column="source")],
-                lambda: [int(n) for n in edges_t.graph_neighbors(ia).to_pandas()["neighbor"].tolist()],
-                "graph_neighbors")
-            if note:
-                out.append(html.Div(note, className="caption"))
+            res = edges_t.graph_neighbors(ia, graph_column="source")
+            ns = [int(n) for n in res.neighbors]
             nt = lookup_titles(ns)
             out.append(html.Div("Neighbors: " + ", ".join(str(nt.get(n, n)) for n in ns[:50])))
         elif op == "subgraph":

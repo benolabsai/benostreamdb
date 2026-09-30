@@ -42,7 +42,6 @@ class TestSparkCompatibility:
         self.table.set_sort_order(["timestamp", "id"], ascending=[False, True])
         self.table.write_pandas(df)
     
-    @pytest.mark.skip(reason="Requires Spark installation")
     def test_spark_read_basic(self):
         """Test Spark can read BenoStreamDB table"""
         spark_script = f"""
@@ -68,7 +67,6 @@ class TestSparkCompatibility:
         )
         assert result.returncode == 0
     
-    @pytest.mark.skip(reason="Requires Spark installation")
     def test_spark_read_v3_metadata(self):
         """Test Spark can read V3 metadata columns"""
         # This test would verify _row_id and _last_updated_sequence_number
@@ -92,7 +90,6 @@ class TestTrinoCompatibility:
         
         self.table.write_pandas(df)
     
-    @pytest.mark.skip(reason="Requires Trino installation")
     def test_trino_read_basic(self):
         """Test Trino can read BenoStreamDB table"""
         # This would use Trino CLI or Python client

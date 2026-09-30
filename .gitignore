@@ -36,8 +36,6 @@ python/**/*.dylib
 *.so
 *.dll
 *.exe
-test_pgvector_sql_integration
-scratch_mem_test
 
 # ── BenoStream data artifacts ───────────────────────────────────────────────
 *.parquet
@@ -49,26 +47,16 @@ _manifest/
 _metadata/
 test_admin_table/
 test_explain_db/
-test_ingestion_db/
-test_ingestion_perf_db/
-test_lancedb_ingestion_perf_db/
 
 # ── Local toolchain downloads (Maven/JDK fetched by build-connectors.sh) ────
 .java/
 .maven/
 
 # ── Local vector DBs, scratch data & generated artifacts ────────────────────
-rag_db/
-news_db/
 data/
 docker/data/
 benchmarks/competitive/data/
 hsdbg_bench_data/
-connector-artifacts/
-dist/
-benchmark_results/
-trino-benostream/src/main/resources/libbenostreamdb.so
-spark-benostream/src/main/resources/libbenostreamdb.so
 
 # ── Documentation build output (Sphinx) ─────────────────────────────────────
 docs/build/
@@ -79,17 +67,12 @@ logs/
 *.log
 *.pid
 *.patch
-dhat-heap.json
 build_errors*.txt
-check_output.txt
 rust_test_output*.log
 python_test_output*.log
 python_feature_test_output*.log
 test_output*.txt
 *_output.txt
-mem_report.txt
-benchmark_raw.json
-benchmarks/competitive/venv/
 
 # ── Test caches ─────────────────────────────────────────────────────────────
 .hypothesis/
@@ -105,25 +88,9 @@ groq_api_key.txt
 
 # ── Ad-hoc local scripts & scratch (not part of the repo) ───────────────────
 scratch*.rs
-/test
-test.rs
-test_avro.py
-test_investigate.py
-test_mmap.py
-test_vectors.py
 debug_read*.py
 patch_*.py
 patch_*.sh
 fix_*.py
-extract_comments.py
-analyze_comments.py
-all_comments.txt
-interesting_comments.txt
-user_msg.txt
-measure_disk.py
-parse_dhat.py
-populate.py
 run_*.sh
-test_bench.sh
 bench_*.py
-run_benchmark.py
