@@ -74,7 +74,7 @@ impl EmbeddingFunction for PythonCallbackFunction {
         // which is critical when the Python callback holds the GIL.
         let callback_ref = &self.callback;
 
-        tokio::task::block_in_place(|| (callback_ref)(texts))
+        crate::core::run_blocking(|| (callback_ref)(texts))
     }
 
     fn dimension(&self) -> usize {

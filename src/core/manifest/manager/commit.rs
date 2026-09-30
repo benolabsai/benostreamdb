@@ -1103,7 +1103,7 @@ mod tests {
         };
         // Commit v1
         manager
-            .commit(&[entry.clone()], &[], CommitMetadata::default())
+            .commit(std::slice::from_ref(&entry), &[], CommitMetadata::default())
             .await?;
 
         // Write live data file in store

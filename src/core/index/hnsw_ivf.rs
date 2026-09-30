@@ -1681,7 +1681,7 @@ impl HnswIvfIndex {
         // Phase 2: Deserialize all HNSW graphs in parallel (CPU-bound, via rayon).
         let quantizer_for_deser = quantizer.clone();
         let deser_results: Vec<Result<(usize, (HnswGraph, Vec<usize>))>> =
-            tokio::task::block_in_place(|| {
+            crate::core::run_blocking(|| {
                 cluster_bytes
                 .into_par_iter()
                 .map(|cb_res| {

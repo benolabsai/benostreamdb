@@ -135,5 +135,12 @@ condition:
   at first use with a clear message is correct. Guarded by
   `#[allow(clippy::expect_used)]`.
 
+- **`src/core/segment.rs` `indexing_pool()` and
+  `src/core/table/maintenance.rs` `maintenance_pool()`** — `rayon`'s
+  `ThreadPoolBuilder::build()` has no infallible form and fails only on OS
+  resource exhaustion (thread creation). The pools are process-lifetime
+  singletons built on first use; a failure is unrecoverable at startup. Guarded
+  by a function-level `#[allow(clippy::expect_used)]`.
+
 Anything not in this list should be converted to `?`, made total, or the
 allowlist entry justified in review.
