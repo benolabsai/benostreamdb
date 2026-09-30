@@ -2,6 +2,7 @@
 
 use crate::core::cache::CacheExt;
 use crate::core::index::bm25::Bm25Params;
+use std::collections::HashMap;
 use std::sync::Arc;
 // use std::collections::HashSet;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
@@ -1402,6 +1403,15 @@ impl HybridReader {
                         anyhow::anyhow!("Expected ListArray in inverted index row_ids")
                     })?;
 
+                let positions_list = if batch.num_columns() >= 3 {
+                    batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<arrow::array::ListArray>()
+                } else {
+                    None
+                };
+
                 for i in 0..batch.num_rows() {
                     let key = key_array.value(i);
                     if key == token.as_str() {
@@ -1412,11 +1422,30 @@ impl HybridReader {
                             .downcast_ref::<arrow::array::UInt32Array>()
                             .context("Invalid cast")?;
 
-                        let mut last_id = 0;
-                        for j in 0..row_ids.len() {
-                            let rid = last_id + row_ids.value(j);
-                            *current_doc_counts.entry(rid).or_default() += 1;
-                            last_id = rid;
+                        if let Some(pos_list_col) = positions_list {
+                            let docs_pos_list = pos_list_col.value(i);
+                            let docs_pos = docs_pos_list
+                                .as_any()
+                                .downcast_ref::<arrow::array::ListArray>()
+                                .context("Invalid cast")?;
+
+                            let mut last_id = 0;
+                            for j in 0..row_ids.len() {
+                                let rid = last_id + row_ids.value(j);
+                                last_id = rid;
+                                // In the 3-column position-aware index, row_ids has unique doc IDs
+                                // and docs_pos.value_length(j) gives the exact term frequency in O(1)!
+                                let tf = docs_pos.value_length(j) as u32;
+                                *current_doc_counts.entry(rid).or_default() += tf;
+                            }
+                        } else {
+                            // Backward compatibility: 2-column format where duplicate row_ids encode tf
+                            let mut last_id = 0;
+                            for j in 0..row_ids.len() {
+                                let rid = last_id + row_ids.value(j);
+                                *current_doc_counts.entry(rid).or_default() += 1;
+                                last_id = rid;
+                            }
                         }
                     }
                 }
@@ -1451,6 +1480,226 @@ impl HybridReader {
         }
 
         Ok(results)
+    }
+
+    /// Position-aware phrase query: searches for exact or slop-bounded phrase matches.
+    /// Uses the 3-column inverted index (`positions` column).
+    pub async fn phrase_search_index(
+        &self,
+        column: &str,
+        phrase: &str,
+        k: usize,
+        slop: usize,
+        analyzer: Option<&str>,
+    ) -> Result<Vec<(usize, f32)>> {
+        // 1. Find Inverted Index
+        let idx_info = self
+            .config
+            .index_files
+            .iter()
+            .find(|f| {
+                let match_type = f.index_type == "inverted" || f.index_type == "bm25";
+                let match_col = f.column_name.as_deref() == Some(column);
+                match_type && match_col
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No keyword/inverted index found for column '{}' in segment {}",
+                    column,
+                    self.config.segment_id
+                )
+            })?;
+
+        // 2. Load Inverted Index Batches
+        let inv_path_str = &idx_info.file_path;
+        let mut dir_path = self.config.parquet_path.clone().unwrap_or_default();
+        if let Some(pos) = dir_path.rfind('/') {
+            dir_path.truncate(pos);
+        } else {
+            dir_path = "".to_string();
+        }
+
+        let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
+            inv_path_str.clone()
+        } else {
+            format!("{}/{}", dir_path, inv_path_str)
+        };
+
+        let cache_key = if let Some(offset) = idx_info.offset {
+            format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
+        } else {
+            format!("{}/{}", self.root_uri, full_inv_path_str)
+        };
+
+        let batches = if let Some(cached) = crate::core::cache::INVERTED_INDEX_CACHE
+            .get_with_metrics(&cache_key, "inverted_index")
+            .await
+        {
+            cached.as_ref().clone()
+        } else {
+            let inv_path = Path::from(full_inv_path_str.as_str());
+            let inv_bytes = match self.store.get(&inv_path).await {
+                Ok(res) => {
+                    let b = res.bytes().await?;
+                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                    b.to_vec()
+                }
+                Err(e) => return Err(e.into()),
+            };
+
+            let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                Bytes::from(inv_bytes),
+            )?;
+            let reader = builder.build()?;
+            let mut decoded = Vec::new();
+            for batch_result in reader {
+                decoded.push(batch_result?);
+            }
+            crate::core::cache::INVERTED_INDEX_CACHE
+                .insert(cache_key.clone(), Arc::new(decoded.clone()))
+                .await;
+            decoded
+        };
+
+        // 3. Tokenize Query
+        let analyzer_name = if let Some(override_name) = analyzer {
+            override_name.to_string()
+        } else if let Some(cached) = crate::core::cache::ANALYZER_META_CACHE
+            .get(&cache_key)
+            .await
+        {
+            cached
+        } else {
+            "analyzer:english".to_string()
+        };
+
+        let tokenizer = crate::core::index::tokenizer::GLOBAL_TOKENIZER_REGISTRY
+            .read()
+            .get(&analyzer_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown analyzer '{}'", analyzer_name))?;
+
+        let phrase_tokens = tokenizer.tokenize(phrase);
+        if phrase_tokens.is_empty() {
+            return Ok(vec![]);
+        }
+        if phrase_tokens.len() == 1 {
+            return self
+                .keyword_search_index(column, phrase, k, &Bm25Params::default(), analyzer, None)
+                .await;
+        }
+
+        // 4. Retrieve positions per token: token -> doc_id -> Vec<u32> (positions)
+        let mut token_doc_positions: Vec<HashMap<u32, Vec<u32>>> =
+            Vec::with_capacity(phrase_tokens.len());
+
+        for token in &phrase_tokens {
+            let mut doc_map: HashMap<u32, Vec<u32>> = HashMap::new();
+            for batch in &batches {
+                let key_array = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .ok_or_else(|| anyhow::anyhow!("Expected StringArray"))?;
+                let row_ids_list = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<arrow::array::ListArray>()
+                    .ok_or_else(|| anyhow::anyhow!("Expected ListArray"))?;
+                let positions_list = if batch.num_columns() >= 3 {
+                    batch
+                        .column(2)
+                        .as_any()
+                        .downcast_ref::<arrow::array::ListArray>()
+                } else {
+                    None
+                };
+
+                let positions_list = match positions_list {
+                    Some(pl) => pl,
+                    None => {
+                        return Err(anyhow::anyhow!(
+                            "Phrase search requires position-aware inverted index"
+                        ))
+                    }
+                };
+
+                for i in 0..batch.num_rows() {
+                    if key_array.value(i) == token.as_str() {
+                        let list = row_ids_list.value(i);
+                        let row_ids = list
+                            .as_any()
+                            .downcast_ref::<arrow::array::UInt32Array>()
+                            .context("Invalid cast")?;
+                        let docs_pos_list = positions_list.value(i);
+                        let docs_pos = docs_pos_list
+                            .as_any()
+                            .downcast_ref::<arrow::array::ListArray>()
+                            .context("Invalid cast")?;
+
+                        let mut last_id = 0;
+                        for j in 0..row_ids.len() {
+                            let rid = last_id + row_ids.value(j);
+                            last_id = rid;
+                            let pos_arr = docs_pos.value(j);
+                            let pos_u32 = pos_arr
+                                .as_any()
+                                .downcast_ref::<arrow::array::UInt32Array>()
+                                .context("Invalid cast")?;
+                            let positions_vec: Vec<u32> =
+                                (0..pos_u32.len()).map(|p| pos_u32.value(p)).collect();
+                            doc_map.entry(rid).or_default().extend(positions_vec);
+                        }
+                    }
+                }
+            }
+            token_doc_positions.push(doc_map);
+        }
+
+        // 5. Match phrases across candidate documents (docs present in all tokens)
+        let first_docs = &token_doc_positions[0];
+        let mut phrase_scores: Vec<(usize, f32)> = Vec::new();
+
+        for (&doc_id, first_positions) in first_docs {
+            let in_all = token_doc_positions[1..]
+                .iter()
+                .all(|m| m.contains_key(&doc_id));
+            if !in_all {
+                continue;
+            }
+
+            let mut matches_count = 0;
+            for &start_pos in first_positions {
+                let mut matched = true;
+                let mut prev_pos = start_pos;
+                for term_map in token_doc_positions[1..].iter() {
+                    let next_positions = &term_map[&doc_id];
+                    let expected_pos = prev_pos + 1;
+                    let found = next_positions
+                        .iter()
+                        .any(|&p| p >= expected_pos && p <= expected_pos + slop as u32);
+                    if found {
+                        prev_pos = expected_pos;
+                    } else {
+                        matched = false;
+                        break;
+                    }
+                }
+                if matched {
+                    matches_count += 1;
+                }
+            }
+
+            if matches_count > 0 {
+                phrase_scores.push((doc_id as usize, matches_count as f32));
+            }
+        }
+
+        phrase_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        if phrase_scores.len() > k {
+            phrase_scores.truncate(k);
+        }
+
+        Ok(phrase_scores)
     }
 
     pub async fn read_rows_by_id(
