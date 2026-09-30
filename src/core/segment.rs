@@ -52,8 +52,13 @@ pub struct HybridSegmentWriter {
     // after each column tokenizes into a task-local map (see
     // `build_inverted_index`); the remaining buffers are written briefly, once
     // per column, and are effectively uncontended.
+    //
+    // Each posting entry is `(row_id, position)` — the ordinal token position
+    // within the document. Storing positions enables phrase queries, span
+    // queries, and highlighting, and also speeds up tf computation (count
+    // positions per doc instead of counting duplicate row_ids).
     pub(crate) inverted_data:
-        parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<u32>>>>,
+        parking_lot::Mutex<HashMap<String, std::collections::BTreeMap<String, Vec<(u32, u32)>>>>,
     pub index_metadata: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) vector_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) graph_data: parking_lot::Mutex<HashMap<String, String>>,
@@ -526,8 +531,8 @@ impl HybridSegmentWriter {
                 // before the consuming loop below drains it. Rows with no tokens
                 // are absent and read as 0 at query time.
                 let mut doc_counts: HashMap<u32, u32> = HashMap::new();
-                for row_ids in inverted_map.values() {
-                    for &row_id in row_ids {
+                for postings in inverted_map.values() {
+                    for &(row_id, _pos) in postings {
                         *doc_counts.entry(row_id).or_insert(0) += 1;
                     }
                 }
@@ -583,24 +588,52 @@ impl HybridSegmentWriter {
                 );
             }
 
-            // Build Arrow Arrays for Parquet
+            // Build Arrow Arrays for Parquet:
+            // Column 0: key (Utf8)
+            // Column 1: row_ids (List<UInt32>) - unique doc IDs per term (delta-encoded)
+            // Column 2: positions (List<List<UInt32>>) - ordinal token positions per doc
             let mut key_builder = arrow::array::StringBuilder::new();
             let value_builder = arrow::array::UInt32Builder::new();
             let mut list_builder = arrow::array::ListBuilder::new(value_builder);
 
-            for (key, mut row_ids) in inverted_map {
+            let pos_inner_builder = arrow::array::UInt32Builder::new();
+            let pos_doc_builder = arrow::array::ListBuilder::new(pos_inner_builder);
+            let mut positions_builder = arrow::array::ListBuilder::new(pos_doc_builder);
+
+            for (key, mut postings) in inverted_map {
                 key_builder.append_value(&key);
-                row_ids.sort_unstable();
+                postings.sort_unstable_by_key(|&(row_id, pos)| (row_id, pos));
+
+                // Group postings by unique row_id
+                let mut doc_postings: Vec<(u32, Vec<u32>)> = Vec::new();
+                for (row_id, pos) in postings {
+                    if let Some(last) = doc_postings.last_mut() {
+                        if last.0 == row_id {
+                            last.1.push(pos);
+                            continue;
+                        }
+                    }
+                    doc_postings.push((row_id, vec![pos]));
+                }
+
                 let mut last_id = 0;
-                for row_id in row_ids {
+                for (row_id, positions) in doc_postings {
                     list_builder.values().append_value(row_id - last_id);
                     last_id = row_id;
+
+                    let doc_pos_builder = positions_builder.values();
+                    for pos in positions {
+                        doc_pos_builder.values().append_value(pos);
+                    }
+                    doc_pos_builder.append(true);
                 }
                 list_builder.append(true);
+                positions_builder.append(true);
             }
 
             let key_array = std::sync::Arc::new(key_builder.finish());
             let list_array = std::sync::Arc::new(list_builder.finish());
+            let pos_array = std::sync::Arc::new(positions_builder.finish());
 
             let inv_schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
                 arrow::datatypes::Field::new("key", arrow::datatypes::DataType::Utf8, false),
@@ -615,9 +648,27 @@ impl HybridSegmentWriter {
                     )),
                     false,
                 ),
+                arrow::datatypes::Field::new(
+                    "positions",
+                    arrow::datatypes::DataType::List(std::sync::Arc::new(
+                        arrow::datatypes::Field::new(
+                            "item",
+                            arrow::datatypes::DataType::List(std::sync::Arc::new(
+                                arrow::datatypes::Field::new(
+                                    "item",
+                                    arrow::datatypes::DataType::UInt32,
+                                    true,
+                                ),
+                            )),
+                            true,
+                        ),
+                    )),
+                    false,
+                ),
             ]));
 
-            let inv_batch = RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array])?;
+            let inv_batch =
+                RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array, pos_array])?;
             let filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
             let full_path_str = format!("{}{}", parent_prefix, filename);
             let target_path = object_store::path::Path::from(full_path_str.clone());
