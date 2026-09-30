@@ -473,24 +473,32 @@ impl crate::core::segment::HybridSegmentWriter {
                     meta.insert(col_name.to_string(), tokenizer_name.clone());
                 }
 
-                // Build inverted index: Token -> RowIDs (buffered in memory per segment).
+                // Build inverted index: Token → (RowID, Position) pairs (buffered
+                // in memory per segment).
                 //
                 // `build_indexes` drives columns through a rayon `into_par_iter`, so
                 // several columns can tokenize concurrently. Accumulate this column's
                 // postings in a task-local map and merge under a short-lived lock,
                 // rather than holding `inverted_data` for the whole tokenization loop.
-                let mut col_inverted_map: std::collections::BTreeMap<String, Vec<u32>> =
+                //
+                // Each posting is `(row_id, position)` where `position` is the
+                // ordinal token index within the document. This enables:
+                //   - phrase queries (consecutive positions)
+                //   - span/proximity queries (position distance)
+                //   - highlighting (token-offset mapping)
+                //   - faster tf computation (count entries per row_id)
+                let mut col_inverted_map: std::collections::BTreeMap<String, Vec<(u32, u32)>> =
                     std::collections::BTreeMap::new();
 
                 for (batch_i, val) in array.iter().enumerate() {
                     if let Some(v) = val {
                         let tokens = tokenizer.tokenize(v);
                         let global_row_id = (row_offset + batch_i) as u32;
-                        for token in tokens {
+                        for (pos, token) in tokens.into_iter().enumerate() {
                             col_inverted_map
                                 .entry(token)
                                 .or_default()
-                                .push(global_row_id);
+                                .push((global_row_id, pos as u32));
                         }
                     }
                 }
@@ -502,8 +510,8 @@ impl crate::core::segment::HybridSegmentWriter {
                 {
                     let mut inverted_lock = self.inverted_data.lock();
                     let entry = inverted_lock.entry(col_name.to_string()).or_default();
-                    for (token, mut rows) in col_inverted_map {
-                        entry.entry(token).or_default().append(&mut rows);
+                    for (token, mut postings) in col_inverted_map {
+                        entry.entry(token).or_default().append(&mut postings);
                     }
                 }
 
