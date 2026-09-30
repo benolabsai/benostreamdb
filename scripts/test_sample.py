@@ -8,9 +8,13 @@ sys.path.insert(0, os.path.abspath("python"))
 import benostreamdb as bsdb
 
 def main():
-    part_path = "data/three_tier/section_embeddings_parts/part_0000.parquet"
-    if not os.path.exists(part_path):
-        print(f"Error: {part_path} does not exist.")
+    candidates = [
+        os.path.expanduser("~/data/benostreamdb/three_tier/section_embeddings_parts/part_0000.parquet"),
+        "data/three_tier/section_embeddings_parts/part_0000.parquet",
+    ]
+    part_path = next((p for p in candidates if os.path.exists(p)), None)
+    if not part_path:
+        print("Error: part_0000.parquet does not exist.")
         return
 
     table_uri = "file://" + os.path.abspath("data/sample_db")

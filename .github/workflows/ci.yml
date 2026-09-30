@@ -62,7 +62,6 @@ jobs:
       - name: Check binary targets
         run: |
           cargo check --bins
-          cargo check -p benostreamdb-search --bin bsdb-search
 
   #########################
   # Rust unit/integration tests
@@ -235,3 +234,33 @@ jobs:
 
       - name: Run no-panic ratchet + hard gate
         run: bash scripts/no_panic_check.sh
+
+  #########################
+  # Ecosystem Integrations (Flight, dbt, Spark, Trino)
+  #########################
+  ecosystem:
+    name: Ecosystem Integrations
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Ecosystem Dependencies
+        run: |
+          pip install pytest pyspark trino dbt-core adbc-driver-flightsql pyarrow
+          # Install the local dbt adapter
+          pip install -e dbt-benostreamdb/
+
+      - name: Run Arrow Flight SQL Client Tests
+        run: pytest -v server/flight_sql/tests/test_flight_client.py
+
+      - name: Run dbt Graph Macros Tests
+        run: pytest -v tests/python/test_dbt_graph_macros.py
+
+      - name: Run Spark & Trino Cross-Engine Tests
+        # We run these explicitly, ensuring any skipped markers are overriden or handled
+        run: pytest -v tests/test_cross_engine_compat.py

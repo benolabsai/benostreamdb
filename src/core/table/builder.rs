@@ -417,7 +417,11 @@ impl TableBuilder {
         // its tx id would not be in `benostream.committed_wal_tx`).
         let recovered_tx_ids: Vec<uuid::Uuid> = recovered_batches
             .iter()
-            .filter_map(|b| crate::core::wal::extract_wal_tx(b).map(|h| h.tx_id))
+            .map(|b| {
+                crate::core::wal::extract_wal_tx(b)
+                    .map(|h| h.tx_id)
+                    .unwrap_or_else(uuid::Uuid::new_v4)
+            })
             .collect();
 
         let recovered_stream = Box::new(recovered_batches.into_iter().map(Ok));
@@ -480,14 +484,19 @@ impl TableBuilder {
             },
 
             schema: Arc::new(parking_lot::RwLock::new(schema_val)),
-            write_buffer: Arc::new(parking_lot::RwLock::new(initial_buffer)),
+            pending_writes: Arc::new(parking_lot::RwLock::new(
+                initial_buffer
+                    .into_iter()
+                    .zip(recovered_tx_ids)
+                    .map(|(batch, tx_id)| crate::core::table::PendingWrite { batch, tx_id })
+                    .collect()
+            )),
+            maintenance_lock: Arc::new(tokio::sync::RwLock::new(())),
             wal: Arc::new(Mutex::new(wal)),
             background_tasks: Arc::new(Mutex::new(Vec::new())),
             index_build_gate: super::new_index_build_gate(),
             sort_order: Arc::new(parking_lot::RwLock::new(None)),
             sort_order_columns: Arc::new(parking_lot::RwLock::new(None)),
-            #[cfg(feature = "enterprise")]
-            enterprise_license: None,
             primary_key: Arc::new(parking_lot::RwLock::new(Vec::new())),
             autocommit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             recovered_wal_paths: Arc::new(parking_lot::Mutex::new(recovered_paths)),
@@ -497,7 +506,6 @@ impl TableBuilder {
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: Arc::new(tokio::sync::Notify::new()),
             format_version: Arc::new(std::sync::atomic::AtomicI32::new(manifest.format_version)),
-            pending_wal_tx_ids: Arc::new(parking_lot::Mutex::new(recovered_tx_ids)),
         };
 
         table.sync_primary_key_from_schema_async().await.ok();

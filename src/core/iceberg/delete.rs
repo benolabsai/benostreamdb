@@ -472,7 +472,7 @@ fn avro_to_arrow_array(
 /// Writer for Iceberg Delete Files (Position and Equality Deletes).
 ///
 /// Delete files are written through the table's `ObjectStore`, so they land in
-/// the same store as the data (local FS, S3/MinIO, …). The previous
+/// the same store as the data (local FS, S3/RustFS, …). The previous
 /// implementation used `std::fs::File::create` on a path derived from the table
 /// URI, which silently wrote to a bogus local path for any non-`file://` store
 /// (e.g. `./s3:/bucket/…`) and made deletes invisible to readers.

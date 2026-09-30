@@ -797,15 +797,16 @@ impl Table {
         columns: Option<&[&str]>,
     ) -> Result<Vec<RecordBatch>> {
         let mut result = Vec::new();
-        let buffer = self.write_buffer.read();
+        let pending = self.pending_writes.read();
 
-        if buffer.is_empty() {
+        if pending.is_empty() {
             return Ok(result);
         }
 
         let planner = QueryPlanner::new();
 
-        for batch in buffer.iter() {
+        for p in pending.iter() {
+            let batch = &p.batch;
             // Apply projection first
             let batch_to_filter = if let Some(cols) = columns {
                 let indices: Vec<usize> = cols

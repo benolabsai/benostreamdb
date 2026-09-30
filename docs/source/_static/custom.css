@@ -1,0 +1,11 @@
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] {
+    /* Accents */
+    --color-brand-primary: #2563eb !important;
+    --color-brand-content: #2563eb !important;
+
+    /* Fonts */
+    --font-stack: 'Inter', system-ui, -apple-system, sans-serif !important;
+    --font-stack--headings: 'Inter', system-ui, -apple-system, sans-serif !important;
+}

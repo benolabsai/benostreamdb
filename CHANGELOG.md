@@ -7,6 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Native in-memory regional DRIFT search** — `Table.regional_drift_search(...)`
+  (Python) / `Table::regional_drift(...)` (Rust) plus the `drift_search` UDAF.
+  Ports Microsoft GraphRAG's DRIFT (Dynamic Reasoning and Inference with
+  Flexible Traversal) algorithm — the multi-phase primer / follow-up / reduction
+  architecture over a `DriftAction` search tree — onto BenoStreamDB-native graph
+  primitives, running entirely in memory with no temporary table creation or
+  disk I/O. Adapted from the MIT-licensed Microsoft GraphRAG project.
+- **First-class graph traversal primitives in the core engine** — new
+  `src/core/table/graph.rs` exposes `GraphNeighborhoodOptions` and
+  `Table::{load_graph_index, shortest_path, connecting_paths, graph_neighbors,
+  subgraph_edges}` as native Rust APIs (previously Python-only helpers in
+  `src/python/helpers.rs`). The shared `csr_bfs_visited` BFS (max-degree
+  truncation + token-budget cap) now lives in core and is reused by the Python
+  bindings.
+- **Python graph result containers** — `PathResult`, `ConnectingPathsResult`,
+  and `GraphNeighborsResult` subclass `list` for direct indexing/iteration while
+  adding `.to_pandas()` / `.to_arrow()`.
+- **New Python `Table` helpers** — `subgraph_edges(...)`,
+  `regional_drift_search(...)`, `find_entities(...)` (full-text index with ILIKE
+  fallback), and `lookup_entities(...)` (bulk id → name resolution).
+- **Graph RAG vector re-ranking** — `graph_rag_search(..., rerank_vector=True,
+  rerank_k=N)` re-ranks the local-mode candidate node set with a vector search
+  restricted to the discovered ids.
+- **`commit_synced_snapshot`** — commits an externally synchronized Iceberg
+  snapshot with full reconciliation against the current manifest (retries on
+  conflict, preserves delete files).
+- **`docs/architecture_review_response.md`** — evaluation and remediation plan
+  for the concurrency review (H1–H3) and the repository restructuring.
+
+### Changed
+- **Repository restructured into a three-tier layout.** The core workspace is
+  now strictly the database engine plus first-class data-platform connectors,
+  with experimental integrations moved out of the root package:
+  - `benostreamdb-search` → `contrib/benostreamdb-search` (optional HTTP search
+    gateway; `contrib/*` is excluded from the root Cargo package).
+  - `benostreamdb-flight` → `server/flight_sql` (optional Arrow Flight SQL
+    server).
+  - `trino-config/` → `trino-benostreamdb/etc/`; new `spark-benostreamdb/` and
+    per-integration READMEs (`dbt-benostreamdb`, `spark-benostreamdb`,
+    `trino-benostreamdb`).
+  - The root Cargo workspace now contains only the core engine,
+    `benostream-gpu-ann`, `server/flight_sql`, and `contrib/benostreamdb-search`.
+  - CI trimmed to test the core engine and the Tier-2 integrations (Trino, Spark,
+    dbt).
+- README documents three deployment modes (embedded core, optional Arrow Flight
+  SQL server, future distributed) and clarifies that Flight SQL is
+  single-process.
+- ROADMAP condensed from ~811 to ~100 lines, removing stale historical
+  benchmarks.
+
+### Fixed
+- **H1 — write/WAL atomicity**: `write_buffer` and `pending_wal_tx_ids` unified
+  into a single `pending_writes: Arc<RwLock<Vec<PendingWrite>>>` so a batch and
+  its WAL transaction id are always taken together at flush time, structurally
+  guaranteeing idempotent WAL replay.
+- **H2 — `truncate_async()` race**: added a table-wide `maintenance_lock`
+  (`tokio::sync::RwLock`); writes take a read lock while `truncate`,
+  `rewrite_data_files`/compaction, `vacuum`, `delete`, `add_index`/`drop_index`,
+  `update_schema`, `rollback_to_snapshot`, and `remove_orphan_files` take a write
+  lock, preventing concurrent writes from being silently discarded.
+- **H3 — destructive truncate error suppression**: `truncate_async()` no longer
+  substitutes an empty manifest on load failure; the error is propagated.
+  `flush_async` likewise propagates manifest-load errors instead of
+  `unwrap_or_default()`.
+- **Vacuum fail-closed**: `vacuum()` aborts (rather than deleting every data
+  file) when a manifest version or its entries cannot be read, including during
+  re-validation.
+- **Orphan cleanup preserves delete files**: `remove_orphan_files` now treats
+  position/equality delete files referenced by the manifest as live, so they are
+  no longer reaped.
+- **Equality-delete read failures propagate**: `HybridReader` now returns an
+  error instead of warning-and-continuing when an equality delete file cannot be
+  read.
+- **Lock robustness**: an unparseable lock payload is now treated as expired
+  (with a warning) instead of being silently ignored.
+
+### Tests
+- `tests/test_h1_h2_concurrency_regression.rs` — H1/H2/H3 regression coverage
+  (truncate-vs-write race, `PendingWrite` atomicity under parallel writers, safe
+  error bubbling).
+- Orphan-cleanup-preserves-delete-files, `commit_synced_snapshot` reconciliation,
+  and vacuum fail-closed tests.
+
 ## [0.11.1] - 2026-09-29
 
 ### Added
@@ -436,7 +520,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aligned the Hamming (`!=`) and Jaccard (`> 0.0`) comparisons with the CPU/CUDA
   definition. Covered by the new macOS CI job (Apple Silicon).
 - **rustdoc: `VEC_TMP_MAGIC` linked to a private item**, breaking
-  `cargo doc --features python,wgpu,enterprise,java`. Now plain text.
+  `cargo doc --features python,wgpu,java`. Now plain text.
 - **CUDA distance kernels launched with the wrong grid and no shared memory.**
   `CudaBackend::compute_distance` used `LaunchConfig::for_num_elems`, which packs
   rows into 1024-thread blocks and sets `shared_mem_bytes: 0`, but the kernels
@@ -925,7 +1009,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `benostreamdb/quickstart:latest`: Single all-in-one developer container running ES 7.10 (9200), Qdrant (6333), and Flight SQL (50051).
   - `benostreamdb/search:latest`: Standalone production search microservice.
   - `benostreamdb/flight:latest`: Standalone production Arrow Flight SQL microservice.
-  - `docker/docker-compose.quickstart.yml`: Single-command full stack with MinIO (S3), Project Nessie catalog, and BenoStreamDB.
+  - `docker/docker-compose.quickstart.yml`: Single-command full stack with RustFS (S3), Project Nessie catalog, and BenoStreamDB.
   - `docker-compose.production.yml`: Production multi-container configuration with health checks and resource limits.
 - Okapi BM25 keyword scoring (tunable `k1`/`b`) with an English analyzer in the core engine; public `keyword_search_index` API.
 - Smart hybrid trigger fusing keyword (BM25) and vector (HNSW) results via reciprocal rank fusion (RRF, k=60).

@@ -1326,6 +1326,137 @@ impl PyTable {
         self.execute_sql(py, query)
     }
 
+    #[pyo3(signature = (start_node, end_node, directed=true, graph_column=None))]
+    fn core_shortest_path(
+        &self,
+        py: Python<'_>,
+        start_node: u64,
+        end_node: u64,
+        directed: bool,
+        graph_column: Option<String>,
+    ) -> PyResult<Vec<u64>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .shortest_path(start_node, end_node, directed, graph_column.as_deref())
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    #[pyo3(signature = (seeds, directed=false, graph_column=None))]
+    fn core_connecting_paths(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        directed: bool,
+        graph_column: Option<String>,
+    ) -> PyResult<Vec<(u64, u64)>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .connecting_paths(&seeds, directed, graph_column.as_deref())
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    #[pyo3(signature = (node, hops=1, graph_column=None))]
+    fn core_graph_neighbors(
+        &self,
+        py: Python<'_>,
+        node: u64,
+        hops: u32,
+        graph_column: Option<String>,
+    ) -> PyResult<Vec<u64>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .graph_neighbors(node, hops, graph_column.as_deref())
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    #[pyo3(signature = (seeds, hops=1, directed=false, max_degree=None, max_nodes=None, graph_column=None))]
+    fn core_subgraph_edges(
+        &self,
+        py: Python<'_>,
+        seeds: Vec<u64>,
+        hops: u32,
+        directed: bool,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
+        graph_column: Option<String>,
+    ) -> PyResult<Vec<(u64, u64)>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .subgraph_edges(
+                        &seeds,
+                        hops,
+                        directed,
+                        max_degree,
+                        max_nodes,
+                        graph_column.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    #[pyo3(signature = (query, seeds, top_k=5, hops=1, n_depth=1, k_followups=2))]
+    fn core_regional_drift(
+        &self,
+        py: Python<'_>,
+        query: String,
+        seeds: Vec<u64>,
+        top_k: usize,
+        hops: u32,
+        n_depth: u32,
+        k_followups: usize,
+    ) -> PyResult<Py<pyo3::types::PyDict>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let result = py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .regional_drift(&query, &seeds, top_k, hops, n_depth, k_followups)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("all_discovered_nodes", result.all_discovered_nodes)?;
+        let actions = pyo3::types::PyList::empty(py);
+        for a in result.actions {
+            let ad = pyo3::types::PyDict::new(py);
+            ad.set_item("action_id", a.action_id)?;
+            ad.set_item("query", a.query)?;
+            ad.set_item("query_seeds", a.query_seeds)?;
+            ad.set_item("score", a.score)?;
+            ad.set_item("nodes_discovered", a.nodes_discovered)?;
+            ad.set_item("is_complete", a.is_complete)?;
+            ad.set_item("round_num", a.round_num)?;
+            actions.append(ad)?;
+        }
+        dict.set_item("actions", actions)?;
+        Ok(dict.into())
+    }
+
     fn strongly_connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let query = "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) FROM t";
         self.execute_sql(py, query.to_string())

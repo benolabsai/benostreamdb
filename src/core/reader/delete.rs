@@ -443,11 +443,13 @@ impl HybridReader {
                             tracing::warn!("Multi-column equality deletes not yet optimized");
                         }
                     }
-                    Err(e) => tracing::warn!(
-                        "Failed to read equality delete file {}: {}",
-                        resolved_path,
-                        e
-                    ),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Failed to read equality delete file {}: {}",
+                            resolved_path,
+                            e
+                        ));
+                    }
                 }
             }
         }
