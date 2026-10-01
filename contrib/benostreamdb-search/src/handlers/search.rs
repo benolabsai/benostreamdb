@@ -434,7 +434,8 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                                     Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
                             }
                         }
-                        "term" | "terms" | "range" | "exists" | "prefix" | "wildcard" | "ids" => {
+                        "term" | "terms" | "range" | "exists" | "prefix" | "wildcard"
+                        | "regexp" | "ids" => {
                             let mut wrap = serde_json::Map::new();
                             wrap.insert(key.clone(), spec.clone());
                             let sql = clause_to_sql(&Value::Object(wrap), "query")?;
@@ -873,11 +874,12 @@ pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStr
                 "exists" => exists_to_sql(value, ctx),
                 "prefix" => prefix_to_sql(value, ctx),
                 "wildcard" => wildcard_to_sql(value, ctx),
+                "regexp" => regexp_to_sql(value, ctx),
                 "ids" => ids_to_sql(value, ctx),
                 "bool" => bool_to_sql(value, ctx),
                 "nested" => nested_to_sql(value, ctx),
                 other => Err(bad_request(format!(
-                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, ids, bool, nested)"
+                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, regexp, ids, bool, nested)"
                 ))),
             },
             _ => Err(bad_request(format!(
@@ -913,6 +915,7 @@ fn qualify_nested_paths(val: &Value, path: &str) -> Value {
                         | "match_phrase"
                         | "prefix"
                         | "wildcard"
+                        | "regexp"
                         | "ids"
                         | "nested"
                         | "exists"
@@ -1107,6 +1110,27 @@ fn wildcard_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError>
         }
     }
     Ok(format!("{field} LIKE '{sql_pattern}'"))
+}
+
+fn regexp_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value
+        .as_object()
+        .ok_or_else(|| bad_request("regexp: expected {\"field\": \"pattern\"}"))?;
+    if m.len() != 1 {
+        return Err(bad_request("regexp: expected exactly one field"));
+    }
+    let (field, v) = m.iter().next().unwrap();
+    let field = valid_field(field)?;
+    let pattern_str = v
+        .as_str()
+        .or_else(|| {
+            v.as_object()
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+        })
+        .ok_or_else(|| bad_request("regexp: expected string pattern"))?;
+    let safe_pattern = pattern_str.replace('\'', "''");
+    Ok(format!("regexp_like({field}, '{safe_pattern}')"))
 }
 
 fn ids_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
@@ -2322,6 +2346,23 @@ mod tests {
         .unwrap();
         assert_eq!(resp_wildcard.hits.total.value, 1);
         assert_eq!(resp_wildcard.hits.hits[0].id, "ops-doc-2");
+
+        // 3b. regexp query: title matches ".*choc.*"
+        let resp_regexp = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "regexp": {
+                        "title": ".*choc.*"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_regexp.hits.total.value, 1);
+        assert_eq!(resp_regexp.hits.hits[0].id, "ops-doc-2");
 
         // 4. ids query
         let resp_ids = search_core(

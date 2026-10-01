@@ -98,9 +98,9 @@ fn parse_bulk(body: &str, default_index: Option<&str>) -> Result<Vec<BulkItem>, 
                 }
             };
 
-            if !matches!(op.as_str(), "index" | "create" | "delete") {
+            if !matches!(op.as_str(), "index" | "create" | "delete" | "update") {
                 return Err(bad_request(format!(
-                    "bulk line {}: unsupported action '{op}' (supported: index, create, delete)",
+                    "bulk line {}: unsupported action '{op}' (supported: index, create, delete, update)",
                     raw.line_num
                 )));
             }
@@ -401,15 +401,20 @@ pub async fn bulk_core(
     let t_write = Instant::now();
     for (index, group) in by_index {
         let existed_before = table_exists(&state.index_uri(&index)).await;
-        // Split off deletes (no source) — they are 501 in v1.
+        // Split off deletes and updates
         let writes: Vec<(usize, &BulkItem)> = group
             .iter()
-            .filter(|(_, it)| it.op != "delete")
+            .filter(|(_, it)| it.op != "delete" && it.op != "update")
             .map(|(pos, it)| (*pos, it))
             .collect();
         let deletes: Vec<(usize, &BulkItem)> = group
             .iter()
             .filter(|(_, it)| it.op == "delete")
+            .map(|(pos, it)| (*pos, it))
+            .collect();
+        let updates: Vec<(usize, &BulkItem)> = group
+            .iter()
+            .filter(|(_, it)| it.op == "update")
             .map(|(pos, it)| (*pos, it))
             .collect();
         if !deletes.is_empty() {
@@ -464,6 +469,51 @@ pub async fn bulk_core(
                             index: index.clone(),
                             id: it.id.clone(),
                             status: 404,
+                            result: "error".into(),
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+        if !updates.is_empty() {
+            for (pos, it) in updates {
+                let Some(body) = it.doc.clone() else {
+                    results[pos] = Some(ItemResult {
+                        op: "update".into(),
+                        index: index.clone(),
+                        id: it.id.clone(),
+                        status: 400,
+                        result: "error".into(),
+                        error: Some("missing update document source".into()),
+                    });
+                    continue;
+                };
+                match crate::handlers::docs::update_document_core(state, &index, &it.id, body).await
+                {
+                    Ok(resp) => {
+                        results[pos] = Some(ItemResult {
+                            op: "update".into(),
+                            index: index.clone(),
+                            id: it.id.clone(),
+                            status: if resp.result == "created" { 201 } else { 200 },
+                            result: resp.result,
+                            error: None,
+                        });
+                    }
+                    Err(e) => {
+                        let status = if e.to_string().contains("document missing")
+                            || matches!(e, BenoStreamError::TableNotFound { .. })
+                        {
+                            404
+                        } else {
+                            400
+                        };
+                        results[pos] = Some(ItemResult {
+                            op: "update".into(),
+                            index: index.clone(),
+                            id: it.id.clone(),
+                            status,
                             result: "error".into(),
                             error: Some(e.to_string()),
                         });
@@ -583,5 +633,22 @@ mod tests {
         assert!(!doc1_after.found);
         let doc2_after = get_document_core(&state, "bulk_test", "b2").await.unwrap();
         assert!(doc2_after.found);
+
+        // Bulk update on b2 (partial update)
+        let update_ndjson = "{\"update\": {\"_index\": \"bulk_test\", \"_id\": \"b2\"}}\n{\"doc\": {\"val\": 250, \"extra\": \"yes\"}}\n";
+        let up_res = bulk_core(&state, None, update_ndjson).await.unwrap();
+        assert_eq!(up_res["errors"], false);
+        let up_items = up_res["items"].as_array().unwrap();
+        assert_eq!(up_items.len(), 1);
+        assert_eq!(up_items[0]["update"]["result"], "updated");
+        assert_eq!(up_items[0]["update"]["status"], 200);
+
+        refresh_core(&state, "bulk_test").await.unwrap();
+        let doc2_updated = get_document_core(&state, "bulk_test", "b2").await.unwrap();
+        assert!(doc2_updated.found);
+        let src2 = doc2_updated.source.unwrap();
+        assert_eq!(src2["name"], "item 2");
+        assert_eq!(src2["val"], 250);
+        assert_eq!(src2["extra"], "yes");
     }
 }

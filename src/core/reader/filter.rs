@@ -220,14 +220,18 @@ impl HybridReader {
             negated: false,
         };
 
+        let deletes = self.load_merged_deletes().await.unwrap_or_default();
+
         if let Some(bitmap) = self.get_scalar_filter_bitmap(&filter).await? {
-            return Ok(!bitmap.is_empty());
+            let live = &bitmap - &deletes;
+            return Ok(!live.is_empty());
         }
 
         // 3. Fallback: Full Scan (Slowest)
         // This is only called if Bloom Filter said "Possible" and no Inverted Index exists.
         let batches = self.stream_all(None).await?;
         let mut stream = batches;
+        let mut row_offset: u32 = 0;
         while let Some(batch_res) = stream.next().await {
             let batch = batch_res?;
             let col = batch
@@ -236,12 +240,16 @@ impl HybridReader {
 
             // Check rows in batch
             for i in 0..batch.num_rows() {
+                if deletes.contains(row_offset + i as u32) {
+                    continue;
+                }
                 let val = crate::core::manifest::ManifestValue::from_array(col, i);
                 // Simple comparison (might need type handling optimization)
                 if format!("{}", val) == format!("{}", value).trim_matches('"') {
                     return Ok(true);
                 }
             }
+            row_offset += batch.num_rows() as u32;
         }
 
         Ok(false)
