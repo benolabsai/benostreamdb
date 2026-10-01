@@ -27,8 +27,8 @@ semantics map onto the engine.
 |----------|-------|
 | `GET /collections` | Lists every table under the storage root. |
 | `GET /collections/:name/exists` | `{exists: bool}`. |
-| `GET /collections/:name` | Real `points_count` (read from the table, including the write buffer), `vectors_count`, `indexed_vectors_count`, and the configured `size` / `distance`. |
-| `PUT /collections/:name` | Creates the collection eagerly with `_id` + `vector` columns. Pre-existing collection → `400`. |
+| `GET /collections/:name` | Real `points_count` (read from the table, including the write buffer), `vectors_count`, `indexed_vectors_count`, configured dense `size` / `distance`, and `sparse_vectors` map. |
+| `PUT /collections/:name` | Creates the collection eagerly with dense vectors (`_id` + `vector` columns), sparse vectors (`sparse_vectors: { "<name>": {} }`), or hybrid collections supporting both. Pre-existing collection → `400`. |
 | `PATCH /collections/:name` | Persists `hnsw_config`; other params are accepted and ignored (documented below). |
 | `DELETE /collections/:name` | **Hard delete** — removes all store objects and any aliases pointing at the collection. |
 | `PUT /collections/:name/index` | Payload index creation. Builds physical BM25 or Bitmap index on the payload column and records in `payload_schema`. |
@@ -41,21 +41,21 @@ semantics map onto the engine.
 ### Points
 | Endpoint | Notes |
 |----------|-------|
-| `PUT /collections/:name/points` | Upsert. Implemented as *flush → delete-by-id → append* (merge-on-read via Iceberg position deletes), so re-upserting an id overwrites it. |
-| `GET` / `POST /collections/:name/points` | Retrieve by `ids`. Both verbs are routed; `GET` accepts a JSON body. |
+| `PUT /collections/:name/points` | Upsert dense vectors, sparse vectors (`{"indices": [...], "values": [...]}`), or named vector maps. Implemented as *flush → delete-by-id → append* (merge-on-read via Iceberg position deletes), so re-upserting an id overwrites it. |
+| `GET` / `POST /collections/:name/points` | Retrieve by `ids`. Both verbs are routed; returns dense or sparse vector wire format when `with_vector` is true. |
 | `GET /collections/:name/points/:id` | Single point; `404` when missing. |
-| `POST /collections/:name/points/search` | Legacy vector search. |
-| `POST /collections/:name/points/query` | Universal query API. Accepts `query: [..]`, `query: {nearest: [..]}`, or `query: {fusion: "rrf"}` with `prefetch: [...]`; omitting `query` behaves like a scroll. |
+| `POST /collections/:name/points/search` | Vector search for dense (Euclid, Cosine, Dot, Manhattan) and sparse vectors (dot product scoring). |
+| `POST /collections/:name/points/query` | Universal query API. Accepts dense nearest vectors, sparse nearest vectors (`indices` + `values`), or `query: {fusion: "rrf"}` across dense/sparse `prefetch: [...]` legs; omitting `query` behaves like a scroll. |
 | `POST /collections/:name/points/scroll` | `{filter?, limit, offset?, with_payload?, with_vector?}` → `{points, next_page_offset}`. |
 | `POST /collections/:name/points/count` | `{filter?, exact?}` → `{count}`. |
-| `POST /collections/:name/points/recommend` | Supports `best_score` (max positive score minus max negative score) and `average_vector` (`mean(positive) - mean(negative)`). |
+| `POST /collections/:name/points/recommend` | Supports `best_score` (max positive score minus max negative score) and `average_vector` (`mean(positive) - mean(negative)`). Sparse vectors automatically evaluate with `best_score`. |
 | `POST /collections/:name/points/discover` | Metric-aware context discovery: searches with `target`, then keeps points closer to each context `positive` than its `negative` using the collection distance metric. |
 | `POST /collections/:name/points/batch` | `upsert` / `delete` / `set_payload` / `overwrite_payload` / `delete_payload` / `clear_payload` / `update_vectors`. |
 | `POST /collections/:name/points/payload` | Set (merge) payload. |
 | `PUT /collections/:name/points/payload` | Overwrite payload. |
 | `POST /collections/:name/points/payload/delete` | Delete payload keys. |
 | `POST /collections/:name/points/payload/clear` | Clear payload. |
-| `PUT /collections/:name/points/vectors` | Update point vectors. |
+| `PUT /collections/:name/points/vectors` | Update point vectors (dense or sparse). |
 | `POST /collections/:name/points/delete` | Delete by `points` (ids) and/or `filter`. |
 
 ### Aliases
@@ -95,6 +95,8 @@ converts it to the Qdrant score for the collection's configured `distance`:
 | `Dot` | `-dot` | `-d` (dot product) | descending (higher is better) |
 | `Manhattan` | L1 | `d` | ascending |
 
+For sparse vectors, scoring evaluates the dot product $\sum a_i b_i$ across matching indices (higher is better, descending order).
+
 Results are always ordered best-first.
 
 ### Error envelope
@@ -112,7 +114,8 @@ Success responses use `{ "result": <T>, "status": "ok", "time": <seconds> }`.
 | Feature | Behavior / workaround |
 |---------|----------------------|
 | Named vectors | A point's `vector` may be a list or a named map; the entry keyed `vector` (or the first entry) is stored in the single `vector` column. Multiple named vectors per point are not stored separately. |
-| Sparse / binary / multi-vector | Not supported; only dense `Float32` vectors. |
+| Sparse vectors | Fully supported: native wire format `{ "indices": [...], "values": [...] }`, dot-product scoring, sparse collection creation (`sparse_vectors: { "<name>": {} }`), hybrid prefetch with RRF fusion, and retrieval. |
+| Binary / multi-vector (ColBERT) | Not supported yet; dense `Float32` and sparse vectors are supported. |
 | `PATCH` optimizers / quantization / on-disk params | Accepted and ignored (the engine manages its own storage layout). |
 | Payload index semantics | Fully supported: `PUT .../index` builds physical BM25 (text/keyword) or Bitmap indexes and tracks them in `payload_schema`. |
 | `recommend` strategies | Both `best_score` and `average_vector` strategies are supported. |

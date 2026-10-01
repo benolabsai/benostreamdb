@@ -30,9 +30,9 @@ use std::time::Instant;
 
 use arrow::array::{
     Array, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
-    StringArray, StructArray,
+    ListArray, StringArray, StructArray,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -119,6 +119,8 @@ struct CollectionMeta {
     hnsw_config: Option<HnswConfig>,
     #[serde(default)]
     payload_schema: HashMap<String, String>,
+    #[serde(default)]
+    sparse_vectors: Option<HashMap<String, SparseVectorConfig>>,
 }
 
 impl Default for CollectionMeta {
@@ -129,6 +131,7 @@ impl Default for CollectionMeta {
             on_disk: true,
             hnsw_config: None,
             payload_schema: HashMap::new(),
+            sparse_vectors: None,
         }
     }
 }
@@ -404,6 +407,143 @@ fn vector_from_array(array: &dyn Array, row: usize) -> Option<Vec<f32>> {
     Some(f.values().to_vec())
 }
 
+fn extract_u32_list(array: &dyn Array, row: usize) -> Option<Vec<u32>> {
+    if array.is_null(row) {
+        return None;
+    }
+    if let Some(list) = array.as_any().downcast_ref::<ListArray>() {
+        let val = list.value(row);
+        if let Some(arr) = val.as_any().downcast_ref::<Int64Array>() {
+            return Some(arr.values().iter().map(|&v| v as u32).collect());
+        }
+        if let Some(arr) = val.as_any().downcast_ref::<arrow::array::UInt32Array>() {
+            return Some(arr.values().to_vec());
+        }
+    }
+    if let Some(fsl) = array.as_any().downcast_ref::<FixedSizeListArray>() {
+        let val = fsl.value(row);
+        if let Some(arr) = val.as_any().downcast_ref::<Int64Array>() {
+            return Some(arr.values().iter().map(|&v| v as u32).collect());
+        }
+        if let Some(arr) = val.as_any().downcast_ref::<arrow::array::UInt32Array>() {
+            return Some(arr.values().to_vec());
+        }
+    }
+    None
+}
+
+fn extract_f32_list(array: &dyn Array, row: usize) -> Option<Vec<f32>> {
+    if array.is_null(row) {
+        return None;
+    }
+    if let Some(list) = array.as_any().downcast_ref::<ListArray>() {
+        let val = list.value(row);
+        if let Some(arr) = val.as_any().downcast_ref::<Float32Array>() {
+            return Some(arr.values().to_vec());
+        }
+        if let Some(arr) = val.as_any().downcast_ref::<Float64Array>() {
+            return Some(arr.values().iter().map(|&v| v as f32).collect());
+        }
+    }
+    if let Some(fsl) = array.as_any().downcast_ref::<FixedSizeListArray>() {
+        let val = fsl.value(row);
+        if let Some(arr) = val.as_any().downcast_ref::<Float32Array>() {
+            return Some(arr.values().to_vec());
+        }
+        if let Some(arr) = val.as_any().downcast_ref::<Float64Array>() {
+            return Some(arr.values().iter().map(|&v| v as f32).collect());
+        }
+    }
+    None
+}
+
+fn sparse_vector_from_array(array: &dyn Array, row: usize) -> Option<SparseVector> {
+    if array.is_null(row) {
+        return None;
+    }
+    let s = array.as_any().downcast_ref::<StructArray>()?;
+    let indices_col = s.column_by_name("indices")?;
+    let values_col = s.column_by_name("values")?;
+    let indices = extract_u32_list(indices_col.as_ref(), row)?;
+    let values = extract_f32_list(values_col.as_ref(), row)?;
+    Some(SparseVector { indices, values })
+}
+
+fn vector_output_from_array(array: &dyn Array, row: usize) -> Option<VectorOutput> {
+    if let Some(dense) = vector_from_array(array, row) {
+        return Some(VectorOutput::Dense(dense));
+    }
+    if let Some(sparse) = sparse_vector_from_array(array, row) {
+        return Some(VectorOutput::Sparse(sparse));
+    }
+    None
+}
+
+fn sparse_dot_product(a_idx: &[u32], a_val: &[f32], b_idx: &[u32], b_val: &[f32]) -> f32 {
+    let mut sum = 0.0;
+    let mut i = 0;
+    let mut j = 0;
+    while i < a_idx.len() && j < b_idx.len() {
+        if a_idx[i] == b_idx[j] {
+            sum += a_val[i] * b_val[j];
+            i += 1;
+            j += 1;
+        } else if a_idx[i] < b_idx[j] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    sum
+}
+
+fn sparse_vec_dot(a: &SparseVector, b: &SparseVector) -> f32 {
+    let sa = a.sorted();
+    let sb = b.sorted();
+    sparse_dot_product(&sa.indices, &sa.values, &sb.indices, &sb.values)
+}
+
+fn sparse_vector_field(name: &str) -> Field {
+    Field::new(
+        name,
+        DataType::Struct(Fields::from(vec![
+            Field::new(
+                "indices",
+                DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+                true,
+            ),
+            Field::new(
+                "values",
+                DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+                true,
+            ),
+        ])),
+        true,
+    )
+}
+
+fn is_sparse_struct(dt: &DataType) -> bool {
+    if let DataType::Struct(fields) = dt {
+        let has_indices = fields.iter().any(|f| f.name() == "indices");
+        let has_values = fields.iter().any(|f| f.name() == "values");
+        has_indices && has_values
+    } else {
+        false
+    }
+}
+
+fn adjust_sparse_schema(schema: &Schema) -> Schema {
+    let mut fields = Vec::with_capacity(schema.fields().len());
+    for f in schema.fields() {
+        if is_sparse_struct(f.data_type()) {
+            fields.push(sparse_vector_field(f.name()));
+        } else {
+            fields.push((**f).clone());
+        }
+    }
+    Schema::new(fields)
+}
+
 fn parse_point_id(s: &str) -> PointId {
     match s.parse::<u64>() {
         Ok(n) => PointId::Num(n),
@@ -456,7 +596,7 @@ fn batch_to_retrieved(
         };
         let payload = payload_from_batch(batch, row, with_payload);
         let vector = if with_vector {
-            vec_idx.and_then(|i| vector_from_array(batch.column(i).as_ref(), row))
+            vec_idx.and_then(|i| vector_output_from_array(batch.column(i).as_ref(), row))
         } else {
             None
         };
@@ -500,7 +640,7 @@ fn batch_to_scored(
             .unwrap_or(0.0);
         let payload = payload_from_batch(batch, row, with_payload);
         let vector = if with_vector {
-            vec_idx.and_then(|i| vector_from_array(batch.column(i).as_ref(), row))
+            vec_idx.and_then(|i| vector_output_from_array(batch.column(i).as_ref(), row))
         } else {
             None
         };
@@ -543,17 +683,68 @@ async fn count_points(
     Ok(batches.iter().map(|b| b.num_rows()).sum())
 }
 
+fn vector_data_to_json(vd: &VectorData) -> Value {
+    match vd {
+        VectorData::Dense(v) => Value::Array(v.iter().map(|f| Value::from(*f as f64)).collect()),
+        VectorData::Sparse(s) => {
+            let sorted = s.sorted();
+            let mut sv = serde_json::Map::new();
+            sv.insert(
+                "indices".to_string(),
+                Value::Array(
+                    sorted
+                        .indices
+                        .iter()
+                        .map(|i| Value::from(*i as i64))
+                        .collect(),
+                ),
+            );
+            sv.insert(
+                "values".to_string(),
+                Value::Array(
+                    sorted
+                        .values
+                        .iter()
+                        .map(|f| Value::from(*f as f64))
+                        .collect(),
+                ),
+            );
+            Value::Object(sv)
+        }
+    }
+}
+
 /// Build the flat JSON documents the engine infers a schema from.
 fn points_to_docs(points: &[PointStruct]) -> Vec<Value> {
     let mut docs = Vec::with_capacity(points.len());
     for p in points {
         let mut doc = serde_json::Map::new();
         doc.insert("_id".to_string(), Value::String(p.id.as_string()));
-        if let Some(v) = p.vector.as_ref().and_then(|v| v.primary()) {
-            doc.insert(
-                "vector".to_string(),
-                Value::Array(v.iter().map(|f| Value::from(*f as f64)).collect()),
-            );
+        if let Some(vi) = &p.vector {
+            match vi {
+                VectorInput::Single(v) => {
+                    doc.insert(
+                        "vector".to_string(),
+                        Value::Array(v.iter().map(|f| Value::from(*f as f64)).collect()),
+                    );
+                }
+                VectorInput::Sparse(s) => {
+                    doc.insert(
+                        "vector".to_string(),
+                        vector_data_to_json(&VectorData::Sparse(s.clone())),
+                    );
+                }
+                VectorInput::Named(map) => {
+                    for (name, vd) in map {
+                        doc.insert(name.clone(), vector_data_to_json(vd));
+                    }
+                    if !doc.contains_key("vector") {
+                        if let Some(first) = map.get("vector").or_else(|| map.values().next()) {
+                            doc.insert("vector".to_string(), vector_data_to_json(first));
+                        }
+                    }
+                }
+            }
         }
         if let Some(payload) = &p.payload {
             for (k, v) in payload {
@@ -584,6 +775,7 @@ async fn upsert_core(state: &AppState, name: &str, points: Vec<PointStruct>) -> 
     for doc in &docs {
         let s = infer::infer_schema(doc)
             .map_err(|e| QErr::bad(format!("Schema inference failed: {e}")))?;
+        let s = Arc::new(adjust_sparse_schema(&s));
         merged = Some(match merged {
             None => s,
             Some(prev) => Arc::new(
@@ -634,7 +826,7 @@ async fn upsert_core(state: &AppState, name: &str, points: Vec<PointStruct>) -> 
 
 struct PointRow {
     id: String,
-    vector: Option<Vec<f32>>,
+    vector: Option<VectorOutput>,
     payload: HashMap<String, Value>,
 }
 
@@ -658,7 +850,8 @@ async fn read_point_rows(
                 Some(a) if !a.is_null(row) => a.value(row).to_string(),
                 _ => continue,
             };
-            let vector = vec_idx.and_then(|i| vector_from_array(batch.column(i).as_ref(), row));
+            let vector =
+                vec_idx.and_then(|i| vector_output_from_array(batch.column(i).as_ref(), row));
             let mut payload = HashMap::new();
             for (i, f) in schema.fields().iter().enumerate() {
                 let n = f.name();
@@ -732,7 +925,7 @@ async fn apply_payload_op(
         }
         new_points.push(PointStruct {
             id: parse_point_id(&r.id),
-            vector: r.vector.map(VectorInput::Single),
+            vector: r.vector.map(|v| v.to_vector_input()),
             payload: Some(payload),
         });
     }
@@ -755,11 +948,10 @@ async fn update_vectors_core(
     let mut new_points = Vec::with_capacity(points.len());
     for p in points {
         let id = p.id.as_string();
-        let vector = p.vector.primary().cloned();
         let payload = by_id.remove(&id).map(|r| r.payload).unwrap_or_default();
         new_points.push(PointStruct {
             id: p.id,
-            vector: vector.map(VectorInput::Single),
+            vector: Some(p.vector),
             payload: Some(payload),
         });
     }
@@ -789,6 +981,50 @@ async fn delete_points_core(
 
 #[allow(clippy::too_many_arguments)]
 async fn search_core(
+    state: &AppState,
+    name: &str,
+    vector: VectorData,
+    filter: Option<&Filter>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    with_payload: Option<&WithPayload>,
+    with_vector: Option<&WithVector>,
+    score_threshold: Option<f32>,
+) -> Result<Vec<ScoredPoint>, QErr> {
+    match vector {
+        VectorData::Dense(dense) => {
+            search_core_dense(
+                state,
+                name,
+                dense,
+                filter,
+                limit,
+                offset,
+                with_payload,
+                with_vector,
+                score_threshold,
+            )
+            .await
+        }
+        VectorData::Sparse(sparse) => {
+            search_core_sparse(
+                state,
+                name,
+                sparse,
+                filter,
+                limit,
+                offset,
+                with_payload,
+                with_vector,
+                score_threshold,
+            )
+            .await
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn search_core_dense(
     state: &AppState,
     name: &str,
     vector: Vec<f32>,
@@ -835,6 +1071,78 @@ async fn search_core(
 
     if let Some(t) = score_threshold {
         points.retain(|p| if hib { p.score >= t } else { p.score <= t });
+    }
+
+    Ok(points.into_iter().skip(offset).take(limit).collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn search_core_sparse(
+    state: &AppState,
+    name: &str,
+    sparse: SparseVector,
+    filter: Option<&Filter>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    with_payload: Option<&WithPayload>,
+    with_vector: Option<&WithVector>,
+    score_threshold: Option<f32>,
+) -> Result<Vec<ScoredPoint>, QErr> {
+    let filter_sql = match filter {
+        Some(f) => filter_to_sql(f)?,
+        None => None,
+    };
+    let limit = limit.unwrap_or(10).max(1);
+    let offset = offset.unwrap_or(0);
+
+    let batches = read_batches(state, name, filter_sql.as_deref(), None).await?;
+    let wp = with_payload.cloned().unwrap_or(WithPayload::Bool(true));
+    let wv = with_vector.map(|w| w.enabled()).unwrap_or(false);
+
+    let mut points: Vec<ScoredPoint> = Vec::new();
+    for batch in &batches {
+        let schema = batch.schema();
+        let id_idx = match schema.index_of("_id") {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+        let id_arr = batch.column(id_idx).as_any().downcast_ref::<StringArray>();
+        let vec_idx = schema.index_of("vector").ok();
+
+        for row in 0..batch.num_rows() {
+            let id = match id_arr {
+                Some(a) if !a.is_null(row) => parse_point_id(a.value(row)),
+                _ => continue,
+            };
+            let pt_vec =
+                vec_idx.and_then(|i| vector_output_from_array(batch.column(i).as_ref(), row));
+            let score = match &pt_vec {
+                Some(VectorOutput::Sparse(pt_sparse)) => sparse_vec_dot(&sparse, pt_sparse),
+                _ => 0.0,
+            };
+
+            let payload = payload_from_batch(batch, row, &wp);
+            let vector = if wv { pt_vec } else { None };
+
+            points.push(ScoredPoint {
+                id,
+                version: 0,
+                score,
+                payload,
+                vector,
+            });
+        }
+    }
+
+    points.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.as_string().cmp(&b.id.as_string()))
+    });
+
+    if let Some(t) = score_threshold {
+        points.retain(|p| p.score >= t);
     }
 
     Ok(points.into_iter().skip(offset).take(limit).collect())
@@ -928,6 +1236,25 @@ fn vector_sim(a: &[f32], b: &[f32], metric: VectorMetric) -> f32 {
     }
 }
 
+fn vector_output_to_data(vo: &VectorOutput) -> Option<VectorData> {
+    match vo {
+        VectorOutput::Dense(v) => Some(VectorData::Dense(v.clone())),
+        VectorOutput::Sparse(s) => Some(VectorData::Sparse(s.clone())),
+        VectorOutput::Named(m) => m
+            .get("vector")
+            .cloned()
+            .or_else(|| m.values().next().cloned()),
+    }
+}
+
+fn vector_data_sim(a: &VectorData, b: &VectorData, metric: VectorMetric) -> f32 {
+    match (a, b) {
+        (VectorData::Dense(da), VectorData::Dense(db)) => vector_sim(da, db, metric),
+        (VectorData::Sparse(sa), VectorData::Sparse(sb)) => sparse_vec_dot(sa, sb),
+        _ => f32::NEG_INFINITY,
+    }
+}
+
 // ==========================================
 // Collection handlers
 // ==========================================
@@ -1010,11 +1337,17 @@ pub async fn get_collection(
         segments_count: 1,
         config: CollectionConfig {
             params: CollectionParams {
-                vectors: VectorsConfig {
-                    size: vector_size,
-                    distance: meta.distance.clone(),
-                    on_disk: Some(meta.on_disk),
+                vectors: if meta.size > 0 {
+                    serde_json::to_value(VectorsConfig {
+                        size: vector_size,
+                        distance: meta.distance.clone(),
+                        on_disk: Some(meta.on_disk),
+                    })
+                    .ok()
+                } else {
+                    None
                 },
+                sparse_vectors: meta.sparse_vectors.clone(),
             },
             hnsw_config: meta.hnsw_config.clone(),
         },
@@ -1033,21 +1366,43 @@ pub async fn create_collection(
     if collection_exists(&state, &collection_name).await {
         return qerr(QErr::bad("Collection already exists"), start);
     }
-    let size = req.vectors.size;
-    if size == 0 {
-        return qerr(QErr::bad("vectors.size must be greater than 0"), start);
+    if req.vectors.is_none() && req.sparse_vectors.is_none() {
+        return qerr(
+            QErr::bad("Either 'vectors' or 'sparse_vectors' must be provided"),
+            start,
+        );
     }
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("_id", DataType::Utf8, true),
-        Field::new(
+    let (size, distance, on_disk) =
+        if let Some(cfg) = req.vectors.as_ref().and_then(|v| v.primary()) {
+            if cfg.size == 0 {
+                return qerr(QErr::bad("vectors.size must be greater than 0"), start);
+            }
+            (cfg.size, cfg.distance.clone(), cfg.on_disk.unwrap_or(true))
+        } else {
+            (0, "Dot".to_string(), true)
+        };
+    let mut fields = vec![Field::new("_id", DataType::Utf8, true)];
+    if size > 0 {
+        fields.push(Field::new(
             "vector",
             DataType::FixedSizeList(
                 Arc::new(Field::new("item", DataType::Float32, true)),
                 size as i32,
             ),
             true,
-        ),
-    ]));
+        ));
+    }
+    if let Some(sparse_map) = &req.sparse_vectors {
+        for name in sparse_map.keys() {
+            if !fields.iter().any(|f| f.name() == name) {
+                fields.push(sparse_vector_field(name));
+            }
+        }
+        if !fields.iter().any(|f| f.name() == "vector") {
+            fields.push(sparse_vector_field("vector"));
+        }
+    }
+    let schema = Arc::new(Schema::new(fields));
     if let Err(e) = state
         .open_or_create_qdrant(&collection_name, &Some(schema))
         .await
@@ -1056,10 +1411,11 @@ pub async fn create_collection(
     }
     let meta = CollectionMeta {
         size,
-        distance: req.vectors.distance.clone(),
-        on_disk: req.vectors.on_disk.unwrap_or(true),
+        distance,
+        on_disk,
         hnsw_config: req.hnsw_config.clone(),
         payload_schema: HashMap::new(),
+        sparse_vectors: req.sparse_vectors.clone(),
     };
     if let Err(e) = write_meta(&state, &collection_name, &meta).await {
         return qerr(e, start);
@@ -1258,7 +1614,7 @@ pub async fn search_points(
     match search_core(
         &state,
         &collection_name,
-        req.vector,
+        req.vector.to_vector_data(),
         req.filter.as_ref(),
         req.limit,
         req.offset,
@@ -1388,13 +1744,24 @@ pub async fn query_points(
                 let mut rescored: Vec<ScoredPoint> = candidate_map
                     .into_values()
                     .filter_map(|mut p| {
-                        let v = p.vector.as_ref()?;
-                        p.score =
-                            to_qdrant_score(vector_dist(v, query_vec, metric), &meta.distance);
+                        let v = p.vector.as_ref().and_then(vector_output_to_data)?;
+                        p.score = match (&v, &query_vec) {
+                            (VectorData::Sparse(s1), VectorData::Sparse(s2)) => {
+                                sparse_vec_dot(s1, s2)
+                            }
+                            (VectorData::Dense(d1), VectorData::Dense(d2)) => {
+                                to_qdrant_score(vector_dist(d1, d2, metric), &meta.distance)
+                            }
+                            _ => 0.0,
+                        };
                         Some(p)
                     })
                     .collect();
-                if higher_is_better(&meta.distance) {
+                let hib = match query_vec {
+                    VectorData::Sparse(_) => true,
+                    VectorData::Dense(_) => higher_is_better(&meta.distance),
+                };
+                if hib {
                     rescored.sort_by(|a, b| b.score.total_cmp(&a.score));
                 } else {
                     rescored.sort_by(|a, b| a.score.total_cmp(&b.score));
@@ -1519,21 +1886,26 @@ pub async fn recommend_points(
             start,
         );
     }
-    let dim = req.positive[0].len();
-    for v in &req.positive {
-        if v.len() != dim {
-            return qerr(QErr::bad("inconsistent vector dimensions"), start);
-        }
-    }
-    if let Some(negs) = &req.negative {
-        for v in negs {
-            if v.len() != dim {
+    let dense_dim = match &req.positive[0] {
+        VectorData::Dense(v) => Some(v.len()),
+        VectorData::Sparse(_) => None,
+    };
+    if let Some(dim) = dense_dim {
+        for v in &req.positive {
+            if v.dense().map(|d| d.len()) != Some(dim) {
                 return qerr(QErr::bad("inconsistent vector dimensions"), start);
+            }
+        }
+        if let Some(negs) = &req.negative {
+            for v in negs {
+                if v.dense().map(|d| d.len()) != Some(dim) {
+                    return qerr(QErr::bad("inconsistent vector dimensions"), start);
+                }
             }
         }
     }
 
-    if req.strategy.as_deref() == Some("best_score") {
+    if req.strategy.as_deref() == Some("best_score") || dense_dim.is_none() {
         let meta = load_meta_or_default(&state, &collection_name).await;
         let metric = metric_for(&meta.distance);
         let limit = req.limit.unwrap_or(10).max(1);
@@ -1562,17 +1934,17 @@ pub async fn recommend_points(
 
         let mut scored_points: Vec<ScoredPoint> = Vec::new();
         for (_, mut p) in candidates_map {
-            if let Some(v) = &p.vector {
+            if let Some(v) = p.vector.as_ref().and_then(vector_output_to_data) {
                 let best_pos = req
                     .positive
                     .iter()
-                    .map(|pos| vector_sim(v, pos, metric))
+                    .map(|pos| vector_data_sim(&v, pos, metric))
                     .fold(f32::NEG_INFINITY, f32::max);
 
                 let worst_neg = if let Some(negs) = &req.negative {
                     if !negs.is_empty() {
                         negs.iter()
-                            .map(|neg| vector_sim(v, neg, metric))
+                            .map(|neg| vector_data_sim(&v, neg, metric))
                             .fold(f32::NEG_INFINITY, f32::max)
                     } else {
                         0.0
@@ -1602,11 +1974,19 @@ pub async fn recommend_points(
         return ok(scored_points, start);
     }
 
-    // Default: average-vector strategy
+    // Default: average-vector strategy (for dense vectors)
+    let Some(dim) = dense_dim else {
+        return qerr(
+            QErr::bad("sparse vectors must use best_score strategy"),
+            start,
+        );
+    };
     let mut query = vec![0.0f32; dim];
     for v in &req.positive {
-        for (i, x) in v.iter().enumerate() {
-            query[i] += x;
+        if let Some(dv) = v.dense() {
+            for (i, x) in dv.iter().enumerate() {
+                query[i] += x;
+            }
         }
     }
     for x in query.iter_mut() {
@@ -1616,8 +1996,10 @@ pub async fn recommend_points(
         if !neg.is_empty() {
             let mut nq = vec![0.0f32; dim];
             for v in neg {
-                for (i, x) in v.iter().enumerate() {
-                    nq[i] += x;
+                if let Some(dv) = v.dense() {
+                    for (i, x) in dv.iter().enumerate() {
+                        nq[i] += x;
+                    }
                 }
             }
             for x in nq.iter_mut() {
@@ -1631,7 +2013,7 @@ pub async fn recommend_points(
     match search_core(
         &state,
         &collection_name,
-        query,
+        VectorData::Dense(query),
         req.filter.as_ref(),
         req.limit,
         None,
@@ -1666,7 +2048,7 @@ pub async fn discover_points(
     let mut results = match search_core(
         &state,
         &collection_name,
-        req.target.clone(),
+        VectorData::Dense(req.target.clone()),
         req.filter.as_ref(),
         Some(limit * 4),
         None,
@@ -1682,7 +2064,7 @@ pub async fn discover_points(
     if let Some(ctx) = &req.context {
         if !ctx.is_empty() {
             results.retain(|p| {
-                let Some(v) = &p.vector else {
+                let Some(v) = p.vector.as_ref().and_then(|vo| vo.dense()) else {
                     return true;
                 };
                 ctx.iter().all(|c| {

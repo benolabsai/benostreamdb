@@ -67,11 +67,42 @@ impl UpdateResult {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateCollectionRequest {
-    pub vectors: VectorsConfig,
+    #[serde(default)]
+    pub vectors: Option<VectorsConfigInput>,
+    #[serde(default)]
+    pub sparse_vectors: Option<HashMap<String, SparseVectorConfig>>,
     #[serde(default)]
     pub hnsw_config: Option<HnswConfig>,
     #[serde(default)]
     pub on_disk_payload: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum VectorsConfigInput {
+    Single(VectorsConfig),
+    Multiple(HashMap<String, VectorsConfig>),
+}
+
+impl VectorsConfigInput {
+    pub fn primary(&self) -> Option<&VectorsConfig> {
+        match self {
+            VectorsConfigInput::Single(v) => Some(v),
+            VectorsConfigInput::Multiple(m) => m.get("vector").or_else(|| m.values().next()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SparseVectorConfig {
+    #[serde(default)]
+    pub index: Option<SparseIndexConfig>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct SparseIndexConfig {
+    #[serde(default)]
+    pub on_disk: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -113,7 +144,10 @@ pub struct CollectionConfig {
 
 #[derive(Debug, Serialize)]
 pub struct CollectionParams {
-    pub vectors: VectorsConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vectors: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse_vectors: Option<HashMap<String, SparseVectorConfig>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -173,21 +207,180 @@ pub struct PointStruct {
     pub payload: Option<HashMap<String, Value>>,
 }
 
-/// A point vector: either a single unnamed vector or a named-vector map.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct SparseVector {
+    pub indices: Vec<u32>,
+    pub values: Vec<f32>,
+}
+
+impl SparseVector {
+    pub fn sorted(&self) -> Self {
+        if self.indices.windows(2).all(|w| w[0] < w[1]) {
+            return self.clone();
+        }
+        let mut pairs: Vec<(u32, f32)> = self
+            .indices
+            .iter()
+            .copied()
+            .zip(self.values.iter().copied())
+            .collect();
+        pairs.sort_unstable_by_key(|&(idx, _)| idx);
+        let indices = pairs.iter().map(|&(i, _)| i).collect();
+        let values = pairs.iter().map(|&(_, v)| v).collect();
+        SparseVector { indices, values }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum VectorData {
+    Dense(Vec<f32>),
+    Sparse(SparseVector),
+}
+
+impl VectorData {
+    pub fn dense(&self) -> Option<&Vec<f32>> {
+        match self {
+            VectorData::Dense(v) => Some(v),
+            VectorData::Sparse(_) => None,
+        }
+    }
+
+    pub fn sparse(&self) -> Option<&SparseVector> {
+        match self {
+            VectorData::Dense(_) => None,
+            VectorData::Sparse(s) => Some(s),
+        }
+    }
+
+    pub fn to_vector_input(&self) -> VectorInput {
+        match self {
+            VectorData::Dense(v) => VectorInput::Single(v.clone()),
+            VectorData::Sparse(s) => VectorInput::Sparse(s.clone()),
+        }
+    }
+}
+
+/// A point vector: dense list, sparse vector, or a named-vector map.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum VectorInput {
     Single(Vec<f32>),
-    Named(HashMap<String, Vec<f32>>),
+    Sparse(SparseVector),
+    Named(HashMap<String, VectorData>),
 }
 
 impl VectorInput {
-    /// The vector the engine stores in its single `vector` column. For named
-    /// vectors the entry keyed `vector` (or the first entry) is used.
-    pub fn primary(&self) -> Option<&Vec<f32>> {
+    pub fn primary_dense(&self) -> Option<&Vec<f32>> {
         match self {
             VectorInput::Single(v) => Some(v),
-            VectorInput::Named(m) => m.get("vector").or_else(|| m.values().next()),
+            VectorInput::Sparse(_) => None,
+            VectorInput::Named(m) => {
+                if let Some(VectorData::Dense(v)) = m.get("vector") {
+                    return Some(v);
+                }
+                for v in m.values() {
+                    if let VectorData::Dense(d) = v {
+                        return Some(d);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    pub fn primary_sparse(&self) -> Option<&SparseVector> {
+        match self {
+            VectorInput::Single(_) => None,
+            VectorInput::Sparse(s) => Some(s),
+            VectorInput::Named(m) => {
+                if let Some(VectorData::Sparse(s)) = m.get("vector") {
+                    return Some(s);
+                }
+                for v in m.values() {
+                    if let VectorData::Sparse(s) = v {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    pub fn primary(&self) -> Option<VectorData> {
+        match self {
+            VectorInput::Single(v) => Some(VectorData::Dense(v.clone())),
+            VectorInput::Sparse(s) => Some(VectorData::Sparse(s.clone())),
+            VectorInput::Named(m) => m
+                .get("vector")
+                .cloned()
+                .or_else(|| m.values().next().cloned()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum VectorOutput {
+    Dense(Vec<f32>),
+    Sparse(SparseVector),
+    Named(HashMap<String, VectorData>),
+}
+
+impl From<Vec<f32>> for VectorOutput {
+    fn from(v: Vec<f32>) -> Self {
+        VectorOutput::Dense(v)
+    }
+}
+
+impl From<SparseVector> for VectorOutput {
+    fn from(s: SparseVector) -> Self {
+        VectorOutput::Sparse(s)
+    }
+}
+
+impl VectorOutput {
+    pub fn dense(&self) -> Option<&Vec<f32>> {
+        match self {
+            VectorOutput::Dense(v) => Some(v),
+            VectorOutput::Sparse(_) => None,
+            VectorOutput::Named(m) => {
+                if let Some(VectorData::Dense(v)) = m.get("vector") {
+                    return Some(v);
+                }
+                for v in m.values() {
+                    if let VectorData::Dense(d) = v {
+                        return Some(d);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    pub fn sparse(&self) -> Option<&SparseVector> {
+        match self {
+            VectorOutput::Dense(_) => None,
+            VectorOutput::Sparse(s) => Some(s),
+            VectorOutput::Named(m) => {
+                if let Some(VectorData::Sparse(s)) = m.get("vector") {
+                    return Some(s);
+                }
+                for v in m.values() {
+                    if let VectorData::Sparse(s) = v {
+                        return Some(s);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    pub fn to_vector_input(&self) -> VectorInput {
+        match self {
+            VectorOutput::Dense(v) => VectorInput::Single(v.clone()),
+            VectorOutput::Sparse(s) => VectorInput::Sparse(s.clone()),
+            VectorOutput::Named(m) => VectorInput::Named(m.clone()),
         }
     }
 }
@@ -289,7 +482,7 @@ pub struct RetrievedPoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vector: Option<Vec<f32>>,
+    pub vector: Option<VectorOutput>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -300,13 +493,31 @@ pub struct ScoredPoint {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<HashMap<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub vector: Option<Vec<f32>>,
+    pub vector: Option<VectorOutput>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum SearchVectorInput {
+    Dense(Vec<f32>),
+    Sparse(SparseVector),
+    Named { name: String, vector: VectorData },
+}
+
+impl SearchVectorInput {
+    pub fn to_vector_data(&self) -> VectorData {
+        match self {
+            SearchVectorInput::Dense(v) => VectorData::Dense(v.clone()),
+            SearchVectorInput::Sparse(s) => VectorData::Sparse(s.clone()),
+            SearchVectorInput::Named { vector, .. } => vector.clone(),
+        }
+    }
 }
 
 /// `POST /collections/:name/points/search` (legacy) request.
 #[derive(Debug, Deserialize)]
 pub struct SearchPointsRequest {
-    pub vector: Vec<f32>,
+    pub vector: SearchVectorInput,
     #[serde(default)]
     pub filter: Option<Filter>,
     #[serde(default)]
@@ -353,14 +564,20 @@ pub struct QueryPointsRequest {
 pub enum QueryInput {
     Nearest(Vec<f32>),
     NearestObj { nearest: Vec<f32> },
+    NearestSparse(SparseVector),
+    NearestSparseObj { nearest: SparseVector },
+    NamedSparse { name: String, vector: SparseVector },
     Fusion { fusion: String },
 }
 
 impl QueryInput {
-    pub fn vector(&self) -> Option<&Vec<f32>> {
+    pub fn vector(&self) -> Option<VectorData> {
         match self {
-            QueryInput::Nearest(v) => Some(v),
-            QueryInput::NearestObj { nearest } => Some(nearest),
+            QueryInput::Nearest(v) => Some(VectorData::Dense(v.clone())),
+            QueryInput::NearestObj { nearest } => Some(VectorData::Dense(nearest.clone())),
+            QueryInput::NearestSparse(s) => Some(VectorData::Sparse(s.clone())),
+            QueryInput::NearestSparseObj { nearest } => Some(VectorData::Sparse(nearest.clone())),
+            QueryInput::NamedSparse { vector, .. } => Some(VectorData::Sparse(vector.clone())),
             QueryInput::Fusion { .. } => None,
         }
     }
@@ -432,9 +649,9 @@ pub struct CountResult {
 
 #[derive(Debug, Deserialize)]
 pub struct RecommendRequest {
-    pub positive: Vec<Vec<f32>>,
+    pub positive: Vec<VectorData>,
     #[serde(default)]
-    pub negative: Option<Vec<Vec<f32>>>,
+    pub negative: Option<Vec<VectorData>>,
     #[serde(default)]
     pub strategy: Option<String>,
     #[serde(default)]
