@@ -435,6 +435,117 @@ pub async fn delete_document_core(
     })
 }
 
+/// `POST /{index}/_update/{id}` — partial document update.
+pub async fn update_document(
+    State(state): State<Arc<AppState>>,
+    Path((index, id)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    let result = update_document_core(&state, &index, &id, body).await;
+    match result {
+        Ok(resp) => {
+            let status = if resp.result == "created" {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            };
+            (status, axum::Json(resp)).into_response()
+        }
+        Err(BenoStreamError::TableNotFound { .. }) => {
+            let es = crate::es_types::EsError {
+                error: crate::es_types::EsErrorBody {
+                    error_type: "document_missing_exception".into(),
+                    reason: format!("[_doc][{id}]: document missing"),
+                },
+                status: 404,
+            };
+            (StatusCode::NOT_FOUND, axum::Json(es)).into_response()
+        }
+        Err(e) if e.to_string().contains("document missing") => {
+            let es = crate::es_types::EsError {
+                error: crate::es_types::EsErrorBody {
+                    error_type: "document_missing_exception".into(),
+                    reason: format!("[_doc][{id}]: document missing"),
+                },
+                status: 404,
+            };
+            (StatusCode::NOT_FOUND, axum::Json(es)).into_response()
+        }
+        Err(e) => es_response_with_status::<DocWriteResponse>(StatusCode::BAD_REQUEST, Err(e)),
+    }
+}
+
+pub async fn update_document_core(
+    state: &AppState,
+    index: &str,
+    id: &str,
+    body: Value,
+) -> Result<DocWriteResponse, BenoStreamError> {
+    let doc_patch = body.get("doc").and_then(Value::as_object).ok_or_else(|| {
+        BenoStreamError::SchemaIncompatible {
+            reason: "update: missing or invalid 'doc' object (scripts not supported)".into(),
+        }
+    })?;
+    let doc_as_upsert = body
+        .get("doc_as_upsert")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let resolved = state.resolve_alias(index).await;
+    if !table_exists(&state.index_uri(&resolved)).await {
+        if doc_as_upsert {
+            let new_doc = Value::Object(doc_patch.clone());
+            return index_document_core(state, &resolved, Some(id), new_doc).await;
+        } else {
+            return Err(BenoStreamError::TableNotFound {
+                namespace: String::new(),
+                name: index.to_string(),
+            });
+        }
+    }
+
+    let existing = get_document_core(state, &resolved, id).await?;
+    if !existing.found || existing.source.is_none() {
+        if doc_as_upsert {
+            let new_doc = Value::Object(doc_patch.clone());
+            return index_document_core(state, &resolved, Some(id), new_doc).await;
+        } else {
+            return Err(BenoStreamError::internal(format!(
+                "document missing: [_doc][{id}]"
+            )));
+        }
+    }
+
+    let mut source = existing.source.unwrap();
+    let source_obj = source
+        .as_object_mut()
+        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+            reason: "corrupted document source".into(),
+        })?;
+
+    for (k, v) in doc_patch {
+        source_obj.insert(k.clone(), v.clone());
+    }
+
+    let table = state.open_or_create(&resolved, &None).await?;
+    let safe_id = id.replace('\'', "''");
+    let filter = format!("{ID_COLUMN} = '{safe_id}'");
+    table
+        .delete_async(&filter)
+        .await
+        .map_err(BenoStreamError::from)?;
+
+    let write_res = index_document_core(state, &resolved, Some(id), source).await?;
+
+    Ok(DocWriteResponse {
+        index: index.to_string(),
+        id: id.to_string(),
+        version: existing.version.unwrap_or(1) + 1,
+        result: "updated".to_string(),
+        shards: write_res.shards,
+    })
+}
+
 /// `POST /{index}/_delete_by_query` — delete documents matching a query DSL.
 pub async fn delete_by_query(
     State(state): State<Arc<AppState>>,
@@ -800,5 +911,81 @@ mod tests {
         let batches = table.read_async(None, None, None).await.unwrap();
         let remaining_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(remaining_rows, 2);
+    }
+
+    #[tokio::test]
+    async fn update_document_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("users")).unwrap();
+
+        // Initial write
+        index_document_core(
+            &state,
+            "users",
+            Some("u-1"),
+            serde_json::json!({"name": "alice", "age": 30, "city": "Seattle"}),
+        )
+        .await
+        .unwrap();
+        refresh_core(&state, "users").await.unwrap();
+
+        // 1. Partial update: change age, add occupation
+        let update_res = update_document_core(
+            &state,
+            "users",
+            "u-1",
+            serde_json::json!({
+                "doc": {
+                    "age": 31,
+                    "occupation": "Engineer"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(update_res.result, "updated");
+        assert_eq!(update_res.version, 2);
+        refresh_core(&state, "users").await.unwrap();
+
+        // Verify merged doc
+        let get_res = get_document_core(&state, "users", "u-1").await.unwrap();
+        assert!(get_res.found);
+        let src = get_res.source.unwrap();
+        assert_eq!(src["name"], "alice");
+        assert_eq!(src["city"], "Seattle");
+        assert_eq!(src["age"], 31);
+        assert_eq!(src["occupation"], "Engineer");
+
+        // 2. Update nonexistent without upsert fails with document missing
+        let err = update_document_core(
+            &state,
+            "users",
+            "u-2",
+            serde_json::json!({"doc": {"name": "bob"}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("document missing"));
+
+        // 3. Update nonexistent with doc_as_upsert succeeds
+        let upsert_res = update_document_core(
+            &state,
+            "users",
+            "u-2",
+            serde_json::json!({
+                "doc": {"name": "bob", "age": 25},
+                "doc_as_upsert": true
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(upsert_res.id, "u-2");
+        refresh_core(&state, "users").await.unwrap();
+
+        let get_u2 = get_document_core(&state, "users", "u-2").await.unwrap();
+        assert!(get_u2.found);
+        assert_eq!(get_u2.source.unwrap()["name"], "bob");
     }
 }

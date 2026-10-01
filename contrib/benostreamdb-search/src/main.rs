@@ -171,6 +171,7 @@ async fn main() {
                 .post(docs::index_document_id)
                 .delete(docs::delete_document),
         )
+        .route("/:index/_update/:id", post(docs::update_document))
         .route("/:index/_delete_by_query", post(docs::delete_by_query))
         .route("/:index/_refresh", post(docs::refresh))
         .route("/:index/_bulk", post(bulk::bulk_indexed))

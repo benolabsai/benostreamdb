@@ -284,6 +284,8 @@ impl Table {
                 let value = value.clone();
                 let entry_path = entry.file_path.clone();
                 let entry_size = entry.file_size_bytes as u64;
+                let delete_files = entry.delete_files.clone();
+                let index_files = entry.index_files.clone();
 
                 async move {
                     let mut reader =
@@ -291,6 +293,8 @@ impl Table {
 
                     reader.config.parquet_path = Some(entry_path);
                     reader.config.file_size = Some(entry_size);
+                    reader.config.delete_files = delete_files;
+                    reader.config.index_files = index_files;
 
                     reader.check_value_exists(&column, &value).await
                 }
