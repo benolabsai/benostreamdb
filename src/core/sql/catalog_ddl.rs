@@ -85,7 +85,11 @@ pub fn classify(sql: &str) -> Handled {
     let upper = trimmed.to_ascii_uppercase();
 
     if upper.starts_with("SHOW ") {
-        let rest = trimmed.split_once(' ').map(|x| x.1).unwrap_or("").trim_start();
+        let rest = trimmed
+            .split_once(' ')
+            .map(|x| x.1)
+            .unwrap_or("")
+            .trim_start();
         return if rest.to_ascii_lowercase().starts_with("benostream.") {
             Handled::Query
         } else {
@@ -93,7 +97,11 @@ pub fn classify(sql: &str) -> Handled {
         };
     }
     if upper.starts_with("SET ") {
-        let rest = trimmed.split_once(' ').map(|x| x.1).unwrap_or("").trim_start();
+        let rest = trimmed
+            .split_once(' ')
+            .map(|x| x.1)
+            .unwrap_or("")
+            .trim_start();
         return if rest.to_ascii_lowercase().starts_with("benostream.") {
             Handled::Ddl
         } else {
