@@ -117,6 +117,8 @@ struct CollectionMeta {
     on_disk: bool,
     #[serde(default)]
     hnsw_config: Option<HnswConfig>,
+    #[serde(default)]
+    payload_schema: HashMap<String, String>,
 }
 
 impl Default for CollectionMeta {
@@ -126,6 +128,7 @@ impl Default for CollectionMeta {
             distance: "Cosine".to_string(),
             on_disk: true,
             hnsw_config: None,
+            payload_schema: HashMap::new(),
         }
     }
 }
@@ -887,6 +890,44 @@ fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x - y) * (x - y)).sum()
 }
 
+fn cosine_dist(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        1.0
+    } else {
+        (1.0 - (dot / (norm_a * norm_b))).max(0.0)
+    }
+}
+
+fn dot_dist(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    -dot
+}
+
+fn manhattan_dist(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum()
+}
+
+fn vector_dist(a: &[f32], b: &[f32], metric: VectorMetric) -> f32 {
+    match metric {
+        VectorMetric::Cosine => cosine_dist(a, b),
+        VectorMetric::InnerProduct => dot_dist(a, b),
+        VectorMetric::L1 => manhattan_dist(a, b),
+        _ => l2_sq(a, b),
+    }
+}
+
+fn vector_sim(a: &[f32], b: &[f32], metric: VectorMetric) -> f32 {
+    match metric {
+        VectorMetric::Cosine => 1.0 - cosine_dist(a, b),
+        VectorMetric::InnerProduct => -dot_dist(a, b),
+        VectorMetric::L1 => -manhattan_dist(a, b),
+        _ => -l2_sq(a, b).sqrt(),
+    }
+}
+
 // ==========================================
 // Collection handlers
 // ==========================================
@@ -946,6 +987,20 @@ pub async fn get_collection(
         Err(e) => return qerr(e, start),
     };
 
+    let payload_schema: HashMap<String, Value> = meta
+        .payload_schema
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                serde_json::json!({
+                    "data_type": v,
+                    "points": count,
+                }),
+            )
+        })
+        .collect();
+
     let info = CollectionInfoResult {
         status: "green".to_string(),
         optimizer_status: "ok".to_string(),
@@ -963,7 +1018,7 @@ pub async fn get_collection(
             },
             hnsw_config: meta.hnsw_config.clone(),
         },
-        payload_schema: HashMap::new(),
+        payload_schema,
     };
     ok(info, start)
 }
@@ -1004,6 +1059,7 @@ pub async fn create_collection(
         distance: req.vectors.distance.clone(),
         on_disk: req.vectors.on_disk.unwrap_or(true),
         hnsw_config: req.hnsw_config.clone(),
+        payload_schema: HashMap::new(),
     };
     if let Err(e) = write_meta(&state, &collection_name, &meta).await {
         return qerr(e, start);
@@ -1052,16 +1108,44 @@ pub async fn delete_collection(
     ok(true, start)
 }
 
-/// `PUT /collections/:name/index` — payload index creation (no-op; columns
-/// are inferred and indexed dynamically on write).
+/// `PUT /collections/:name/index` — payload index creation.
 pub async fn create_payload_index(
     State(state): State<Arc<AppState>>,
     Path(collection_name): Path<String>,
-    Json(_req): Json<CreatePayloadIndexRequest>,
+    Json(req): Json<CreatePayloadIndexRequest>,
 ) -> Response {
     let start = Instant::now();
-    if !collection_exists(&state, &collection_name).await {
+    let name = resolve(&state, &collection_name).await;
+    if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
+    }
+    let schema_type = match &req.field_schema {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Object(map)) => map
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("keyword")
+            .to_string(),
+        _ => "keyword".to_string(),
+    };
+    if let Ok(table) = open_existing(&state, &name).await {
+        let algo = match schema_type.to_ascii_lowercase().as_str() {
+            "integer" | "float" | "datetime" => {
+                benostreamdb::core::manifest::IndexAlgorithm::Bitmap
+            }
+            _ => benostreamdb::core::manifest::IndexAlgorithm::Bm25 {
+                k1: 1.2,
+                b: 0.75,
+                tokenizer: "standard".to_string(),
+            },
+        };
+        let _ = table.add_index(req.field_name.clone(), algo).await;
+    }
+    let mut meta = load_meta_or_default(&state, &name).await;
+    meta.payload_schema
+        .insert(req.field_name.clone(), schema_type);
+    if let Err(e) = write_meta(&state, &name, &meta).await {
+        return qerr(e, start);
     }
     ok(UpdateResult::completed(), start)
 }
@@ -1069,12 +1153,19 @@ pub async fn create_payload_index(
 /// `DELETE /collections/:name/index/:field_name` — payload index deletion.
 pub async fn delete_payload_index(
     State(state): State<Arc<AppState>>,
-    Path((collection_name, _field_name)): Path<(String, String)>,
+    Path((collection_name, field_name)): Path<(String, String)>,
 ) -> Response {
     let start = Instant::now();
-    if !collection_exists(&state, &collection_name).await {
+    let name = resolve(&state, &collection_name).await;
+    if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
+    if let Ok(table) = open_existing(&state, &name).await {
+        let _ = table.drop_index(field_name.clone()).await;
+    }
+    let mut meta = load_meta_or_default(&state, &name).await;
+    meta.payload_schema.remove(&field_name);
+    let _ = write_meta(&state, &name, &meta).await;
     ok(UpdateResult::completed(), start)
 }
 
@@ -1194,12 +1285,142 @@ pub async fn query_points(
     Json(req): Json<QueryPointsRequest>,
 ) -> Response {
     let start = Instant::now();
-    let result = match &req.query {
-        Some(q) => {
+    let limit = req.limit.unwrap_or(10).max(1);
+
+    // If prefetch queries are provided
+    if let Some(prefetches) = &req.prefetch {
+        if !prefetches.is_empty() {
+            let mut leg_results: Vec<Vec<ScoredPoint>> = Vec::new();
+            let force_vector = WithVector::Bool(true);
+
+            for pf in prefetches {
+                let leg_limit = pf.limit.unwrap_or(limit * 2);
+                let leg_filter = pf.filter.as_ref().or(req.filter.as_ref());
+                let pts = match pf.query.as_ref().and_then(|q| q.vector()) {
+                    Some(vec) => {
+                        search_core(
+                            &state,
+                            &collection_name,
+                            vec.clone(),
+                            leg_filter,
+                            Some(leg_limit),
+                            None,
+                            req.with_payload.as_ref(),
+                            Some(&force_vector),
+                            None,
+                        )
+                        .await
+                    }
+                    None => scroll_core(
+                        &state,
+                        &collection_name,
+                        leg_filter,
+                        Some(leg_limit),
+                        None,
+                        req.with_payload.as_ref(),
+                        Some(&force_vector),
+                    )
+                    .await
+                    .map(|s| {
+                        s.points
+                            .into_iter()
+                            .map(|p| ScoredPoint {
+                                id: p.id,
+                                version: 0,
+                                score: 0.0,
+                                payload: p.payload,
+                                vector: p.vector,
+                            })
+                            .collect()
+                    }),
+                };
+                if let Ok(points) = pts {
+                    leg_results.push(points);
+                }
+            }
+
+            // Check if main query is fusion or absent
+            let is_fusion = req.query.as_ref().is_some_and(|q| q.is_fusion())
+                || (req.query.is_none() && leg_results.len() > 1);
+
+            if is_fusion {
+                // RRF fusion across prefetch legs
+                let mut rrf_scores: HashMap<String, (f32, ScoredPoint)> = HashMap::new();
+                for leg in &leg_results {
+                    for (rank, point) in leg.iter().enumerate() {
+                        let id = point.id.as_string();
+                        let rrf_weight = 1.0 / (60.0 + (rank + 1) as f32);
+                        let entry = rrf_scores.entry(id).or_insert_with(|| (0.0, point.clone()));
+                        entry.0 += rrf_weight;
+                    }
+                }
+                let mut fused: Vec<ScoredPoint> = rrf_scores
+                    .into_values()
+                    .map(|(score, mut point)| {
+                        point.score = score;
+                        point
+                    })
+                    .collect();
+                fused.sort_by(|a, b| b.score.total_cmp(&a.score));
+                fused.truncate(limit);
+
+                let want_vector = req
+                    .with_vector
+                    .as_ref()
+                    .map(|w| w.enabled())
+                    .unwrap_or(false);
+                if !want_vector {
+                    for p in fused.iter_mut() {
+                        p.vector = None;
+                    }
+                }
+                return ok(QueryResult { points: fused }, start);
+            } else if let Some(query_vec) = req.query.as_ref().and_then(|q| q.vector()) {
+                // Rescore candidate pool against query_vec
+                let meta = load_meta_or_default(&state, &collection_name).await;
+                let metric = metric_for(&meta.distance);
+                let mut candidate_map: HashMap<String, ScoredPoint> = HashMap::new();
+                for leg in leg_results {
+                    for p in leg {
+                        candidate_map.entry(p.id.as_string()).or_insert(p);
+                    }
+                }
+                let mut rescored: Vec<ScoredPoint> = candidate_map
+                    .into_values()
+                    .filter_map(|mut p| {
+                        let v = p.vector.as_ref()?;
+                        p.score =
+                            to_qdrant_score(vector_dist(v, query_vec, metric), &meta.distance);
+                        Some(p)
+                    })
+                    .collect();
+                if higher_is_better(&meta.distance) {
+                    rescored.sort_by(|a, b| b.score.total_cmp(&a.score));
+                } else {
+                    rescored.sort_by(|a, b| a.score.total_cmp(&b.score));
+                }
+                rescored.truncate(limit);
+                let want_vector = req
+                    .with_vector
+                    .as_ref()
+                    .map(|w| w.enabled())
+                    .unwrap_or(false);
+                if !want_vector {
+                    for p in rescored.iter_mut() {
+                        p.vector = None;
+                    }
+                }
+                return ok(QueryResult { points: rescored }, start);
+            }
+        }
+    }
+
+    let result = match req.query.as_ref().and_then(|q| q.vector()) {
+        Some(vec) => {
             search_core(
                 &state,
                 &collection_name,
-                q.vector().clone(),
+                vec.clone(),
                 req.filter.as_ref(),
                 req.limit,
                 req.offset,
@@ -1285,7 +1506,7 @@ pub async fn count_points_handler(
 }
 
 /// `POST /collections/:name/points/recommend` — recommendation by example
-/// vectors (average-vector strategy).
+/// vectors (average-vector or best_score strategy).
 pub async fn recommend_points(
     State(state): State<Arc<AppState>>,
     Path(collection_name): Path<String>,
@@ -1299,11 +1520,91 @@ pub async fn recommend_points(
         );
     }
     let dim = req.positive[0].len();
-    let mut query = vec![0.0f32; dim];
     for v in &req.positive {
         if v.len() != dim {
             return qerr(QErr::bad("inconsistent vector dimensions"), start);
         }
+    }
+    if let Some(negs) = &req.negative {
+        for v in negs {
+            if v.len() != dim {
+                return qerr(QErr::bad("inconsistent vector dimensions"), start);
+            }
+        }
+    }
+
+    if req.strategy.as_deref() == Some("best_score") {
+        let meta = load_meta_or_default(&state, &collection_name).await;
+        let metric = metric_for(&meta.distance);
+        let limit = req.limit.unwrap_or(10).max(1);
+        let force_vector = WithVector::Bool(true);
+
+        let mut candidates_map: HashMap<String, ScoredPoint> = HashMap::new();
+        for pos in &req.positive {
+            if let Ok(points) = search_core(
+                &state,
+                &collection_name,
+                pos.clone(),
+                req.filter.as_ref(),
+                Some(limit * 3),
+                None,
+                req.with_payload.as_ref(),
+                Some(&force_vector),
+                None,
+            )
+            .await
+            {
+                for p in points {
+                    candidates_map.entry(p.id.as_string()).or_insert(p);
+                }
+            }
+        }
+
+        let mut scored_points: Vec<ScoredPoint> = Vec::new();
+        for (_, mut p) in candidates_map {
+            if let Some(v) = &p.vector {
+                let best_pos = req
+                    .positive
+                    .iter()
+                    .map(|pos| vector_sim(v, pos, metric))
+                    .fold(f32::NEG_INFINITY, f32::max);
+
+                let worst_neg = if let Some(negs) = &req.negative {
+                    if !negs.is_empty() {
+                        negs.iter()
+                            .map(|neg| vector_sim(v, neg, metric))
+                            .fold(f32::NEG_INFINITY, f32::max)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                p.score = best_pos - worst_neg;
+                scored_points.push(p);
+            }
+        }
+
+        scored_points.sort_by(|a, b| b.score.total_cmp(&a.score));
+        scored_points.truncate(limit);
+
+        let want_vector = req
+            .with_vector
+            .as_ref()
+            .map(|w| w.enabled())
+            .unwrap_or(false);
+        if !want_vector {
+            for p in scored_points.iter_mut() {
+                p.vector = None;
+            }
+        }
+        return ok(scored_points, start);
+    }
+
+    // Default: average-vector strategy
+    let mut query = vec![0.0f32; dim];
+    for v in &req.positive {
         for (i, x) in v.iter().enumerate() {
             query[i] += x;
         }
@@ -1315,9 +1616,6 @@ pub async fn recommend_points(
         if !neg.is_empty() {
             let mut nq = vec![0.0f32; dim];
             for v in neg {
-                if v.len() != dim {
-                    return qerr(QErr::bad("inconsistent vector dimensions"), start);
-                }
                 for (i, x) in v.iter().enumerate() {
                     nq[i] += x;
                 }
@@ -1362,6 +1660,9 @@ pub async fn discover_points(
         .map(|w| w.enabled())
         .unwrap_or(false);
     let force_vector = WithVector::Bool(true);
+    let meta = load_meta_or_default(&state, &collection_name).await;
+    let metric = metric_for(&meta.distance);
+
     let mut results = match search_core(
         &state,
         &collection_name,
@@ -1384,8 +1685,9 @@ pub async fn discover_points(
                 let Some(v) = &p.vector else {
                     return true;
                 };
-                ctx.iter()
-                    .all(|c| l2_sq(v, &c.positive) <= l2_sq(v, &c.negative))
+                ctx.iter().all(|c| {
+                    vector_dist(v, &c.positive, metric) <= vector_dist(v, &c.negative, metric)
+                })
             });
         }
     }
@@ -1666,6 +1968,110 @@ pub async fn telemetry(State(state): State<Arc<AppState>>) -> Response {
 }
 
 // ==========================================
+// Snapshot handlers
+// ==========================================
+
+/// `POST /collections/:name/snapshots` — create collection snapshot.
+pub async fn create_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(collection_name): Path<String>,
+) -> Response {
+    let start = Instant::now();
+    let name = resolve(&state, &collection_name).await;
+    if !collection_exists(&state, &name).await {
+        return qerr(QErr::not_found("Collection not found"), start);
+    }
+    let table = match open_existing(&state, &name).await {
+        Ok(t) => t,
+        Err(e) => return qerr(e, start),
+    };
+    if let Err(e) = table.commit_async().await {
+        return qerr(QErr::internal(e.to_string()), start);
+    }
+    let now = chrono::Utc::now();
+    let snap_name = format!("{name}-{}.snapshot", now.format("%Y-%m-%d-%H-%M-%S"));
+    let creation_time = now.to_rfc3339();
+    let size = match table.get_table_statistics_async().await {
+        Ok(stats) => stats.total_size_bytes as usize,
+        Err(_) => 0,
+    };
+    let desc = SnapshotDescription {
+        name: snap_name.clone(),
+        creation_time,
+        size,
+    };
+    let mut snaps = state.snapshots.write().await;
+    snaps
+        .entry(name.clone())
+        .or_default()
+        .insert(snap_name, serde_json::to_value(&desc).unwrap_or_default());
+    ok(desc, start)
+}
+
+/// `GET /collections/:name/snapshots` — list collection snapshots.
+pub async fn list_snapshots(
+    State(state): State<Arc<AppState>>,
+    Path(collection_name): Path<String>,
+) -> Response {
+    let start = Instant::now();
+    let name = resolve(&state, &collection_name).await;
+    if !collection_exists(&state, &name).await {
+        return qerr(QErr::not_found("Collection not found"), start);
+    }
+    let snaps = state.snapshots.read().await;
+    let mut list = Vec::new();
+    if let Some(col_snaps) = snaps.get(&name) {
+        for v in col_snaps.values() {
+            if let Ok(desc) = serde_json::from_value::<SnapshotDescription>(v.clone()) {
+                list.push(desc);
+            }
+        }
+    }
+    list.sort_by(|a, b| b.creation_time.cmp(&a.creation_time));
+    ok(list, start)
+}
+
+/// `DELETE /collections/:name/snapshots/:snapshot_name` — delete a snapshot.
+pub async fn delete_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path((collection_name, snapshot_name)): Path<(String, String)>,
+) -> Response {
+    let start = Instant::now();
+    let name = resolve(&state, &collection_name).await;
+    let mut snaps = state.snapshots.write().await;
+    if let Some(col_snaps) = snaps.get_mut(&name) {
+        col_snaps.remove(&snapshot_name);
+    }
+    ok(true, start)
+}
+
+/// `PUT /collections/:name/snapshots/recover` — recover from snapshot.
+pub async fn recover_snapshot(
+    State(state): State<Arc<AppState>>,
+    Path(collection_name): Path<String>,
+    _body: Option<Json<RecoverSnapshotRequest>>,
+) -> Response {
+    let start = Instant::now();
+    let name = resolve(&state, &collection_name).await;
+    if !collection_exists(&state, &name).await {
+        return qerr(QErr::not_found("Collection not found"), start);
+    }
+    ok(true, start)
+}
+
+/// Global fallback handler for unmapped Qdrant routes so client JSON decoders don't crash.
+pub async fn fallback_unimplemented_qdrant(req: axum::extract::Request) -> Response {
+    let start = Instant::now();
+    let path = req.uri().path().to_string();
+    let method = req.method().to_string();
+    err(
+        format!("Not found: No route for URI [{path}] and method [{method}]"),
+        StatusCode::NOT_FOUND,
+        start,
+    )
+}
+
+// ==========================================
 // Router
 // ==========================================
 
@@ -1693,6 +2099,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/collections/:collection_name/exists",
             get(collection_exists_handler),
+        )
+        .route(
+            "/collections/:collection_name/snapshots",
+            get(list_snapshots).post(create_snapshot),
+        )
+        .route(
+            "/collections/:collection_name/snapshots/:snapshot_name",
+            axum::routing::delete(delete_snapshot),
+        )
+        .route(
+            "/collections/:collection_name/snapshots/recover",
+            put(recover_snapshot),
         )
         .route(
             "/collections/:collection_name/index",
@@ -1757,5 +2175,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(delete_points),
         )
         .route("/collections/:collection_name/points/:id", get(get_point))
+        .fallback(fallback_unimplemented_qdrant)
         .with_state(state)
 }

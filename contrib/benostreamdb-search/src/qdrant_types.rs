@@ -248,11 +248,17 @@ impl WithPayload {
             WithPayload::Selector(sel) => {
                 if let Some(include) = &sel.include {
                     if !include.is_empty() {
-                        return include.iter().any(|i| i == field);
+                        return include.iter().any(|i| {
+                            i == field
+                                || i.starts_with(&format!("{field}."))
+                                || field.starts_with(&format!("{i}."))
+                        });
                     }
                 }
                 if let Some(exclude) = &sel.exclude {
-                    return !exclude.iter().any(|e| e == field);
+                    return !exclude
+                        .iter()
+                        .any(|e| e == field || e.starts_with(&format!("{field}.")));
                 }
                 true
             }
@@ -286,7 +292,7 @@ pub struct RetrievedPoint {
     pub vector: Option<Vec<f32>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ScoredPoint {
     pub id: PointId,
     pub version: u64,
@@ -323,6 +329,8 @@ pub struct QueryPointsRequest {
     #[serde(default)]
     pub query: Option<QueryInput>,
     #[serde(default)]
+    pub prefetch: Option<Vec<PrefetchQuery>>,
+    #[serde(default)]
     pub filter: Option<Filter>,
     #[serde(default)]
     pub limit: Option<usize>,
@@ -340,20 +348,53 @@ pub struct QueryPointsRequest {
     pub params: Option<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum QueryInput {
     Nearest(Vec<f32>),
     NearestObj { nearest: Vec<f32> },
+    Fusion { fusion: String },
 }
 
 impl QueryInput {
-    pub fn vector(&self) -> &Vec<f32> {
+    pub fn vector(&self) -> Option<&Vec<f32>> {
         match self {
-            QueryInput::Nearest(v) => v,
-            QueryInput::NearestObj { nearest } => nearest,
+            QueryInput::Nearest(v) => Some(v),
+            QueryInput::NearestObj { nearest } => Some(nearest),
+            QueryInput::Fusion { .. } => None,
         }
     }
+
+    pub fn is_fusion(&self) -> bool {
+        matches!(self, QueryInput::Fusion { .. })
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PrefetchQuery {
+    #[serde(default)]
+    pub query: Option<QueryInput>,
+    #[serde(default)]
+    pub filter: Option<Filter>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub params: Option<Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SnapshotDescription {
+    pub name: String,
+    pub creation_time: String,
+    pub size: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecoverSnapshotRequest {
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

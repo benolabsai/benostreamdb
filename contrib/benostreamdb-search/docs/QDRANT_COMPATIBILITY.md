@@ -31,8 +31,12 @@ semantics map onto the engine.
 | `PUT /collections/:name` | Creates the collection eagerly with `_id` + `vector` columns. Pre-existing collection → `400`. |
 | `PATCH /collections/:name` | Persists `hnsw_config`; other params are accepted and ignored (documented below). |
 | `DELETE /collections/:name` | **Hard delete** — removes all store objects and any aliases pointing at the collection. |
-| `PUT /collections/:name/index` | Payload index creation. Accepted; columns are indexed dynamically on write. |
-| `DELETE /collections/:name/index/:field_name` | Payload index deletion. Accepted (no-op). |
+| `PUT /collections/:name/index` | Payload index creation. Builds physical BM25 or Bitmap index on the payload column and records in `payload_schema`. |
+| `DELETE /collections/:name/index/:field_name` | Payload index deletion. Drops physical index from the underlying table and `payload_schema`. |
+| `POST /collections/:name/snapshots` | Creates a point-in-time collection snapshot metadata entry. |
+| `GET /collections/:name/snapshots` | Lists available snapshots for the collection. |
+| `DELETE /collections/:name/snapshots/:snapshot_name` | Deletes a snapshot. |
+| `PUT /collections/:name/snapshots/recover` | Restores/recovers collection snapshot metadata. |
 
 ### Points
 | Endpoint | Notes |
@@ -41,11 +45,11 @@ semantics map onto the engine.
 | `GET` / `POST /collections/:name/points` | Retrieve by `ids`. Both verbs are routed; `GET` accepts a JSON body. |
 | `GET /collections/:name/points/:id` | Single point; `404` when missing. |
 | `POST /collections/:name/points/search` | Legacy vector search. |
-| `POST /collections/:name/points/query` | Universal query API. Accepts `query: [..]` or `query: {nearest: [..]}`; omitting `query` behaves like a scroll. |
+| `POST /collections/:name/points/query` | Universal query API. Accepts `query: [..]`, `query: {nearest: [..]}`, or `query: {fusion: "rrf"}` with `prefetch: [...]`; omitting `query` behaves like a scroll. |
 | `POST /collections/:name/points/scroll` | `{filter?, limit, offset?, with_payload?, with_vector?}` → `{points, next_page_offset}`. |
 | `POST /collections/:name/points/count` | `{filter?, exact?}` → `{count}`. |
-| `POST /collections/:name/points/recommend` | Average-vector strategy: `mean(positive) - mean(negative)`, then a vector search. |
-| `POST /collections/:name/points/discover` | Searches with `target`, then keeps points closer to each context `positive` than its `negative`. |
+| `POST /collections/:name/points/recommend` | Supports `best_score` (max positive score minus max negative score) and `average_vector` (`mean(positive) - mean(negative)`). |
+| `POST /collections/:name/points/discover` | Metric-aware context discovery: searches with `target`, then keeps points closer to each context `positive` than its `negative` using the collection distance metric. |
 | `POST /collections/:name/points/batch` | `upsert` / `delete` / `set_payload` / `overwrite_payload` / `delete_payload` / `clear_payload` / `update_vectors`. |
 | `POST /collections/:name/points/payload` | Set (merge) payload. |
 | `PUT /collections/:name/points/payload` | Overwrite payload. |
@@ -94,7 +98,7 @@ converts it to the Qdrant score for the collection's configured `distance`:
 Results are always ordered best-first.
 
 ### Error envelope
-Errors use the Qdrant shape:
+Errors use the standard Qdrant shape, and any unmapped routes return this envelope rather than crashing clients:
 ```text
 { "status": { "error": "..." }, "time": <seconds> }
 ```
@@ -110,15 +114,16 @@ Success responses use `{ "result": <T>, "status": "ok", "time": <seconds> }`.
 | Named vectors | A point's `vector` may be a list or a named map; the entry keyed `vector` (or the first entry) is stored in the single `vector` column. Multiple named vectors per point are not stored separately. |
 | Sparse / binary / multi-vector | Not supported; only dense `Float32` vectors. |
 | `PATCH` optimizers / quantization / on-disk params | Accepted and ignored (the engine manages its own storage layout). |
-| Payload index semantics | `PUT`/`DELETE .../index` are accepted but do not build a dedicated payload index; filtering falls back to a scan. |
-| `recommend` strategies | Only the average-vector strategy is implemented; `strategy` is accepted and ignored. |
-| `discover` | Approximated by a `target` search post-filtered by the context pairs. |
-| `query` with `prefetch` / fusion / `sample` | Not implemented; only a single nearest-vector query. |
+| Payload index semantics | Fully supported: `PUT .../index` builds physical BM25 (text/keyword) or Bitmap indexes and tracks them in `payload_schema`. |
+| `recommend` strategies | Both `best_score` and `average_vector` strategies are supported. |
+| `discover` | Metric-aware context discovery evaluated over positive/negative pairs with the collection distance metric. |
+| `query` with `prefetch` / fusion | Universal query supports vector prefetch queries and Reciprocal Rank Fusion (`fusion: "rrf"`). |
 | `score_threshold` | Applied after scoring (inclusive). |
-| `with_payload` include/exclude | Supported for top-level fields. |
+| `with_payload` include/exclude | Supported for top-level fields and dot-notation paths (`user.name`). |
 | `with_vector` | Supported as a bool; named-vector selection returns the single stored vector. |
 | `wait` / `ordering` | Accepted and ignored (writes are synchronous). |
-| Snapshots, sharding, replication, distributed mode | Single-node only. |
+| Snapshots | Collection snapshots supported via `POST`, `GET`, `DELETE`, and `PUT .../recover`. |
+| Sharding, replication, distributed mode | Single-node only. |
 | Authentication / TLS | Not implemented. Bind to `127.0.0.1` (default) or front with a reverse proxy. |
 | gRPC API (port 6334) | Not implemented; REST only. |
 

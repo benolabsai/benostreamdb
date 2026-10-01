@@ -571,3 +571,166 @@ async fn error_envelope_shape() {
     assert_eq!(val["status"]["error"], "Collection not found");
     assert!(val["time"].is_number());
 }
+
+#[tokio::test]
+async fn snapshots_lifecycle() {
+    let h = Harness::new();
+    h.ok(
+        "PUT",
+        "/collections/demo",
+        Some(json!({"vectors": {"size": 4, "distance": "Cosine"}})),
+    )
+    .await;
+    h.ok(
+        "PUT",
+        "/collections/demo/points",
+        Some(json!({"points": [{"id": 1, "vector": [1, 0, 0, 0]}]})),
+    )
+    .await;
+
+    // Create snapshot
+    let snap = h.ok("POST", "/collections/demo/snapshots", None).await;
+    let snap_name = snap["name"].as_str().expect("snapshot name");
+    assert!(snap_name.starts_with("demo-"));
+    assert!(snap["creation_time"].is_string());
+    assert!(snap["size"].is_number());
+
+    // List snapshots
+    let snaps = h.ok("GET", "/collections/demo/snapshots", None).await;
+    let list = snaps.as_array().expect("snapshot list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["name"], snap_name);
+
+    // Recover snapshot
+    let recovered = h
+        .ok(
+            "PUT",
+            "/collections/demo/snapshots/recover",
+            Some(json!({"location": snap_name})),
+        )
+        .await;
+    assert_eq!(recovered, json!(true));
+
+    // Delete snapshot
+    let deleted = h
+        .ok(
+            "DELETE",
+            &format!("/collections/demo/snapshots/{snap_name}"),
+            None,
+        )
+        .await;
+    assert_eq!(deleted, json!(true));
+
+    // List snapshots is now empty
+    let snaps = h.ok("GET", "/collections/demo/snapshots", None).await;
+    assert_eq!(snaps.as_array().expect("snapshot list").len(), 0);
+}
+
+#[tokio::test]
+async fn payload_indexing() {
+    let h = Harness::new();
+    h.ok(
+        "PUT",
+        "/collections/demo",
+        Some(json!({"vectors": {"size": 4, "distance": "Cosine"}})),
+    )
+    .await;
+    h.ok(
+        "PUT",
+        "/collections/demo/points",
+        Some(json!({"points": [{"id": 1, "vector": [1, 0, 0, 0], "payload": {"tag": "alpha", "city": "London"}}]})),
+    )
+    .await;
+
+    // Create payload index for keyword and text
+    h.ok(
+        "PUT",
+        "/collections/demo/index",
+        Some(json!({"field_name": "tag", "field_schema": "keyword"})),
+    )
+    .await;
+    h.ok(
+        "PUT",
+        "/collections/demo/index",
+        Some(json!({"field_name": "city", "field_schema": "text"})),
+    )
+    .await;
+
+    // Verify payload_schema in GET collection info
+    let info = h.ok("GET", "/collections/demo", None).await;
+    assert!(info["payload_schema"]["tag"].is_object());
+    assert!(info["payload_schema"]["city"].is_object());
+
+    // Delete index
+    h.ok("DELETE", "/collections/demo/index/tag", None).await;
+    let info = h.ok("GET", "/collections/demo", None).await;
+    assert!(info["payload_schema"]["tag"].is_null());
+    assert!(info["payload_schema"]["city"].is_object());
+}
+
+#[tokio::test]
+async fn recommend_best_score_and_query_prefetch_fusion() {
+    let h = Harness::new();
+    h.ok(
+        "PUT",
+        "/collections/demo",
+        Some(json!({"vectors": {"size": 4, "distance": "Cosine"}})),
+    )
+    .await;
+    h.ok(
+        "PUT",
+        "/collections/demo/points",
+        Some(json!({"points": [
+            {"id": 1, "vector": [1, 0, 0, 0], "payload": {"city": "Berlin"}},
+            {"id": 2, "vector": [0, 1, 0, 0], "payload": {"city": "Paris"}},
+            {"id": 3, "vector": [0.8, 0.2, 0, 0], "payload": {"city": "London"}}
+        ]})),
+    )
+    .await;
+
+    // Recommend with best_score
+    let rec = h
+        .ok(
+            "POST",
+            "/collections/demo/points/recommend",
+            Some(json!({
+                "positive": [[1, 0, 0, 0]],
+                "negative": [[0, 1, 0, 0]],
+                "strategy": "best_score",
+                "limit": 2
+            })),
+        )
+        .await;
+    let rec_points = rec.as_array().expect("rec points");
+    assert_eq!(rec_points.len(), 2);
+    assert_eq!(rec_points[0]["id"], json!(1));
+
+    // Query points with prefetch and RRF fusion
+    let q = h
+        .ok(
+            "POST",
+            "/collections/demo/points/query",
+            Some(json!({
+                "prefetch": [
+                    {"query": [1, 0, 0, 0], "limit": 2},
+                    {"query": [0.8, 0.2, 0, 0], "limit": 2}
+                ],
+                "query": {"fusion": "rrf"},
+                "limit": 2
+            })),
+        )
+        .await;
+    let points = q["points"].as_array().expect("points");
+    assert_eq!(points.len(), 2);
+
+    // Fallback unmapped router test
+    let (status, val) = h
+        .call("GET", "/collections/demo/unmapped_route", None)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(val["status"]["error"]
+        .as_str()
+        .expect("error")
+        .contains("No route for URI"));
+    assert!(val["time"].is_number());
+}
