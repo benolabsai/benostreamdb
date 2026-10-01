@@ -43,6 +43,13 @@ pub trait Catalog: Send + Sync {
         Ok(())
     }
 
+    /// List all table names in a namespace.
+    ///
+    /// Catalogs that do not implement listing return an empty list by default.
+    async fn list_tables(&self, _namespace: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// Load table metadata
     async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata>;
 

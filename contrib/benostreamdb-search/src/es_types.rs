@@ -61,6 +61,39 @@ impl From<BenoStreamError> for EsError {
                 },
                 status: 400,
             },
+            BenoStreamError::SchemaIncompatible { reason }
+                if reason.contains("search_context_missing_exception") =>
+            {
+                EsError {
+                    error: EsErrorBody {
+                        error_type: "search_context_missing_exception".into(),
+                        reason: reason.clone(),
+                    },
+                    status: 404,
+                }
+            }
+            BenoStreamError::SchemaIncompatible { reason }
+                if reason.contains("repository_missing_exception") =>
+            {
+                EsError {
+                    error: EsErrorBody {
+                        error_type: "repository_missing_exception".into(),
+                        reason: reason.clone(),
+                    },
+                    status: 404,
+                }
+            }
+            BenoStreamError::SchemaIncompatible { reason }
+                if reason.contains("snapshot_missing_exception") =>
+            {
+                EsError {
+                    error: EsErrorBody {
+                        error_type: "snapshot_missing_exception".into(),
+                        reason: reason.clone(),
+                    },
+                    status: 404,
+                }
+            }
             BenoStreamError::SchemaIncompatible { .. } => EsError {
                 error: EsErrorBody {
                     error_type: "illegal_argument_exception".into(),
@@ -233,11 +266,20 @@ pub struct ClusterHealth {
 /// ES 7.10 `POST /{index}/_search` response.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResponse {
+    #[serde(rename = "_scroll_id", skip_serializing_if = "Option::is_none")]
+    pub scroll_id: Option<String>,
     pub took: u64,
     pub timed_out: bool,
     pub hits: SearchHits,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Value>,
+}
+
+/// ES 7.10 `DELETE /_search/scroll` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClearScrollResponse {
+    pub succeeded: bool,
+    pub num_freed: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -274,4 +316,29 @@ pub struct SearchHit {
 #[derive(Debug, Clone, Serialize)]
 pub struct CountResponse {
     pub count: u64,
+}
+
+/// ES 7.10 `POST /_reindex` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReindexResponse {
+    pub took: u64,
+    pub timed_out: bool,
+    pub total: u64,
+    pub updated: u64,
+    pub created: u64,
+    pub deleted: u64,
+    pub batches: u64,
+    pub version_conflicts: u64,
+    pub noops: u64,
+    pub retries: ReindexRetries,
+    pub throttled_millis: u64,
+    pub requests_per_second: f64,
+    pub throttled_until_millis: u64,
+    pub failures: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReindexRetries {
+    pub bulk: u64,
+    pub search: u64,
 }

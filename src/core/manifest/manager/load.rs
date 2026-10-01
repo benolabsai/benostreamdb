@@ -299,9 +299,15 @@ impl ManifestManager {
             }
         }
 
-        // 2. Process manifest.entries last (higher priority - overrides manifest lists)
+        // 2. Process manifest.entries last (higher priority - overrides manifest lists).
+        // Iceberg stores absolute paths; normalize to store-relative so the rest
+        // of the engine (reader, writer, vacuum) sees the form it writes. This
+        // matters for inline entries (e.g. after a table relocate), which are
+        // not run through the Avro relativization above.
         for e in &manifest.entries {
-            entry_map.insert(e.file_path.clone(), e.clone());
+            let mut e = e.clone();
+            e.file_path = relativize_file_path(&self.root_uri, &e.file_path);
+            entry_map.insert(e.file_path.clone(), e);
         }
 
         // 3. Resolve the per-entry derived view from the authoritative global

@@ -19,6 +19,14 @@ the gaps.
 | `GET /_health`, `GET /_cluster/health` | Single-node health (`status: green`, 1 node, 1 primary shard per index). |
 | `GET /_cluster/stats` | Aggregate index/node statistics. |
 | `GET /_cat/indices` | Tab-separated index summary (`health status index pri rep docs.count docs.store store.size`). |
+| `GET /_cat/cluster_manager`, `GET /_cat/master` | Active cluster manager / master node info (OpenSearch 3.x and ES compatible). |
+| `GET /_cat/nodes` | Tab-separated node status, resource, and role summary. |
+| `GET /_cat/shards` | Tab-separated shard allocation per index. |
+| `GET /_cat/health` | Tab-separated cluster health and active shards. |
+| `GET /_nodes*` | Node capabilities and HTTP coordinates for client connection sniffing. |
+| `GET /_cluster/settings`, `PUT /_cluster/settings` | Cluster settings inspection and no-op acknowledgement. |
+| `GET /_xpack`, `GET /_license` | Compatibility shims for official Elastic clients probing security/license status. |
+| `GET /_ingest/pipeline*`, `PUT /_ingest/pipeline*` | Pipeline definition stubs acknowledging ingest pipeline configuration. |
 | `GET /metrics` | Prometheus text format (0.0.4) operational telemetry. |
 
 ### Index management
@@ -27,21 +35,35 @@ the gaps.
 | `PUT /{index}` | Create an index, optionally with `mappings.properties`. Pre-existing index → 400 `resource_already_exists_exception`. |
 | `GET /{index}` | Returns `aliases`, `mappings`, and `settings`. Missing index → 404 `index_not_found_exception`. |
 | `DELETE /{index}` | **Hard delete** — removes all store objects (manifest, metadata, data, indexes). |
-| `GET /{index}/_mapping` | Renders the Arrow schema as ES properties (`text`, `long`, `double`, `boolean`, `date`, `dense_vector{dims}`, nested `object`). |
+| `GET /{index}/_mapping` | Renders the Arrow schema as ES properties (`text`, `long`, `double`, `boolean`, `date`, `dense_vector{dims}`, nested `object`, and `nested` array of objects). |
 | `PUT /{index}/_mapping` | Adds new properties via `Table::add_column`; optional `indexes` block registers index algorithms. |
+| `GET /{index}/_field_caps`, `GET /_field_caps` | Field capabilities API returning types, searchability, aggregatability, metadata status, and conflict mappings across indices. |
 
-### Documents & ingestion
+### Document lifecycle & updates
 | Endpoint | Notes |
 |----------|-------|
 | `POST /{index}/_doc` | Index a doc with a server-generated id. Auto-creates the index on first write (schema-on-write). 201 `created` / 200 `updated`. |
 | `POST /{index}/_doc/{id}` | Index a doc with a client-supplied id. Duplicate id → 400 `resource_already_exists_exception`. |
-| `POST /_bulk`, `POST /{index}/_bulk` | NDJSON `index` / `create` / `delete` actions. Batched per index; per-item status in the response. |
+| `GET /{index}/_doc/{id}` | Retrieve document by `_id`. Returns standard ES metadata and `_source`. |
+| `DELETE /{index}/_doc/{id}` | Soft/hard delete of document by `_id`. Returns standard ES `deleted` / `not_found`. |
+| `POST /{index}/_delete_by_query` | Deletes matching documents across segments matching the query DSL. |
+| `POST /{index}/_update/{id}` | Partial document update (`doc`), merge, and `doc_as_upsert`. |
+| `POST /_reindex` | Copies documents from source to destination index, supporting query filtering, field selection, `max_docs`, and version conflict management. |
+| `POST /_bulk`, `POST /{index}/_bulk` | NDJSON `index`, `create`, `update`, `delete` actions. Batched per index; per-item status in the response. |
 | `POST /{index}/_refresh`, `POST /_refresh` | Flush the write buffer (memtable + WAL → segments + indexes) so new docs become searchable. |
+
+### Index aliases
+| Endpoint | Notes |
+|----------|-------|
+| `POST /_aliases` | Add/remove index aliases atomically. |
+| `GET /_alias`, `GET /{index}/_alias` | Retrieve registered aliases across cluster or per index. |
+| `PUT /{index}/_alias/{name}` | Create/assign alias to index. |
+| `DELETE /{index}/_alias/{name}` | Remove alias from index. |
 
 ### Aggregations
 `POST /{index}/_search` accepts an `aggs` (or `aggregations`) object, compiled
 to SQL and executed with DataFusion. Aggregations run over the top-level
-`filter` (the query clause does not scope aggregations in v1).
+`filter` (the query clause scopes aggregations via filter handoff).
 
 | Aggregation | Notes |
 |-------------|-------|
@@ -53,30 +75,75 @@ to SQL and executed with DataFusion. Aggregations run over the top-level
 | `missing` | `{field}` → `{doc_count}` of null rows. |
 | `avg`, `sum`, `min`, `max`, `value_count`, `cardinality` | `{field}` → `{value}`. |
 | `stats`, `extended_stats` | `{field}` → `{count, min, max, avg, sum, sum_of_squares, variance, std_deviation}`. |
-| Nested `aggs` | Supported on `terms`, `histogram`, `range`, `filter`, and `missing` buckets. |
+| `percentiles` | `{field, percents?, keyed?}` → `{values}` computed via DataFusion `approx_percentile_cont`. |
+| `composite` | Multi-source bucket pagination (`terms`, `histogram`, `date_histogram`), `order`, `after_key` pagination cursor. |
+| `significant_terms` | Foreground vs. background term frequency analysis with JLH significance scoring. |
+| Nested `aggs` | Supported on `terms`, `histogram`, `range`, `filter`, `missing`, `composite`, and `significant_terms` buckets. |
 
 ### Search
 | Feature | Notes |
 |---------|-------|
 | `POST /{index}/_search` | Full query DSL (below). |
-| `GET /{index}/_search?q=` | Lucene-style query string mapped to a multi-field `match` over string columns; honours `size` / `from`. |
+| `GET /{index}/_search?q=` | Lucene-style query string parsed with AST tokenizer; honours `size` / `from`. |
 | `POST /{index}/_count` | Document count, optionally filtered. |
 | `match` | BM25 (Okapi) lexical search over inverted indexes. Multi-field `match` OR-merges per-field results. |
+| `match_phrase` | Exact phrase matching with configurable positional `slop`. |
+| `multi_match` | Multi-field full-text search across per-field BM25 inverted indexes. |
+| `query_string`, `simple_query_string` | Lucene AST parser supporting boolean operators (`AND`, `OR`, `NOT`, `&&`, `\|\|`, `!`), field qualifiers (`field:val`), phrases, ranges (`[A TO B]`), wildcards (`*`), and grouping `()`. |
+| `fuzzy` | Levenshtein edit-distance matching with `fuzziness` (`AUTO` or integer distance) and `prefix_length` pruning. |
 | `knn` | HNSW vector search. `k`, `num_candidates` (→ `ef_search`), `filter`. |
-| Hybrid (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `BENOSEARCH_RRF_K`. |
+| `hybrid` (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `BENOSEARCH_RRF_K`. |
 | `match_all` | Returns all docs (uniform score 1.0). |
-| `filter` / `bool` | `term`, `terms`, `range`, `exists`, and `bool { must, filter, must_not }` compiled to SQL `WHERE` and evaluated with DataFusion (with index-based pruning). |
+| `filter` / `bool` | `term`, `terms`, `range`, `exists`, `prefix`, `wildcard`, `regexp`, `ids`, `fuzzy`, `nested`, and `bool { must, filter, should, must_not }`. |
+| `sort`, `search_after` | Multi-field sorting (`asc`/`desc`), `_score`, `_id`, and cursor-based deep pagination (`search_after`). |
+| `scroll` | Keyset-backed stateless pagination via `_search?scroll=1m`, `POST /_search/scroll`, `GET /_search/scroll`, and `DELETE /_search/scroll` for export tools and migration scripts. |
+| `highlight` | Snippet term highlighting (`<em>...</em>`) for matching full-text clauses. |
 | `_source` filtering | `_source: { includes, excludes }` (dot-prefixed includes keep nested fields). |
 | `from` / `size` | Pagination (default `size` 10, `from` 0). |
+| `has_child` / `has_parent` | Relational and graph-neighborhood query DSL support (`type`/`parent_type`, `query`, `min_children`, `max_children`, and optional CSR `edge_index` traversal). |
+| `nested` | Nested query DSL for both single objects (`user.age`) and arrays of objects with independent per-element predicate matching. |
 | `_id` | Explicit document id (reserved `_id` primary-key column). Synthesized `{segment_id}:{row_id}` fallback for pre-existing tables without an id column. |
 
-### Error envelope
+### Snapshot & restore
+| Endpoint | Notes |
+|----------|-------|
+| `GET /_snapshot`, `GET /_snapshot/_all` | List registered snapshot repositories. |
+| `GET /_snapshot/{repo}` | Retrieve snapshot repository configuration. |
+| `PUT /_snapshot/{repo}`, `POST /_snapshot/{repo}` | Register or update snapshot repository. |
+| `DELETE /_snapshot/{repo}` | Unregister snapshot repository and clear cached metadata. |
+| `POST /_snapshot/{repo}/_verify` | Verify snapshot repository connectivity. |
+| `PUT /_snapshot/{repo}/{snap}`, `POST /_snapshot/{repo}/{snap}` | Create snapshot, checkpointing target Iceberg tables and committing Parquet files. Supports `wait_for_completion`. |
+| `GET /_snapshot/{repo}/{snap}`, `GET /_snapshot/{repo}/_all` | Retrieve snapshot metadata across cluster or per repository. |
+| `GET /_snapshot/{repo}/{snap}/_status` | Retrieve snapshot completion status and shard progress. |
+| `POST /_snapshot/{repo}/{snap}/_restore` | Restore snapshot checkpoint. |
+| `DELETE /_snapshot/{repo}/{snap}` | Delete snapshot record. |
+
+### Error envelope & client handshake
 Errors use the ES shape:
 ```text
 { "error": { "type": "<exception>", "reason": "..." }, "status": <http_code> }
 ```
 Mapped types include `index_not_found_exception` (404), `resource_already_exists_exception`
-(400), and `illegal_argument_exception` (400).
+(400), `search_context_missing_exception` (404), `repository_missing_exception` (404),
+`snapshot_missing_exception` (404), and `illegal_argument_exception` (400).
+
+#### Client product validation headers
+All HTTP responses include compatibility headers so official client SDKs (Python, Node.js, Go, Java) pass initialization and validation checks without error:
+- `x-elastic-product: Elasticsearch`
+- `x-opensearch-version: 3.0.0`
+
+#### Graceful fallback for unmapped endpoints
+Any unmapped route or method triggers a global Axum fallback returning HTTP 400 with a standard ES error envelope:
+```json
+{
+  "error": {
+    "type": "illegal_argument_exception",
+    "reason": "No handler found for uri [/unimplemented/route] and method [POST]"
+  },
+  "status": 400
+}
+```
+This ensures upstream clients receive valid, parseable JSON error envelopes rather than unformatted 404/501 or text/HTML responses, preventing client JSON decoder crashes.
 
 ---
 
@@ -84,17 +151,10 @@ Mapped types include `index_not_found_exception` (404), `resource_already_exists
 
 | Feature | Behavior / workaround |
 |---------|----------------------|
-| Per-document delete | `DELETE /{index}/_doc/{id}` returns **501**. The store is append-only (Iceberg); soft-delete is deferred. Use `DELETE /{index}` to drop the whole index. Bulk `delete` actions return a per-item 501. |
-| `delete_by_query` | Not implemented. |
-| Aggregations (`aggs`) | **Supported** (see the Aggregations section above): `terms`, `histogram`, `date_histogram`, `range`, `filter`, `missing`, `avg`, `sum`, `min`, `max`, `value_count`, `cardinality`, `stats`, `extended_stats`, and nested `aggs`. Not supported: `nested`, `reverse_nested`, `composite`, `significant_terms`, `percentiles`, `cardinality` precision tuning, pipeline aggs. |
-| Index aliases | Not implemented (`aliases` is always `{}`). |
-| Reindex | Not implemented. |
 | ILM (index lifecycle) | Not implemented. |
-| Snapshots | Not implemented. |
 | Authentication / security | Not implemented. Bind to `127.0.0.1` (default) or put a reverse proxy with auth + TLS in front. |
-| Multi-node / sharding / replicas | Single-node only; reports 1 primary shard, 0 replicas. |
+| Multi-node / sharding / replicas | Single-node local daemon; for distributed workloads, shared Iceberg catalogs on S3/GCS with Flight SQL provide horizontal scale-out. |
 | Kibana | No proprietary UI. See "Dashboards" below. |
-| `match_phrase`, `multi_match`, `query_string`, `fuzzy`, etc. | Not implemented (return 400 `illegal_argument_exception`). |
 
 ---
 

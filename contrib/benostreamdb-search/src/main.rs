@@ -13,13 +13,13 @@
 )]
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use benostreamdb_search::handlers::{
-    bulk, cluster, docs, graph_search, indices, mapping, metrics, search,
+    bulk, cluster, docs, graph_search, indices, mapping, metrics, search, snapshots,
 };
 use benostreamdb_search::state::{resolve_catalog, resolve_storage_uri, AppState};
 
@@ -145,8 +145,29 @@ async fn main() {
         .route("/_health", get(cluster::cluster_health))
         .route("/_cluster/health", get(cluster::cluster_health))
         .route("/_cluster/stats", get(cluster::cluster_stats))
+        .route(
+            "/_cluster/settings",
+            get(cluster::get_cluster_settings).put(cluster::put_cluster_settings),
+        )
         .route("/_cat/indices", get(cluster::cat_indices))
+        .route("/_cat/master", get(cluster::cat_cluster_manager))
+        .route("/_cat/cluster_manager", get(cluster::cat_cluster_manager))
+        .route("/_cat/nodes", get(cluster::cat_nodes))
+        .route("/_cat/shards", get(cluster::cat_shards))
+        .route("/_cat/health", get(cluster::cat_health))
+        .route("/_nodes", get(cluster::nodes_info))
+        .route("/_nodes/_all", get(cluster::nodes_info))
+        .route("/_nodes/http", get(cluster::nodes_info))
+        .route("/_nodes/stats", get(cluster::nodes_info))
+        .route("/_xpack", get(cluster::xpack_info))
+        .route("/_license", get(cluster::license_info))
+        .route("/_ingest/pipeline", get(cluster::get_ingest_pipeline))
+        .route(
+            "/_ingest/pipeline/:id",
+            get(cluster::get_ingest_pipeline).put(cluster::put_ingest_pipeline),
+        )
         .route("/_refresh", post(docs::refresh_all))
+        .route("/_reindex", post(docs::reindex))
         .route("/_bulk", post(bulk::bulk))
         .route("/_aliases", post(indices::post_aliases))
         .route("/_alias", get(indices::get_all_aliases))
@@ -177,14 +198,65 @@ async fn main() {
         .route("/:index/_bulk", post(bulk::bulk_indexed))
         .route("/:index/_count", get(search::count))
         .route(
+            "/_field_caps",
+            get(mapping::field_caps_all).post(mapping::field_caps_all),
+        )
+        .route(
             "/:index/_mapping",
             get(mapping::get_mapping).put(mapping::put_mapping),
+        )
+        .route(
+            "/:index/_field_caps",
+            get(mapping::field_caps).post(mapping::field_caps),
         )
         .route(
             "/:index/_search",
             post(search::search).get(search::search_get),
         )
+        .route(
+            "/_search/scroll",
+            post(search::scroll_post)
+                .get(search::scroll_get)
+                .delete(search::clear_scroll),
+        )
+        .route(
+            "/_search/scroll/:scroll_id",
+            delete(search::clear_scroll_path),
+        )
+        // Snapshot management.
+        .route("/_snapshot", get(snapshots::get_all_repositories))
+        .route(
+            "/_snapshot/:repository",
+            get(snapshots::get_repository)
+                .put(snapshots::put_repository)
+                .post(snapshots::put_repository)
+                .delete(snapshots::delete_repository),
+        )
+        .route(
+            "/_snapshot/:repository/_verify",
+            post(snapshots::verify_repository),
+        )
+        .route(
+            "/_snapshot/:repository/_all",
+            get(snapshots::get_all_snapshots),
+        )
+        .route(
+            "/_snapshot/:repository/:snapshot",
+            get(snapshots::get_snapshot)
+                .put(snapshots::create_snapshot)
+                .post(snapshots::create_snapshot)
+                .delete(snapshots::delete_snapshot),
+        )
+        .route(
+            "/_snapshot/:repository/:snapshot/_status",
+            get(snapshots::get_snapshot_status),
+        )
+        .route(
+            "/_snapshot/:repository/:snapshot/_restore",
+            post(snapshots::restore_snapshot),
+        )
         .route("/:index/_graph_search", post(graph_search::graph_search))
+        .fallback(cluster::fallback_unimplemented)
         .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

@@ -566,6 +566,149 @@ impl Table {
         Ok(())
     }
 
+    /// Rebuild the position-aware inverted index for `column` on every segment
+    /// that already carries an inverted index for it.
+    ///
+    /// This is a *targeted* reindex. Unlike [`Self::backfill_indexes_async`] —
+    /// which rebuilds every configured index for a segment (including the HNSW
+    /// vector indexes, tens of GB at Wikipedia scale) and skips segments that
+    /// already carry an `inverted` index — this rebuilds only the
+    /// `{segment}.{column}.inv.parquet` sidecar (and its `.doclen.parquet`
+    /// companion) in place, leaving every other index file untouched.
+    ///
+    /// It exists to upgrade legacy 2-column (position-less) inverted indexes to
+    /// the 3-column position-aware format, which lets the keyword-search path
+    /// compute term frequency in O(1) via `ListArray::value_length` instead of
+    /// counting duplicate row ids. The analyzer recorded in the existing index
+    /// footer is preserved, so query semantics are unchanged — only the on-disk
+    /// format (and therefore the query speed) changes.
+    ///
+    /// The sidecar paths are unchanged, so the manifest needs no update; any
+    /// cached copy of the old file is invalidated. Returns the number of
+    /// segments rebuilt.
+    pub async fn reindex_inverted_column(&self, column: &str) -> Result<usize> {
+        use futures::StreamExt;
+
+        let _maintenance_guard = self.maintenance_lock.write().await;
+
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let (_manifest, entries, _) = manager.load_latest_full().await?;
+
+        let store = self.store.clone();
+        let data_store = self
+            .data_store
+            .clone()
+            .unwrap_or_else(|| self.store.clone());
+        let table_uri = self.uri.clone();
+        let mut index_configs = self.indexing.index_configs.read().clone();
+
+        let mut rebuilt = 0usize;
+        for entry in entries {
+            // Only segments that already carry an inverted index on `column`.
+            let inv = entry
+                .index_files
+                .iter()
+                .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(column));
+            let Some(inv) = inv else { continue };
+
+            // Preserve the analyzer the existing index was built with so the
+            // rebuilt index answers queries identically (only faster).
+            let analyzer = read_inverted_analyzer(&store, &entry, inv)
+                .await
+                .unwrap_or_else(|| "identity".to_string());
+
+            // Force the exact analyzer on the rebuild. `build_inverted_index`
+            // reads `config.tokenizer` first, so this overrides the algorithm's
+            // default (e.g. `analyzer:english` for BM25).
+            {
+                let cfg = index_configs.entry(column.to_string()).or_default();
+                cfg.enabled = true;
+                cfg.tokenizer = Some(analyzer);
+            }
+
+            // The manifest may store an absolute URI (e.g. after a relocate).
+            // The writer derives its output path from `parquet_path`, so pass
+            // the store-relative form the reader and store expect — otherwise
+            // `finish_indexing` writes to a bogus nested `file:` path.
+            let rel_parquet_path = relativize_against(&table_uri, &entry.file_path);
+            let segment_id = rel_parquet_path
+                .split('/')
+                .next_back()
+                .unwrap_or(&rel_parquet_path)
+                .strip_suffix(".parquet")
+                .unwrap_or(&rel_parquet_path)
+                .to_string();
+            let rel_parent = if let Some(pos) = rel_parquet_path.rfind('/') {
+                rel_parquet_path[..pos].to_string()
+            } else {
+                String::new()
+            };
+            let full_base_uri = if rel_parent.is_empty() {
+                table_uri.clone()
+            } else {
+                format!("{}/{}", table_uri.trim_end_matches('/'), rel_parent)
+            };
+
+            let config = SegmentConfig::new(&full_base_uri, &segment_id)
+                .with_parquet_path(rel_parquet_path)
+                .with_data_store(data_store.clone())
+                .with_columns_to_index(vec![column.to_string()]);
+
+            let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
+            let mut writer = HybridSegmentWriter::new(config)
+                .with_index_configs(index_configs.clone())
+                .with_record_count(entry.record_count as usize)
+                .with_existing_stats(entry.column_stats.clone());
+            writer.set_store(store.clone());
+
+            // Re-tokenize only `column`; `index_column` (not `build_indexes`)
+            // keeps the vector columns out of the rebuild entirely. Project the
+            // read down to `column` so a segment's other (potentially huge)
+            // columns — e.g. a 384-dim embedding — are never fetched.
+            let projection: Option<arrow::datatypes::SchemaRef> = {
+                let schema = self.schema.read();
+                schema
+                    .field_with_name(column)
+                    .ok()
+                    .map(|f| std::sync::Arc::new(arrow::datatypes::Schema::new(vec![f.clone()])))
+            };
+            let stream = reader.stream_row_groups(None, projection).await?;
+            let mut stream = stream.boxed();
+            let mut offset = 0usize;
+            while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                let rows = batch.num_rows();
+                if let Some(col) = batch.column_by_name(column) {
+                    writer.index_column(column, col, offset)?;
+                }
+                offset += rows;
+            }
+            writer.finish_indexing().await?;
+
+            // The sidecar path is unchanged, so the manifest needs no update —
+            // but any cached copy of the old file must be dropped.
+            let inv_path = if rel_parent.is_empty() {
+                inv.file_path.clone()
+            } else {
+                format!("{}/{}", rel_parent, inv.file_path)
+            };
+            let cache_key = format!("{}/{}", table_uri, inv_path);
+            crate::core::cache::INVERTED_INDEX_CACHE
+                .invalidate(&cache_key)
+                .await;
+            crate::core::cache::BYTE_CACHE.invalidate(&cache_key).await;
+
+            rebuilt += 1;
+            tracing::info!(
+                segment = %entry.file_path,
+                column,
+                "reindexed inverted index (position-aware)"
+            );
+        }
+
+        Ok(rebuilt)
+    }
+
     /// Physical index types required for `target_columns` (or every configured
     /// column when `target_columns` is empty), as `(column, index_type)` pairs.
     ///
@@ -696,6 +839,71 @@ fn entry_has_index(entry: &crate::core::manifest::ManifestEntry, col: &str, ty: 
         .index_files
         .iter()
         .any(|f| f.column_name.as_deref() == Some(col) && f.index_type == ty)
+}
+
+/// Convert a manifest `file_path` (which may be an absolute URI, e.g. after a
+/// table relocate) into the store-relative path the reader and writer expect.
+///
+/// Falls back to the last path component when the path is not under `root_uri`
+/// (data files live directly in the table directory in the common case).
+fn relativize_against(root_uri: &str, file_path: &str) -> String {
+    fn strip_scheme(s: &str) -> &str {
+        s.strip_prefix("file://").unwrap_or(s)
+    }
+    let root = strip_scheme(root_uri).trim_end_matches('/');
+    let p = strip_scheme(file_path);
+    if !root.is_empty() {
+        if let Some(rest) = p.strip_prefix(root) {
+            return rest.trim_start_matches('/').to_string();
+        }
+    }
+    file_path
+        .split('/')
+        .next_back()
+        .unwrap_or(file_path)
+        .to_string()
+}
+
+/// Read the `analyzer` key/value from an existing inverted-index footer.
+///
+/// Used by [`Table::reindex_inverted_column`] to preserve the tokenization the
+/// index was originally built with. Returns `None` when the file is missing or
+/// carries no analyzer metadata (legacy indexes), in which case the caller
+/// falls back to `identity`.
+async fn read_inverted_analyzer(
+    store: &std::sync::Arc<dyn object_store::ObjectStore>,
+    entry: &crate::core::manifest::ManifestEntry,
+    inv: &crate::core::manifest::IndexFile,
+) -> Option<String> {
+    // Resolve the sidecar path the same way the reader does: relative to the
+    // segment's parquet directory unless the manifest already stores a path.
+    let mut dir_path = entry.file_path.clone();
+    if let Some(pos) = dir_path.rfind('/') {
+        dir_path.truncate(pos);
+    } else {
+        dir_path.clear();
+    }
+    let full = if dir_path.is_empty() || inv.file_path.contains('/') {
+        inv.file_path.clone()
+    } else {
+        format!("{}/{}", dir_path, inv.file_path)
+    };
+
+    let bytes = store
+        .get(&object_store::path::Path::from(full.as_str()))
+        .await
+        .ok()?
+        .bytes()
+        .await
+        .ok()?;
+    let builder =
+        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes).ok()?;
+    for kv in builder.metadata().file_metadata().key_value_metadata()? {
+        if kv.key == "analyzer" {
+            return kv.value.clone();
+        }
+    }
+    None
 }
 
 #[cfg(test)]

@@ -47,6 +47,8 @@ pub struct AppState {
     /// routing convenience, and the underlying collection data is durable. See
     /// `docs/QDRANT_COMPATIBILITY.md`.
     pub aliases: Arc<RwLock<HashMap<String, String>>>,
+    pub snapshot_repositories: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    pub snapshots: Arc<RwLock<HashMap<String, HashMap<String, serde_json::Value>>>>,
     /// Serializes open/create so concurrent first-use requests for the same
     /// index share one `Table` instance (no forked write buffers / WALs).
     open_gate: Arc<Mutex<()>>,
@@ -104,6 +106,17 @@ impl AppState {
         catalog: Option<Arc<dyn benostreamdb::core::catalog::Catalog>>,
         catalog_namespace: String,
     ) -> Self {
+        let mut default_repos = HashMap::new();
+        default_repos.insert(
+            "default".to_string(),
+            serde_json::json!({
+                "type": "fs",
+                "settings": {
+                    "location": storage_root.clone()
+                }
+            }),
+        );
+
         Self {
             storage_root,
             cluster_uuid,
@@ -114,6 +127,8 @@ impl AppState {
             catalog,
             catalog_namespace,
             aliases: Arc::new(RwLock::new(HashMap::new())),
+            snapshot_repositories: Arc::new(RwLock::new(default_repos)),
+            snapshots: Arc::new(RwLock::new(HashMap::new())),
             open_gate: Arc::new(Mutex::new(())),
         }
     }
@@ -162,6 +177,45 @@ impl AppState {
     pub fn index_uri(&self, index: &str) -> String {
         let target = self.resolve_alias_sync(index);
         format!("{}/{}", self.storage_root.trim_end_matches('/'), target)
+    }
+
+    /// Resolves the storage URI for an index. If an external catalog is configured and
+    /// has registered the table, returns the catalog's authoritative location.
+    /// Otherwise returns `{storage_root}/{resolved_index}`.
+    pub async fn resolve_table_uri(&self, index: &str) -> String {
+        let resolved = self.resolve_alias(index).await;
+        if let Some(catalog) = &self.catalog {
+            if let Ok(meta) = catalog.load_table(&self.catalog_namespace, &resolved).await {
+                if !meta.location.is_empty() {
+                    return meta.location;
+                }
+            }
+        }
+        self.index_uri(&resolved)
+    }
+
+    /// Checks whether an index exists in memory cache, local storage, or the external catalog.
+    pub async fn index_exists(&self, index: &str) -> bool {
+        let resolved = self.resolve_alias(index).await;
+        {
+            let tables = self.tables.read().await;
+            if tables.contains_key(&resolved) {
+                return true;
+            }
+        }
+        if table_exists(&self.index_uri(&resolved)).await {
+            return true;
+        }
+        if let Some(catalog) = &self.catalog {
+            if catalog
+                .table_exists(&self.catalog_namespace, &resolved)
+                .await
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Look up an already-open table, or open/create one.
@@ -217,7 +271,7 @@ impl AppState {
         // 2. Serialize the open/create decision for this index.
         let _gate = self.open_gate.lock().await;
         self.metrics.index_cache_misses_total.inc();
-        let uri = self.index_uri(index);
+        let uri = self.resolve_table_uri(index).await;
 
         // Open (or create) with indexing enabled. The default builder
         // config (`index_all = false`) would leave segments without the
@@ -232,7 +286,17 @@ impl AppState {
             builder = builder.with_catalog(Arc::clone(catalog), &self.catalog_namespace, index);
         }
 
-        let mut table = if table_exists(&uri).await {
+        let exists_in_storage = table_exists(&uri).await;
+        let exists_in_catalog = if let Some(catalog) = &self.catalog {
+            catalog
+                .table_exists(&self.catalog_namespace, index)
+                .await
+                .unwrap_or(false)
+        } else {
+            false
+        };
+
+        let mut table = if exists_in_storage || exists_in_catalog {
             builder.build_async().await.map_err(|e| {
                 BenoStreamError::internal(format!("failed to open index '{index}': {e}"))
             })?
@@ -342,8 +406,7 @@ impl AppState {
         Ok(Arc::clone(entry))
     }
 
-    /// Enumerate all index names under the storage root: the first path
-    /// component of every object that has an Iceberg `metadata/version-hint.text`.
+    /// Enumerate all index names under the storage root and the external catalog if configured.
     pub async fn list_indexes(&self) -> Result<Vec<String>, BenoStreamError> {
         let store =
             benostreamdb::core::storage::create_object_store(&self.storage_root).map_err(|e| {
@@ -365,6 +428,16 @@ impl AppState {
                 names.insert(parts[0].to_string());
             }
         }
+
+        // Enumerate tables from external Iceberg catalog if configured
+        if let Some(catalog) = &self.catalog {
+            if let Ok(cat_tables) = catalog.list_tables(&self.catalog_namespace).await {
+                for tbl in cat_tables {
+                    names.insert(tbl);
+                }
+            }
+        }
+
         Ok(names.into_iter().collect())
     }
 
@@ -372,16 +445,19 @@ impl AppState {
     /// Used by `_cat/indices` / `_cluster/stats` so listing indexes does not
     /// trigger background index backfills.
     pub async fn open_light(&self, index: &str) -> Result<Table, BenoStreamError> {
-        let uri = self.index_uri(index);
-        Table::builder(uri)
+        let uri = self.resolve_table_uri(index).await;
+        let mut builder = Table::builder(uri);
+        if let Some(catalog) = &self.catalog {
+            builder = builder.with_catalog(Arc::clone(catalog), &self.catalog_namespace, index);
+        }
+        builder
             .build_async()
             .await
             .map_err(|e| BenoStreamError::internal(format!("failed to open index '{index}': {e}")))
     }
 
-    /// Remove the index from the in-process table cache and delete every
-    /// object under its URI (manifest, metadata, data, indexes) from the
-    /// object store.
+    /// Remove the index from the in-process table cache, drop it from the external
+    /// catalog if configured, and delete every object under its URI from the object store.
     pub async fn delete_index(&self, index: &str) -> Result<(), BenoStreamError> {
         let resolved = self.resolve_alias(index).await;
         let index = resolved.as_str();
@@ -393,7 +469,25 @@ impl AppState {
             .await
             .retain(|_, target| target != index);
 
-        let uri = self.index_uri(index);
+        // Drop from external catalog if configured
+        if let Some(catalog) = &self.catalog {
+            if let Err(e) = catalog.drop_table(&self.catalog_namespace, index).await {
+                tracing::warn!(
+                    index = %index,
+                    namespace = %self.catalog_namespace,
+                    error = %e,
+                    "Failed to drop table from external catalog on delete"
+                );
+            } else {
+                tracing::info!(
+                    index = %index,
+                    namespace = %self.catalog_namespace,
+                    "Dropped table from external Iceberg catalog"
+                );
+            }
+        }
+
+        let uri = self.resolve_table_uri(index).await;
         let store = benostreamdb::core::storage::create_object_store(&uri).map_err(|e| {
             BenoStreamError::InvalidUri {
                 uri: uri.clone(),
