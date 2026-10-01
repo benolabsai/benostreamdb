@@ -137,9 +137,31 @@ impl AppState {
         Ok(())
     }
 
+    /// Resolve an index alias to its target index name asynchronously.
+    pub async fn resolve_alias(&self, name: &str) -> String {
+        let aliases = self.aliases.read().await;
+        aliases
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Resolve an index alias synchronously if lock is uncontended.
+    pub fn resolve_alias_sync(&self, name: &str) -> String {
+        if let Ok(aliases) = self.aliases.try_read() {
+            aliases
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string())
+        } else {
+            name.to_string()
+        }
+    }
+
     /// Table URI for a named search index: `{storage_root}/{index}`.
     pub fn index_uri(&self, index: &str) -> String {
-        format!("{}/{}", self.storage_root.trim_end_matches('/'), index)
+        let target = self.resolve_alias_sync(index);
+        format!("{}/{}", self.storage_root.trim_end_matches('/'), target)
     }
 
     /// Look up an already-open table, or open/create one.
@@ -151,7 +173,9 @@ impl AppState {
         index: &str,
         schema: &Option<SchemaRef>,
     ) -> Result<Arc<Table>, BenoStreamError> {
-        self.open_or_create_with_indexing(index, schema, true).await
+        let resolved = self.resolve_alias(index).await;
+        self.open_or_create_with_indexing(&resolved, schema, true)
+            .await
     }
 
     /// Open/create a table for the Qdrant API.
@@ -166,7 +190,8 @@ impl AppState {
         index: &str,
         schema: &Option<SchemaRef>,
     ) -> Result<Arc<Table>, BenoStreamError> {
-        self.open_or_create_with_indexing(index, schema, false)
+        let resolved = self.resolve_alias(index).await;
+        self.open_or_create_with_indexing(&resolved, schema, false)
             .await
     }
 
@@ -176,6 +201,8 @@ impl AppState {
         schema: &Option<SchemaRef>,
         index_all: bool,
     ) -> Result<Arc<Table>, BenoStreamError> {
+        let resolved = self.resolve_alias(index).await;
+        let index = resolved.as_str();
         Self::validate_index_name(index)?;
 
         // 1. Fast path: already open in this process.
@@ -356,8 +383,15 @@ impl AppState {
     /// object under its URI (manifest, metadata, data, indexes) from the
     /// object store.
     pub async fn delete_index(&self, index: &str) -> Result<(), BenoStreamError> {
+        let resolved = self.resolve_alias(index).await;
+        let index = resolved.as_str();
+
         // Drop the cached handle so a stale Table isn't reused.
         self.tables.write().await.remove(index);
+        self.aliases
+            .write()
+            .await
+            .retain(|_, target| target != index);
 
         let uri = self.index_uri(index);
         let store = benostreamdb::core::storage::create_object_store(&uri).map_err(|e| {
