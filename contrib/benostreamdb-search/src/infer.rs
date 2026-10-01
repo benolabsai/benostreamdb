@@ -335,6 +335,12 @@ pub fn merge_datatypes(base: &DataType, incoming: &DataType) -> Result<DataType,
         (DataType::Int64, DataType::Float64) | (DataType::Float64, DataType::Int64) => {
             Ok(DataType::Float64)
         }
+        (DataType::Int64, DataType::Float32) | (DataType::Float32, DataType::Int64) => {
+            Ok(DataType::Float32)
+        }
+        (DataType::Float32, DataType::Float64) | (DataType::Float64, DataType::Float32) => {
+            Ok(DataType::Float64)
+        }
         (DataType::FixedSizeList(b_item, b_dim), DataType::FixedSizeList(i_item, i_dim))
             if matches!(b_item.data_type(), DataType::Float32)
                 && matches!(i_item.data_type(), DataType::Float32) =>
@@ -465,6 +471,27 @@ pub fn value_to_array(
                 })
                 .collect();
             Ok(Arc::new(Int64Array::from_iter_values_with_nulls(
+                vals.iter().copied(),
+                nulls,
+            )))
+        }
+        DataType::Float32 => {
+            for v in values.iter().flatten() {
+                if !v.is_number() {
+                    return Err(InferError::Unsupported {
+                        field: field_name.to_string(),
+                        reason: format!("expected number, got {}", es_name(json_kind(v))),
+                    });
+                }
+            }
+            let vals: Vec<f32> = values
+                .iter()
+                .map(|v| match v.as_ref().and_then(Value::as_number) {
+                    Some(n) => n.as_f64().map(|f| f as f32).unwrap_or(0.0),
+                    None => 0.0,
+                })
+                .collect();
+            Ok(Arc::new(Float32Array::from_iter_values_with_nulls(
                 vals.iter().copied(),
                 nulls,
             )))
