@@ -66,6 +66,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`plans/sql_ddl_surface.md`** — design spec for the SQL surface, and a full
   SQL language guide (all statements, UDFs, and pgvector syntax) in
   `server/flight_sql/README.md`.
+- **`Table::reindex_inverted_column`** — a *targeted* reindex that rebuilds only
+  a column's `.inv.parquet` (and `.doclen.parquet`) sidecar in place, upgrading
+  legacy 2-column (position-less) inverted indexes to the 3-column
+  position-aware format without touching the segment's other indexes (notably
+  the HNSW vector indexes). The analyzer recorded in the existing footer is
+  preserved, so query semantics are unchanged — only the O(1) term-frequency
+  path is enabled. Driven by the new `reindex_inverted` binary.
+- **`relocate_table` binary** — rewrites a moved table's absolute paths to its
+  new location across all three places Iceberg stores them: the table metadata
+  JSON (`location`, `snapshots[].manifest-list`, `metadata-log`), the
+  BenoStream manifest entries, and the Avro manifest list / manifest files. An
+  optional `--catalog-type` step repoints a catalog's metadata-location via a
+  `set-metadata-location` commit.
 
 ### Changed
 - **Repository restructured into a three-tier layout.** The core workspace is
@@ -118,6 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Orphan cleanup preserves delete files**: `remove_orphan_files` now treats
   position/equality delete files referenced by the manifest as live, so they are
   no longer reaped.
+- **`ManifestManager::load_all_entries` relativizes inline manifest entries**:
+  entries stored directly in the manifest JSON (e.g. after a `relocate_table`)
+  are now normalized against the table URI, matching the Avro-entry handling.
+  Without this, an absolute inline `file_path` reached the writer, whose
+  `finish_indexing` derived a bogus nested `file:` output path.
 - **Equality-delete read failures propagate**: `HybridReader` now returns an
   error instead of warning-and-continuing when an equality delete file cannot be
   read.

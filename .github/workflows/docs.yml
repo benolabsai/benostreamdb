@@ -7,6 +7,7 @@ on:
       - "src/**"
       - "python/**"
       - "docs/**"
+      - "contrib/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "pyproject.toml"

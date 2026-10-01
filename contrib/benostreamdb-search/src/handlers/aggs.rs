@@ -8,7 +8,7 @@
 //! - Bucket: `terms`, `histogram`, `date_histogram`, `range`, `filter`,
 //!   `missing`
 //! - Metric: `avg`, `sum`, `min`, `max`, `value_count`, `cardinality`,
-//!   `stats`, `extended_stats`
+//!   `stats`, `extended_stats`, `percentiles`
 //! - Nested `aggs` on bucket aggregations
 //!
 //! Aggregations run over the top-level `filter` (the query clause is not used
@@ -228,6 +228,9 @@ async fn compute_one(
             metric(table, filter, kind.as_str(), body).await
         }
         "stats" | "extended_stats" => stats(table, filter, body).await,
+        "percentiles" => percentiles(table, filter, body).await,
+        "composite" => composite(table, filter, body, nested).await,
+        "significant_terms" => significant_terms(table, filter, body, nested).await,
         other => Err(bad(format!("unsupported aggregation type '{other}'"))),
     }
 }
@@ -555,5 +558,468 @@ async fn stats(
         "sum_of_squares": sum_sq,
         "variance": variance,
         "std_deviation": variance.max(0.0).sqrt(),
+    }))
+}
+
+async fn percentiles(
+    table: &Table,
+    filter: Option<&str>,
+    body: &Value,
+) -> Result<Value, BenoStreamError> {
+    let field = field_of(body)?;
+    let keyed = body.get("keyed").and_then(Value::as_bool).unwrap_or(true);
+
+    let default_percents = [1.0, 5.0, 25.0, 50.0, 75.0, 95.0, 99.0];
+    let percents: Vec<f64> = match body.get("percents").and_then(Value::as_array) {
+        Some(arr) => {
+            let mut list = Vec::with_capacity(arr.len());
+            for v in arr {
+                let p = v
+                    .as_f64()
+                    .ok_or_else(|| bad("percentiles: 'percents' items must be numbers"))?;
+                if !(0.0..=100.0).contains(&p) {
+                    return Err(bad("percentiles: percent must be between 0.0 and 100.0"));
+                }
+                list.push(p);
+            }
+            list
+        }
+        None => default_percents.to_vec(),
+    };
+
+    if percents.is_empty() {
+        return Ok(if keyed {
+            json!({ "values": {} })
+        } else {
+            json!({ "values": [] })
+        });
+    }
+
+    let cols: Vec<String> = percents
+        .iter()
+        .enumerate()
+        .map(|(i, &p)| {
+            let frac = (p / 100.0).clamp(0.0, 1.0);
+            format!("approx_percentile_cont({field}, {frac}) AS p{i}")
+        })
+        .collect();
+
+    let sql = format!("SELECT {} FROM t{}", cols.join(", "), where_clause(filter));
+
+    let batches = run_sql(table, &sql).await?;
+    let row = batches
+        .iter()
+        .flat_map(batch_rows)
+        .next()
+        .unwrap_or_default();
+
+    if keyed {
+        let mut values_map = Map::new();
+        for (i, &p) in percents.iter().enumerate() {
+            let col_name = format!("p{i}");
+            let val = row.get(&col_name).cloned().unwrap_or(Value::Null);
+            let p_key = if p.fract() == 0.0 {
+                format!("{p:.1}")
+            } else {
+                format!("{p}")
+            };
+            values_map.insert(p_key, val);
+        }
+        Ok(json!({ "values": values_map }))
+    } else {
+        let mut values_list = Vec::with_capacity(percents.len());
+        for (i, &p) in percents.iter().enumerate() {
+            let col_name = format!("p{i}");
+            let val = row.get(&col_name).cloned().unwrap_or(Value::Null);
+            values_list.push(json!({
+                "key": p,
+                "value": val,
+            }));
+        }
+        Ok(json!({ "values": values_list }))
+    }
+}
+
+struct CompositeSource {
+    name: String,
+    expr: String,
+    is_asc: bool,
+    missing_bucket: bool,
+}
+
+async fn composite(
+    table: &Table,
+    filter: Option<&str>,
+    body: &Value,
+    nested: Option<&Value>,
+) -> Result<Value, BenoStreamError> {
+    let sources_array = body
+        .get("sources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad("composite: 'sources' must be an array"))?;
+    if sources_array.is_empty() {
+        return Err(bad("composite: 'sources' must be a non-empty array"));
+    }
+
+    let size = body.get("size").and_then(Value::as_u64).unwrap_or(10) as usize;
+
+    let mut sources = Vec::with_capacity(sources_array.len());
+    for item in sources_array {
+        let obj = item
+            .as_object()
+            .ok_or_else(|| bad("composite: each source must be an object"))?;
+        if obj.len() != 1 {
+            return Err(bad(
+                "composite: each source object must have exactly one name key",
+            ));
+        }
+        let (name, spec) = obj
+            .iter()
+            .next()
+            .ok_or_else(|| bad("composite: each source object must have exactly one name key"))?;
+        let spec_obj = spec
+            .as_object()
+            .ok_or_else(|| bad(format!("composite source '{name}': expected an object")))?;
+        if spec_obj.len() != 1 {
+            return Err(bad(format!(
+                "composite source '{name}': expected exactly one source type"
+            )));
+        }
+        let (stype, sbody) = spec_obj.iter().next().ok_or_else(|| {
+            bad(format!(
+                "composite source '{name}': expected exactly one source type"
+            ))
+        })?;
+        let order_str = sbody.get("order").and_then(Value::as_str).unwrap_or("asc");
+        let is_asc = match order_str.to_ascii_lowercase().as_str() {
+            "asc" => true,
+            "desc" => false,
+            other => {
+                return Err(bad(format!(
+                    "composite source '{name}': unsupported order '{other}'"
+                )))
+            }
+        };
+        let missing_bucket = sbody
+            .get("missing_bucket")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        let expr = match stype.as_str() {
+            "terms" => field_of(sbody)?,
+            "histogram" => {
+                let field = field_of(sbody)?;
+                let interval = sbody
+                    .get("interval")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| {
+                        bad(format!(
+                            "composite source '{name}': histogram 'interval' must be a number"
+                        ))
+                    })?;
+                if interval <= 0.0 {
+                    return Err(bad(format!(
+                        "composite source '{name}': histogram 'interval' must be > 0"
+                    )));
+                }
+                format!("floor({field} / {interval}) * {interval}")
+            }
+            "date_histogram" => {
+                let field = field_of(sbody)?;
+                let unit = sbody
+                    .get("calendar_interval")
+                    .or_else(|| sbody.get("fixed_interval"))
+                    .or_else(|| sbody.get("interval"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("day");
+                let unit = match unit {
+                    "minute" | "1m" => "minute",
+                    "hour" | "1h" => "hour",
+                    "week" | "1w" => "week",
+                    "month" | "1M" => "month",
+                    "quarter" | "1q" => "quarter",
+                    "year" | "1y" => "year",
+                    _ => "day",
+                };
+                format!("date_trunc('{unit}', {field})")
+            }
+            other => {
+                return Err(bad(format!(
+                    "composite source '{name}': unsupported source type '{other}'"
+                )))
+            }
+        };
+
+        sources.push(CompositeSource {
+            name: name.clone(),
+            expr,
+            is_asc,
+            missing_bucket,
+        });
+    }
+
+    let mut extra_conditions = Vec::new();
+
+    // Enforce NOT NULL for sources that do not allow missing_bucket
+    for s in &sources {
+        if !s.missing_bucket {
+            extra_conditions.push(format!("{} IS NOT NULL", s.expr));
+        }
+    }
+
+    // Handle `after` pagination cursor if present
+    if let Some(after_obj) = body.get("after").and_then(Value::as_object) {
+        let mut prefix_len = 0;
+        for s in &sources {
+            if after_obj.contains_key(&s.name) {
+                prefix_len += 1;
+            } else {
+                break;
+            }
+        }
+
+        if prefix_len > 0 {
+            let mut disjunctions = Vec::with_capacity(prefix_len);
+            for i in 0..prefix_len {
+                let mut conjunction = Vec::with_capacity(i + 1);
+                for s_j in sources.iter().take(i) {
+                    let val_j = &after_obj[&s_j.name];
+                    if val_j.is_null() {
+                        conjunction.push(format!("{} IS NULL", s_j.expr));
+                    } else {
+                        conjunction.push(format!("{} = {}", s_j.expr, sql_literal(val_j)));
+                    }
+                }
+                let s_i = &sources[i];
+                let val_i = &after_obj[&s_i.name];
+                let cmp = if s_i.is_asc { ">" } else { "<" };
+                if val_i.is_null() {
+                    conjunction.push(format!("{} IS NOT NULL", s_i.expr));
+                } else {
+                    conjunction.push(format!("{} {} {}", s_i.expr, cmp, sql_literal(val_i)));
+                }
+                disjunctions.push(format!("({})", conjunction.join(" AND ")));
+            }
+            extra_conditions.push(format!("({})", disjunctions.join(" OR ")));
+        }
+    }
+
+    let mut combined_filter = filter.map(|f| f.to_string());
+    for cond in extra_conditions {
+        combined_filter = Some(match combined_filter {
+            Some(curr) if !curr.trim().is_empty() => format!("({curr}) AND ({cond})"),
+            _ => cond,
+        });
+    }
+
+    let select_cols: Vec<String> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| format!("{} AS k_{i}", s.expr))
+        .collect();
+
+    let group_by_exprs: Vec<String> = sources.iter().map(|s| s.expr.clone()).collect();
+
+    let order_by_cols: Vec<String> = sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let ord = if s.is_asc { "ASC" } else { "DESC" };
+            format!("k_{i} {ord}")
+        })
+        .collect();
+
+    let sql = format!(
+        "SELECT {}, COUNT(*) AS doc_count FROM t{} GROUP BY {} ORDER BY {} LIMIT {size}",
+        select_cols.join(", "),
+        where_clause(combined_filter.as_deref()),
+        group_by_exprs.join(", "),
+        order_by_cols.join(", ")
+    );
+
+    let batches = run_sql(table, &sql).await?;
+    let mut buckets = Vec::new();
+    for b in &batches {
+        for row in batch_rows(b) {
+            let mut key_map = Map::new();
+            let mut bucket_filter_parts = Vec::with_capacity(sources.len());
+            for (i, s) in sources.iter().enumerate() {
+                let k_name = format!("k_{i}");
+                let k_val = row.get(&k_name).cloned().unwrap_or(Value::Null);
+                if k_val.is_null() {
+                    bucket_filter_parts.push(format!("{} IS NULL", s.expr));
+                } else {
+                    bucket_filter_parts.push(format!("{} = {}", s.expr, sql_literal(&k_val)));
+                }
+                key_map.insert(s.name.clone(), k_val);
+            }
+
+            let doc_count = row.get("doc_count").cloned().unwrap_or(json!(0));
+            let mut bucket = Map::new();
+            bucket.insert("key".to_string(), Value::Object(key_map));
+            bucket.insert("doc_count".to_string(), doc_count);
+
+            if let Some(n) = nested {
+                let bucket_cond = bucket_filter_parts.join(" AND ");
+                let sub_filter = and_filter(filter, &bucket_cond);
+                bucket.insert(
+                    "aggs".to_string(),
+                    compute_aggregations(table, Some(&sub_filter), n).await?,
+                );
+            }
+            buckets.push(Value::Object(bucket));
+        }
+    }
+
+    let mut out = Map::new();
+    if let Some(last) = buckets.last() {
+        if let Some(key) = last.get("key") {
+            out.insert("after_key".to_string(), key.clone());
+        }
+    }
+    out.insert("buckets".to_string(), Value::Array(buckets));
+    Ok(Value::Object(out))
+}
+
+async fn significant_terms(
+    table: &Table,
+    filter: Option<&str>,
+    body: &Value,
+    nested: Option<&Value>,
+) -> Result<Value, BenoStreamError> {
+    let field = field_of(body)?;
+    let size = body.get("size").and_then(Value::as_u64).unwrap_or(10) as usize;
+    let min_doc_count = body
+        .get("min_doc_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as usize;
+
+    let bg_count_val = scalar(table, "SELECT COUNT(*) FROM t").await?;
+    let bg_total = bg_count_val.as_u64().unwrap_or(0);
+    if bg_total == 0 {
+        return Ok(json!({
+            "doc_count": 0,
+            "bg_count": 0,
+            "buckets": []
+        }));
+    }
+
+    let fg_total = if let Some(f) = filter {
+        if !f.trim().is_empty() {
+            let fg_val = scalar(table, &format!("SELECT COUNT(*) FROM t WHERE ({f})")).await?;
+            fg_val.as_u64().unwrap_or(0)
+        } else {
+            bg_total
+        }
+    } else {
+        bg_total
+    };
+
+    if fg_total == 0 {
+        return Ok(json!({
+            "doc_count": 0,
+            "bg_count": bg_total,
+            "buckets": []
+        }));
+    }
+
+    let fg_sql = format!(
+        "SELECT {field} AS key, COUNT(*) AS fg_count FROM t{} GROUP BY {field} HAVING COUNT(*) >= {min_doc_count}",
+        where_clause(filter)
+    );
+    let fg_batches = run_sql(table, &fg_sql).await?;
+    let mut fg_items = Vec::new();
+    for b in &fg_batches {
+        for row in batch_rows(b) {
+            let key = row.get("key").cloned().unwrap_or(Value::Null);
+            if !key.is_null() {
+                let fg_count = row.get("fg_count").and_then(Value::as_u64).unwrap_or(0);
+                fg_items.push((key, fg_count));
+            }
+        }
+    }
+
+    if fg_items.is_empty() {
+        return Ok(json!({
+            "doc_count": fg_total,
+            "bg_count": bg_total,
+            "buckets": []
+        }));
+    }
+
+    let key_literals: Vec<String> = fg_items.iter().map(|(k, _)| sql_literal(k)).collect();
+    let bg_terms_sql = format!(
+        "SELECT {field} AS key, COUNT(*) AS bg_count FROM t WHERE {field} IN ({}) GROUP BY {field}",
+        key_literals.join(", ")
+    );
+    let bg_batches = run_sql(table, &bg_terms_sql).await?;
+    let mut bg_map = std::collections::HashMap::new();
+    for b in &bg_batches {
+        for row in batch_rows(b) {
+            let key = row.get("key").cloned().unwrap_or(Value::Null);
+            let bg_count = row.get("bg_count").and_then(Value::as_u64).unwrap_or(0);
+            bg_map.insert(key.to_string(), bg_count);
+        }
+    }
+
+    struct ScoredTerm {
+        key: Value,
+        fg_count: u64,
+        bg_count: u64,
+        score: f64,
+    }
+
+    let mut scored = Vec::with_capacity(fg_items.len());
+    let fg_total_f = fg_total as f64;
+    let bg_total_f = bg_total as f64;
+
+    for (key, fg_count) in fg_items {
+        let bg_count = bg_map.get(&key.to_string()).copied().unwrap_or(fg_count);
+        let p_fg = (fg_count as f64) / fg_total_f;
+        let p_bg = (bg_count as f64) / bg_total_f;
+
+        let score = if p_fg > p_bg && p_bg > 0.0 && p_bg < 1.0 {
+            ((p_fg - p_bg) / (1.0 - p_bg)) * (p_fg / p_bg)
+        } else {
+            0.0
+        };
+
+        scored.push(ScoredTerm {
+            key,
+            fg_count,
+            bg_count,
+            score,
+        });
+    }
+
+    scored.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored.truncate(size);
+
+    let mut buckets = Vec::with_capacity(scored.len());
+    for item in scored {
+        let mut bucket = Map::new();
+        bucket.insert("key".to_string(), item.key.clone());
+        bucket.insert("doc_count".to_string(), json!(item.fg_count));
+        bucket.insert("score".to_string(), json!(item.score));
+        bucket.insert("bg_count".to_string(), json!(item.bg_count));
+
+        if let Some(n) = nested {
+            let sub_filter = and_filter(filter, &format!("{field} = {}", sql_literal(&item.key)));
+            bucket.insert(
+                "aggs".to_string(),
+                compute_aggregations(table, Some(&sub_filter), n).await?,
+            );
+        }
+        buckets.push(Value::Object(bucket));
+    }
+
+    Ok(json!({
+        "doc_count": fg_total,
+        "bg_count": bg_total,
+        "buckets": buckets
     }))
 }

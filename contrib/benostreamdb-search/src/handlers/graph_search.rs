@@ -14,7 +14,7 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::handlers::{es_response, search};
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
 use benostreamdb::{BenoStreamError, GraphNeighborhoodOptions};
 
 /// `POST /{index}/_graph_search` — graph-neighborhood-scoped search.
@@ -82,8 +82,7 @@ async fn graph_search_core(
     let id_field = obj.get("id_field").and_then(Value::as_str).unwrap_or("_id");
 
     // ── Resolve graph neighborhood via core Table operator ────────────
-    let edge_uri = state.index_uri(edge_index);
-    if !table_exists(&edge_uri).await {
+    if !state.index_exists(edge_index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: edge_index.to_string(),
@@ -107,6 +106,7 @@ async fn graph_search_core(
     if visited.is_empty() {
         // No neighbors found — return empty search response.
         return Ok(crate::es_types::SearchResponse {
+            scroll_id: None,
             took: 0,
             timed_out: false,
             hits: crate::es_types::SearchHits {

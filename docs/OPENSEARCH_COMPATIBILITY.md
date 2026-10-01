@@ -1,0 +1,1 @@
+../contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md

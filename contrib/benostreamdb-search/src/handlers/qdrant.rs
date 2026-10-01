@@ -48,7 +48,7 @@ use serde_json::Value;
 use crate::handlers::docs::{build_row_batch, translate_write_error};
 use crate::infer;
 use crate::qdrant_types::*;
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
 
 // ==========================================
 // Error + envelope helpers
@@ -135,14 +135,14 @@ fn meta_path() -> object_store::path::Path {
 }
 
 async fn read_meta(state: &AppState, name: &str) -> Option<CollectionMeta> {
-    let uri = state.index_uri(name);
+    let uri = state.resolve_table_uri(name).await;
     let store = benostreamdb::core::storage::create_object_store(&uri).ok()?;
     let bytes = store.get(&meta_path()).await.ok()?.bytes().await.ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
 async fn write_meta(state: &AppState, name: &str, meta: &CollectionMeta) -> Result<(), QErr> {
-    let uri = state.index_uri(name);
+    let uri = state.resolve_table_uri(name).await;
     let store = benostreamdb::core::storage::create_object_store(&uri)
         .map_err(|e| QErr::internal(e.to_string()))?;
     let bytes = serde_json::to_vec(meta).map_err(|e| QErr::internal(e.to_string()))?;
@@ -168,13 +168,13 @@ async fn resolve(state: &AppState, name: &str) -> String {
 
 async fn collection_exists(state: &AppState, name: &str) -> bool {
     let name = resolve(state, name).await;
-    table_exists(&state.index_uri(&name)).await || read_meta(state, &name).await.is_some()
+    state.index_exists(&name).await || read_meta(state, &name).await.is_some()
 }
 
 /// Open an existing collection, or fail with a 404-shaped error.
 async fn open_existing(state: &AppState, name: &str) -> Result<Arc<Table>, QErr> {
     let name = resolve(state, name).await;
-    if !table_exists(&state.index_uri(&name)).await {
+    if !state.index_exists(&name).await {
         return Err(QErr::not_found("Collection not found"));
     }
     state
@@ -571,8 +571,7 @@ async fn upsert_core(state: &AppState, name: &str, points: Vec<PointStruct>) -> 
         return Ok(());
     }
     let name = resolve(state, name).await;
-    let uri = state.index_uri(&name);
-    let existed_before = table_exists(&uri).await;
+    let existed_before = state.index_exists(&name).await;
 
     let docs = points_to_docs(&points);
     let ids: Vec<String> = points.iter().map(|p| p.id.as_string()).collect();

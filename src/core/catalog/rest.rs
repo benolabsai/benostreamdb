@@ -66,6 +66,18 @@ struct CreateTableRequest {
 
 // Response structures
 #[derive(Deserialize)]
+struct TableIdentifier {
+    #[allow(dead_code)]
+    namespace: Option<Vec<String>>,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct ListTablesResponse {
+    identifiers: Vec<TableIdentifier>,
+}
+
+#[derive(Deserialize)]
 struct LoadTableResponse {
     #[allow(dead_code)]
     #[serde(rename = "metadata-location")]
@@ -354,6 +366,35 @@ impl Catalog for RestCatalogClient {
         Err(anyhow!(
             "REST Catalog does not support branching. Use Nessie for Git-like branching."
         ))
+    }
+
+    async fn drop_table(&self, namespace: &str, table_name: &str) -> Result<()> {
+        let url = self.build_url(&format!("/namespaces/{}/tables/{}", namespace, table_name));
+        let builder = self.prepare_request(self.client.delete(&url)).await?;
+        let resp = builder.send().await?;
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
+            let status = resp.status();
+            let error = resp.text().await?;
+            return Err(anyhow!("Failed to drop table ({}): {}", status, error));
+        }
+        Ok(())
+    }
+
+    async fn list_tables(&self, namespace: &str) -> Result<Vec<String>> {
+        let url = self.build_url(&format!("/namespaces/{}/tables", namespace));
+        let builder = self.prepare_request(self.client.get(&url)).await?;
+        let resp = builder.send().await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await?;
+            return Err(anyhow!("Failed to list tables ({}): {}", status, error));
+        }
+        let list_resp: ListTablesResponse = resp.json().await?;
+        Ok(list_resp
+            .identifiers
+            .into_iter()
+            .map(|id| id.name)
+            .collect())
     }
 
     async fn table_exists(&self, namespace: &str, table_name: &str) -> Result<bool> {
