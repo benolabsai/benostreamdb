@@ -264,6 +264,10 @@ pub struct SearchHit {
     pub score: Option<f32>,
     #[serde(rename = "_source")]
     pub source: Value,
+    #[serde(rename = "sort", skip_serializing_if = "Option::is_none")]
+    pub sort: Option<Vec<Value>>,
+    #[serde(rename = "highlight", skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<std::collections::HashMap<String, Vec<String>>>,
 }
 
 /// ES 7.10 `GET /{index}/_count` response.
