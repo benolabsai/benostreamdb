@@ -203,10 +203,24 @@ impl SourceFilter {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PhraseSearchParams {
+    pub column: String,
+    pub phrase: String,
+    pub slop: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SortClause {
+    pub field: String,
+    pub descending: bool,
+}
+
 #[derive(Debug)]
 struct SearchRequest {
     /// One keyword search per matched field (multi-field `match` / `q`).
     keyword: Option<Vec<KeywordSearchParams>>,
+    phrase: Option<PhraseSearchParams>,
     vector: Option<VectorSearchParams>,
     /// SQL `WHERE` clause translated from the top-level ES `filter`.
     filter: Option<String>,
@@ -218,12 +232,15 @@ struct SearchRequest {
     rrf_k: Option<f32>,
     /// ES `aggs` / `aggregations` object, computed over the top-level filter.
     aggs: Option<Value>,
+    /// Sort criteria
+    sort: Option<Vec<SortClause>>,
 }
 
 impl Default for SearchRequest {
     fn default() -> Self {
         Self {
             keyword: None,
+            phrase: None,
             vector: None,
             filter: None,
             size: 10,
@@ -231,6 +248,7 @@ impl Default for SearchRequest {
             source: None,
             rrf_k: None,
             aggs: None,
+            sort: None,
         }
     }
 }
@@ -333,6 +351,9 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
         }
         req.aggs = Some(aggs.clone());
     }
+    if let Some(sort_val) = obj.get("sort") {
+        req.sort = Some(parse_sort(sort_val)?);
+    }
 
     if let Some(query) = obj.get("query") {
         match query {
@@ -345,10 +366,30 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                             }
                         }
                         "match" => req.keyword = Some(parse_match(spec)?),
+                        "multi_match" => req.keyword = Some(parse_multi_match(spec)?),
+                        "match_phrase" => req.phrase = Some(parse_match_phrase(spec)?),
                         "knn" => req.vector = Some(parse_knn(spec)?),
+                        "bool" => {
+                            let sql = bool_to_sql(spec, "query.bool")?;
+                            if req.filter.is_none() {
+                                req.filter = Some(sql);
+                            } else {
+                                req.filter = Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
+                            }
+                        }
+                        "term" | "terms" | "range" | "exists" | "prefix" | "wildcard" | "ids" => {
+                            let mut wrap = serde_json::Map::new();
+                            wrap.insert(key.clone(), spec.clone());
+                            let sql = clause_to_sql(&Value::Object(wrap), "query")?;
+                            if req.filter.is_none() {
+                                req.filter = Some(sql);
+                            } else {
+                                req.filter = Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
+                            }
+                        }
                         other => {
                             return Err(bad_request(format!(
-                                "unsupported query clause '{other}' (supported: match, match_all, knn)"
+                                "unsupported query clause '{other}' (supported: match, multi_match, match_phrase, match_all, knn, bool, term, terms, range, exists, prefix, wildcard, ids)"
                             )));
                         }
                     }
@@ -406,6 +447,142 @@ fn parse_match(spec: &Value) -> Result<Vec<KeywordSearchParams>, BenoStreamError
         out.push(KeywordSearchParams::new(field, text));
     }
     Ok(out)
+}
+
+fn parse_multi_match(spec: &Value) -> Result<Vec<KeywordSearchParams>, BenoStreamError> {
+    let m = spec.as_object().ok_or_else(|| {
+        bad_request("multi_match: expected an object with query and fields")
+    })?;
+    let query_str = m.get("query").and_then(Value::as_str).ok_or_else(|| {
+        bad_request("multi_match: missing 'query' string")
+    })?;
+    let fields_arr = m.get("fields").and_then(Value::as_array).ok_or_else(|| {
+        bad_request("multi_match: missing 'fields' array")
+    })?;
+    let mut out = Vec::with_capacity(fields_arr.len());
+    for f in fields_arr {
+        let field_str = f.as_str().ok_or_else(|| {
+            bad_request("multi_match: fields array elements must be strings")
+        })?;
+        let field = valid_field(field_str)?;
+        out.push(KeywordSearchParams::new(field, query_str.to_string()));
+    }
+    Ok(out)
+}
+
+fn parse_match_phrase(spec: &Value) -> Result<PhraseSearchParams, BenoStreamError> {
+    let m = spec.as_object().ok_or_else(|| {
+        bad_request(
+            "match_phrase: expected {\"field\": \"phrase\"} or {\"field\": {\"query\": \"phrase\"}}",
+        )
+    })?;
+    if m.is_empty() {
+        return Err(bad_request("match_phrase: expected at least one field"));
+    }
+    let (field, v) = m.iter().next().unwrap();
+    let field = valid_field(field)?;
+    let (phrase, slop) = match v {
+        Value::String(s) => (s.clone(), 0),
+        Value::Object(o) => {
+            let phrase = o
+                .get("query")
+                .or_else(|| o.get("value"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad_request("match_phrase: missing query string"))?
+                .to_string();
+            let slop = o.get("slop").and_then(Value::as_u64).unwrap_or(0) as usize;
+            (phrase, slop)
+        }
+        _ => return Err(bad_request("match_phrase: expected string or object")),
+    };
+    Ok(PhraseSearchParams {
+        column: field,
+        phrase,
+        slop,
+    })
+}
+
+fn parse_sort(v: &Value) -> Result<Vec<SortClause>, BenoStreamError> {
+    let mut clauses = Vec::new();
+    let arr = match v {
+        Value::Array(a) => a.clone(),
+        Value::String(s) => {
+            let mut parts = s.split(':');
+            let field = parts.next().unwrap_or("").trim();
+            let desc = parts
+                .next()
+                .map(|o| o.eq_ignore_ascii_case("desc"))
+                .unwrap_or(false);
+            if !field.is_empty() {
+                clauses.push(SortClause {
+                    field: field.to_string(),
+                    descending: desc,
+                });
+            }
+            return Ok(clauses);
+        }
+        Value::Object(_) => vec![v.clone()],
+        _ => return Err(bad_request("sort: expected array, string, or object")),
+    };
+
+    for item in arr {
+        match item {
+            Value::String(s) => {
+                let mut parts = s.split(':');
+                let field = parts.next().unwrap_or("").trim();
+                let desc = parts
+                    .next()
+                    .map(|o| o.eq_ignore_ascii_case("desc"))
+                    .unwrap_or(false);
+                if !field.is_empty() {
+                    clauses.push(SortClause {
+                        field: field.to_string(),
+                        descending: desc,
+                    });
+                }
+            }
+            Value::Object(m) => {
+                for (field, val) in m {
+                    let desc = match val {
+                        Value::String(s) => s.eq_ignore_ascii_case("desc"),
+                        Value::Object(o) => o
+                            .get("order")
+                            .and_then(Value::as_str)
+                            .map(|s| s.eq_ignore_ascii_case("desc"))
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    clauses.push(SortClause {
+                        field,
+                        descending: desc,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(clauses)
+}
+
+fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
+    match (a, b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater, // nulls sort last
+        (Some(_), None) => Ordering::Less,
+        (Some(va), Some(vb)) => match (va, vb) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
+            (Value::Bool(b1), Value::Bool(b2)) => b1.cmp(b2),
+            (Value::Number(n1), Value::Number(n2)) => {
+                let f1 = n1.as_f64().unwrap_or(0.0);
+                let f2 = n2.as_f64().unwrap_or(0.0);
+                f1.partial_cmp(&f2).unwrap_or(Ordering::Equal)
+            }
+            (Value::String(s1), Value::String(s2)) => s1.cmp(s2),
+            _ => Ordering::Equal,
+        },
+    }
 }
 
 /// Parse `_source` / `source` into a [`SourceFilter`].
@@ -519,9 +696,12 @@ pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStr
                 "terms" => terms_to_sql(value, ctx),
                 "range" => range_to_sql(value, ctx),
                 "exists" => exists_to_sql(value, ctx),
+                "prefix" => prefix_to_sql(value, ctx),
+                "wildcard" => wildcard_to_sql(value, ctx),
+                "ids" => ids_to_sql(value, ctx),
                 "bool" => bool_to_sql(value, ctx),
                 other => Err(bad_request(format!(
-                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, bool)"
+                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, ids, bool)"
                 ))),
             },
             _ => Err(bad_request(format!(
@@ -639,6 +819,84 @@ fn exists_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
     Ok(format!("{field} IS NOT NULL"))
 }
 
+fn prefix_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value
+        .as_object()
+        .ok_or_else(|| bad_request("prefix: expected {\"field\": \"value\"}"))?;
+    if m.len() != 1 {
+        return Err(bad_request("prefix: expected exactly one field"));
+    }
+    let (field, v) = m.iter().next().unwrap();
+    let field = valid_field(field)?;
+    let prefix_str = v
+        .as_str()
+        .or_else(|| {
+            v.as_object()
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+        })
+        .ok_or_else(|| bad_request("prefix: expected string value"))?;
+    let safe_prefix = prefix_str
+        .replace('\'', "''")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    Ok(format!("{field} LIKE '{safe_prefix}%'"))
+}
+
+fn wildcard_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value
+        .as_object()
+        .ok_or_else(|| bad_request("wildcard: expected {\"field\": \"value\"}"))?;
+    if m.len() != 1 {
+        return Err(bad_request("wildcard: expected exactly one field"));
+    }
+    let (field, v) = m.iter().next().unwrap();
+    let field = valid_field(field)?;
+    let pattern_str = v
+        .as_str()
+        .or_else(|| {
+            v.as_object()
+                .and_then(|o| o.get("value"))
+                .and_then(Value::as_str)
+        })
+        .ok_or_else(|| bad_request("wildcard: expected string pattern"))?;
+    let mut sql_pattern = String::new();
+    for c in pattern_str.chars() {
+        match c {
+            '*' => sql_pattern.push('%'),
+            '?' => sql_pattern.push('_'),
+            '%' => sql_pattern.push_str("\\%"),
+            '_' => sql_pattern.push_str("\\_"),
+            '\'' => sql_pattern.push_str("''"),
+            other => sql_pattern.push(other),
+        }
+    }
+    Ok(format!("{field} LIKE '{sql_pattern}'"))
+}
+
+fn ids_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let values_arr = match value {
+        Value::Object(m) => m.get("values").and_then(Value::as_array),
+        Value::Array(a) => Some(a),
+        _ => None,
+    }
+    .ok_or_else(|| bad_request("ids: expected {\"values\": [\"id1\", \"id2\"]}"))?;
+
+    if values_arr.is_empty() {
+        return Ok("false".to_string());
+    }
+    let mut id_lits = Vec::new();
+    for v in values_arr {
+        let id_str = match v {
+            Value::String(s) => s.as_str(),
+            Value::Number(n) => &n.to_string(),
+            _ => return Err(bad_request("ids: values must be strings or numbers")),
+        };
+        id_lits.push(format!("'{}'", id_str.replace('\'', "''")));
+    }
+    Ok(format!("{ID_COLUMN} IN ({})", id_lits.join(", ")))
+}
+
 fn bool_to_sql(value: &Value, ctx: &str) -> Result<String, BenoStreamError> {
     let m = value
         .as_object()
@@ -654,6 +912,17 @@ fn bool_to_sql(value: &Value, ctx: &str) -> Result<String, BenoStreamError> {
     if let Some(arr) = m.get("must_not").and_then(Value::as_array) {
         for clause in arr {
             parts.push(format!("NOT ({})", clause_to_sql(clause, ctx)?));
+        }
+    }
+    if let Some(arr) = m.get("should").and_then(Value::as_array) {
+        if !arr.is_empty() {
+            let mut should_parts = Vec::new();
+            for clause in arr {
+                should_parts.push(clause_to_sql(clause, ctx)?);
+            }
+            if !should_parts.is_empty() {
+                parts.push(format!("({})", should_parts.join(" OR ")));
+            }
         }
     }
     if parts.is_empty() {
@@ -702,8 +971,8 @@ pub async fn search_core(
             .filter(|k| *k > 0.0)
     });
 
-    let (batches, kind, knn_k) = match (&req.keyword, &req.vector) {
-        (Some(kp), Some(vp)) => {
+    let (batches, kind, knn_k) = match (&req.keyword, &req.vector, &req.phrase) {
+        (Some(kp), Some(vp), _) => {
             // Hybrid: BM25 + HNSW fused with RRF. Multi-field matches use the
             // first field for the keyword leg (v1); pure multi-field matches
             // are OR-merged in the keyword-only path below.
@@ -724,7 +993,7 @@ pub async fn search_core(
                 .map_err(translate_search_error)?;
             (batches, ScoreKind::Relevance, None)
         }
-        (Some(kp), None) => {
+        (Some(kp), None, _) => {
             let scored = if kp.len() == 1 {
                 table
                     .execute_keyword_search_as_scored(kp[0].clone())
@@ -741,7 +1010,18 @@ pub async fn search_core(
                 .map_err(translate_search_error)?;
             (batches, ScoreKind::Relevance, None)
         }
-        (None, Some(vp)) => {
+        (None, None, Some(pp)) => {
+            let scored = table
+                .execute_phrase_search_as_scored(&pp.column, &pp.phrase, pp.slop, None)
+                .await
+                .map_err(translate_search_error)?;
+            let batches = table
+                .fetch_results_by_id(scored, None)
+                .await
+                .map_err(translate_search_error)?;
+            (batches, ScoreKind::Relevance, None)
+        }
+        (None, Some(vp), _) => {
             if req.filter.is_some() {
                 // Core pre-filters inside the scan and appends a distance
                 // column. Note: the core's smart hybrid trigger may rewrite
@@ -765,7 +1045,7 @@ pub async fn search_core(
                 (batches, ScoreKind::Distance, Some(vp.k))
             }
         }
-        (None, None) => {
+        (None, None, None) => {
             let batches = table
                 .read_async(req.filter.as_deref(), None, None)
                 .await
@@ -807,28 +1087,64 @@ pub async fn search_core(
         .flat_map(|b| flatten_batch(b, kind, &req.source))
         .collect();
 
-    // Equal scores (match_all, ties) are ordered by `_id` so `from`/`size`
-    // pagination is stable; ES itself makes no ordering guarantee for ties.
-    match kind {
-        ScoreKind::Relevance => {
-            // Core already returns a globally score-DESC list; defensive.
+    // Custom sort criteria overrides relevance/distance sort order.
+    if let Some(sort_clauses) = &req.sort {
+        if !sort_clauses.is_empty() {
             hits.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| a.id.cmp(&b.id))
+                for sc in sort_clauses {
+                    let cmp = if sc.field == "_score" {
+                        let sa = a.score;
+                        let sb = b.score;
+                        if sc.descending {
+                            sb.partial_cmp(&sa).unwrap_or(Ordering::Equal)
+                        } else {
+                            sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
+                        }
+                    } else if sc.field == "_id" {
+                        if sc.descending {
+                            b.id.cmp(&a.id)
+                        } else {
+                            a.id.cmp(&b.id)
+                        }
+                    } else {
+                        let va = a.source.get(&sc.field);
+                        let vb = b.source.get(&sc.field);
+                        let c = compare_json_values(va, vb);
+                        if sc.descending {
+                            c.reverse()
+                        } else {
+                            c
+                        }
+                    };
+                    if cmp != Ordering::Equal {
+                        return cmp;
+                    }
+                }
+                a.id.cmp(&b.id)
             });
         }
-        ScoreKind::Distance => {
-            hits.sort_by(|a, b| {
-                a.score
-                    .partial_cmp(&b.score)
-                    .unwrap_or(Ordering::Equal)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-        }
-        ScoreKind::None => {
-            hits.sort_by_key(|a| a.id.clone());
+    } else {
+        // Default sort by relevance / distance / id
+        match kind {
+            ScoreKind::Relevance => {
+                hits.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+            }
+            ScoreKind::Distance => {
+                hits.sort_by(|a, b| {
+                    a.score
+                        .partial_cmp(&b.score)
+                        .unwrap_or(Ordering::Equal)
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+            }
+            ScoreKind::None => {
+                hits.sort_by_key(|a| a.id.clone());
+            }
         }
     }
 
@@ -1009,7 +1325,7 @@ fn row_to_json(
     Value::Object(obj)
 }
 
-fn value_to_json(col: &dyn Array, i: usize) -> Value {
+pub(crate) fn value_to_json(col: &dyn Array, i: usize) -> Value {
     if col.is_null(i) {
         return Value::Null;
     }
@@ -1572,5 +1888,199 @@ mod tests {
         let ranges = aggs["age_ranges"]["buckets"].as_array().unwrap();
         assert_eq!(ranges[0]["doc_count"], 2);
         assert_eq!(ranges[1]["doc_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn search_match_phrase_and_multi_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("phrase_idx")).unwrap();
+
+        crate::handlers::indices::create_index_core(&state, "phrase_idx", None)
+            .await
+            .unwrap();
+        crate::handlers::mapping::put_mapping_core(
+            &state,
+            "phrase_idx",
+            &json!({
+                "properties": {
+                    "body": {"type": "text"},
+                    "title": {"type": "text"}
+                },
+                "indexes": {
+                    "body": "bm25",
+                    "title": "bm25"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        index_docs(
+            &state,
+            "phrase_idx",
+            &[
+                json!({"title": "alpha", "body": "the quick brown fox jumps"}),
+                json!({"title": "beta", "body": "the quick red fox jumps"}),
+                json!({"title": "gamma fox", "body": "lazy brown dog"}),
+            ],
+        )
+        .await;
+
+        // Exact phrase search: "quick brown fox" matches alpha
+        let resp = search_core(
+            &state,
+            "phrase_idx",
+            &json!({"query": {"match_phrase": {"body": "quick brown fox"}}}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.hits.total.value, 1);
+        assert_eq!(resp.hits.hits[0].id, "phrase_idx-doc-0");
+
+        // Phrase with slop: "quick fox" with slop=1 matches alpha ("quick brown fox") and beta ("quick red fox")
+        let resp_slop = search_core(
+            &state,
+            "phrase_idx",
+            &json!({
+                "query": {
+                    "match_phrase": {
+                        "body": {
+                            "query": "quick fox",
+                            "slop": 1
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_slop.hits.total.value, 2);
+
+        // multi_match across body and title for "fox"
+        let resp_multi = search_core(
+            &state,
+            "phrase_idx",
+            &json!({
+                "query": {
+                    "multi_match": {
+                        "query": "fox",
+                        "fields": ["body", "title"]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        // alpha, beta have "fox" in body, gamma has "fox" in title
+        assert_eq!(resp_multi.hits.total.value, 3);
+    }
+
+    #[tokio::test]
+    async fn search_bool_should_wildcard_prefix_ids_and_sort() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("ops")).unwrap();
+
+        index_docs(
+            &state,
+            "ops",
+            &[
+                json!({"title": "alice in wonderland", "tag": "novel", "score_val": 10}),
+                json!({"title": "bob the builder", "tag": "animation", "score_val": 40}),
+                json!({"title": "charlie and chocolate factory", "tag": "novel", "score_val": 25}),
+                json!({"title": "aladin and the lamp", "tag": "fairy_tale", "score_val": 50}),
+            ],
+        )
+        .await;
+
+        // 1. bool.should: tag = 'animation' OR score_val = 10
+        let resp_should = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "bool": {
+                        "should": [
+                            {"term": {"tag": "animation"}},
+                            {"term": {"score_val": 10}}
+                        ]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_should.hits.total.value, 2);
+
+        // 2. prefix query: title starts with "al"
+        let resp_prefix = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "prefix": {
+                        "title": "al"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_prefix.hits.total.value, 2); // alice, aladin
+
+        // 3. wildcard query: title contains "chocolate"
+        let resp_wildcard = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "wildcard": {
+                        "title": "*chocolate*"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_wildcard.hits.total.value, 1);
+        assert_eq!(resp_wildcard.hits.hits[0].id, "ops-doc-2");
+
+        // 4. ids query
+        let resp_ids = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "ids": {
+                        "values": ["ops-doc-1", "ops-doc-3"]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_ids.hits.total.value, 2);
+
+        // 5. custom sort by score_val descending
+        let resp_sorted = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [
+                    {"score_val": {"order": "desc"}}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_sorted.hits.hits.len(), 4);
+        assert_eq!(resp_sorted.hits.hits[0].source["score_val"], 50);
+        assert_eq!(resp_sorted.hits.hits[1].source["score_val"], 40);
+        assert_eq!(resp_sorted.hits.hits[2].source["score_val"], 25);
+        assert_eq!(resp_sorted.hits.hits[3].source["score_val"], 10);
     }
 }

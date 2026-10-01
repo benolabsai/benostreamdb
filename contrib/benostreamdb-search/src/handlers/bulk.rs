@@ -213,12 +213,18 @@ async fn write_index_docs(
     let inferred: Vec<_> = items
         .par_iter()
         .map(|(pos, item)| match item.doc.as_ref() {
-            Some(doc) => match infer::infer_schema(doc) {
-                Ok(s) => Ok((*pos, *item, s)),
-                // Box the error: `(usize, ItemResult)` is ~136 bytes, which trips
-                // `clippy::result_large_err` under `#![deny(warnings)]`.
-                Err(e) => Err(Box::new(err_result(*pos, item, 400, e.to_string()))),
-            },
+            Some(doc) => {
+                let mut doc = doc.clone();
+                if let Err(e) = with_id(&mut doc, &item.id) {
+                    return Err(Box::new(err_result(*pos, item, 400, e.to_string())));
+                }
+                match infer::infer_schema(&doc) {
+                    Ok(s) => Ok((*pos, *item, s)),
+                    // Box the error: `(usize, ItemResult)` is ~136 bytes, which trips
+                    // `clippy::result_large_err` under `#![deny(warnings)]`.
+                    Err(e) => Err(Box::new(err_result(*pos, item, 400, e.to_string()))),
+                }
+            }
             None => Err(Box::new(err_result(
                 *pos,
                 item,
@@ -401,18 +407,69 @@ pub async fn bulk_core(
             .filter(|(_, it)| it.op != "delete")
             .map(|(pos, it)| (*pos, it))
             .collect();
-        for (pos, it) in group.iter().filter(|(_, it)| it.op == "delete") {
-            results[*pos] = Some(ItemResult {
-                op: it.op.clone(),
-                index: index.clone(),
-                id: it.id.clone(),
-                status: 501,
-                result: "error".into(),
-                error: Some(
-                    "per-document delete is not supported (append-only store); use DELETE /{index}"
-                        .into(),
-                ),
-            });
+        let deletes: Vec<(usize, &BulkItem)> = group
+            .iter()
+            .filter(|(_, it)| it.op == "delete")
+            .map(|(pos, it)| (*pos, it))
+            .collect();
+        if !deletes.is_empty() {
+            match state.open_or_create(&index, &None).await {
+                Ok(table) => {
+                    for (pos, it) in deletes {
+                        let safe_id = it.id.replace('\'', "''");
+                        let filter = format!("_id = '{safe_id}'");
+                        let found = match table.read_async(Some(&filter), None, None).await {
+                            Ok(batches) => !batches.is_empty() && batches[0].num_rows() > 0,
+                            Err(_) => false,
+                        };
+                        if found {
+                            match table.delete_async(&filter).await {
+                                Ok(()) => {
+                                    results[pos] = Some(ItemResult {
+                                        op: "delete".into(),
+                                        index: index.clone(),
+                                        id: it.id.clone(),
+                                        status: 200,
+                                        result: "deleted".into(),
+                                        error: None,
+                                    });
+                                }
+                                Err(e) => {
+                                    results[pos] = Some(ItemResult {
+                                        op: "delete".into(),
+                                        index: index.clone(),
+                                        id: it.id.clone(),
+                                        status: 500,
+                                        result: "error".into(),
+                                        error: Some(e.to_string()),
+                                    });
+                                }
+                            }
+                        } else {
+                            results[pos] = Some(ItemResult {
+                                op: "delete".into(),
+                                index: index.clone(),
+                                id: it.id.clone(),
+                                status: 404,
+                                result: "not_found".into(),
+                                error: None,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    for (pos, it) in deletes {
+                        results[pos] = Some(ItemResult {
+                            op: "delete".into(),
+                            index: index.clone(),
+                            id: it.id.clone(),
+                            status: 404,
+                            result: "error".into(),
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
+            }
         }
         if writes.is_empty() {
             continue;
@@ -482,4 +539,49 @@ pub async fn bulk_indexed(
 ) -> Response {
     let text = String::from_utf8_lossy(&body);
     es_response(bulk_core(&state, Some(&index), &text).await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handlers::docs::{get_document_core, refresh_core};
+
+    #[tokio::test]
+    async fn test_bulk_index_and_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("bulk_test")).unwrap();
+
+        let ndjson = "{\"index\": {\"_index\": \"bulk_test\", \"_id\": \"b1\"}}\n{\"name\": \"item 1\", \"val\": 100}\n{\"index\": {\"_index\": \"bulk_test\", \"_id\": \"b2\"}}\n{\"name\": \"item 2\", \"val\": 200}\n";
+        let res = bulk_core(&state, None, ndjson).await.unwrap();
+        assert_eq!(res["errors"], false);
+        let items = res["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["index"]["result"], "created");
+        assert_eq!(items[1]["index"]["result"], "created");
+
+        refresh_core(&state, "bulk_test").await.unwrap();
+
+        // Verify doc 1 exists
+        let doc1 = get_document_core(&state, "bulk_test", "b1").await.unwrap();
+        assert!(doc1.found);
+
+        // Now run bulk delete for doc 1 and non-existent doc 3
+        let del_ndjson = "{\"delete\": {\"_index\": \"bulk_test\", \"_id\": \"b1\"}}\n{\"delete\": {\"_index\": \"bulk_test\", \"_id\": \"b3\"}}\n";
+        let del_res = bulk_core(&state, None, del_ndjson).await.unwrap();
+        assert_eq!(del_res["errors"], true);
+        let del_items = del_res["items"].as_array().unwrap();
+        assert_eq!(del_items.len(), 2);
+        assert_eq!(del_items[0]["delete"]["result"], "deleted");
+        assert_eq!(del_items[0]["delete"]["status"], 200);
+        assert_eq!(del_items[1]["delete"]["result"], "not_found");
+        assert_eq!(del_items[1]["delete"]["status"], 404);
+
+        refresh_core(&state, "bulk_test").await.unwrap();
+        let doc1_after = get_document_core(&state, "bulk_test", "b1").await.unwrap();
+        assert!(!doc1_after.found);
+        let doc2_after = get_document_core(&state, "bulk_test", "b2").await.unwrap();
+        assert!(doc2_after.found);
+    }
 }

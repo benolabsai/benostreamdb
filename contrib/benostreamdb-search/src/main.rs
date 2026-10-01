@@ -160,8 +160,11 @@ async fn main() {
         .route("/:index/_doc", post(docs::index_document))
         .route(
             "/:index/_doc/:id",
-            post(docs::index_document_id).delete(docs::delete_document),
+            get(docs::get_document)
+                .post(docs::index_document_id)
+                .delete(docs::delete_document),
         )
+        .route("/:index/_delete_by_query", post(docs::delete_by_query))
         .route("/:index/_refresh", post(docs::refresh))
         .route("/:index/_bulk", post(bulk::bulk_indexed))
         .route("/:index/_count", get(search::count))
