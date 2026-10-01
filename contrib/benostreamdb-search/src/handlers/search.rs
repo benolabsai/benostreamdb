@@ -374,7 +374,8 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                             if req.filter.is_none() {
                                 req.filter = Some(sql);
                             } else {
-                                req.filter = Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
+                                req.filter =
+                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
                             }
                         }
                         "term" | "terms" | "range" | "exists" | "prefix" | "wildcard" | "ids" => {
@@ -384,7 +385,8 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                             if req.filter.is_none() {
                                 req.filter = Some(sql);
                             } else {
-                                req.filter = Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
+                                req.filter =
+                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
                             }
                         }
                         other => {
@@ -450,20 +452,22 @@ fn parse_match(spec: &Value) -> Result<Vec<KeywordSearchParams>, BenoStreamError
 }
 
 fn parse_multi_match(spec: &Value) -> Result<Vec<KeywordSearchParams>, BenoStreamError> {
-    let m = spec.as_object().ok_or_else(|| {
-        bad_request("multi_match: expected an object with query and fields")
-    })?;
-    let query_str = m.get("query").and_then(Value::as_str).ok_or_else(|| {
-        bad_request("multi_match: missing 'query' string")
-    })?;
-    let fields_arr = m.get("fields").and_then(Value::as_array).ok_or_else(|| {
-        bad_request("multi_match: missing 'fields' array")
-    })?;
+    let m = spec
+        .as_object()
+        .ok_or_else(|| bad_request("multi_match: expected an object with query and fields"))?;
+    let query_str = m
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("multi_match: missing 'query' string"))?;
+    let fields_arr = m
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad_request("multi_match: missing 'fields' array"))?;
     let mut out = Vec::with_capacity(fields_arr.len());
     for f in fields_arr {
-        let field_str = f.as_str().ok_or_else(|| {
-            bad_request("multi_match: fields array elements must be strings")
-        })?;
+        let field_str = f
+            .as_str()
+            .ok_or_else(|| bad_request("multi_match: fields array elements must be strings"))?;
         let field = valid_field(field_str)?;
         out.push(KeywordSearchParams::new(field, query_str.to_string()));
     }
