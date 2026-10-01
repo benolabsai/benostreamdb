@@ -734,3 +734,191 @@ async fn recommend_best_score_and_query_prefetch_fusion() {
         .contains("No route for URI"));
     assert!(val["time"].is_number());
 }
+
+#[tokio::test]
+async fn sparse_vector_lifecycle_and_search() {
+    let h = Harness::new();
+
+    // 1. Create collection with sparse vector configuration
+    let created = h
+        .ok(
+            "PUT",
+            "/collections/sparse_docs",
+            Some(json!({
+                "sparse_vectors": {
+                    "text": {}
+                }
+            })),
+        )
+        .await;
+    assert_eq!(created, json!(true));
+
+    // 2. Verify collection metadata exposes sparse_vectors
+    let info = h.ok("GET", "/collections/sparse_docs", None).await;
+    assert_eq!(info["status"], "green");
+    assert!(info["config"]["params"]["sparse_vectors"]["text"].is_object());
+
+    // 3. Upsert points with sparse vectors
+    let upsert = h
+        .ok(
+            "PUT",
+            "/collections/sparse_docs/points",
+            Some(json!({
+                "points": [
+                    {
+                        "id": 1,
+                        "vector": {
+                            "indices": [1, 5, 10],
+                            "values": [0.5, 1.0, 0.2]
+                        },
+                        "payload": {"title": "doc 1", "category": "tech"}
+                    },
+                    {
+                        "id": 2,
+                        "vector": {
+                            "indices": [2, 5, 20],
+                            "values": [0.8, 0.5, 0.1]
+                        },
+                        "payload": {"title": "doc 2", "category": "science"}
+                    },
+                    {
+                        "id": 3,
+                        "vector": {
+                            "indices": [10, 30],
+                            "values": [0.9, 0.4]
+                        },
+                        "payload": {"title": "doc 3", "category": "tech"}
+                    }
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(upsert["status"], "completed");
+
+    // 4. Retrieve point 1 and check sparse vector wire format
+    let retrieved = h
+        .ok(
+            "POST",
+            "/collections/sparse_docs/points",
+            Some(json!({
+                "ids": [1],
+                "with_vector": true,
+                "with_payload": true
+            })),
+        )
+        .await;
+    let ret_pts = retrieved.as_array().expect("retrieved array");
+    assert_eq!(ret_pts.len(), 1);
+    assert_eq!(ret_pts[0]["id"], json!(1));
+    assert_eq!(ret_pts[0]["payload"]["title"], json!("doc 1"));
+    assert_eq!(ret_pts[0]["vector"]["indices"], json!([1, 5, 10]));
+    assert_eq!(ret_pts[0]["vector"]["values"], json!([0.5, 1.0, 0.2]));
+
+    // 5. Search using sparse vector dot product
+    // Query with indices [5, 10] with weights [1.0, 1.0]
+    // Doc 1 dot: (idx 5: 1.0*1.0) + (idx 10: 0.2*1.0) = 1.2
+    // Doc 2 dot: (idx 5: 0.5*1.0) = 0.5
+    // Doc 3 dot: (idx 10: 0.9*1.0) = 0.9
+    // Expected order: Doc 1 (1.2), Doc 3 (0.9), Doc 2 (0.5)
+    let search = h
+        .ok(
+            "POST",
+            "/collections/sparse_docs/points/search",
+            Some(json!({
+                "vector": {
+                    "indices": [5, 10],
+                    "values": [1.0, 1.0]
+                },
+                "with_payload": true,
+                "with_vector": true,
+                "limit": 3
+            })),
+        )
+        .await;
+    let pts = search.as_array().expect("search points");
+    assert_eq!(pts.len(), 3);
+    assert_eq!(pts[0]["id"], json!(1));
+    assert!((pts[0]["score"].as_f64().unwrap() - 1.2).abs() < 1e-4);
+    assert_eq!(pts[1]["id"], json!(3));
+    assert!((pts[1]["score"].as_f64().unwrap() - 0.9).abs() < 1e-4);
+    assert_eq!(pts[2]["id"], json!(2));
+    assert!((pts[2]["score"].as_f64().unwrap() - 0.5).abs() < 1e-4);
+
+    // 6. Search with score_threshold
+    let search_filtered = h
+        .ok(
+            "POST",
+            "/collections/sparse_docs/points/search",
+            Some(json!({
+                "vector": {
+                    "indices": [5, 10],
+                    "values": [1.0, 1.0]
+                },
+                "score_threshold": 0.8,
+                "limit": 3
+            })),
+        )
+        .await;
+    let filtered_pts = search_filtered.as_array().expect("filtered points");
+    assert_eq!(filtered_pts.len(), 2);
+    assert_eq!(filtered_pts[0]["id"], json!(1));
+    assert_eq!(filtered_pts[1]["id"], json!(3));
+
+    // 7. Universal query API with sparse prefetch and RRF fusion
+    let q = h
+        .ok(
+            "POST",
+            "/collections/sparse_docs/points/query",
+            Some(json!({
+                "prefetch": [
+                    {
+                        "query": {
+                            "indices": [5],
+                            "values": [1.0]
+                        },
+                        "limit": 2
+                    },
+                    {
+                        "query": {
+                            "indices": [10],
+                            "values": [1.0]
+                        },
+                        "limit": 2
+                    }
+                ],
+                "query": {"fusion": "rrf"},
+                "limit": 3
+            })),
+        )
+        .await;
+    let query_pts = q["points"].as_array().expect("query points");
+    assert!(!query_pts.is_empty());
+}
+
+#[tokio::test]
+async fn hybrid_collection_lifecycle() {
+    let h = Harness::new();
+
+    // Create a collection supporting both dense and sparse vectors
+    let created = h
+        .ok(
+            "PUT",
+            "/collections/hybrid_demo",
+            Some(json!({
+                "vectors": {
+                    "size": 4,
+                    "distance": "Cosine"
+                },
+                "sparse_vectors": {
+                    "splade": {}
+                }
+            })),
+        )
+        .await;
+    assert_eq!(created, json!(true));
+
+    let info = h.ok("GET", "/collections/hybrid_demo", None).await;
+    assert_eq!(info["status"], "green");
+    assert_eq!(info["config"]["params"]["vectors"]["size"], 4);
+    assert!(info["config"]["params"]["sparse_vectors"]["splade"].is_object());
+}
