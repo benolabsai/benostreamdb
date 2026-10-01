@@ -305,7 +305,9 @@ pub async fn get_document(
             };
             (StatusCode::NOT_FOUND, axum::Json(es)).into_response()
         }
-        Err(e) => es_response_with_status::<DocGetResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e)),
+        Err(e) => {
+            es_response_with_status::<DocGetResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e))
+        }
     }
 }
 
@@ -380,7 +382,9 @@ pub async fn delete_document(
             };
             (status, axum::Json(resp)).into_response()
         }
-        Err(e) => es_response_with_status::<DocWriteResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e)),
+        Err(e) => {
+            es_response_with_status::<DocWriteResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e))
+        }
     }
 }
 
@@ -418,7 +422,11 @@ pub async fn delete_document_core(
         index: index.to_string(),
         id: id.to_string(),
         version: if found { 2 } else { 1 },
-        result: if found { "deleted".into() } else { "not_found".into() },
+        result: if found {
+            "deleted".into()
+        } else {
+            "not_found".into()
+        },
         shards: Shards {
             total: 1,
             successful: 1,
@@ -450,11 +458,11 @@ pub async fn delete_by_query_core(
         });
     }
 
-    let query_clause = body.get("query").ok_or_else(|| {
-        BenoStreamError::SchemaIncompatible {
+    let query_clause = body
+        .get("query")
+        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
             reason: "missing 'query' in _delete_by_query request body".into(),
-        }
-    })?;
+        })?;
 
     let filter_sql = crate::handlers::search::clause_to_sql(query_clause, "_delete_by_query")?;
     let table = state.open_or_create(index, &None).await?;
@@ -729,12 +737,16 @@ mod tests {
         assert_eq!(src["price"], 45);
 
         // GET nonexistent doc
-        let doc_none = get_document_core(&state, "items", "nonexistent").await.unwrap();
+        let doc_none = get_document_core(&state, "items", "nonexistent")
+            .await
+            .unwrap();
         assert!(!doc_none.found);
         assert!(doc_none.source.is_none());
 
         // DELETE doc
-        let del = delete_document_core(&state, "items", "item-42").await.unwrap();
+        let del = delete_document_core(&state, "items", "item-42")
+            .await
+            .unwrap();
         assert_eq!(del.result, "deleted");
         refresh_core(&state, "items").await.unwrap();
 
@@ -743,7 +755,9 @@ mod tests {
         assert!(!doc_after.found);
 
         // DELETE nonexistent doc
-        let del_none = delete_document_core(&state, "items", "item-42").await.unwrap();
+        let del_none = delete_document_core(&state, "items", "item-42")
+            .await
+            .unwrap();
         assert_eq!(del_none.result, "not_found");
     }
 

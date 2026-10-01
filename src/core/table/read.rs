@@ -1357,13 +1357,7 @@ impl Table {
 
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             let matches = reader
-                .phrase_search_index(
-                    column,
-                    phrase,
-                    1000,
-                    slop,
-                    analyzer,
-                )
+                .phrase_search_index(column, phrase, 1000, slop, analyzer)
                 .await?;
 
             for (row_id, score) in matches {

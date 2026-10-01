@@ -105,5 +105,7 @@ def main() -> None:
             print(f"OK: {STEPS} randomized steps, no divergence (seed={SEED})")
 
 
+test_randomized_workload = main
+
 if __name__ == "__main__":
     main()
