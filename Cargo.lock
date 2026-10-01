@@ -1326,7 +1326,9 @@ version = "0.7.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-trait",
  "axum 0.7.9",
+ "base64 0.22.1",
  "benostreamdb",
  "chrono",
  "dhat",

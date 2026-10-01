@@ -12,7 +12,7 @@ use benostreamdb::{BenoStreamError, Table};
 use serde_json::{Map, Value};
 
 use crate::handlers::mapping::{get_mapping_core, schema_from_mapping};
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
 
 use super::es_response;
 
@@ -31,8 +31,7 @@ pub(crate) async fn create_index_core(
     index: &str,
     body: Option<&Value>,
 ) -> Result<Value, BenoStreamError> {
-    let uri = state.index_uri(index);
-    if table_exists(&uri).await {
+    if state.index_exists(index).await {
         return Err(BenoStreamError::PrimaryKeyViolation {
             key: format!("index '{index}' already exists"),
         });
@@ -45,7 +44,8 @@ pub(crate) async fn create_index_core(
         .and_then(Value::as_object);
     let schema: SchemaRef = schema_from_mapping(properties)?;
 
-    Table::create_async(uri.clone(), schema)
+    let uri = state.resolve_table_uri(index).await;
+    Table::create_async(uri.clone(), schema.clone())
         .await
         .map_err(|e| {
             // Lost a create race with a concurrent request.
@@ -56,6 +56,29 @@ pub(crate) async fn create_index_core(
             }
             BenoStreamError::internal(format!("failed to create index '{index}': {e}"))
         })?;
+
+    // Register in the external catalog if configured
+    if let Some(catalog) = &state.catalog {
+        if let Ok(false) = catalog.table_exists(&state.catalog_namespace, index).await {
+            if let Err(e) = catalog
+                .create_table(&state.catalog_namespace, index, schema, Some(&uri))
+                .await
+            {
+                tracing::warn!(
+                    index = %index,
+                    namespace = %state.catalog_namespace,
+                    error = %e,
+                    "Failed to register index in external catalog on PUT"
+                );
+            } else {
+                tracing::info!(
+                    index = %index,
+                    namespace = %state.catalog_namespace,
+                    "Registered new index in external Iceberg catalog on PUT"
+                );
+            }
+        }
+    }
 
     // Open the shared, indexing-enabled handle so subsequent writes/searches
     // reuse one Table instance.
@@ -79,7 +102,7 @@ pub(crate) async fn get_index_core(
     state: &AppState,
     index: &str,
 ) -> Result<Value, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -127,7 +150,7 @@ pub(crate) async fn delete_index_core(
     state: &AppState,
     index: &str,
 ) -> Result<Value, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -219,7 +242,7 @@ pub(crate) async fn get_index_aliases_core(
     index: &str,
 ) -> Result<Value, BenoStreamError> {
     let resolved = state.resolve_alias(index).await;
-    if !table_exists(&state.index_uri(&resolved)).await {
+    if !state.index_exists(&resolved).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -255,7 +278,7 @@ pub(crate) async fn put_single_alias_core(
     index: &str,
     alias: &str,
 ) -> Result<Value, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -281,6 +304,8 @@ pub async fn delete_single_alias(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use benostreamdb::Catalog;
     use serde_json::json;
 
     #[tokio::test]
@@ -332,5 +357,143 @@ mod tests {
         // 7. Delete index cleans up aliases
         delete_index_core(&state, "logs-v2").await.unwrap();
         assert_eq!(state.resolve_alias("logs").await, "logs");
+    }
+
+    #[derive(Default)]
+    struct MockCatalog {
+        tables: std::sync::RwLock<std::collections::HashMap<String, Vec<String>>>,
+        dropped: std::sync::RwLock<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl benostreamdb::core::catalog::Catalog for MockCatalog {
+        async fn create_table(
+            &self,
+            namespace: &str,
+            table_name: &str,
+            _schema: SchemaRef,
+            _location: Option<&str>,
+        ) -> anyhow::Result<()> {
+            self.tables
+                .write()
+                .unwrap()
+                .entry(namespace.to_string())
+                .or_default()
+                .push(table_name.to_string());
+            Ok(())
+        }
+
+        async fn drop_table(&self, namespace: &str, table_name: &str) -> anyhow::Result<()> {
+            self.dropped.write().unwrap().push(table_name.to_string());
+            if let Some(list) = self.tables.write().unwrap().get_mut(namespace) {
+                list.retain(|t| t != table_name);
+            }
+            Ok(())
+        }
+
+        async fn load_table(
+            &self,
+            _namespace: &str,
+            _table_name: &str,
+        ) -> anyhow::Result<benostreamdb::core::metadata::TableMetadata> {
+            Err(anyhow::anyhow!("not found"))
+        }
+
+        async fn create_branch(&self, _branch: &str, _source: Option<&str>) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn table_exists(&self, namespace: &str, table_name: &str) -> anyhow::Result<bool> {
+            let tables = self.tables.read().unwrap();
+            Ok(tables
+                .get(namespace)
+                .map(|list| list.contains(&table_name.to_string()))
+                .unwrap_or(false))
+        }
+
+        async fn list_tables(&self, namespace: &str) -> anyhow::Result<Vec<String>> {
+            let tables = self.tables.read().unwrap();
+            Ok(tables.get(namespace).cloned().unwrap_or_default())
+        }
+
+        async fn commit_table(
+            &self,
+            _namespace: &str,
+            _table_name: &str,
+            _updates: Vec<serde_json::Value>,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_catalog_integration_create_list_get_delete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let mock_cat = Arc::new(MockCatalog::default());
+        let state = AppState::with_catalog(
+            root,
+            "test-cluster".into(),
+            benostreamdb::core::index::gpu::ComputeContext::auto_detect(),
+            Some(mock_cat.clone()),
+            "analytics".to_string(),
+        );
+
+        // 1. Create index via PUT /{index} -> registers in catalog
+        let create_res = create_index_core(&state, "catalog_idx", None)
+            .await
+            .unwrap();
+        assert_eq!(create_res["acknowledged"], true);
+
+        // Verify registered in MockCatalog
+        assert!(mock_cat
+            .table_exists("analytics", "catalog_idx")
+            .await
+            .unwrap());
+
+        // 2. Index exists returns true
+        assert!(state.index_exists("catalog_idx").await);
+
+        // 3. List indexes includes catalog index
+        let indexes = state.list_indexes().await.unwrap();
+        assert!(indexes.contains(&"catalog_idx".to_string()));
+
+        // 4. GET index metadata succeeds
+        let get_res = get_index_core(&state, "catalog_idx").await.unwrap();
+        assert!(get_res.get("catalog_idx").is_some());
+
+        // 5. Index and retrieve a doc (POST / GET)
+        let doc = json!({ "title": "BenoStreamDB search with Iceberg Catalog" });
+        let write_res =
+            crate::handlers::docs::index_document_core(&state, "catalog_idx", Some("doc-1"), doc)
+                .await
+                .unwrap();
+        assert_eq!(write_res.result, "updated");
+
+        let doc_get = crate::handlers::docs::get_document_core(&state, "catalog_idx", "doc-1")
+            .await
+            .unwrap();
+        assert!(doc_get.found);
+
+        // 6. Delete doc (DELETE doc)
+        let doc_del = crate::handlers::docs::delete_document_core(&state, "catalog_idx", "doc-1")
+            .await
+            .unwrap();
+        assert_eq!(doc_del.result, "deleted");
+
+        // 7. Delete index via DELETE /{index} -> drops from catalog
+        let del_res = delete_index_core(&state, "catalog_idx").await.unwrap();
+        assert_eq!(del_res["acknowledged"], true);
+
+        // Verify dropped from MockCatalog
+        assert_eq!(
+            mock_cat.dropped.read().unwrap().as_slice(),
+            &["catalog_idx"]
+        );
+        assert!(!mock_cat
+            .table_exists("analytics", "catalog_idx")
+            .await
+            .unwrap());
+        assert!(!state.index_exists("catalog_idx").await);
     }
 }

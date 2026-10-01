@@ -16,10 +16,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int64Array, NullArray,
-    StringArray, StructArray,
+    ArrayRef, BooleanArray, FixedSizeListArray, Float32Array, Float64Array, Int64Array, ListArray,
+    NullArray, StringArray, StructArray,
 };
-use arrow::buffer::NullBuffer;
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 use serde_json::Value;
 
@@ -157,6 +157,51 @@ pub fn infer_datatype(
     }
 
     if values.iter().all(|v| v.is_array()) {
+        let non_empty: Vec<&Vec<Value>> = values
+            .iter()
+            .filter_map(|v| v.as_array())
+            .filter(|a| !a.is_empty())
+            .collect();
+        if non_empty.is_empty() {
+            return Ok(None);
+        }
+        let all_numbers = non_empty.iter().all(|a| a.iter().all(|e| e.is_number()));
+        if all_numbers {
+            return infer_vector(field, &values);
+        }
+        let all_objects = non_empty.iter().all(|a| a.iter().all(|e| e.is_object()));
+        if all_objects {
+            let all_element_refs: Vec<&Value> = non_empty.iter().flat_map(|a| a.iter()).collect();
+            let keys: BTreeSet<&str> = all_element_refs
+                .iter()
+                .filter_map(|v| v.as_object())
+                .flat_map(|o| o.keys())
+                .map(|k| k.as_str())
+                .collect();
+            let mut struct_fields: Vec<Field> = Vec::with_capacity(keys.len());
+            for k in keys {
+                let child: Vec<Option<&Value>> = all_element_refs
+                    .iter()
+                    .map(|v| v.as_object().and_then(|o| o.get(k)))
+                    .collect();
+                let dt = infer_datatype(k, &child)?.unwrap_or(DataType::Utf8);
+                struct_fields.push(Field::new(k, dt, true));
+            }
+            let struct_type = DataType::Struct(Fields::from(struct_fields));
+            return Ok(Some(DataType::List(Arc::new(Field::new(
+                "item",
+                struct_type,
+                true,
+            )))));
+        }
+        let all_strings = non_empty.iter().all(|a| a.iter().all(|e| e.is_string()));
+        if all_strings {
+            return Ok(Some(DataType::List(Arc::new(Field::new(
+                "item",
+                DataType::Utf8,
+                true,
+            )))));
+        }
         return infer_vector(field, &values);
     }
 
@@ -316,6 +361,14 @@ pub fn merge_datatypes(base: &DataType, incoming: &DataType) -> Result<DataType,
                 }
             }
             Ok(DataType::Struct(Fields::from(merged)))
+        }
+        (DataType::List(b_item), DataType::List(i_item)) => {
+            let merged_item = merge_datatypes(b_item.data_type(), i_item.data_type())?;
+            Ok(DataType::List(Arc::new(Field::new(
+                b_item.name(),
+                merged_item,
+                true,
+            ))))
         }
         _ => Err(InferError::Conflict {
             field: String::new(),
@@ -531,6 +584,35 @@ pub fn value_to_array(
                 reason: format!("failed to build fixed-size list: {e}"),
             })?;
             Ok(Arc::new(fsl))
+        }
+        DataType::List(item_field) => {
+            let mut flat_values: Vec<Option<Value>> = Vec::new();
+            let mut offsets: Vec<i32> = Vec::with_capacity(values.len() + 1);
+            offsets.push(0);
+
+            for v in values {
+                match v {
+                    None => {
+                        offsets.push(flat_values.len() as i32);
+                    }
+                    Some(row) => {
+                        let arr = row.as_array().ok_or_else(|| InferError::Unsupported {
+                            field: field_name.to_string(),
+                            reason: format!("expected array, got {}", es_name(json_kind(row))),
+                        })?;
+                        for item in arr {
+                            flat_values.push(Some(item.clone()));
+                        }
+                        offsets.push(flat_values.len() as i32);
+                    }
+                }
+            }
+
+            let child_array =
+                value_to_array(item_field.name(), item_field.data_type(), &flat_values)?;
+            let offset_buffer = OffsetBuffer::new(ScalarBuffer::from(offsets));
+            let list_arr = ListArray::new(item_field.clone(), offset_buffer, child_array, nulls);
+            Ok(Arc::new(list_arr))
         }
         _ => Err(InferError::Unsupported {
             field: field_name.to_string(),
@@ -964,5 +1046,32 @@ mod tests {
         let arr = value_to_array("n", &DataType::Null, &[None, Some(json!(1))]).unwrap();
         let arr = arr.as_any().downcast_ref::<NullArray>().unwrap();
         assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn infer_array_of_objects_and_list_array() {
+        let doc = json!({
+            "comments": [
+                { "author": "alice", "stars": 5 },
+                { "author": "bob", "stars": 1 }
+            ]
+        });
+        let schema = infer_schema(&doc).unwrap();
+        let field = schema.field_with_name("comments").unwrap();
+        assert!(matches!(field.data_type(), DataType::List(_)));
+        if let DataType::List(item) = field.data_type() {
+            assert!(matches!(item.data_type(), DataType::Struct(_)));
+        }
+
+        let arr = value_to_array(
+            "comments",
+            field.data_type(),
+            &[Some(doc["comments"].clone()), None],
+        )
+        .unwrap();
+        let la = arr.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(la.len(), 2);
+        assert_eq!(la.null_count(), 1);
+        assert_eq!(la.value_length(0), 2);
     }
 }

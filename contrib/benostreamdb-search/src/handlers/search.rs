@@ -19,27 +19,78 @@ use arrow::array::{
 };
 use arrow::datatypes::DataType;
 use axum::extract::{Path, State};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use benostreamdb::core::index::VectorValue;
 use benostreamdb::core::planner::{FilterExpr, QueryPlanner};
 use benostreamdb::core::search::{HybridSearchCoordinator, KeywordSearchParams, ScoredResult};
-use benostreamdb::{BenoStreamError, Table, VectorSearchParams};
+use benostreamdb::{BenoStreamError, GraphNeighborhoodOptions, Table, VectorSearchParams};
 use chrono::{DateTime, NaiveDate, SecondsFormat};
 use serde_json::{Map, Value};
 
-use crate::es_types::{CountResponse, SearchHit, SearchHits, SearchResponse, TotalHits};
+use crate::es_types::{
+    ClearScrollResponse, CountResponse, SearchHit, SearchHits, SearchResponse, TotalHits,
+};
 use crate::handlers::docs::ID_COLUMN;
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE, URL_SAFE_NO_PAD};
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 
 use super::es_response;
 
 pub async fn search(
     State(state): State<Arc<AppState>>,
     Path(index): Path<String>,
-    Json(body): Json<Value>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+    Json(mut body): Json<Value>,
 ) -> Response {
+    if let Some(scroll) = params.get("scroll") {
+        if let Some(obj) = body.as_object_mut() {
+            if !obj.contains_key("scroll") {
+                obj.insert("scroll".to_string(), Value::String(scroll.clone()));
+            }
+        }
+    }
     es_response(search_core(&state, &index, &body).await)
+}
+
+pub async fn scroll_post(State(state): State<Arc<AppState>>, Json(body): Json<Value>) -> Response {
+    let scroll_id = body.get("scroll_id").and_then(Value::as_str).unwrap_or("");
+    let scroll_override = body.get("scroll").and_then(Value::as_str);
+    es_response(execute_scroll(&state, scroll_id, scroll_override).await)
+}
+
+pub async fn scroll_get(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let scroll_id = params.get("scroll_id").map(|s| s.as_str()).unwrap_or("");
+    let scroll_override = params.get("scroll").map(|s| s.as_str());
+    es_response(execute_scroll(&state, scroll_id, scroll_override).await)
+}
+
+pub async fn clear_scroll(body: Option<Json<Value>>) -> Response {
+    let _ = body;
+    (
+        axum::http::StatusCode::OK,
+        Json(ClearScrollResponse {
+            succeeded: true,
+            num_freed: 1,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn clear_scroll_path(Path(_scroll_id): Path<String>) -> Response {
+    (
+        axum::http::StatusCode::OK,
+        Json(ClearScrollResponse {
+            succeeded: true,
+            num_freed: 1,
+        }),
+    )
+        .into_response()
 }
 
 /// `GET /{index}/_search?q=` — a Lucene-style query string mapped to a
@@ -58,31 +109,32 @@ pub async fn search_get(
     let mut body = if q.is_empty() {
         serde_json::json!({ "query": { "match_all": {} } })
     } else {
-        // Expand `q` into a multi-field match over every string column.
-        let fields = if table_exists(&state.index_uri(&index)).await {
+        let string_fields = if state.index_exists(&index).await {
             state
                 .open_or_create(&index, &None)
                 .await
                 .map(|t| {
                     let schema = t.arrow_schema();
-                    let mut fields = serde_json::Map::new();
+                    let mut fields = Vec::new();
                     for f in schema.fields() {
                         if matches!(f.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
-                            fields.insert(f.name().clone(), serde_json::Value::String(q.clone()));
+                            fields.push(f.name().clone());
                         }
                     }
                     fields
                 })
                 .unwrap_or_default()
         } else {
-            serde_json::Map::new()
+            Vec::new()
         };
-        if fields.is_empty() {
-            // No string columns (or index missing): fall back to match_all so
-            // the 404 path is handled uniformly by search_core.
-            serde_json::json!({ "query": { "match_all": {} } })
-        } else {
-            serde_json::json!({ "query": { "match": fields } })
+
+        let opts = crate::handlers::query_string::QueryStringOptions {
+            fields: string_fields,
+            ..Default::default()
+        };
+        match crate::handlers::query_string::parse_query_string(&q, &opts, false) {
+            Ok(query_ast) => serde_json::json!({ "query": query_ast }),
+            Err(_) => serde_json::json!({ "query": { "match_all": {} } }),
         }
     };
     if let Some(size) = params.get("size").and_then(|s| s.parse::<u64>().ok()) {
@@ -90,6 +142,9 @@ pub async fn search_get(
     }
     if let Some(from) = params.get("from").and_then(|s| s.parse::<u64>().ok()) {
         body["from"] = serde_json::json!(from);
+    }
+    if let Some(scroll) = params.get("scroll") {
+        body["scroll"] = serde_json::json!(scroll);
     }
     es_response(search_core(&state, &index, &body).await)
 }
@@ -109,13 +164,19 @@ pub(crate) async fn count_core(
     index: &str,
     body: Option<&Value>,
 ) -> Result<CountResponse, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
         });
     }
     let table = state.open_or_create(index, &None).await?;
+
+    let resolved_body = match body {
+        Some(b) => Some(resolve_relation_queries(state, index, b).await?),
+        None => None,
+    };
+    let body = resolved_body.as_ref();
 
     // Translate an optional filter/query into a SQL predicate.
     let filter_sql = match body {
@@ -243,6 +304,7 @@ struct SearchRequest {
     sort: Option<Vec<SortClause>>,
     search_after: Option<Vec<Value>>,
     highlight: Option<HighlightSpec>,
+    scroll: Option<String>,
 }
 
 impl Default for SearchRequest {
@@ -260,6 +322,7 @@ impl Default for SearchRequest {
             sort: None,
             search_after: None,
             highlight: None,
+            scroll: None,
         }
     }
 }
@@ -402,6 +465,10 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
         });
     }
 
+    if let Some(scroll) = obj.get("scroll").and_then(Value::as_str) {
+        req.scroll = Some(scroll.to_string());
+    }
+
     if let Some(query) = obj.get("query") {
         match query {
             Value::Object(m) => {
@@ -418,37 +485,44 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                         "knn" => req.vector = Some(parse_knn(spec)?),
                         "bool" => {
                             let sql = bool_to_sql(spec, "query.bool")?;
-                            if req.filter.is_none() {
-                                req.filter = Some(sql);
-                            } else {
-                                req.filter =
-                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
-                            }
+                            req.filter = match req.filter.take() {
+                                Some(curr) => Some(format!("({curr}) AND ({sql})")),
+                                None => Some(sql),
+                            };
                         }
                         "nested" => {
                             let sql = nested_to_sql(spec, "query.nested")?;
-                            if req.filter.is_none() {
-                                req.filter = Some(sql);
-                            } else {
-                                req.filter =
-                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
-                            }
+                            req.filter = match req.filter.take() {
+                                Some(curr) => Some(format!("({curr}) AND ({sql})")),
+                                None => Some(sql),
+                            };
                         }
                         "term" | "terms" | "range" | "exists" | "prefix" | "wildcard"
-                        | "regexp" | "ids" => {
+                        | "regexp" | "ids" | "fuzzy" => {
                             let mut wrap = serde_json::Map::new();
                             wrap.insert(key.clone(), spec.clone());
                             let sql = clause_to_sql(&Value::Object(wrap), "query")?;
-                            if req.filter.is_none() {
-                                req.filter = Some(sql);
-                            } else {
-                                req.filter =
-                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
-                            }
+                            req.filter = match req.filter.take() {
+                                Some(curr) => Some(format!("({curr}) AND ({sql})")),
+                                None => Some(sql),
+                            };
+                        }
+                        "query_string" | "simple_query_string" => {
+                            let is_simple = key.as_str() == "simple_query_string";
+                            let (q, opts) =
+                                crate::handlers::query_string::QueryStringOptions::from_value(
+                                    spec,
+                                )?;
+                            let ast = crate::handlers::query_string::parse_query_string(
+                                &q, &opts, is_simple,
+                            )?;
+                            let mut wrap = serde_json::Map::new();
+                            wrap.insert("query".to_string(), ast);
+                            return parse_request(&Value::Object(wrap));
                         }
                         other => {
                             return Err(bad_request(format!(
-                                "unsupported query clause '{other}' (supported: match, multi_match, match_phrase, match_all, knn, bool, term, terms, range, exists, prefix, wildcard, ids, nested)"
+                                "unsupported query clause '{other}' (supported: match, multi_match, match_phrase, match_all, knn, bool, term, terms, range, exists, prefix, wildcard, ids, nested, has_child, has_parent, query_string, simple_query_string)"
                             )));
                         }
                     }
@@ -467,6 +541,13 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
         if let Some(knn) = obj.get("knn") {
             req.vector = Some(parse_knn(knn)?);
         }
+    }
+
+    if req.scroll.is_some() && req.sort.is_none() {
+        req.sort = Some(vec![SortClause {
+            field: "_id".to_string(),
+            descending: false,
+        }]);
     }
 
     Ok(req)
@@ -540,7 +621,10 @@ fn parse_match_phrase(spec: &Value) -> Result<PhraseSearchParams, BenoStreamErro
     if m.is_empty() {
         return Err(bad_request("match_phrase: expected at least one field"));
     }
-    let (field, v) = m.iter().next().unwrap();
+    let (field, v) = m
+        .iter()
+        .next()
+        .ok_or_else(|| bad_request("match_phrase: expected at least one field"))?;
     let field = valid_field(field)?;
     let (phrase, slop) = match v {
         Value::String(s) => (s.clone(), 0),
@@ -878,8 +962,12 @@ pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStr
                 "ids" => ids_to_sql(value, ctx),
                 "bool" => bool_to_sql(value, ctx),
                 "nested" => nested_to_sql(value, ctx),
+                "match" => match_to_sql(value, ctx),
+                "match_phrase" => match_phrase_to_sql(value, ctx),
+                "multi_match" => multi_match_to_sql(value, ctx),
+                "fuzzy" => fuzzy_to_sql(value, ctx),
                 other => Err(bad_request(format!(
-                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, regexp, ids, bool, nested)"
+                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, regexp, ids, bool, nested, match, match_phrase, multi_match, fuzzy)"
                 ))),
             },
             _ => Err(bad_request(format!(
@@ -915,6 +1003,7 @@ fn qualify_nested_paths(val: &Value, path: &str) -> Value {
                         | "match_phrase"
                         | "prefix"
                         | "wildcard"
+                        | "fuzzy"
                         | "regexp"
                         | "ids"
                         | "nested"
@@ -938,6 +1027,30 @@ fn qualify_nested_paths(val: &Value, path: &str) -> Value {
     }
 }
 
+fn unqualify_nested_paths(val: &Value, path: &str) -> Value {
+    let prefix = format!("{path}.");
+    match val {
+        Value::Object(m) => {
+            let mut new_m = Map::new();
+            for (k, v) in m {
+                let new_v = unqualify_nested_paths(v, path);
+                if let Some(stripped) = k.strip_prefix(&prefix) {
+                    new_m.insert(stripped.to_string(), new_v);
+                } else {
+                    new_m.insert(k.clone(), new_v);
+                }
+            }
+            Value::Object(new_m)
+        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|item| unqualify_nested_paths(item, path))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 fn nested_to_sql(value: &Value, ctx: &str) -> Result<String, BenoStreamError> {
     let obj = value
         .as_object()
@@ -952,6 +1065,106 @@ fn nested_to_sql(value: &Value, ctx: &str) -> Result<String, BenoStreamError> {
         inner_query.clone()
     };
     clause_to_sql(&qualified, ctx)
+}
+
+fn match_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value
+        .as_object()
+        .ok_or_else(|| bad_request("match: expected {\"field\": \"text\"}"))?;
+    if m.is_empty() {
+        return Err(bad_request("match: expected at least one field"));
+    }
+    let mut parts = Vec::new();
+    for (field, v) in m {
+        let field = valid_field(field)?;
+        let query_str = match v {
+            Value::String(s) => s.as_str(),
+            Value::Object(o) => o
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad_request("match: missing query string"))?,
+            _ => return Err(bad_request("match: expected string or object")),
+        };
+        let words: Vec<&str> = query_str.split_whitespace().collect();
+        if words.is_empty() {
+            parts.push("true".to_string());
+        } else {
+            let word_preds: Vec<String> = words
+                .into_iter()
+                .map(|w| {
+                    let escaped = w.replace('\'', "''");
+                    format!("lower({field}) LIKE lower('%{escaped}%')")
+                })
+                .collect();
+            parts.push(format!("({})", word_preds.join(" OR ")));
+        }
+    }
+    Ok(parts.join(" AND "))
+}
+
+fn match_phrase_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value
+        .as_object()
+        .ok_or_else(|| bad_request("match_phrase: expected {\"field\": \"phrase\"}"))?;
+    if m.is_empty() {
+        return Err(bad_request("match_phrase: expected at least one field"));
+    }
+    let mut parts = Vec::new();
+    for (field, v) in m {
+        let field = valid_field(field)?;
+        let phrase_str = match v {
+            Value::String(s) => s.as_str(),
+            Value::Object(o) => o
+                .get("query")
+                .or_else(|| o.get("phrase"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad_request("match_phrase: missing query string"))?,
+            _ => return Err(bad_request("match_phrase: expected string or object")),
+        };
+        let escaped = phrase_str.replace('\'', "''");
+        parts.push(format!("lower({field}) LIKE lower('%{escaped}%')"));
+    }
+    Ok(parts.join(" AND "))
+}
+
+fn multi_match_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| bad_request("multi_match: expected an object"))?;
+    let query_str = obj
+        .get("query")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_request("multi_match: missing 'query'"))?;
+    let fields = obj
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad_request("multi_match: missing 'fields'"))?;
+
+    let words: Vec<&str> = query_str.split_whitespace().collect();
+    let mut field_preds = Vec::new();
+    for f in fields {
+        if let Some(fname) = f.as_str() {
+            let clean_name = fname.split('^').next().unwrap_or(fname);
+            let valid = valid_field(clean_name)?;
+            if words.is_empty() {
+                field_preds.push("true".to_string());
+            } else {
+                let word_preds: Vec<String> = words
+                    .iter()
+                    .map(|w| {
+                        let escaped = w.replace('\'', "''");
+                        format!("lower({valid}) LIKE lower('%{escaped}%')")
+                    })
+                    .collect();
+                field_preds.push(format!("({})", word_preds.join(" OR ")));
+            }
+        }
+    }
+    if field_preds.is_empty() {
+        Ok("true".to_string())
+    } else {
+        Ok(format!("({})", field_preds.join(" OR ")))
+    }
 }
 
 fn term_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
@@ -1064,7 +1277,10 @@ fn prefix_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
     if m.len() != 1 {
         return Err(bad_request("prefix: expected exactly one field"));
     }
-    let (field, v) = m.iter().next().unwrap();
+    let (field, v) = m
+        .iter()
+        .next()
+        .ok_or_else(|| bad_request("prefix: expected exactly one field"))?;
     let field = valid_field(field)?;
     let prefix_str = v
         .as_str()
@@ -1088,7 +1304,10 @@ fn wildcard_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError>
     if m.len() != 1 {
         return Err(bad_request("wildcard: expected exactly one field"));
     }
-    let (field, v) = m.iter().next().unwrap();
+    let (field, v) = m
+        .iter()
+        .next()
+        .ok_or_else(|| bad_request("wildcard: expected exactly one field"))?;
     let field = valid_field(field)?;
     let pattern_str = v
         .as_str()
@@ -1119,7 +1338,10 @@ fn regexp_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
     if m.len() != 1 {
         return Err(bad_request("regexp: expected exactly one field"));
     }
-    let (field, v) = m.iter().next().unwrap();
+    let (field, v) = m
+        .iter()
+        .next()
+        .ok_or_else(|| bad_request("regexp: expected exactly one field"))?;
     let field = valid_field(field)?;
     let pattern_str = v
         .as_str()
@@ -1131,6 +1353,82 @@ fn regexp_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
         .ok_or_else(|| bad_request("regexp: expected string pattern"))?;
     let safe_pattern = pattern_str.replace('\'', "''");
     Ok(format!("regexp_like({field}, '{safe_pattern}')"))
+}
+
+fn fuzzy_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
+    let m = value.as_object().ok_or_else(|| {
+        bad_request("fuzzy: expected {\"field\": \"term\"} or {\"field\": {\"value\": \"term\"}}")
+    })?;
+    if m.len() != 1 {
+        return Err(bad_request("fuzzy: expected exactly one field"));
+    }
+    let (field, v) = m
+        .iter()
+        .next()
+        .ok_or_else(|| bad_request("fuzzy: expected exactly one field"))?;
+    let field = valid_field(field)?;
+
+    let (term, fuzziness, prefix_len) = match v {
+        Value::String(s) => (s.as_str(), 2usize, 0usize),
+        Value::Object(opts) => {
+            let term = opts
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or_else(|| bad_request("fuzzy: missing 'value' string"))?;
+            let prefix_len = opts
+                .get("prefix_length")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let fuzziness = match opts.get("fuzziness") {
+                Some(Value::Number(n)) => n.as_u64().unwrap_or(2) as usize,
+                Some(Value::String(s)) => {
+                    if s.eq_ignore_ascii_case("AUTO") {
+                        if term.len() <= 2 {
+                            0
+                        } else if term.len() <= 5 {
+                            1
+                        } else {
+                            2
+                        }
+                    } else {
+                        s.parse::<usize>().unwrap_or(2)
+                    }
+                }
+                _ => {
+                    if term.len() <= 2 {
+                        0
+                    } else if term.len() <= 5 {
+                        1
+                    } else {
+                        2
+                    }
+                }
+            };
+            (term, fuzziness, prefix_len)
+        }
+        _ => return Err(bad_request("fuzzy: expected string or object with 'value'")),
+    };
+
+    let safe_term = term.replace('\'', "''");
+    let mut parts = Vec::new();
+    if prefix_len > 0 && prefix_len <= term.len() {
+        let prefix = &term[..prefix_len];
+        let safe_prefix = prefix
+            .replace('\'', "''")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        parts.push(format!("{field} LIKE '{safe_prefix}%'"));
+    }
+
+    if fuzziness == 0 {
+        parts.push(format!("{field} = '{safe_term}'"));
+    } else {
+        parts.push(format!(
+            "levenshtein({field}, '{safe_term}') <= {fuzziness}"
+        ));
+    }
+
+    Ok(parts.join(" AND "))
 }
 
 fn ids_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
@@ -1202,6 +1500,394 @@ fn sql_literal(v: &Value) -> Result<String, BenoStreamError> {
     }
 }
 
+fn json_val_to_string(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+async fn resolve_nested_array_query(
+    state: &AppState,
+    target_index: &str,
+    path: &str,
+    inner_query: &Value,
+) -> Result<Option<Value>, BenoStreamError> {
+    let resolved_index = state.resolve_alias(target_index).await;
+    if path.is_empty() || !state.index_exists(&resolved_index).await {
+        return Ok(None);
+    }
+
+    let table = state.open_or_create(&resolved_index, &None).await?;
+    let schema = table.arrow_schema();
+    let Ok(field) = schema.field_with_name(path) else {
+        return Ok(None);
+    };
+
+    let inner_struct_fields = match field.data_type() {
+        DataType::List(item) | DataType::LargeList(item) => match item.data_type() {
+            DataType::Struct(subfields) => subfields.clone(),
+            _ => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+
+    let unqualified = unqualify_nested_paths(inner_query, path);
+    let resolved_inner = resolve_relation_queries(state, target_index, &unqualified).await?;
+    let sql = clause_to_sql(&resolved_inner, "nested")?;
+    let struct_schema = Arc::new(arrow::datatypes::Schema::new(inner_struct_fields.to_vec()));
+    let filter_expr = FilterExpr::parse_sql(&sql, struct_schema.clone())
+        .await
+        .map_err(|e| BenoStreamError::SchemaIncompatible {
+            reason: format!("nested query parsing failed: {e}"),
+        })?;
+    let planner = QueryPlanner::new();
+
+    let batches = table
+        .read_async(None, None, Some(&[ID_COLUMN, path]))
+        .await
+        .map_err(|e| {
+            BenoStreamError::internal(format!("failed to read table for nested query: {e}"))
+        })?;
+
+    let mut matching_ids = Vec::new();
+    for batch in &batches {
+        let id_col = batch
+            .column_by_name(ID_COLUMN)
+            .and_then(|c| c.as_any().downcast_ref::<StringArray>());
+        let list_col = batch
+            .column_by_name(path)
+            .and_then(|c| c.as_any().downcast_ref::<ListArray>());
+        if let Some(list_col) = list_col {
+            for row_idx in 0..batch.num_rows() {
+                if list_col.is_null(row_idx) || list_col.value_length(row_idx) == 0 {
+                    continue;
+                }
+                let sub_arr = list_col.value(row_idx);
+                if let Some(struct_arr) = sub_arr.as_any().downcast_ref::<StructArray>() {
+                    if struct_arr.len() == 0 {
+                        continue;
+                    }
+                    if let Ok(mini_batch) =
+                        RecordBatch::try_new(struct_schema.clone(), struct_arr.columns().to_vec())
+                    {
+                        if let Ok(mask) = planner.evaluate_expr(&mini_batch, &filter_expr) {
+                            if mask.true_count() > 0 {
+                                let doc_id = if let Some(id_col) = id_col {
+                                    id_col.value(row_idx).to_string()
+                                } else {
+                                    format!("0:{row_idx}")
+                                };
+                                matching_ids.push(Value::String(doc_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Some(if matching_ids.is_empty() {
+        serde_json::json!({
+            "term": { "_id": "__bsdb_no_match__" }
+        })
+    } else {
+        serde_json::json!({
+            "terms": { "_id": matching_ids }
+        })
+    }))
+}
+
+pub(crate) fn resolve_relation_queries<'a>(
+    state: &'a AppState,
+    target_index: &'a str,
+    val: &'a Value,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value, BenoStreamError>> + Send + 'a>>
+{
+    Box::pin(resolve_relation_queries_inner(state, target_index, val))
+}
+
+async fn resolve_relation_queries_inner(
+    state: &AppState,
+    target_index: &str,
+    val: &Value,
+) -> Result<Value, BenoStreamError> {
+    match val {
+        Value::Object(map) => {
+            if let Some(spec) = map.get("query_string") {
+                let (query, opts) =
+                    crate::handlers::query_string::QueryStringOptions::from_value(spec)?;
+                let expanded =
+                    crate::handlers::query_string::parse_query_string(&query, &opts, false)?;
+                return resolve_relation_queries(state, target_index, &expanded).await;
+            }
+
+            if let Some(spec) = map.get("simple_query_string") {
+                let (query, opts) =
+                    crate::handlers::query_string::QueryStringOptions::from_value(spec)?;
+                let expanded =
+                    crate::handlers::query_string::parse_query_string(&query, &opts, true)?;
+                return resolve_relation_queries(state, target_index, &expanded).await;
+            }
+
+            if let Some(spec) = map.get("nested") {
+                let spec_obj =
+                    spec.as_object()
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "nested: expected an object with 'path' and 'query'".into(),
+                        })?;
+                let path = spec_obj.get("path").and_then(Value::as_str).unwrap_or("");
+                let inner_query =
+                    spec_obj
+                        .get("query")
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "nested: missing 'query'".into(),
+                        })?;
+
+                if let Some(resolved) =
+                    resolve_nested_array_query(state, target_index, path, inner_query).await?
+                {
+                    return Ok(resolved);
+                }
+            }
+
+            if let Some(spec) = map.get("has_child") {
+                let spec_obj =
+                    spec.as_object()
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "has_child: expected an object".into(),
+                        })?;
+                let child_type = spec_obj
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                        reason: "has_child: 'type' (string) is required".into(),
+                    })?;
+                let subquery =
+                    spec_obj
+                        .get("query")
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "has_child: 'query' (object) is required".into(),
+                        })?;
+
+                let min_children = spec_obj
+                    .get("min_children")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as usize;
+                let max_children = spec_obj
+                    .get("max_children")
+                    .and_then(Value::as_u64)
+                    .map(|m| m as usize);
+
+                let edge_index = spec_obj.get("edge_index").and_then(Value::as_str);
+                let parent_field_opt = spec_obj.get("parent_field").and_then(Value::as_str);
+
+                let resolved_subquery =
+                    resolve_relation_queries(state, child_type, subquery).await?;
+                let child_search_req = serde_json::json!({
+                    "query": resolved_subquery,
+                    "size": 10000,
+                });
+
+                let child_resp = search_core(state, child_type, &child_search_req).await?;
+
+                let mut parent_counts: HashMap<String, usize> = HashMap::new();
+
+                if let Some(edge_idx) = edge_index {
+                    if state.index_exists(edge_idx).await {
+                        let edge_table = state.open_or_create(edge_idx, &None).await?;
+                        let child_seeds: Vec<u64> = child_resp
+                            .hits
+                            .hits
+                            .iter()
+                            .filter_map(|h| h.id.parse::<u64>().ok())
+                            .collect();
+
+                        if !child_seeds.is_empty() {
+                            let options = GraphNeighborhoodOptions {
+                                seeds: child_seeds,
+                                hops: 1,
+                                directed: false,
+                                ..Default::default()
+                            };
+                            if let Ok(parents) = edge_table.graph_neighborhood(&options).await {
+                                for p in parents {
+                                    *parent_counts.entry(p.to_string()).or_insert(0) += 1;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for hit in &child_resp.hits.hits {
+                        let pid = if let Some(pf) = parent_field_opt {
+                            hit.source.get(pf).and_then(json_val_to_string)
+                        } else {
+                            hit.source
+                                .get("parent_id")
+                                .or_else(|| hit.source.get("_parent"))
+                                .or_else(|| hit.source.get("parent"))
+                                .or_else(|| hit.source.get(format!("{target_index}_id").as_str()))
+                                .or_else(|| {
+                                    if let Some(singular) = target_index.strip_suffix('s') {
+                                        hit.source.get(format!("{singular}_id").as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .and_then(json_val_to_string)
+                        };
+                        if let Some(pid_str) = pid {
+                            *parent_counts.entry(pid_str).or_insert(0) += 1;
+                        }
+                    }
+                }
+
+                let matching_parents: Vec<Value> = parent_counts
+                    .into_iter()
+                    .filter(|(_, count)| {
+                        *count >= min_children && max_children.is_none_or(|max| *count <= max)
+                    })
+                    .map(|(pid, _)| Value::String(pid))
+                    .collect();
+
+                return Ok(if matching_parents.is_empty() {
+                    serde_json::json!({
+                        "term": { "_id": "__bsdb_no_match__" }
+                    })
+                } else {
+                    serde_json::json!({
+                        "terms": { "_id": matching_parents }
+                    })
+                });
+            }
+
+            if let Some(spec) = map.get("has_parent") {
+                let spec_obj =
+                    spec.as_object()
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "has_parent: expected an object".into(),
+                        })?;
+                let parent_type = spec_obj
+                    .get("parent_type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                        reason: "has_parent: 'parent_type' (string) is required".into(),
+                    })?;
+                let subquery =
+                    spec_obj
+                        .get("query")
+                        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+                            reason: "has_parent: 'query' (object) is required".into(),
+                        })?;
+
+                let edge_index = spec_obj.get("edge_index").and_then(Value::as_str);
+
+                let resolved_subquery =
+                    resolve_relation_queries(state, parent_type, subquery).await?;
+                let parent_search_req = serde_json::json!({
+                    "query": resolved_subquery,
+                    "size": 10000,
+                });
+
+                let parent_resp = search_core(state, parent_type, &parent_search_req).await?;
+                let parent_ids: Vec<String> =
+                    parent_resp.hits.hits.iter().map(|h| h.id.clone()).collect();
+
+                if parent_ids.is_empty() {
+                    return Ok(serde_json::json!({
+                        "term": { "_id": "__bsdb_no_match__" }
+                    }));
+                }
+
+                if let Some(edge_idx) = edge_index {
+                    if state.index_exists(edge_idx).await {
+                        let edge_table = state.open_or_create(edge_idx, &None).await?;
+                        let parent_seeds: Vec<u64> = parent_ids
+                            .iter()
+                            .filter_map(|s| s.parse::<u64>().ok())
+                            .collect();
+                        if !parent_seeds.is_empty() {
+                            let options = GraphNeighborhoodOptions {
+                                seeds: parent_seeds,
+                                hops: 1,
+                                directed: true,
+                                ..Default::default()
+                            };
+                            let children = edge_table
+                                .graph_neighborhood(&options)
+                                .await
+                                .unwrap_or_default();
+                            let child_ids_json: Vec<Value> = children
+                                .into_iter()
+                                .map(|c| Value::String(c.to_string()))
+                                .collect();
+                            return Ok(if child_ids_json.is_empty() {
+                                serde_json::json!({
+                                    "term": { "_id": "__bsdb_no_match__" }
+                                })
+                            } else {
+                                serde_json::json!({
+                                    "terms": { "_id": child_ids_json }
+                                })
+                            });
+                        }
+                    }
+                }
+
+                let parent_field =
+                    if let Some(pf) = spec_obj.get("parent_field").and_then(Value::as_str) {
+                        pf.to_string()
+                    } else if state.index_exists(target_index).await {
+                        if let Ok(target_table) = state.open_or_create(target_index, &None).await {
+                            let schema = target_table.arrow_schema();
+                            let singular = parent_type.strip_suffix('s').unwrap_or(parent_type);
+                            let candidate_fields = [
+                                "parent_id",
+                                "_parent",
+                                "parent",
+                                &format!("{parent_type}_id"),
+                                &format!("{singular}_id"),
+                            ];
+                            candidate_fields
+                                .iter()
+                                .find(|&&f| schema.field_with_name(f).is_ok())
+                                .unwrap_or(&"parent_id")
+                                .to_string()
+                        } else {
+                            "parent_id".to_string()
+                        }
+                    } else {
+                        "parent_id".to_string()
+                    };
+
+                let parent_ids_json: Vec<Value> =
+                    parent_ids.into_iter().map(Value::String).collect();
+                return Ok(serde_json::json!({
+                    "terms": { parent_field: parent_ids_json }
+                }));
+            }
+
+            let mut out = Map::new();
+            for (k, v) in map {
+                out.insert(
+                    k.clone(),
+                    resolve_relation_queries(state, target_index, v).await?,
+                );
+            }
+            Ok(Value::Object(out))
+        }
+        Value::Array(arr) => {
+            let mut out = Vec::with_capacity(arr.len());
+            for v in arr {
+                out.push(resolve_relation_queries(state, target_index, v).await?);
+            }
+            Ok(Value::Array(out))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
 /// Core search dispatch. Returns the full ES-shaped response so tests can
 /// assert on it without going through the axum layer.
 pub async fn search_core(
@@ -1211,14 +1897,15 @@ pub async fn search_core(
 ) -> Result<SearchResponse, BenoStreamError> {
     let start = Instant::now();
 
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
         });
     }
 
-    let req = parse_request(body)?;
+    let resolved_body = resolve_relation_queries(state, index, body).await?;
+    let req = parse_request(&resolved_body)?;
     let table = state.open_or_create(index, &None).await?;
 
     // RRF fusion constant: request-level `rrf_k` wins, then the
@@ -1470,7 +2157,32 @@ pub async fn search_core(
         None => None,
     };
 
+    let scroll_id = if let Some(ref scroll_duration) = req.scroll {
+        let next_search_after = page.last().and_then(|h| h.sort.clone());
+        let ttl_secs = parse_scroll_ttl_secs(scroll_duration);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut next_body = body.clone();
+        if let Some(sa) = next_search_after {
+            if let Some(b_obj) = next_body.as_object_mut() {
+                b_obj.insert("search_after".to_string(), Value::Array(sa));
+            }
+        }
+        let token = ScrollToken {
+            index: index.to_string(),
+            body: next_body,
+            scroll: scroll_duration.clone(),
+            expires_at: now_secs + ttl_secs,
+        };
+        Some(encode_scroll_token(&token)?)
+    } else {
+        None
+    };
+
     Ok(SearchResponse {
+        scroll_id,
         took: start.elapsed().as_millis() as u64,
         timed_out: false,
         hits: SearchHits {
@@ -1483,6 +2195,83 @@ pub async fn search_core(
         },
         aggregations,
     })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollToken {
+    pub index: String,
+    pub body: Value,
+    pub scroll: String,
+    pub expires_at: u64,
+}
+
+fn parse_scroll_ttl_secs(s: &str) -> u64 {
+    let s = s.trim();
+    if let Some(stripped) = s.strip_suffix('m') {
+        stripped.parse::<u64>().unwrap_or(1) * 60
+    } else if let Some(stripped) = s.strip_suffix('s') {
+        stripped.parse::<u64>().unwrap_or(60)
+    } else if let Some(stripped) = s.strip_suffix('h') {
+        stripped.parse::<u64>().unwrap_or(1) * 3600
+    } else if let Some(stripped) = s.strip_suffix('d') {
+        stripped.parse::<u64>().unwrap_or(1) * 86400
+    } else {
+        s.parse::<u64>().unwrap_or(60)
+    }
+}
+
+pub fn encode_scroll_token(token: &ScrollToken) -> Result<String, BenoStreamError> {
+    let json_bytes =
+        serde_json::to_vec(token).map_err(|e| BenoStreamError::internal(e.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(json_bytes))
+}
+
+pub fn decode_scroll_token(s: &str) -> Result<ScrollToken, BenoStreamError> {
+    let s = s.trim();
+    let json_bytes = URL_SAFE_NO_PAD
+        .decode(s)
+        .or_else(|_| URL_SAFE.decode(s))
+        .or_else(|_| STANDARD.decode(s))
+        .map_err(|_| BenoStreamError::SchemaIncompatible {
+            reason: "search_context_missing_exception: Invalid scroll_id base64".into(),
+        })?;
+    serde_json::from_slice(&json_bytes).map_err(|_| BenoStreamError::SchemaIncompatible {
+        reason: "search_context_missing_exception: Malformed scroll token payload".into(),
+    })
+}
+
+pub async fn execute_scroll(
+    state: &AppState,
+    scroll_id: &str,
+    scroll_override: Option<&str>,
+) -> Result<SearchResponse, BenoStreamError> {
+    if scroll_id.is_empty() {
+        return Err(BenoStreamError::SchemaIncompatible {
+            reason: "scroll_id is required".into(),
+        });
+    }
+
+    let token = decode_scroll_token(scroll_id)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    if now > token.expires_at {
+        return Err(BenoStreamError::SchemaIncompatible {
+            reason: "search_context_missing_exception: Cannot execute scroll, context has expired"
+                .into(),
+        });
+    }
+
+    let mut body = token.body.clone();
+    if let Some(s) = scroll_override {
+        if let Some(obj) = body.as_object_mut() {
+            obj.insert("scroll".to_string(), Value::String(s.to_string()));
+        }
+    }
+
+    search_core(state, &token.index, &body).await
 }
 
 /// OR-merge per-field BM25 results for a multi-field `match`, keeping the
@@ -1700,19 +2489,17 @@ pub(crate) fn value_to_json(col: &dyn Array, i: usize) -> Value {
                     .unwrap_or(Value::Null)
             })
             .unwrap_or(Value::Null),
-        DataType::List(_) => downcast::<ListArray>(col)
+        DataType::List(_) | DataType::LargeList(_) => downcast::<ListArray>(col)
             .map(|a| {
                 let off = a.value_offsets();
-                let len = off[i + 1] - off[i];
-                a.values()
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .map(|flat| {
-                        let s = &flat.values()[off[i] as usize..(off[i] + len) as usize];
-                        s.iter().map(|x| Value::from(*x as f64)).collect::<Vec<_>>()
-                    })
-                    .map(Value::Array)
-                    .unwrap_or(Value::Null)
+                let start = off[i] as usize;
+                let end = off[i + 1] as usize;
+                let values = a.values();
+                let mut items = Vec::with_capacity(end - start);
+                for idx in start..end {
+                    items.push(value_to_json(values.as_ref(), idx));
+                }
+                Value::Array(items)
             })
             .unwrap_or(Value::Null),
         DataType::Struct(_) => downcast::<StructArray>(col)
@@ -2026,7 +2813,7 @@ mod tests {
             // match value as an array
             json!({"query": {"match": {"body": ["a", "b"]}}}),
             // unsupported filter clause
-            json!({"filter": {"match_phrase": {"body": "a"}}}),
+            json!({"filter": {"unsupported_clause": {"body": "a"}}}),
             // knn without a vector
             json!({"knn": {"field": "body", "k": 3}}),
             // invalid field name (SQL-injection guard)
@@ -2167,6 +2954,441 @@ mod tests {
         let ranges = aggs["age_ranges"]["buckets"].as_array().unwrap();
         assert_eq!(ranges[0]["doc_count"], 2);
         assert_eq!(ranges[1]["doc_count"], 2);
+    }
+
+    #[tokio::test]
+    async fn aggregations_percentiles() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("pct")).unwrap();
+
+        index_docs(
+            &state,
+            "pct",
+            &[
+                json!({"latency": 10.0}),
+                json!({"latency": 20.0}),
+                json!({"latency": 30.0}),
+                json!({"latency": 40.0}),
+                json!({"latency": 50.0}),
+                json!({"latency": 60.0}),
+                json!({"latency": 70.0}),
+                json!({"latency": 80.0}),
+                json!({"latency": 90.0}),
+                json!({"latency": 100.0}),
+            ],
+        )
+        .await;
+
+        let resp = search_core(
+            &state,
+            "pct",
+            &json!({
+                "size": 0,
+                "aggs": {
+                    "load_pct": {
+                        "percentiles": {
+                            "field": "latency",
+                            "percents": [25.0, 50.0, 75.0, 99.0]
+                        }
+                    },
+                    "default_pct": {
+                        "percentiles": {
+                            "field": "latency"
+                        }
+                    },
+                    "unkeyed_pct": {
+                        "percentiles": {
+                            "field": "latency",
+                            "percents": [50.0],
+                            "keyed": false
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs = resp.aggregations.expect("aggregations present");
+        let load_values = &aggs["load_pct"]["values"];
+        assert!(load_values["25.0"].as_f64().is_some());
+        assert!(load_values["50.0"].as_f64().is_some());
+        assert!(load_values["75.0"].as_f64().is_some());
+        assert!(load_values["99.0"].as_f64().is_some());
+
+        let default_values = &aggs["default_pct"]["values"];
+        assert!(default_values["1.0"].as_f64().is_some());
+        assert!(default_values["50.0"].as_f64().is_some());
+        assert!(default_values["99.0"].as_f64().is_some());
+
+        let unkeyed_values = aggs["unkeyed_pct"]["values"].as_array().expect("array");
+        assert_eq!(unkeyed_values.len(), 1);
+        assert_eq!(unkeyed_values[0]["key"], 50.0);
+        assert!(unkeyed_values[0]["value"].as_f64().is_some());
+    }
+
+    #[tokio::test]
+    async fn aggregations_composite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("comp_idx")).unwrap();
+
+        index_docs(
+            &state,
+            "comp_idx",
+            &[
+                json!({"category": "apparel", "product": "shirt", "price": 25.0}),
+                json!({"category": "apparel", "product": "shoes", "price": 50.0}),
+                json!({"category": "apparel", "product": "shoes", "price": 60.0}),
+                json!({"category": "electronics", "product": "laptop", "price": 1500.0}),
+                json!({"category": "electronics", "product": "phone", "price": 800.0}),
+                json!({"category": "electronics", "product": "tv", "price": 1200.0}),
+            ],
+        )
+        .await;
+
+        // 1. Basic pagination across composite buckets (size: 2)
+        let page1 = search_core(
+            &state,
+            "comp_idx",
+            &json!({
+                "size": 0,
+                "aggs": {
+                    "my_comp": {
+                        "composite": {
+                            "size": 2,
+                            "sources": [
+                                { "cat": { "terms": { "field": "category", "order": "asc" } } },
+                                { "prod": { "terms": { "field": "product", "order": "asc" } } }
+                            ]
+                        },
+                        "aggs": {
+                            "avg_price": { "avg": { "field": "price" } }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs1 = page1.aggregations.expect("aggs present");
+        let buckets1 = aggs1["my_comp"]["buckets"].as_array().expect("buckets");
+        assert_eq!(buckets1.len(), 2);
+        assert_eq!(buckets1[0]["key"]["cat"], "apparel");
+        assert_eq!(buckets1[0]["key"]["prod"], "shirt");
+        assert_eq!(buckets1[0]["doc_count"], 1);
+        assert_eq!(buckets1[0]["aggs"]["avg_price"]["value"], 25.0);
+
+        assert_eq!(buckets1[1]["key"]["cat"], "apparel");
+        assert_eq!(buckets1[1]["key"]["prod"], "shoes");
+        assert_eq!(buckets1[1]["doc_count"], 2);
+        assert_eq!(buckets1[1]["aggs"]["avg_price"]["value"], 55.0);
+
+        let after1 = aggs1["my_comp"]["after_key"].clone();
+        assert_eq!(after1, buckets1[1]["key"]);
+
+        // 2. Fetch page 2 using after_key
+        let page2 = search_core(
+            &state,
+            "comp_idx",
+            &json!({
+                "size": 0,
+                "aggs": {
+                    "my_comp": {
+                        "composite": {
+                            "size": 2,
+                            "sources": [
+                                { "cat": { "terms": { "field": "category", "order": "asc" } } },
+                                { "prod": { "terms": { "field": "product", "order": "asc" } } }
+                            ],
+                            "after": after1
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs2 = page2.aggregations.expect("aggs present");
+        let buckets2 = aggs2["my_comp"]["buckets"].as_array().expect("buckets");
+        assert_eq!(buckets2.len(), 2);
+        assert_eq!(buckets2[0]["key"]["cat"], "electronics");
+        assert_eq!(buckets2[0]["key"]["prod"], "laptop");
+
+        assert_eq!(buckets2[1]["key"]["cat"], "electronics");
+        assert_eq!(buckets2[1]["key"]["prod"], "phone");
+
+        let after2 = aggs2["my_comp"]["after_key"].clone();
+        assert_eq!(after2, buckets2[1]["key"]);
+
+        // 3. Fetch page 3
+        let page3 = search_core(
+            &state,
+            "comp_idx",
+            &json!({
+                "size": 0,
+                "aggs": {
+                    "my_comp": {
+                        "composite": {
+                            "size": 2,
+                            "sources": [
+                                { "cat": { "terms": { "field": "category", "order": "asc" } } },
+                                { "prod": { "terms": { "field": "product", "order": "asc" } } }
+                            ],
+                            "after": after2
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs3 = page3.aggregations.expect("aggs present");
+        let buckets3 = aggs3["my_comp"]["buckets"].as_array().expect("buckets");
+        assert_eq!(buckets3.len(), 1);
+        assert_eq!(buckets3[0]["key"]["cat"], "electronics");
+        assert_eq!(buckets3[0]["key"]["prod"], "tv");
+
+        // 4. Test histogram source in composite
+        let hist_resp = search_core(
+            &state,
+            "comp_idx",
+            &json!({
+                "size": 0,
+                "aggs": {
+                    "by_bracket": {
+                        "composite": {
+                            "size": 10,
+                            "sources": [
+                                { "bracket": { "histogram": { "field": "price", "interval": 500.0, "order": "desc" } } }
+                            ]
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let h_aggs = hist_resp.aggregations.expect("aggs present");
+        let h_buckets = h_aggs["by_bracket"]["buckets"].as_array().expect("buckets");
+        assert!(!h_buckets.is_empty());
+        // Ordered desc: 1500, 1000, 500, 0
+        assert_eq!(h_buckets[0]["key"]["bracket"], 1500.0);
+
+        // 5. Error handling
+        let empty_sources = search_core(
+            &state,
+            "comp_idx",
+            &json!({
+                "aggs": {
+                    "comp": { "composite": { "sources": [] } }
+                }
+            }),
+        )
+        .await;
+        assert!(empty_sources.is_err());
+    }
+
+    #[tokio::test]
+    async fn aggregations_significant_terms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("sig_idx")).unwrap();
+
+        index_docs(
+            &state,
+            "sig_idx",
+            &[
+                json!({"city": "Seattle", "category": "boat_theft", "loss": 5000.0}),
+                json!({"city": "Seattle", "category": "boat_theft", "loss": 8000.0}),
+                json!({"city": "Seattle", "category": "boat_theft", "loss": 6000.0}),
+                json!({"city": "Seattle", "category": "burglary", "loss": 1000.0}),
+                json!({"city": "Denver", "category": "burglary", "loss": 2000.0}),
+                json!({"city": "Denver", "category": "burglary", "loss": 3000.0}),
+                json!({"city": "Denver", "category": "burglary", "loss": 2500.0}),
+                json!({"city": "Denver", "category": "burglary", "loss": 1500.0}),
+                json!({"city": "Denver", "category": "burglary", "loss": 4000.0}),
+                json!({"city": "Denver", "category": "boat_theft", "loss": 7000.0}),
+            ],
+        )
+        .await;
+
+        let resp = search_core(
+            &state,
+            "sig_idx",
+            &json!({
+                "size": 0,
+                "query": {
+                    "term": { "city": "Seattle" }
+                },
+                "aggs": {
+                    "unusual_crime": {
+                        "significant_terms": {
+                            "field": "category",
+                            "size": 5
+                        },
+                        "aggs": {
+                            "avg_loss": { "avg": { "field": "loss" } }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        let aggs = resp.aggregations.expect("aggs present");
+        let sig = &aggs["unusual_crime"];
+        assert_eq!(sig["doc_count"], 4);
+        assert_eq!(sig["bg_count"], 10);
+
+        let buckets = sig["buckets"].as_array().expect("buckets");
+        assert!(!buckets.is_empty());
+        assert_eq!(buckets[0]["key"], "boat_theft");
+        assert_eq!(buckets[0]["doc_count"], 3);
+        assert_eq!(buckets[0]["bg_count"], 4);
+        assert!(buckets[0]["score"].as_f64().unwrap() > 0.0);
+        assert_eq!(buckets[0]["aggs"]["avg_loss"]["value"], 6333.333333333333);
+    }
+
+    #[tokio::test]
+    async fn search_fuzzy_query() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("fuzzy_idx")).unwrap();
+
+        index_docs(
+            &state,
+            "fuzzy_idx",
+            &[
+                json!({"name": "kitten", "category": "pet"}),
+                json!({"name": "sitting", "category": "action"}),
+                json!({"name": "kitchen", "category": "room"}),
+                json!({"name": "apple", "category": "fruit"}),
+            ],
+        )
+        .await;
+
+        // 1. Basic fuzzy string matching with distance 1
+        let resp = search_core(
+            &state,
+            "fuzzy_idx",
+            &json!({
+                "query": {
+                    "fuzzy": {
+                        "name": "kitton"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.hits.total.value, 1);
+        assert_eq!(resp.hits.hits[0].source["name"], "kitten");
+
+        // 2. Fuzzy with options: value, fuzziness: 1, prefix_length: 3
+        let resp2 = search_core(
+            &state,
+            "fuzzy_idx",
+            &json!({
+                "query": {
+                    "fuzzy": {
+                        "name": {
+                            "value": "kitton",
+                            "fuzziness": 1,
+                            "prefix_length": 3
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp2.hits.total.value, 1);
+        assert_eq!(resp2.hits.hits[0].source["name"], "kitten");
+
+        // Prefix length 3: prefix "sit" matches "sitting" with distance 2
+        let resp3 = search_core(
+            &state,
+            "fuzzy_idx",
+            &json!({
+                "query": {
+                    "fuzzy": {
+                        "name": {
+                            "value": "sitton",
+                            "fuzziness": 2,
+                            "prefix_length": 3
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp3.hits.total.value, 1);
+        assert_eq!(resp3.hits.hits[0].source["name"], "sitting");
+
+        // Prefix length 3: prefix "mut" does not match any document
+        let resp3_none = search_core(
+            &state,
+            "fuzzy_idx",
+            &json!({
+                "query": {
+                    "fuzzy": {
+                        "name": {
+                            "value": "mutton",
+                            "fuzziness": 2,
+                            "prefix_length": 3
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp3_none.hits.total.value, 0);
+
+        // 3. Fuzzy inside bool filter
+        let resp4 = search_core(
+            &state,
+            "fuzzy_idx",
+            &json!({
+                "query": {
+                    "bool": {
+                        "must": [
+                            {
+                                "fuzzy": {
+                                    "name": {
+                                        "value": "kitcen",
+                                        "fuzziness": 1
+                                    }
+                                }
+                            }
+                        ],
+                        "filter": [
+                            {
+                                "term": {
+                                    "category": "room"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp4.hits.total.value, 1);
+        assert_eq!(resp4.hits.hits[0].source["name"], "kitchen");
     }
 
     #[tokio::test]
@@ -2550,5 +3772,619 @@ mod tests {
         assert_eq!(resp_sorted.hits.hits.len(), 2);
         assert_eq!(resp_sorted.hits.hits[0].source["user"]["name"], "alice");
         assert_eq!(resp_sorted.hits.hits[1].source["user"]["name"], "bob");
+    }
+
+    #[tokio::test]
+    async fn search_nested_array_of_objects_query() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("nested_arr")).unwrap();
+
+        // Index documents with array of objects
+        index_docs(
+            &state,
+            "nested_arr",
+            &[
+                // Doc 0: alice has 5 stars, bob has 1 star
+                json!({
+                    "title": "Post 1",
+                    "comments": [
+                        { "author": "alice", "stars": 5 },
+                        { "author": "bob", "stars": 1 }
+                    ]
+                }),
+                // Doc 1: alice has 1 star
+                json!({
+                    "title": "Post 2",
+                    "comments": [
+                        { "author": "alice", "stars": 1 }
+                    ]
+                }),
+            ],
+        )
+        .await;
+
+        // Query: nested comments where author == "alice" AND stars == 1
+        // In standard non-nested object semantics, Doc 0 would falsely match because it has alice (stars 5) and bob (stars 1).
+        // Under nested semantics, matching must happen on the same array element.
+        // Therefore, ONLY Doc 1 must match!
+        let resp = search_core(
+            &state,
+            "nested_arr",
+            &json!({
+                "query": {
+                    "nested": {
+                        "path": "comments",
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    { "term": { "comments.author": "alice" } },
+                                    { "term": { "comments.stars": 1 } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp.hits.total.value, 1);
+        assert_eq!(resp.hits.hits[0].id, "nested_arr-doc-1");
+        assert_eq!(resp.hits.hits[0].source["title"], "Post 2");
+        assert_eq!(resp.hits.hits[0].source["comments"][0]["author"], "alice");
+        assert_eq!(resp.hits.hits[0].source["comments"][0]["stars"], 1);
+
+        // Query with relative field paths inside nested: "author" and "stars" (unqualified)
+        let resp_rel = search_core(
+            &state,
+            "nested_arr",
+            &json!({
+                "query": {
+                    "nested": {
+                        "path": "comments",
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    { "term": { "author": "alice" } },
+                                    { "term": { "stars": 5 } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp_rel.hits.total.value, 1);
+        assert_eq!(resp_rel.hits.hits[0].id, "nested_arr-doc-0");
+
+        // Query with impossible combination: bob with 5 stars
+        let resp_none = search_core(
+            &state,
+            "nested_arr",
+            &json!({
+                "query": {
+                    "nested": {
+                        "path": "comments",
+                        "query": {
+                            "bool": {
+                                "must": [
+                                    { "term": { "author": "bob" } },
+                                    { "term": { "stars": 5 } }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp_none.hits.total.value, 0);
+        assert!(resp_none.hits.hits.is_empty());
+    }
+
+    #[tokio::test]
+    async fn search_has_child_and_has_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("posts")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("comments")).unwrap();
+
+        // 1. Index posts
+        crate::handlers::indices::create_index_core(&state, "posts", None)
+            .await
+            .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "posts",
+            Some("post1"),
+            json!({"title": "Introduction to Rust", "tag": "tech"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "posts",
+            Some("post2"),
+            json!({"title": "Cooking Italian Pasta", "tag": "food"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "posts",
+            Some("post3"),
+            json!({"title": "Advanced Data Systems", "tag": "tech"}),
+        )
+        .await
+        .unwrap();
+
+        // 2. Index comments
+        crate::handlers::indices::create_index_core(&state, "comments", None)
+            .await
+            .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "comments",
+            Some("c1"),
+            json!({"post_id": "post1", "text": "Great tutorial", "author": "alice"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "comments",
+            Some("c2"),
+            json!({"post_id": "post1", "text": "Loved it", "author": "bob"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "comments",
+            Some("c3"),
+            json!({"post_id": "post2", "text": "Delicious recipe", "author": "charlie"}),
+        )
+        .await
+        .unwrap();
+
+        // Refresh tables so writes are committed and searchable
+        refresh_core(&state, "posts").await.unwrap();
+        refresh_core(&state, "comments").await.unwrap();
+
+        // Test 1: has_child (find post with comments by alice)
+        let resp_child = search_core(
+            &state,
+            "posts",
+            &json!({
+                "query": {
+                    "has_child": {
+                        "type": "comments",
+                        "query": {
+                            "term": {"author": "alice"}
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_child.hits.total.value, 1);
+        assert_eq!(resp_child.hits.hits[0].id, "post1");
+
+        // Test 2: has_child with min_children: 2 (only post1 has 2 comments)
+        let resp_min = search_core(
+            &state,
+            "posts",
+            &json!({
+                "query": {
+                    "has_child": {
+                        "type": "comments",
+                        "query": {"match_all": {}},
+                        "min_children": 2
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_min.hits.total.value, 1);
+        assert_eq!(resp_min.hits.hits[0].id, "post1");
+
+        // Test 3: has_parent (find comments whose post tag is food)
+        let resp_parent = search_core(
+            &state,
+            "comments",
+            &json!({
+                "query": {
+                    "has_parent": {
+                        "parent_type": "posts",
+                        "query": {
+                            "term": {"tag": "food"}
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_parent.hits.total.value, 1);
+        assert_eq!(resp_parent.hits.hits[0].id, "c3");
+
+        // Test 4: has_child inside bool.must
+        let resp_bool = search_core(
+            &state,
+            "posts",
+            &json!({
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"tag": "tech"}},
+                            {
+                                "has_child": {
+                                    "type": "comments",
+                                    "query": {"term": {"author": "bob"}}
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_bool.hits.total.value, 1);
+        assert_eq!(resp_bool.hits.hits[0].id, "post1");
+
+        // Test 5: has_child with 0 matching child docs
+        let resp_none = search_core(
+            &state,
+            "posts",
+            &json!({
+                "query": {
+                    "has_child": {
+                        "type": "comments",
+                        "query": {"term": {"author": "nobody"}}
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_none.hits.total.value, 0);
+
+        // Test 6: count_core with has_child
+        let count_resp = count_core(
+            &state,
+            "posts",
+            Some(&json!({
+                "query": {
+                    "has_child": {
+                        "type": "comments",
+                        "query": {"term": {"author": "charlie"}}
+                    }
+                }
+            })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(count_resp.count, 1);
+
+        // Test 7: graph-backed edge_index with has_child
+        std::fs::create_dir_all(tmp.path().join("g_posts")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("g_comments")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("g_edges")).unwrap();
+
+        crate::handlers::indices::create_index_core(&state, "g_posts", None)
+            .await
+            .unwrap();
+        crate::handlers::indices::create_index_core(&state, "g_comments", None)
+            .await
+            .unwrap();
+        crate::handlers::indices::create_index_core(&state, "g_edges", None)
+            .await
+            .unwrap();
+
+        crate::handlers::docs::index_document_core(
+            &state,
+            "g_posts",
+            Some("100"),
+            json!({"title": "Graph Parent Post"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "g_comments",
+            Some("200"),
+            json!({"text": "Graph Child Comment"}),
+        )
+        .await
+        .unwrap();
+        crate::handlers::docs::index_document_core(
+            &state,
+            "g_edges",
+            Some("e1"),
+            json!({"source": 100, "target": 200}),
+        )
+        .await
+        .unwrap();
+
+        refresh_core(&state, "g_posts").await.unwrap();
+        refresh_core(&state, "g_comments").await.unwrap();
+        refresh_core(&state, "g_edges").await.unwrap();
+
+        let resp_graph_child = search_core(
+            &state,
+            "g_posts",
+            &json!({
+                "query": {
+                    "has_child": {
+                        "type": "g_comments",
+                        "query": {"match_all": {}},
+                        "edge_index": "g_edges"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_graph_child.hits.total.value, 1);
+        assert_eq!(resp_graph_child.hits.hits[0].id, "100");
+
+        let resp_graph_parent = search_core(
+            &state,
+            "g_comments",
+            &json!({
+                "query": {
+                    "has_parent": {
+                        "parent_type": "g_posts",
+                        "query": {"match_all": {}},
+                        "edge_index": "g_edges"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_graph_parent.hits.total.value, 1);
+        assert_eq!(resp_graph_parent.hits.hits[0].id, "200");
+    }
+
+    #[tokio::test]
+    async fn search_query_string_and_simple_query_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("qs_idx")).unwrap();
+
+        crate::handlers::indices::create_index_core(&state, "qs_idx", None)
+            .await
+            .unwrap();
+        crate::handlers::mapping::put_mapping_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "properties": {
+                    "title": {"type": "text"},
+                    "tag": {"type": "keyword"},
+                    "score_val": {"type": "long"}
+                },
+                "indexes": {
+                    "title": "bm25"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        index_docs(
+            &state,
+            "qs_idx",
+            &[
+                json!({"title": "Introduction to Rust programming", "tag": "tech", "score_val": 10}),
+                json!({"title": "Advanced Rust concurrency and systems", "tag": "tech", "score_val": 40}),
+                json!({"title": "Italian cooking pasta and pizza", "tag": "food", "score_val": 25}),
+                json!({"title": "Desserts and baking cookies", "tag": "food", "score_val": 50}),
+            ],
+        )
+        .await;
+
+        // 1. query_string with AND and field prefix
+        let resp_and = search_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "query": {
+                    "query_string": {
+                        "query": "title:Rust AND tag:tech",
+                        "default_operator": "AND"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_and.hits.total.value, 2);
+
+        // 2. query_string with phrase search
+        let resp_phrase = search_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "query": {
+                    "query_string": {
+                        "query": "\"Italian cooking\"",
+                        "default_field": "title"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_phrase.hits.total.value, 1);
+        assert!(resp_phrase.hits.hits[0].source["title"]
+            .as_str()
+            .unwrap()
+            .contains("Italian"));
+
+        // 3. query_string with range and wildcard
+        let resp_range = search_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "query": {
+                    "query_string": {
+                        "query": "score_val:[20 TO 45] AND tag:tech"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_range.hits.total.value, 1);
+        assert_eq!(resp_range.hits.hits[0].source["score_val"], 40);
+
+        // 4. simple_query_string with + and -
+        let resp_simple = search_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "query": {
+                    "simple_query_string": {
+                        "query": "tag:food -baking",
+                        "default_field": "title"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_simple.hits.total.value, 1);
+        assert!(resp_simple.hits.hits[0].source["title"]
+            .as_str()
+            .unwrap()
+            .contains("pasta"));
+
+        // 5. query_string inside bool.must
+        let resp_bool = search_core(
+            &state,
+            "qs_idx",
+            &json!({
+                "query": {
+                    "bool": {
+                        "must": [
+                            {"term": {"tag": "tech"}},
+                            {
+                                "query_string": {
+                                    "query": "title:concurrency"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_bool.hits.total.value, 1);
+        assert_eq!(resp_bool.hits.hits[0].source["score_val"], 40);
+
+        // 6. search_get endpoint with Lucene query
+        let state_arc = Arc::new(state);
+        let mut q_params = HashMap::new();
+        q_params.insert("q".to_string(), "title:Rust AND tag:tech".to_string());
+        let get_resp = search_get(
+            State(state_arc),
+            Path("qs_idx".to_string()),
+            axum::extract::Query(q_params),
+        )
+        .await;
+        assert_eq!(get_resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn search_scroll_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("scroll_idx")).unwrap();
+
+        let docs: Vec<Value> = (0..5)
+            .map(|i| json!({ "title": format!("Document {i}"), "order_num": i }))
+            .collect();
+        index_docs(&state, "scroll_idx", &docs).await;
+
+        // 1. Initial search with scroll=1m and size=2
+        let resp1 = search_core(
+            &state,
+            "scroll_idx",
+            &json!({
+                "size": 2,
+                "scroll": "1m",
+                "query": { "match_all": {} }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp1.hits.total.value, 5);
+        assert_eq!(resp1.hits.hits.len(), 2);
+        let scroll_id1 = resp1.scroll_id.expect("scroll_id present on resp1");
+        assert!(!scroll_id1.is_empty());
+
+        let mut all_ids = Vec::new();
+        for h in resp1.hits.hits {
+            all_ids.push(h.id);
+        }
+
+        // 2. Fetch page 2
+        let resp2 = execute_scroll(&state, &scroll_id1, None).await.unwrap();
+        assert_eq!(resp2.hits.hits.len(), 2);
+        let scroll_id2 = resp2.scroll_id.expect("scroll_id present on resp2");
+        for h in resp2.hits.hits {
+            all_ids.push(h.id);
+        }
+
+        // 3. Fetch page 3 (last doc)
+        let resp3 = execute_scroll(&state, &scroll_id2, None).await.unwrap();
+        assert_eq!(resp3.hits.hits.len(), 1);
+        let scroll_id3 = resp3.scroll_id.expect("scroll_id present on resp3");
+        for h in resp3.hits.hits {
+            all_ids.push(h.id);
+        }
+
+        // 4. Fetch page 4 (exhausted -> empty hits)
+        let resp4 = execute_scroll(&state, &scroll_id3, None).await.unwrap();
+        assert_eq!(resp4.hits.hits.len(), 0);
+
+        // Verify all 5 documents retrieved in order without duplicates
+        assert_eq!(all_ids.len(), 5);
+        let mut sorted_ids = all_ids.clone();
+        sorted_ids.sort();
+        sorted_ids.dedup();
+        assert_eq!(sorted_ids.len(), 5);
+
+        // 5. Test expired token returns context error
+        let mut expired_token = decode_scroll_token(&scroll_id3).unwrap();
+        expired_token.expires_at = 0; // past
+        let expired_id = encode_scroll_token(&expired_token).unwrap();
+        let err = execute_scroll(&state, &expired_id, None).await.unwrap_err();
+        assert!(err.to_string().contains("search_context_missing_exception"));
+        let es_err = crate::es_types::EsError::from(err);
+        assert_eq!(es_err.status, 404);
+        assert_eq!(es_err.error.error_type, "search_context_missing_exception");
+
+        // 6. Test clear_scroll endpoint
+        let clear_resp = clear_scroll(None).await;
+        assert_eq!(clear_resp.status(), axum::http::StatusCode::OK);
     }
 }

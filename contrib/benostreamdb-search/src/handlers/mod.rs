@@ -11,7 +11,9 @@ pub mod indices;
 pub mod mapping;
 pub mod metrics;
 pub mod qdrant;
+pub mod query_string;
 pub mod search;
+pub mod snapshots;
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -33,7 +35,7 @@ pub(crate) fn es_response_with_status<T: Serialize>(
     status: StatusCode,
     result: Result<T, BenoStreamError>,
 ) -> Response {
-    match result {
+    let mut resp = match result {
         Ok(value) => (status, Json(value)).into_response(),
         Err(err) => {
             tracing::error!(%err, "request failed");
@@ -42,5 +44,14 @@ pub(crate) fn es_response_with_status<T: Serialize>(
                 StatusCode::from_u16(es.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
             (status, Json(es)).into_response()
         }
-    }
+    };
+    resp.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-elastic-product"),
+        axum::http::HeaderValue::from_static("Elasticsearch"),
+    );
+    resp.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-opensearch-version"),
+        axum::http::HeaderValue::from_static("3.0.0"),
+    );
+    resp
 }

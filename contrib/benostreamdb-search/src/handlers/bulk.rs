@@ -20,7 +20,7 @@ use serde_json::{Map, Value};
 
 use crate::handlers::docs::{translate_write_error, with_id, ID_COLUMN};
 use crate::infer;
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
 
 use super::es_response;
 
@@ -400,7 +400,7 @@ pub async fn bulk_core(
 
     let t_write = Instant::now();
     for (index, group) in by_index {
-        let existed_before = table_exists(&state.index_uri(&index)).await;
+        let existed_before = state.index_exists(&index).await;
         // Split off deletes and updates
         let writes: Vec<(usize, &BulkItem)> = group
             .iter()

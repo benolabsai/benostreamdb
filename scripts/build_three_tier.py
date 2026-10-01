@@ -446,20 +446,25 @@ def stage_embed(args, repo_root: str) -> None:
     rows_in_current_part = 0
     writer = None
     done = total_embedded
-    skipped = 0
     t0 = time.time()
 
     try:
-        for batch_record in pq_file.iter_batches(batch_size=args.embed_batch, columns=["text_id", "section_id", "text"]):
-            b_len = len(batch_record)
-            if skipped + b_len <= total_embedded:
-                skipped += b_len
-                continue
-            elif skipped < total_embedded:
-                offset = total_embedded - skipped
-                batch_record = batch_record.slice(offset, b_len - offset)
-                skipped = total_embedded
+        # Push the resume offset down to the Parquet reader so already-embedded
+        # rows are skipped *without* reading their (large) `text` column. The
+        # parts are contiguous row-order slices of section_texts, so `text_id`
+        # is the row index and `text_id >= total_embedded` selects exactly the
+        # remaining rows. The old code iterated every batch and discarded the
+        # skipped ones in Python, which read the whole ~70 GB text column on
+        # every resume and made a near-complete run look like a hang.
+        import pyarrow.dataset as ds
 
+        dataset = ds.dataset(texts_path, format="parquet")
+        scanner = dataset.scanner(
+            columns=["text_id", "section_id", "text"],
+            filter=ds.field("text_id") >= total_embedded,
+            batch_size=args.embed_batch,
+        )
+        for batch_record in scanner.to_batches():
             df_chunk = pl.from_arrow(batch_record)
             texts = df_chunk["text"].to_list()
             ids = df_chunk["text_id"].to_list()
@@ -515,6 +520,7 @@ def stage_embed(args, repo_root: str) -> None:
 
 def stage_load(args, repo_root: str) -> None:
     import polars as pl
+    import pyarrow as pa
     import pyarrow.parquet as pq
 
     sys.path.insert(0, os.path.join(repo_root, "python"))
@@ -532,16 +538,17 @@ def stage_load(args, repo_root: str) -> None:
     sections = pl.read_parquet(os.path.join(args.out_dir, "sections.parquet")).sort("article_id")
 
     articles_uri = f"file://{os.path.abspath(args.table_dir)}/articles"
-    art = bsdb.Table.create(articles_uri, {"id": "int64", "page_id": "large_utf8",
-                                           "title": "large_utf8"})
+    art = bsdb.Table.create(articles_uri, pa.schema([
+        ("id", pa.int64()), ("page_id", pa.large_string()), ("title", pa.large_string()),
+    ]))
     _write_batched(art, articles, "articles", args.load_batch)
 
     # Edge table: article --[has_section]--> section (vertex-centric CSR).
     sections_uri = f"file://{os.path.abspath(args.table_dir)}/sections"
-    sec = bsdb.Table.create_edge_table(sections_uri, {
-        "source": "int64", "target": "int64",
-        "section_title": "large_utf8", "level": "int32",
-    })
+    sec = bsdb.Table.create_edge_table(sections_uri, pa.schema([
+        ("source", pa.int64()), ("target", pa.int64()),
+        ("section_title", pa.large_string()), ("level", pa.int32()),
+    ]))
     sec_df = sections.select([
         pl.col("article_id").alias("source"),
         pl.col("id").alias("target"),
@@ -553,7 +560,9 @@ def stage_load(args, repo_root: str) -> None:
     texts_path = os.path.join(args.out_dir, "section_texts.parquet")
     if os.path.exists(texts_path):
         texts_uri = f"file://{os.path.abspath(args.table_dir)}/section_texts"
-        txt = bsdb.Table.create(texts_uri, {"section_id": "int64", "text": "large_utf8"})
+        txt = bsdb.Table.create(texts_uri, pa.schema([
+            ("section_id", pa.int64()), ("text", pa.large_string()),
+        ]))
         pq_texts = pq.ParquetFile(texts_path)
         total_txt = pq_texts.metadata.num_rows
         log(f"load: streaming section_texts ({total_txt:,} rows)")
@@ -576,7 +585,9 @@ def stage_load(args, repo_root: str) -> None:
 
     if emb_files:
         emb_uri = f"file://{os.path.abspath(args.table_dir)}/section_embeds"
-        embt = bsdb.Table.create(emb_uri, {"section_id": "int64", "embedding": "list<float32>"})
+        embt = bsdb.Table.create(emb_uri, pa.schema([
+            ("section_id", pa.int64()), ("embedding", pa.list_(pa.float32())),
+        ]))
         total_emb = sum(pq.ParquetFile(f).metadata.num_rows for f in emb_files)
         log(f"load: streaming {len(emb_files)} embedding file(s) ({total_emb:,} rows)")
         t0 = time.time()

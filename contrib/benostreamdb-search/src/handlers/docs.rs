@@ -15,12 +15,13 @@ use benostreamdb::BenoStreamError;
 use serde_json::Value;
 
 use crate::es_types::{
-    DeleteByQueryResponse, DocGetResponse, DocWriteResponse, RefreshResponse, Shards,
+    DeleteByQueryResponse, DocGetResponse, DocWriteResponse, RefreshResponse, ReindexResponse,
+    ReindexRetries, Shards,
 };
 use crate::infer::{self, InferError};
-use crate::state::{table_exists, AppState};
+use crate::state::AppState;
 
-use super::es_response_with_status;
+use super::{es_response, es_response_with_status};
 
 /// Reserved document id column.
 pub const ID_COLUMN: &str = "_id";
@@ -164,7 +165,7 @@ pub(crate) async fn index_document_core(
 
     // Was the index present before this request? That decides the ES
     // result and whether we install the `_id` primary key.
-    let existed_before = table_exists(&state.index_uri(index)).await;
+    let existed_before = state.index_exists(index).await;
 
     let doc_schema =
         infer::infer_schema(&doc).map_err(|e: InferError| BenoStreamError::SchemaIncompatible {
@@ -316,7 +317,7 @@ pub async fn get_document_core(
     index: &str,
     id: &str,
 ) -> Result<DocGetResponse, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -393,7 +394,7 @@ pub async fn delete_document_core(
     index: &str,
     id: &str,
 ) -> Result<DocWriteResponse, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -492,7 +493,7 @@ pub async fn update_document_core(
         .unwrap_or(false);
 
     let resolved = state.resolve_alias(index).await;
-    if !table_exists(&state.index_uri(&resolved)).await {
+    if !state.index_exists(&resolved).await {
         if doc_as_upsert {
             let new_doc = Value::Object(doc_patch.clone());
             return index_document_core(state, &resolved, Some(id), new_doc).await;
@@ -516,7 +517,11 @@ pub async fn update_document_core(
         }
     }
 
-    let mut source = existing.source.unwrap();
+    let mut source = existing
+        .source
+        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+            reason: "corrupted document: missing _source".into(),
+        })?;
     let source_obj = source
         .as_object_mut()
         .ok_or_else(|| BenoStreamError::SchemaIncompatible {
@@ -562,7 +567,7 @@ pub async fn delete_by_query_core(
     body: Value,
 ) -> Result<DeleteByQueryResponse, BenoStreamError> {
     let started = std::time::Instant::now();
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -607,11 +612,201 @@ pub async fn delete_by_query_core(
     })
 }
 
+pub async fn reindex(State(state): State<Arc<AppState>>, Json(body): Json<Value>) -> Response {
+    es_response(reindex_core(&state, &body).await)
+}
+
+pub async fn reindex_core(
+    state: &AppState,
+    body: &Value,
+) -> Result<ReindexResponse, BenoStreamError> {
+    let start = std::time::Instant::now();
+
+    let source = body
+        .get("source")
+        .and_then(Value::as_object)
+        .ok_or_else(|| BenoStreamError::SchemaIncompatible {
+            reason: "reindex: missing 'source' object".into(),
+        })?;
+    let source_index = source.get("index").and_then(Value::as_str).ok_or_else(|| {
+        BenoStreamError::SchemaIncompatible {
+            reason: "reindex: 'source.index' must be a string".into(),
+        }
+    })?;
+
+    let dest = body.get("dest").and_then(Value::as_object).ok_or_else(|| {
+        BenoStreamError::SchemaIncompatible {
+            reason: "reindex: missing 'dest' object".into(),
+        }
+    })?;
+    let dest_index = dest.get("index").and_then(Value::as_str).ok_or_else(|| {
+        BenoStreamError::SchemaIncompatible {
+            reason: "reindex: 'dest.index' must be a string".into(),
+        }
+    })?;
+
+    let op_type = dest
+        .get("op_type")
+        .and_then(Value::as_str)
+        .unwrap_or("index");
+
+    let max_docs = body.get("max_docs").and_then(Value::as_u64);
+    let batch_size = source.get("size").and_then(Value::as_u64).unwrap_or(1000) as usize;
+
+    let resolved_source = state.resolve_alias(source_index).await;
+    if !state.index_exists(&resolved_source).await {
+        return Err(BenoStreamError::TableNotFound {
+            namespace: String::new(),
+            name: source_index.to_string(),
+        });
+    }
+
+    let resolved_dest = state.resolve_alias(dest_index).await;
+
+    let dest_existed_before = state.index_exists(&resolved_dest).await;
+
+    let source_query = source.get("query");
+    let source_filter = source.get("_source");
+
+    let mut last_id: Option<String> = None;
+    let mut total_docs: u64 = 0;
+    let mut created_count: u64 = 0;
+    let mut updated_count: u64 = 0;
+    let mut version_conflicts: u64 = 0;
+    let mut batch_count: u64 = 0;
+    let mut failures: Vec<Value> = Vec::new();
+
+    loop {
+        let current_batch_size = if let Some(max) = max_docs {
+            let remaining = max.saturating_sub(total_docs) as usize;
+            if remaining == 0 {
+                break;
+            }
+            batch_size.min(remaining)
+        } else {
+            batch_size
+        };
+
+        let mut search_body = serde_json::Map::new();
+        search_body.insert("size".to_string(), serde_json::json!(current_batch_size));
+        search_body.insert("sort".to_string(), serde_json::json!(["_id:asc"]));
+        if let Some(lid) = &last_id {
+            search_body.insert("search_after".to_string(), serde_json::json!([lid]));
+        }
+        if let Some(q) = source_query {
+            search_body.insert("query".to_string(), q.clone());
+        }
+        if let Some(sf) = source_filter {
+            search_body.insert("_source".to_string(), sf.clone());
+        }
+
+        let resp = super::search::search_core(state, &resolved_source, &Value::Object(search_body))
+            .await?;
+        if resp.hits.hits.is_empty() {
+            break;
+        }
+
+        batch_count += 1;
+
+        for hit in resp.hits.hits {
+            last_id = Some(hit.id.clone());
+
+            let mut doc = hit.source.clone();
+            if let Some(obj) = doc.as_object_mut() {
+                obj.remove(ID_COLUMN);
+            }
+
+            let doc_already_in_dest = if dest_existed_before {
+                get_document_core(state, &resolved_dest, &hit.id)
+                    .await
+                    .map(|d| d.found)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            if doc_already_in_dest && op_type == "create" {
+                version_conflicts += 1;
+                failures.push(serde_json::json!({
+                    "index": dest_index,
+                    "type": "_doc",
+                    "id": hit.id,
+                    "status": 409,
+                    "cause": {
+                        "type": "version_conflict_engine_exception",
+                        "reason": format!("[{}]: version conflict, document already exists (op_type=create)", hit.id)
+                    }
+                }));
+                continue;
+            }
+
+            match index_document_core(state, &resolved_dest, Some(&hit.id), doc).await {
+                Ok(_) => {
+                    total_docs += 1;
+                    if doc_already_in_dest {
+                        updated_count += 1;
+                    } else {
+                        created_count += 1;
+                    }
+                }
+                Err(BenoStreamError::PrimaryKeyViolation { key }) => {
+                    version_conflicts += 1;
+                    if op_type == "create" {
+                        failures.push(serde_json::json!({
+                            "index": dest_index,
+                            "type": "_doc",
+                            "id": key,
+                            "status": 409,
+                            "cause": {
+                                "type": "version_conflict_engine_exception",
+                                "reason": format!("[{key}]: version conflict, document already exists (op_type=create)")
+                            }
+                        }));
+                    }
+                }
+                Err(err) => {
+                    failures.push(serde_json::json!({
+                        "index": dest_index,
+                        "type": "_doc",
+                        "id": hit.id,
+                        "status": 500,
+                        "cause": {
+                            "type": "exception",
+                            "reason": err.to_string()
+                        }
+                    }));
+                }
+            }
+        }
+    }
+
+    if total_docs > 0 {
+        let _ = refresh_core(state, &resolved_dest).await;
+    }
+
+    Ok(ReindexResponse {
+        took: start.elapsed().as_millis() as u64,
+        timed_out: false,
+        total: total_docs,
+        updated: updated_count,
+        created: created_count,
+        deleted: 0,
+        batches: batch_count,
+        version_conflicts,
+        noops: 0,
+        retries: ReindexRetries { bulk: 0, search: 0 },
+        throttled_millis: 0,
+        requests_per_second: -1.0,
+        throttled_until_millis: 0,
+        failures,
+    })
+}
+
 pub async fn refresh_core(
     state: &AppState,
     index: &str,
 ) -> Result<RefreshResponse, BenoStreamError> {
-    if !table_exists(&state.index_uri(index)).await {
+    if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
             name: index.to_string(),
@@ -987,5 +1182,117 @@ mod tests {
         let get_u2 = get_document_core(&state, "users", "u-2").await.unwrap();
         assert!(get_u2.found);
         assert_eq!(get_u2.source.unwrap()["name"], "bob");
+    }
+
+    #[tokio::test]
+    async fn reindex_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+
+        // Populate source index
+        index_document_core(
+            &state,
+            "src",
+            Some("d1"),
+            serde_json::json!({"name": "alice", "age": 25, "role": "eng"}),
+        )
+        .await
+        .unwrap();
+        index_document_core(
+            &state,
+            "src",
+            Some("d2"),
+            serde_json::json!({"name": "bob", "age": 35, "role": "eng"}),
+        )
+        .await
+        .unwrap();
+        index_document_core(
+            &state,
+            "src",
+            Some("d3"),
+            serde_json::json!({"name": "charlie", "age": 45, "role": "mgr"}),
+        )
+        .await
+        .unwrap();
+        refresh_core(&state, "src").await.unwrap();
+
+        // 1. Full reindex into new index "dst1"
+        let res1 = reindex_core(
+            &state,
+            &serde_json::json!({
+                "source": { "index": "src" },
+                "dest": { "index": "dst1" }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res1.total, 3);
+        assert_eq!(res1.created, 3);
+        assert_eq!(res1.failures.len(), 0);
+
+        let d1 = get_document_core(&state, "dst1", "d1").await.unwrap();
+        assert!(d1.found);
+        assert_eq!(d1.source.unwrap()["name"], "alice");
+
+        let d3 = get_document_core(&state, "dst1", "d3").await.unwrap();
+        assert!(d3.found);
+        assert_eq!(d3.source.unwrap()["name"], "charlie");
+
+        // 2. Filtered reindex with query
+        let res2 = reindex_core(
+            &state,
+            &serde_json::json!({
+                "source": {
+                    "index": "src",
+                    "query": {
+                        "range": {
+                            "age": { "gte": 30 }
+                        }
+                    }
+                },
+                "dest": { "index": "dst_seniors" }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(res2.total, 2);
+        assert_eq!(res2.created, 2);
+
+        let d2 = get_document_core(&state, "dst_seniors", "d2")
+            .await
+            .unwrap();
+        assert!(d2.found);
+        let d1_absent = get_document_core(&state, "dst_seniors", "d1")
+            .await
+            .unwrap();
+        assert!(!d1_absent.found);
+
+        // 3. Reindex with max_docs
+        let res3 = reindex_core(
+            &state,
+            &serde_json::json!({
+                "source": { "index": "src" },
+                "dest": { "index": "dst_limit" },
+                "max_docs": 1
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res3.total, 1);
+
+        // 4. Nonexistent source errors
+        let err = reindex_core(
+            &state,
+            &serde_json::json!({
+                "source": { "index": "no_such_src" },
+                "dest": { "index": "dst_err" }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, BenoStreamError::TableNotFound { .. }));
     }
 }

@@ -288,13 +288,95 @@ impl Table {
 
         if !all_updated_entries.is_empty() {
             // Commit the entire updated state.
-            manifest_manager
+            let new_manifest = manifest_manager
                 .commit(
                     &all_updated_entries,
                     &[],
                     crate::core::manifest::CommitMetadata::default(),
                 )
                 .await?;
+
+            let meta_location = if let Some(catalog) = &self.catalog_state.catalog {
+                if let (Some(ns), Some(t)) = (
+                    &self.catalog_state.namespace,
+                    &self.catalog_state.table_name,
+                ) {
+                    catalog
+                        .load_table(ns, t)
+                        .await
+                        .map(|m| m.location)
+                        .unwrap_or_else(|_| self.uri.clone())
+                } else {
+                    self.uri.clone()
+                }
+            } else {
+                self.uri.clone()
+            };
+
+            if let Ok(meta_store_arc) = crate::core::storage::create_object_store(&meta_location) {
+                let meta_store = meta_store_arc.as_ref();
+                if let Ok(mut table_meta) =
+                    crate::core::metadata::TableMetadata::load_latest(meta_store).await
+                {
+                    let manifest_list_abs = match new_manifest.manifest_list_path.clone() {
+                        Some(p) if p.contains("://") || p.starts_with('/') => p,
+                        Some(p) => format!(
+                            "{}/{}",
+                            self.uri.trim_end_matches('/'),
+                            p.trim_start_matches('/')
+                        ),
+                        None => String::new(),
+                    };
+                    let snapshot = crate::core::metadata::Snapshot {
+                        snapshot_id: new_manifest.version as i64,
+                        parent_snapshot_id: table_meta.current_snapshot_id,
+                        timestamp_ms: new_manifest.timestamp_ms,
+                        sequence_number: Some(new_manifest.version as i64),
+                        summary: std::collections::HashMap::from([(
+                            "operation".to_string(),
+                            "delete".to_string(),
+                        )]),
+                        manifest_list: manifest_list_abs,
+                        schema_id: Some(new_manifest.current_schema_id),
+                        first_row_id: None,
+                        added_rows: Some(0),
+                    };
+                    table_meta.add_snapshot(snapshot);
+                    let new_meta_version = (table_meta.snapshots.len() as i32) + 1;
+                    if let Ok(written_metadata_path) =
+                        table_meta.save_to_store(meta_store, new_meta_version).await
+                    {
+                        let metadata_location = format!(
+                            "{}/{}",
+                            self.uri.trim_end_matches('/'),
+                            written_metadata_path.trim_start_matches('/')
+                        );
+
+                        if let Some(catalog) = &self.catalog_state.catalog {
+                            if let (Some(ns), Some(table)) = (
+                                &self.catalog_state.namespace,
+                                &self.catalog_state.table_name,
+                            ) {
+                                let updates = vec![
+                                    serde_json::json!({
+                                        "action": "set-metadata-location",
+                                        "metadata-location": metadata_location
+                                    }),
+                                    serde_json::json!({
+                                        "action": "add-snapshot",
+                                        "snapshot": table_meta.snapshots.last()
+                                    }),
+                                    serde_json::json!({
+                                        "action": "set-current-snapshot",
+                                        "snapshot-id": table_meta.current_snapshot_id
+                                    }),
+                                ];
+                                let _ = catalog.commit_table(ns, table, updates).await;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
