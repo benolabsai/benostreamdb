@@ -1,5 +1,9 @@
 from typing import List, Optional, Union, Dict, Any
 import os
+import logging
+
+logger = logging.getLogger("benostreamdb")
+
 from .benostreamdb import Device as _Device
 from .benostreamdb import Table as _RustTable
 from .benostreamdb import Session as _RustSession
@@ -98,6 +102,130 @@ _Device.device_id = property(lambda self: self.index)
 ComputeContext = Device
 GPUContext = Device
 
+# ---------------------------------------------------------------------------
+# Vector aggregate helpers
+#
+# These mirror the SQL aggregates registered on the session (`centroid`,
+# `vector_min`, `vector_max`, `vector_stddev`, `vector_median`) and the text
+# scoring UDFs (`bm25_score`, `tf_idf`), so the Rust, Python, and Flight SQL
+# surfaces stay 1:1.
+# ---------------------------------------------------------------------------
+
+def _as_rows(vectors):
+    """Normalize input to a list of equal-length float lists."""
+    rows = [list(map(float, v)) for v in vectors]
+    if not rows:
+        return rows
+    dim = len(rows[0])
+    for r in rows:
+        if len(r) != dim:
+            raise ValueError(
+                f"Cannot aggregate vectors of different dimensions: "
+                f"expected {dim}, got {len(r)}"
+            )
+    return rows
+
+
+def centroid(vectors):
+    """Element-wise mean of a group of vectors (alias of ``vector_avg``)."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    n = len(rows)
+    dim = len(rows[0])
+    return [sum(r[d] for r in rows) / n for d in range(dim)]
+
+
+def vector_min(vectors):
+    """Element-wise minimum of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    return [min(r[d] for r in rows) for d in range(dim)]
+
+
+def vector_max(vectors):
+    """Element-wise maximum of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    return [max(r[d] for r in rows) for d in range(dim)]
+
+
+def vector_stddev(vectors):
+    """Element-wise population standard deviation of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    n = len(rows)
+    dim = len(rows[0])
+    out = []
+    for d in range(dim):
+        mean = sum(r[d] for r in rows) / n
+        var = sum((r[d] - mean) ** 2 for r in rows) / n
+        out.append(var ** 0.5)
+    return out
+
+
+def vector_median(vectors):
+    """Element-wise median of a group of vectors."""
+    rows = _as_rows(vectors)
+    if not rows:
+        return None
+    dim = len(rows[0])
+    out = []
+    for d in range(dim):
+        col = sorted(r[d] for r in rows)
+        n = len(col)
+        if n % 2 == 1:
+            out.append(col[n // 2])
+        else:
+            out.append((col[n // 2 - 1] + col[n // 2]) / 2.0)
+    return out
+
+
+def _tokenize(text):
+    import re
+    return [t for t in re.sub(r"[^0-9a-zA-Z]+", " ", text).lower().split() if t]
+
+
+def bm25_score(text, query, k1=1.2):
+    """Corpus-free BM25 score of ``text`` against ``query`` (TF saturation only).
+
+    Mirrors the SQL ``bm25_score(text, query)`` UDF: IDF is fixed at 1.0 and
+    there is no length penalty, so the score is the BM25 term-frequency
+    saturation summed over the query terms.
+    """
+    from collections import Counter
+    tf = Counter(_tokenize(text))
+    score = 0.0
+    for term in _tokenize(query):
+        f = tf.get(term, 0)
+        if f:
+            score += f * (k1 + 1.0) / (f + k1)
+    return score
+
+
+def tf_idf(text):
+    """Corpus-free TF-IDF weights over ``text``'s tokens (IDF fixed at 1.0).
+
+    Mirrors the SQL ``tf_idf(text)`` UDF: returns the normalized term
+    frequencies in first-appearance order.
+    """
+    from collections import Counter
+    tokens = _tokenize(text)
+    if not tokens:
+        return []
+    counts = Counter(tokens)
+    total = len(tokens)
+    seen = []
+    for t in tokens:
+        if t not in seen:
+            seen.append(t)
+    return [counts[t] / total for t in seen]
+
 from .embeddings import registry, EmbeddingFunction
 import pandas as pd
 try:
@@ -191,6 +319,62 @@ class Query:
         if to_arrow:
             return self.to_arrow(device)
         return self.to_pandas(device)
+class PathResult(list):
+    """
+    Result container for shortest path traversals.
+    Subclasses list for direct indexing / list equality,
+    while providing .to_pandas() and .to_arrow() with a 'node' column.
+    """
+    def to_pandas(self):
+        import pandas as pd
+        return pd.DataFrame({"node": list(self)})
+
+    def to_arrow(self):
+        import pyarrow as pa
+        return pa.Table.from_arrays([pa.array(list(self), type=pa.uint64())], names=["node"])
+
+
+class ConnectingPathsResult(list):
+    """
+    Result container for connecting paths traversals between seed nodes.
+    Subclasses list for direct tuple iteration [(u, v), ...],
+    while providing .to_pandas() and .to_arrow() with 'source' and 'target' columns.
+    """
+    def to_pandas(self):
+        import pandas as pd
+        if not self:
+            return pd.DataFrame(columns=["source", "target"])
+        return pd.DataFrame(list(self), columns=["source", "target"])
+
+    def to_arrow(self):
+        import pyarrow as pa
+        if not self:
+            return pa.Table.from_arrays([
+                pa.array([], type=pa.uint64()),
+                pa.array([], type=pa.uint64()),
+            ], names=["source", "target"])
+        sources = [u for u, v in self]
+        targets = [v for u, v in self]
+        return pa.Table.from_arrays([
+            pa.array(sources, type=pa.uint64()),
+            pa.array(targets, type=pa.uint64()),
+        ], names=["source", "target"])
+
+
+class GraphNeighborsResult(list):
+    """
+    Result container for graph neighbor queries.
+    Subclasses list for direct iteration of neighbor IDs,
+    while providing .to_pandas() and .to_arrow() with a 'neighbor' column.
+    """
+    def to_pandas(self):
+        import pandas as pd
+        return pd.DataFrame({"neighbor": list(self)})
+
+    def to_arrow(self):
+        import pyarrow as pa
+        return pa.Table.from_arrays([pa.array(list(self), type=pa.uint64())], names=["neighbor"])
+
 
 class GraphRagResult:
     """
@@ -613,19 +797,26 @@ class Table:
         directed: bool = False,
         max_depth: Optional[int] = None,
         graph_column: Optional[str] = None,
-    ):
+    ) -> ConnectingPathsResult:
         """
         Extract pairwise shortest connecting paths between seed nodes.
-
-        If `graph_column` is provided, uses the CSR graph index built on that
-        column and returns a list of (source, target) tuples. Otherwise runs
-        the SQL UDF over the table's `source`/`target` columns and returns a
-        pyarrow Table with one row per path edge.
-        `max_depth` is accepted for API compatibility.
+        Auto-routes to the memory-mapped CSR graph index fast path when available,
+        falling back to SQL BFS otherwise.
+        Returns ConnectingPathsResult (iterable list of (u, v) tuples with .to_pandas()).
         """
-        if graph_column is not None:
-            return self.graph_api.connecting_paths(graph_column, seeds)
-        return self._inner.connecting_paths(seeds, directed)
+        try:
+            edges = self._inner.core_connecting_paths([int(s) for s in seeds], directed, graph_column)
+            return ConnectingPathsResult(edges)
+        except Exception as e:
+            logger.debug("Fast-path core_connecting_paths fallback triggered: %s", e)
+            if graph_column is not None:
+                return ConnectingPathsResult(self.graph_api.connecting_paths(graph_column, seeds))
+            res = self._inner.connecting_paths(seeds, directed)
+            if hasattr(res, "to_pandas"):
+                df = res.to_pandas()
+                if "source" in df.columns and "target" in df.columns:
+                    return ConnectingPathsResult(list(zip(df["source"].astype(int), df["target"].astype(int))))
+            return ConnectingPathsResult(res)
 
     def louvain_communities(self, resolution: float = 1.0) -> Any:
         """
@@ -773,18 +964,32 @@ class Table:
         """
         return self._inner.pagerank(damping, iterations)
 
-    def shortest_path(self, start_node: int, end_node: int, graph_column: Optional[str] = None) -> Any:
+    def shortest_path(
+        self,
+        start_node: int,
+        end_node: int,
+        directed: bool = True,
+        graph_column: Optional[str] = None,
+    ) -> PathResult:
         """
         Find the shortest path between two nodes using BFS.
-
-        If `graph_column` is provided, uses the CSR graph index built on that
-        column and returns a list of node IDs. Otherwise runs the SQL UDF over
-        the table's `source`/`target` columns and returns a pyarrow Table
-        with a 'node' column.
+        Auto-routes to the memory-mapped CSR graph index fast path when available,
+        falling back to SQL BFS otherwise.
+        Returns a PathResult which behaves both as a list of node IDs and as a Table/DataFrame with .to_pandas().
         """
-        if graph_column is not None:
-            return self.graph_api.shortest_path(graph_column, start_node, end_node)
-        return self._inner.shortest_path(start_node, end_node)
+        try:
+            nodes = self._inner.core_shortest_path(int(start_node), int(end_node), bool(directed), graph_column)
+            return PathResult(nodes)
+        except Exception as e:
+            logger.debug("Fast-path core_shortest_path fallback triggered: %s", e)
+            if graph_column is not None:
+                return PathResult(self.graph_api.shortest_path(graph_column, start_node, end_node))
+            res = self._inner.shortest_path(start_node, end_node)
+            if hasattr(res, "to_pandas"):
+                df = res.to_pandas()
+                if "node" in df.columns:
+                    return PathResult(df["node"].tolist())
+            return PathResult(res)
 
     def connected_components(self) -> Any:
         """
@@ -815,24 +1020,42 @@ class Table:
         graph_column: Optional[str] = None,
         max_degree: Optional[int] = None,
         max_nodes: Optional[int] = None,
-    ) -> Any:
+    ) -> GraphNeighborsResult:
         """
         Find all nodes reachable from `node` within `hops` steps.
-
-        Both paths return a pyarrow Table with a 'neighbor' column. If
-        `graph_column` is provided, the memory-mapped CSR graph index built on
-        that column is used; otherwise the SQL UDF runs over the table's
-        `source`/`target` columns.
-
-        `max_degree` enables max-degree truncation on the CSR fast path (see
-        `subgraph`); it is ignored by the SQL BFS fallback. `max_nodes` is a hard
-        token-budget cap on the visited set (see `subgraph`).
+        Auto-routes to the memory-mapped CSR graph index fast path when available,
+        falling back to SQL BFS otherwise.
+        Returns GraphNeighborsResult (iterable list of neighbor IDs with .to_pandas()).
         """
-        if graph_column is not None:
-            return self._inner.graph_neighbors(
-                node, hops, graph_column, max_degree, max_nodes
-            )
-        return self._inner.graph_neighbors(node, hops)
+        if max_degree is not None or max_nodes is not None:
+            if graph_column is not None:
+                res = self._inner.graph_neighbors(
+                    node, hops, graph_column, max_degree, max_nodes
+                )
+            else:
+                res = self._inner.graph_neighbors(node, hops)
+            if hasattr(res, "to_pandas"):
+                df = res.to_pandas()
+                if "neighbor" in df.columns:
+                    return GraphNeighborsResult(df["neighbor"].tolist())
+            return GraphNeighborsResult(res)
+
+        try:
+            neighbors = self._inner.core_graph_neighbors(int(node), int(hops), graph_column)
+            return GraphNeighborsResult(neighbors)
+        except Exception as e:
+            logger.debug("Fast-path core_graph_neighbors fallback triggered: %s", e)
+            if graph_column is not None:
+                res = self._inner.graph_neighbors(
+                    node, hops, graph_column, max_degree, max_nodes
+                )
+            else:
+                res = self._inner.graph_neighbors(node, hops)
+            if hasattr(res, "to_pandas"):
+                df = res.to_pandas()
+                if "neighbor" in df.columns:
+                    return GraphNeighborsResult(df["neighbor"].tolist())
+            return GraphNeighborsResult(res)
 
     def subgraph_nodes(
         self,
@@ -856,6 +1079,109 @@ class Table:
                 seeds, hops, directed, graph_column, max_degree, max_nodes
             )
         )
+
+    def subgraph_edges(
+        self,
+        seeds: List[int],
+        hops: int = 1,
+        directed: bool = False,
+        max_degree: Optional[int] = None,
+        max_nodes: Optional[int] = None,
+        graph_column: Optional[str] = None,
+    ) -> ConnectingPathsResult:
+        """
+        Extract the induced subgraph edges around seed nodes within `hops`.
+        Zero-copy CSR fast path when index is present, falling back to SQL BFS.
+        Returns ConnectingPathsResult (iterable list of (u, v) tuples with .to_pandas()).
+        """
+        try:
+            edges = self._inner.core_subgraph_edges(
+                [int(s) for s in seeds], int(hops), directed, max_degree, max_nodes, graph_column
+            )
+            return ConnectingPathsResult(edges)
+        except Exception as e:
+            logger.debug("Fast-path core_subgraph_edges fallback triggered: %s", e)
+            res = self.subgraph(seeds, hops=hops, directed=directed, graph_column=graph_column,
+                                max_degree=max_degree, max_nodes=max_nodes)
+            if hasattr(res, "to_pandas"):
+                df = res.to_pandas()
+                s_col, t_col = ("source", "target") if "source" in df.columns else (df.columns[0], df.columns[1])
+                return ConnectingPathsResult(list(zip(df[s_col].astype(int), df[t_col].astype(int))))
+            return ConnectingPathsResult(res)
+
+    def regional_drift_search(
+        self,
+        query: str,
+        seeds: List[int],
+        top_k: int = 5,
+        hops: int = 1,
+        n_depth: int = 1,
+        k_followups: int = 2,
+    ) -> Dict[str, Any]:
+        """
+        Execute native in-memory regional DRIFT search around query `seeds` over this edge table.
+        Avoids all temporary table creation and disk I/O.
+        """
+        return self._inner.core_regional_drift(
+            str(query), [int(s) for s in seeds], int(top_k), int(hops), int(n_depth), int(k_followups)
+        )
+
+    def find_entities(
+        self,
+        query: str,
+        limit: int = 10,
+        text_column: str = "title",
+        id_column: str = "id",
+    ) -> Any:
+        """
+        Fast entity lookup by exact or partial string matching.
+        Uses full-text search index if present on text_column, otherwise SQL ILIKE.
+        """
+        import re
+
+        for idx_name in [f"idx_{text_column}", f"{text_column}_idx", text_column]:
+            try:
+                res = self.search_index(idx_name, query, limit=limit)
+                if res is not None:
+                    return res
+            except Exception as e:
+                logger.debug("Index search on %s skipped: %s", idx_name, e)
+                continue
+
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text_column):
+            raise ValueError(f"Invalid text_column identifier: {text_column!r}")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", id_column):
+            raise ValueError(f"Invalid id_column identifier: {id_column!r}")
+
+        limit_int = int(limit)
+        escaped_q = query.replace("'", "''")
+        return self.sql(f'SELECT "{id_column}", "{text_column}" FROM t WHERE "{text_column}" ILIKE \'%{escaped_q}%\' LIMIT {limit_int}')
+
+    def lookup_entities(
+        self,
+        ids: List[int],
+        text_column: str = "title",
+        id_column: str = "id",
+    ) -> Dict[int, str]:
+        """
+        Fast bulk entity resolution by ID list. Returns a dictionary mapping id -> name.
+        """
+        if not ids:
+            return {}
+        import re
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text_column):
+            raise ValueError(f"Invalid text_column identifier: {text_column!r}")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", id_column):
+            raise ValueError(f"Invalid id_column identifier: {id_column!r}")
+
+        id_list = ", ".join(str(int(i)) for i in ids)
+        try:
+            df = self.sql(f'SELECT "{id_column}", "{text_column}" FROM t WHERE "{id_column}" IN ({id_list})').to_pandas()
+            if not df.empty and id_column in df.columns and text_column in df.columns:
+                return dict(zip(df[id_column].astype(int), df[text_column].astype(str)))
+        except Exception as e:
+            logger.debug("lookup_entities SQL query failed: %s", e)
+        return {}
 
     def label_propagation_communities(self) -> Any:
         """
@@ -1309,6 +1635,8 @@ class Table:
         community_algorithm: str = "louvain",
         llm_router: Optional[Any] = None,
         relevance_threshold: float = 0.0,
+        rerank_vector: bool = False,
+        rerank_k: Optional[int] = None,
     ) -> 'GraphRagResult':
         """
         Execute end-to-end Graph RAG search combining vector retrieval and topological graph reasoning.
@@ -1639,6 +1967,25 @@ class Table:
                                     paths.append(cur_path)
                 except Exception:
                     pass
+
+            if (rerank_vector or rerank_k is not None) and not nodes_df.empty and id_col in nodes_df.columns:
+                target_k = int(rerank_k) if rerank_k is not None else min(len(nodes_df), top_k)
+                pool = [int(x) for x in nodes_df[id_col].tolist()]
+                rerank_vec = query if isinstance(query, list) else None
+                if rerank_vec is not None and pool:
+                    try:
+                        id_list = ", ".join(map(str, pool))
+                        reranked_res = doc_table.vector_search(
+                            vector_column,
+                            rerank_vec,
+                            k=min(target_k, len(pool)),
+                            filter=f"{id_col} IN ({id_list})",
+                        )
+                        rr_df = reranked_res.to_pandas() if hasattr(reranked_res, "to_pandas") else pd.DataFrame(reranked_res)
+                        if not rr_df.empty:
+                            nodes_df = rr_df
+                    except Exception:
+                        pass
 
             return GraphRagResult(mode="local", nodes=nodes_df, edges=subgraph_df, seeds=seeds, paths=paths)
 

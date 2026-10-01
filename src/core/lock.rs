@@ -100,57 +100,53 @@ impl FileBasedLock {
                     Ok(get_res) => {
                         let meta = get_res.meta.clone();
                         let current_bytes = get_res.bytes().await?;
-                        if let Ok(current_payload) =
+                        let is_expired = if let Ok(current_payload) =
                             serde_json::from_slice::<LockPayload>(&current_bytes)
                         {
                             let current_time_ms =
                                 SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
                             let expires_ms =
                                 (current_payload.expires_at * 1000) + self.clock_skew_ms;
+                            current_time_ms > expires_ms
+                        } else {
+                            tracing::warn!("Unparseable lock payload at {}. Treating as active (fail-closed) to preserve mutual exclusion.", self.path);
+                            false
+                        };
 
-                            if current_time_ms > expires_ms {
-                                // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
-                                let update_opts = PutOptions {
-                                    mode: PutMode::Update(UpdateVersion {
-                                        e_tag: meta.e_tag,
-                                        version: meta.version,
-                                    }),
-                                    ..Default::default()
-                                };
+                        if is_expired {
+                            // It's expired. Try to steal it using UpdateVersion if supported (S3/GCS)
+                            let update_opts = PutOptions {
+                                mode: PutMode::Update(UpdateVersion {
+                                    e_tag: meta.e_tag,
+                                    version: meta.version,
+                                }),
+                                ..Default::default()
+                            };
 
-                                match self
-                                    .store
-                                    .put_opts(&self.path, bytes.clone().into(), update_opts)
-                                    .await
-                                {
-                                    Ok(_) => return Ok(Some(self.spawn_heartbeat())),
-                                    Err(object_store::Error::NotImplemented)
-                                    | Err(object_store::Error::NotSupported { .. }) => {
-                                        // SAFETY NOTE: This fallback path has a TOCTOU (time-of-check-time-of-use)
-                                        // race condition. The delete → sleep → create_exclusive sequence is NOT atomic.
-                                        // Two concurrent callers can both delete the expired lock and race to re-create it.
-                                        // The random jitter reduces but does not eliminate this risk.
-                                        // This is inherent to stores without conditional-update (CAS) support (e.g., LocalFileSystem).
-                                        // For production distributed locking, use S3/GCS/Azure which support PutMode::Update.
-                                        tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
-                                        let _ = self.store.delete(&self.path).await;
-                                        let jitter = rand::random::<u64>() % 50;
-                                        tokio::time::sleep(std::time::Duration::from_millis(
-                                            jitter,
-                                        ))
+                            match self
+                                .store
+                                .put_opts(&self.path, bytes.clone().into(), update_opts)
+                                .await
+                            {
+                                Ok(_) => return Ok(Some(self.spawn_heartbeat())),
+                                Err(object_store::Error::NotImplemented)
+                                | Err(object_store::Error::NotSupported { .. }) => {
+                                    tracing::warn!("Lock steal using non-atomic fallback (TOCTOU risk). Consider using S3/GCS/Azure for production locking.");
+                                    let _ = self.store.delete(&self.path).await;
+                                    let jitter = rand::random::<u64>() % 50;
+                                    tokio::time::sleep(std::time::Duration::from_millis(jitter))
                                         .await;
 
-                                        match self
-                                            .store
-                                            .put_opts(&self.path, bytes.clone().into(), opts)
-                                            .await
-                                        {
-                                            Ok(_) => return Ok(Some(self.spawn_heartbeat())),
-                                            Err(_) => return Ok(None),
-                                        }
+                                    match self
+                                        .store
+                                        .put_opts(&self.path, bytes.clone().into(), opts)
+                                        .await
+                                    {
+                                        Ok(_) => return Ok(Some(self.spawn_heartbeat())),
+                                        Err(_) => return Ok(None),
                                     }
-                                    Err(_) => return Ok(None),
                                 }
+                                Err(_) => return Ok(None),
                             }
                         }
                     }
@@ -191,14 +187,29 @@ impl FileBasedLock {
                         if let Ok(bytes) = serde_json::to_vec(&payload) {
                             // Fetch meta to do an atomic PutMode::Update if supported
                             if let Ok(get_res) = store.get(&path).await {
+                                let meta = get_res.meta.clone();
+                                if let Ok(current_bytes) = get_res.bytes().await {
+                                    if let Ok(current_payload) = serde_json::from_slice::<LockPayload>(&current_bytes) {
+                                        if current_payload.owner != owner {
+                                            tracing::error!(
+                                                "Lock heartbeat detected ownership change! Current owner: '{}', our owner: '{}'. Aborting heartbeat renewal.",
+                                                current_payload.owner,
+                                                owner
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
                                 let update_opts = PutOptions {
                                     mode: PutMode::Update(UpdateVersion {
-                                        e_tag: get_res.meta.e_tag,
-                                        version: get_res.meta.version,
+                                        e_tag: meta.e_tag,
+                                        version: meta.version,
                                     }),
                                     ..Default::default()
                                 };
-                                let _ = store.put_opts(&path, bytes.into(), update_opts).await;
+                                if let Err(e) = store.put_opts(&path, bytes.into(), update_opts).await {
+                                    tracing::warn!("Failed to renew lock heartbeat: {}", e);
+                                }
                             }
                         }
                     }

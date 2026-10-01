@@ -59,15 +59,13 @@ impl Table {
     /// Async implementation of truncate
     #[tracing::instrument(skip(self))]
     pub async fn truncate_async(&self) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
+
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
 
         // Step 1: Get all current entry paths
         // We must load THE WHOLE current manifest to know what to remove.
-        let (_, entries, _) = manifest_manager.load_latest_full().await.unwrap_or((
-            crate::core::manifest::Manifest::default(),
-            Vec::new(),
-            0,
-        ));
+        let (_, entries, _) = manifest_manager.load_latest_full().await?;
         let remove_paths: Vec<String> = entries.iter().map(|e| e.file_path.clone()).collect();
 
         // Step 2: Commit with all paths in remove_paths and empty add_entries
@@ -93,10 +91,10 @@ impl Table {
             *idx = None;
         }
 
-        // Step 5: Clear write buffer
+        // Step 5: Clear pending writes
         {
-            let mut buffer = self.write_buffer.write();
-            buffer.clear();
+            let mut pending = self.pending_writes.write();
+            pending.clear();
         }
 
         tracing::info!(
@@ -109,6 +107,12 @@ impl Table {
     /// Compact the WAL (consolidate log entries)
     pub fn checkpoint(&self) -> Result<()> {
         let mut wal = self.wal.blocking_lock();
+        wal.compact()
+    }
+
+    /// Async WAL checkpoint, safe to call from within a Tokio runtime.
+    pub async fn checkpoint_async(&self) -> Result<()> {
+        let mut wal = self.wal.lock().await;
         wal.compact()
     }
 
@@ -193,6 +197,8 @@ impl Table {
             crate::core::resources::check_min_free_disk(path).map_err(|e| anyhow::anyhow!(e))?;
         }
 
+        let _maintenance_guard = self.maintenance_lock.read().await;
+
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         INGEST_ROWS_TOTAL.inc_by(total_rows as u64);
 
@@ -244,9 +250,10 @@ impl Table {
                 let mut seen_keys = std::collections::HashSet::new();
 
                 {
-                    let buffer = self.write_buffer.read();
+                    let pending = self.pending_writes.read();
                     // 1. Pre-populate seen keys from the in-memory write buffer
-                    for b_batch in buffer.iter() {
+                    for p in pending.iter() {
+                        let b_batch = &p.batch;
                         if let Some(b_col) = b_batch.column_by_name(pk_col) {
                             for j in 0..b_batch.num_rows() {
                                 let b_val =
@@ -299,7 +306,7 @@ impl Table {
                     }
                 }
             } else {
-                let buffer = self.write_buffer.read();
+                let pending = self.pending_writes.read();
                 // Fallback for multi-column PKs (O(N*M) check for now)
                 for batch in &batches {
                     for pk_col in &pk_cols {
@@ -317,7 +324,8 @@ impl Table {
                                 }
 
                                 // Check against buffer
-                                for b_batch in buffer.iter() {
+                                for p in pending.iter() {
+                                    let b_batch = &p.batch;
                                     if let Some(b_col) = b_batch.column_by_name(pk_col) {
                                         for j in 0..b_batch.num_rows() {
                                             let b_val =
@@ -537,8 +545,8 @@ impl Table {
         }
 
         let buffer_len_before = {
-            let buffer = self.write_buffer.read();
-            buffer.iter().map(|b| b.num_rows()).sum()
+            let pending = self.pending_writes.read();
+            pending.iter().map(|p| p.batch.num_rows()).sum::<usize>()
         };
 
         let tx_id = uuid::Uuid::new_v4();
@@ -659,21 +667,30 @@ impl Table {
         );
 
         let _write_buffer_len = {
-            let mut buffer = self.write_buffer.write();
-            buffer.extend(batches);
-            // Record the WAL tx id alongside the buffered rows, under the same
-            // lock, so the tx id and its rows are always taken together at flush
-            // time (see `flush_async`). This is what makes WAL replay idempotent.
-            self.pending_wal_tx_ids.lock().push(tx_id);
-            buffer.len()
+            let mut pending = self.pending_writes.write();
+            pending.extend(
+                batches
+                    .into_iter()
+                    .map(|batch| crate::core::table::PendingWrite { batch, tx_id }),
+            );
+            pending.len()
         };
+
+        // Release the maintenance read guard now that the WAL, memory index, and
+        // pending_writes have been updated. This prevents deadlocks when autocommit/spillover
+        // calls `commit_async()` -> `flush_async()`, and ensures queued maintenance
+        // writers are not blocked across downstream I/O.
+        drop(_maintenance_guard);
 
         // Check if we should flush (spillover)
         let should_flush = {
-            let buffer = self.write_buffer.read();
+            let pending = self.pending_writes.read();
 
             // Calculate size in bytes (approximate)
-            let total_bytes: usize = buffer.iter().map(|b| b.get_array_memory_size()).sum();
+            let total_bytes: usize = pending
+                .iter()
+                .map(|p| p.batch.get_array_memory_size())
+                .sum();
 
             let cache_gb: usize = std::env::var("BENOSTREAM_CACHE_GB")
                 .unwrap_or_else(|_| "1".to_string())
@@ -694,34 +711,45 @@ impl Table {
         Ok(())
     }
 
-    /// Flush buffer to disk
+    /// Flush buffer to disk (protected by maintenance read barrier)
     #[tracing::instrument(skip(self))]
     pub async fn flush_async(&self) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.read().await;
+        self.flush_unlocked_async().await
+    }
+
+    /// Internal flush implementation without acquiring `maintenance_lock.read()`.
+    /// Used by operations that already hold `maintenance_lock.write()` (such as compaction).
+    pub(crate) async fn flush_unlocked_async(&self) -> Result<()> {
         // Extract batches from buffer. The WAL tx ids are taken under the same
         // lock so they stay paired with the rows they tag.
         let (batches_to_write, tx_ids): (Vec<RecordBatch>, Vec<uuid::Uuid>) = {
-            let mut buffer = self.write_buffer.write();
-            if buffer.is_empty() {
+            let mut pending = self.pending_writes.write();
+            if pending.is_empty() {
                 return Ok(());
             }
-            let batches = std::mem::take(&mut *buffer);
-            let tx_ids = std::mem::take(&mut *self.pending_wal_tx_ids.lock());
+            let taken = std::mem::take(&mut *pending);
+            let mut batches = Vec::with_capacity(taken.len());
+            let mut tx_ids = Vec::with_capacity(taken.len());
+            for p in taken {
+                batches.push(p.batch);
+                tx_ids.push(p.tx_id);
+            }
             (batches, tx_ids)
         };
 
-        // If flush fails at any point (upload, network, catalog lock), restore batches back into write_buffer
+        // If flush fails at any point (upload, network, catalog lock), restore batches back into pending_writes
         // so in-memory visibility is preserved and subsequent calls can retry!
         let flush_res = self.flush_internal_async(&batches_to_write, &tx_ids).await;
         if let Err(e) = flush_res {
-            let mut buffer = self.write_buffer.write();
-            let mut restored = batches_to_write;
-            restored.append(&mut *buffer);
-            *buffer = restored;
-            // Restore the tx ids too, so a retry records them at commit time.
-            let mut pending = self.pending_wal_tx_ids.lock();
-            let mut restored_tx = tx_ids;
-            restored_tx.append(&mut *pending);
-            *pending = restored_tx;
+            let mut pending = self.pending_writes.write();
+            let mut restored = batches_to_write
+                .into_iter()
+                .zip(tx_ids)
+                .map(|(batch, tx_id)| crate::core::table::PendingWrite { batch, tx_id })
+                .collect::<Vec<_>>();
+            restored.extend(std::mem::take(&mut *pending));
+            *pending = restored;
             return Err(e);
         }
 
@@ -758,10 +786,7 @@ impl Table {
         // Add V3 metadata columns if format_version >= 3 (Iceberg V3 Row Lineage).
         // `load_latest_full` (not `load_latest`) so sharded manifest entries are
         // included — `row_id_base` must see every existing data file.
-        let (manifest, existing_entries, _) = manifest_manager
-            .load_latest_full()
-            .await
-            .unwrap_or_default();
+        let (manifest, existing_entries, _) = manifest_manager.load_latest_full().await?;
         let sequence_number = manifest.version as i64;
         let format_version = self.get_format_version();
 

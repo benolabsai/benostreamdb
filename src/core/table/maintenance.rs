@@ -12,7 +12,6 @@
 use anyhow::{Context, Result};
 use arrow::array::Array;
 use arrow::record_batch::RecordBatch;
-use rayon::prelude::*;
 use std::sync::Arc;
 
 use super::Table;
@@ -22,6 +21,27 @@ use crate::core::manifest::ManifestManager;
 use crate::core::planner::{FilterExpr, QueryPlanner};
 use crate::core::reader::HybridReader;
 use crate::SegmentConfig;
+
+use rayon::ThreadPool;
+use std::sync::OnceLock;
+
+#[allow(clippy::expect_used)] // Thread-pool construction only fails on OS resource exhaustion; unrecoverable at startup.
+fn maintenance_pool() -> &'static ThreadPool {
+    static POOL: OnceLock<ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("maintenance-rayon-{}", i))
+            // Limit threads to not overwhelm system during heavy background compactions
+            .num_threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+                    .clamp(2, 8),
+            )
+            .build()
+            .expect("Failed to build maintenance thread pool")
+    })
+}
 
 impl Table {
     /// Rewrite data files to optimize snapshots (Compaction)
@@ -37,8 +57,10 @@ impl Table {
 
     /// Rewrite data files (Asynchronous)
     pub async fn rewrite_data_files_async(&self, options: Option<CompactionOptions>) -> Result<()> {
-        // Flush before compaction to include recent writes
-        self.flush_async().await?;
+        let _maintenance_guard = self.maintenance_lock.write().await;
+        // Flush before compaction to include recent writes using unlocked variant
+        // because this task already holds maintenance_lock.write()
+        self.flush_unlocked_async().await?;
 
         let opts = options.unwrap_or_default();
         // Carry the table's index configuration so compacted segments are
@@ -53,6 +75,7 @@ impl Table {
 
     /// Update the table schema (Evolution)
     pub async fn update_schema(&self, new_schema: crate::core::manifest::Schema) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         let (manifest, _, _) = manifest_manager.load_latest_full().await?;
 
@@ -84,6 +107,7 @@ impl Table {
 
     /// Rollback table to a specific snapshot ID
     pub async fn rollback_to_snapshot(&self, snapshot_id: i64) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         manifest_manager
             .rollback_to_snapshot(snapshot_id as u64)
@@ -99,6 +123,7 @@ impl Table {
 
     /// Async implementation of vacuum
     pub async fn vacuum_async(&self, retention_versions: usize) -> Result<usize> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
         manifest_manager.vacuum(retention_versions).await
     }
@@ -110,6 +135,7 @@ impl Table {
 
     /// Async implementation of delete
     pub async fn delete_async(&self, filter: &str) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         use futures::StreamExt;
 
         let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
@@ -276,6 +302,7 @@ impl Table {
 
     /// Remove orphan files (asynchronous)
     pub async fn remove_orphan_files_async(&self, older_than_ms: i64) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
         let maintenance = Maintenance::new(&self.uri)?;
         maintenance.remove_orphan_files(older_than_ms).await
     }
@@ -319,82 +346,98 @@ impl Table {
         batch: &RecordBatch,
         col_name: &str,
     ) -> Result<RecordBatch> {
-        use crate::core::index::gpu::get_thread_gpu_context;
-        use crate::core::index::ivf::simple_kmeans;
-        use arrow::array::Int32Array;
+        let batch = batch.clone();
+        let col_name = col_name.to_string();
 
-        let col_idx = batch.schema().index_of(col_name)?;
-        let list_array = batch
-            .column(col_idx)
-            .as_any()
-            .downcast_ref::<arrow::array::FixedSizeListArray>()
-            .ok_or_else(|| anyhow::anyhow!("Column '{}' must be a FixedSizeListArray", col_name))?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let n = list_array.len();
-        if n < 1024 {
-            return Ok(batch.clone());
-        }
+        maintenance_pool().spawn(move || {
+            let result = (|| -> Result<RecordBatch> {
+                use crate::core::index::gpu::get_thread_gpu_context;
+                use crate::core::index::ivf::simple_kmeans;
+                use arrow::array::Int32Array;
+                use rayon::prelude::*;
 
-        // 1. Convert vectors to Vec<Vec<f32>> for K-Means (Training step)
-        let vectors: Vec<Vec<f32>> = (0..n)
-            .into_par_iter()
-            .step_by(n / 1000 + 1)
-            .map(|i| {
-                list_array
-                    .value(i)
+                let col_idx = batch.schema().index_of(&col_name)?;
+                let list_array = batch
+                    .column(col_idx)
                     .as_any()
-                    .downcast_ref::<arrow::array::Float32Array>()
-                    .map(|a| a.values().to_vec())
-                    .unwrap_or_default()
-            })
-            .collect();
+                    .downcast_ref::<arrow::array::FixedSizeListArray>()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Column '{}' must be a FixedSizeListArray", col_name)
+                    })?;
 
-        // 2. Train centroids (Sampled)
-        let k = (n as f64).sqrt() as usize;
-        let k = k.clamp(16, 1024);
-        let (centroids, _) = simple_kmeans(&vectors, k, 3)?;
+                let n = list_array.len();
+                if n < 1024 {
+                    return Ok(batch.clone());
+                }
 
-        // 3. Assign all vectors (GPU Accelerated!)
-        let _ = get_thread_gpu_context()
-            .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
+                // 1. Convert vectors to Vec<Vec<f32>> for K-Means (Training step)
+                let vectors: Vec<Vec<f32>> = (0..n)
+                    .into_par_iter()
+                    .step_by(n / 1000 + 1)
+                    .map(|i| {
+                        list_array
+                            .value(i)
+                            .as_any()
+                            .downcast_ref::<arrow::array::Float32Array>()
+                            .map(|a| a.values().to_vec())
+                            .unwrap_or_default()
+                    })
+                    .collect();
 
-        let dim = list_array.value_length() as usize;
-        let flat_vectors: Vec<f32> = (0..n)
-            .into_par_iter()
-            .flat_map(|i| {
-                list_array
-                    .value(i)
-                    .as_any()
-                    .downcast_ref::<arrow::array::Float32Array>()
-                    .map(|a| a.values().to_vec())
-                    .unwrap_or_default()
-            })
-            .collect();
+                // 2. Train centroids (Sampled)
+                let k = (n as f64).sqrt() as usize;
+                let k = k.clamp(16, 1024);
+                let (centroids, _) = simple_kmeans(&vectors, k, 3)?;
 
-        let flat_centroids: Vec<f32> = centroids.iter().flatten().copied().collect();
+                // 3. Assign all vectors (GPU Accelerated!)
+                let _ = get_thread_gpu_context()
+                    .unwrap_or_else(crate::core::index::gpu::ComputeContext::auto_detect);
 
-        let assignments = crate::core::index::gpu::compute_kmeans_assignment(
-            &flat_vectors,
-            &flat_centroids,
-            dim,
-        )?;
+                let dim = list_array.value_length() as usize;
+                let flat_vectors: Vec<f32> = (0..n)
+                    .into_par_iter()
+                    .flat_map(|i| {
+                        list_array
+                            .value(i)
+                            .as_any()
+                            .downcast_ref::<arrow::array::Float32Array>()
+                            .map(|a| a.values().to_vec())
+                            .unwrap_or_default()
+                    })
+                    .collect();
 
-        // 4. Sort batch by assignments
-        let assignment_array = Int32Array::from(
-            assignments
-                .into_iter()
-                .map(|a| a as i32)
-                .collect::<Vec<i32>>(),
-        );
-        let sort_indices = arrow::compute::sort_to_indices(&assignment_array, None, None)?;
+                let flat_centroids: Vec<f32> = centroids.iter().flatten().copied().collect();
 
-        let mut columns = Vec::new();
-        for i in 0..batch.num_columns() {
-            columns.push(arrow::compute::take(batch.column(i), &sort_indices, None)?);
-        }
+                let assignments = crate::core::index::gpu::compute_kmeans_assignment(
+                    &flat_vectors,
+                    &flat_centroids,
+                    dim,
+                )?;
 
-        RecordBatch::try_new(batch.schema(), columns)
-            .context("Failed to reconstruct shuffled batch")
+                // 4. Sort batch by assignments
+                let assignment_array = Int32Array::from(
+                    assignments
+                        .into_iter()
+                        .map(|a| a as i32)
+                        .collect::<Vec<i32>>(),
+                );
+                let sort_indices = arrow::compute::sort_to_indices(&assignment_array, None, None)?;
+
+                let mut columns = Vec::new();
+                for i in 0..batch.num_columns() {
+                    columns.push(arrow::compute::take(batch.column(i), &sort_indices, None)?);
+                }
+
+                RecordBatch::try_new(batch.schema(), columns)
+                    .context("Failed to reconstruct shuffled batch")
+            })();
+            let _ = tx.send(result);
+        });
+
+        rx.await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("Maintenance thread pool panicked")))
     }
 
     /// Re-indexes data files that are missing overlay index sidecars.

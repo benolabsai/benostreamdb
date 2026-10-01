@@ -1,0 +1,45 @@
+[package]
+name = "benostream-gpu-ann"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Richard Albright and BenoStreamDB Contributors"]
+description = "Universal GPU-accelerated vector indexing & ANN search for Rust (CUDA, Apple Metal, WGPU/Vulkan)"
+repository = "https://github.com/benolabsai/benostreamdb"
+homepage = "https://github.com/benolabsai/benostreamdb"
+keywords = ["vector-search", "ann", "gpu", "cuda", "metal"]
+categories = ["algorithms", "data-structures", "hardware-support"]
+
+[lib]
+name = "benostream_gpu_ann"
+path = "src/lib.rs"
+
+[features]
+default = []
+cuda = ["dep:cudarc", "dep:libloading"]
+wgpu = ["dep:wgpu", "dep:pollster"]
+all = ["cuda", "wgpu"]
+
+[dependencies]
+anyhow = "1.0"
+thiserror = "2.0"
+bytemuck = { version = "1.14", features = ["derive"] }
+rayon = "1.12.0"
+tracing = "0.1"
+roaring = "0.10.12"
+num_cpus = "1.16"
+rand = "0.8"
+
+# Optional cross-platform GPU
+wgpu = { version = "0.20.0", optional = true }
+pollster = { version = "0.4.0", optional = true }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+cudarc = { version = "0.13.0", features = ["driver", "nvrtc", "cuda-12000"], optional = true }
+libloading = { version = "0.7", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = { version = "0.27.0" }
+
+[dev-dependencies]
+rand_chacha = "0.3"

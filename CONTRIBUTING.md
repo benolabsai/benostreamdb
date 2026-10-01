@@ -14,7 +14,7 @@ Before contributing, please read [.instructions.md](.instructions.md) for our de
 
 - **Rust** (stable, 1.80+) — install via [rustup](https://rustup.rs/)
 - **Python** (3.10–3.14) — for binding development and testing
-- **Docker** — for integration tests against MinIO and Nessie
+- **Docker** — for integration tests against RustFS and Nessie
 - **Cargo** and **maturin** — for building Python wheels
 
 ```bash
@@ -43,8 +43,8 @@ pytest tests/
 ### Docker Services
 
 ```bash
-# Start MinIO (S3-compatible storage) and Nessie (Iceberg catalog)
-docker compose -f docker-compose-minio-nessie.yml up -d
+# Start RustFS (S3-compatible storage) and Nessie (Iceberg catalog)
+docker compose -f docker-compose-rustfs-nessie.yml up -d
 
 # Run integration tests
 pytest tests/integration/
@@ -162,7 +162,7 @@ The CI pipeline runs:
 - **Rust checks**: `cargo check`, `cargo clippy`, `cargo test`
 - **Python tests**: `pytest`
 - **Documentation build**: `cargo doc --no-deps`
-- **Integration tests**: against MinIO and Nessie (when applicable)
+- **Integration tests**: against RustFS and Nessie (when applicable)
 
 All CI checks must pass before merge.
 

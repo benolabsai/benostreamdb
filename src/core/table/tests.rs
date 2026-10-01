@@ -232,7 +232,7 @@ async fn test_streaming_flush_interval() -> Result<()> {
 
     // The data should be in the write buffer, not on disk yet.
     {
-        let buffer = table.write_buffer.read();
+        let buffer = table.pending_writes.read();
         assert!(!buffer.is_empty(), "Data should be buffered");
     }
 
@@ -241,7 +241,7 @@ async fn test_streaming_flush_interval() -> Result<()> {
 
     // The buffer should now be empty because the background task committed it
     {
-        let buffer = table.write_buffer.read();
+        let buffer = table.pending_writes.read();
         assert!(
             buffer.is_empty(),
             "Buffer should be empty after streaming flush"

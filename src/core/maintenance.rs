@@ -157,6 +157,12 @@ impl Maintenance {
                 for idx in &entry.index_files {
                     all_valid_files.insert(idx.file_path.clone());
                 }
+                for del in &entry.delete_files {
+                    all_valid_files.insert(del.file_path.clone());
+                }
+            }
+            for del in &m.delete_files {
+                all_valid_files.insert(del.file_path.clone());
             }
         }
 
@@ -288,6 +294,67 @@ mod tests {
         crate::core::cache::LATEST_VERSION_CACHE
             .invalidate(&cache_key)
             .await;
+        std::fs::remove_dir_all(&temp_dir)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_orphan_cleanup_preserves_delete_files() -> Result<()> {
+        let temp_dir =
+            std::env::temp_dir().join(format!("test_orphan_del_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir)?;
+        let uri = format!("file://{}", temp_dir.to_str().unwrap());
+
+        crate::core::cache::LATEST_VERSION_CACHE.invalidate_all();
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+
+        let maintenance = Maintenance::new(&uri)?;
+        let manager = &maintenance.manifest_manager;
+
+        // 1. Write physical data file, delete file, and true orphan file
+        let data_path = temp_dir.join("data_01.parquet");
+        let delete_path = temp_dir.join("pos_delete_01.parquet");
+        let orphan_path = temp_dir.join("orphan_01.parquet");
+
+        std::fs::write(&data_path, b"data content")?;
+        std::fs::write(&delete_path, b"delete content")?;
+        std::fs::write(&orphan_path, b"orphan content")?;
+
+        // 2. Commit manifest referencing data_01.parquet and pos_delete_01.parquet
+        let del_file = crate::core::manifest::DeleteFile {
+            file_path: "pos_delete_01.parquet".to_string(),
+            content: crate::core::manifest::DeleteContent::Position,
+            file_size_bytes: 14,
+            record_count: 1,
+            partition_values: Default::default(),
+        };
+
+        let mut entry = ManifestEntry {
+            file_path: "data_01.parquet".to_string(),
+            file_size_bytes: 12,
+            ..Default::default()
+        };
+        entry.delete_files.push(del_file.clone());
+
+        manager
+            .commit(
+                &[entry],
+                &[],
+                crate::core::manifest::CommitMetadata::default(),
+            )
+            .await?;
+
+        // 3. Run remove_orphan_files with older_than_ms = -1 (treat all non-referenced as candidates)
+        maintenance.remove_orphan_files(-1).await?;
+
+        // 4. Verify data file and delete file are preserved, while orphan file is reaped
+        assert!(data_path.exists(), "live data file must be preserved");
+        assert!(
+            delete_path.exists(),
+            "live position delete file must be preserved"
+        );
+        assert!(!orphan_path.exists(), "true orphan file must be removed");
+
         std::fs::remove_dir_all(&temp_dir)?;
         Ok(())
     }

@@ -27,6 +27,8 @@ pub mod coordinator;
 pub use coordinator::{Lease, ObjectStoreCoordinator, WorkCoordinator, WorkUnit};
 pub mod fluent;
 pub use fluent::TableQuery;
+pub mod graph;
+pub use graph::GraphNeighborhoodOptions;
 pub mod index_config;
 pub mod ingest;
 pub use ingest::{IngestOptions, IngestReport};
@@ -61,6 +63,11 @@ use crate::core::wal::WriteAheadLog;
 use crate::SegmentConfig;
 use arrow::datatypes::{Schema, SchemaRef};
 
+pub(crate) struct PendingWrite {
+    pub(crate) batch: RecordBatch,
+    pub(crate) tx_id: uuid::Uuid,
+}
+
 /// Main Table struct - represents a BenoStreamDB table
 pub struct Table {
     pub uri: String,
@@ -75,7 +82,8 @@ pub struct Table {
     pub(crate) catalog_state: TableCatalogState,
 
     pub(crate) schema: Arc<parking_lot::RwLock<SchemaRef>>,
-    pub(crate) write_buffer: Arc<parking_lot::RwLock<Vec<RecordBatch>>>,
+    pub(crate) pending_writes: Arc<parking_lot::RwLock<Vec<PendingWrite>>>,
+    pub(crate) maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub(crate) wal: Arc<Mutex<WriteAheadLog>>,
     pub(crate) background_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     /// Bounds how many segment index builds run at once.
@@ -97,8 +105,6 @@ pub struct Table {
     pub(crate) sort_order: Arc<parking_lot::RwLock<Option<SortOrder>>>,
     /// Column names for sort order (needed for column lookup)
     pub(crate) sort_order_columns: Arc<parking_lot::RwLock<Option<Vec<String>>>>,
-    #[cfg(feature = "enterprise")]
-    pub(crate) enterprise_license: Option<String>,
     pub(crate) primary_key: Arc<parking_lot::RwLock<Vec<String>>>,
     pub(crate) autocommit: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) recovered_wal_paths: Arc<parking_lot::Mutex<Vec<String>>>,
@@ -116,13 +122,6 @@ pub struct Table {
     /// Iceberg table format version (1, 2, or 3). v3 enables row lineage
     /// (`_row_id` / `_last_updated_sequence_number`).
     pub(crate) format_version: Arc<std::sync::atomic::AtomicI32>,
-    /// WAL transaction IDs appended since the last flush, in buffer order.
-    ///
-    /// Recorded in the manifest at commit time (property
-    /// `benostream.committed_wal_tx`) so that WAL replay is **idempotent**: a
-    /// crash between the manifest commit and the WAL truncation must not replay
-    /// an already-committed batch. See `plans/production_readiness_plan.md` WS2.
-    pub(crate) pending_wal_tx_ids: Arc<parking_lot::Mutex<Vec<uuid::Uuid>>>,
 }
 
 /// Durability level for WAL writes.
@@ -213,14 +212,13 @@ impl Clone for Table {
             indexing: self.indexing.clone(),
             catalog_state: self.catalog_state.clone(),
             schema: self.schema.clone(),
-            write_buffer: self.write_buffer.clone(),
+            pending_writes: self.pending_writes.clone(),
+            maintenance_lock: self.maintenance_lock.clone(),
             wal: self.wal.clone(),
             background_tasks: self.background_tasks.clone(),
             index_build_gate: self.index_build_gate.clone(),
             sort_order: self.sort_order.clone(),
             sort_order_columns: self.sort_order_columns.clone(),
-            #[cfg(feature = "enterprise")]
-            enterprise_license: self.enterprise_license.clone(),
             primary_key: self.primary_key.clone(),
             autocommit: self.autocommit.clone(),
             recovered_wal_paths: self.recovered_wal_paths.clone(),
@@ -230,7 +228,6 @@ impl Clone for Table {
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: self.memory_reclaimed.clone(),
             format_version: self.format_version.clone(),
-            pending_wal_tx_ids: self.pending_wal_tx_ids.clone(),
         }
     }
 }
@@ -285,8 +282,8 @@ impl Table {
                 }
 
                 let is_empty = {
-                    let buffer = bg_table.write_buffer.read();
-                    buffer.is_empty()
+                    let pending = bg_table.pending_writes.read();
+                    pending.is_empty()
                 };
 
                 if !is_empty {
@@ -370,6 +367,56 @@ impl Table {
 
         TableBuilder::new(uri)
             .with_index_all(false)
+            .build_async()
+            .await
+    }
+
+    /// Create a new table at `uri` and attach an external catalog so that
+    /// subsequent commits perform the Iceberg atomic swap through it.
+    ///
+    /// This is the catalog-backed counterpart of [`Table::create_async`], used
+    /// by the SQL `CREATE TABLE` path so a table created over Flight SQL lands
+    /// in the same catalog the instance is configured with.
+    pub async fn create_with_catalog_async(
+        uri: String,
+        schema: SchemaRef,
+        catalog: Arc<dyn crate::core::catalog::Catalog>,
+        namespace: &str,
+        table_name: &str,
+    ) -> Result<Self> {
+        let store = create_object_store(&uri)?;
+        let manifest_manager = ManifestManager::new(store.clone(), "", &uri);
+
+        let (_, version) = manifest_manager.load_latest().await?;
+        if version > 0 {
+            return Err(anyhow::anyhow!("Table already exists at {}", uri));
+        }
+
+        let manifest_schema = crate::core::manifest::Schema::from_arrow(&schema, 1);
+        let max_id = manifest_schema
+            .fields
+            .iter()
+            .map(|f| f.id)
+            .max()
+            .unwrap_or(0);
+
+        manifest_manager
+            .update_schema(vec![manifest_schema.clone()], 1, Some(max_id))
+            .await?;
+
+        let mut metadata = TableMetadata::new(
+            2,
+            uuid::Uuid::new_v4().to_string(),
+            uri.clone(),
+            manifest_schema,
+            PartitionSpec::default(),
+            SortOrder::default(),
+        );
+        metadata.save_to_store(store.as_ref(), 1).await?;
+
+        TableBuilder::new(uri)
+            .with_index_all(false)
+            .with_catalog(catalog, namespace, table_name)
             .build_async()
             .await
     }
@@ -470,24 +517,6 @@ impl Table {
         crate::telemetry::metrics::INDEX_BUILD_GATE_WAIT_SECONDS
             .observe(start.elapsed().as_secs_f64());
         Ok(permit)
-    }
-
-    #[cfg(feature = "enterprise")]
-    pub fn enable_enterprise(&mut self, license_key: String) -> Result<()> {
-        crate::core::license::verify_license(&license_key)?;
-        self.enterprise_license = Some(license_key);
-        Ok(())
-    }
-
-    pub fn is_enterprise_enabled(&self) -> bool {
-        #[cfg(feature = "enterprise")]
-        {
-            self.enterprise_license.is_some()
-        }
-        #[cfg(not(feature = "enterprise"))]
-        {
-            false
-        }
     }
 
     pub fn replace_sort_order(&self, columns: &[&str], ascending: &[bool]) -> Result<()> {

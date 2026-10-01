@@ -19,6 +19,14 @@ pub use config::CatalogConfig;
 /// This trait isolates the application from specific catalog implementations (Nessie, REST, Glue, etc.)
 #[async_trait]
 pub trait Catalog: Send + Sync {
+    /// Create a namespace (PostgreSQL schema / Iceberg namespace) in the catalog.
+    ///
+    /// Catalogs that have no explicit namespace concept (e.g. Nessie, where a
+    /// namespace is a branch) may leave the default no-op implementation.
+    async fn create_namespace(&self, _namespace: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Create a new table in the catalog
     async fn create_table(
         &self,
@@ -27,6 +35,13 @@ pub trait Catalog: Send + Sync {
         schema: SchemaRef,
         location: Option<&str>,
     ) -> Result<()>;
+
+    /// Drop a table from the catalog.
+    ///
+    /// Catalogs that cannot drop tables may leave the default no-op.
+    async fn drop_table(&self, _namespace: &str, _table_name: &str) -> Result<()> {
+        Ok(())
+    }
 
     /// Load table metadata
     async fn load_table(&self, namespace: &str, table_name: &str) -> Result<TableMetadata>;

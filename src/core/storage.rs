@@ -45,7 +45,7 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
 
                 let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
 
-                // Support for custom endpoints (MinIO)
+                // Support for custom endpoints (RustFS)
                 if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
                     builder = builder
                         .with_endpoint(endpoint)

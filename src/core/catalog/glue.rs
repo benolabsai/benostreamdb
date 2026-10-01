@@ -36,6 +36,21 @@ impl GlueCatalogClient {
 
 #[async_trait]
 impl Catalog for GlueCatalogClient {
+    async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        let db_input = aws_sdk_glue::types::DatabaseInput::builder()
+            .name(namespace)
+            .build()
+            .map_err(|e| anyhow!("Failed to build Glue database input: {}", e))?;
+        let mut req = self.client.create_database().database_input(db_input);
+        if let Some(catalog_id) = &self.catalog_id {
+            req = req.catalog_id(catalog_id);
+        }
+        req.send()
+            .await
+            .map_err(|e| anyhow!("Failed to create Glue database: {}", e))?;
+        Ok(())
+    }
+
     async fn create_table(
         &self,
         namespace: &str, // Glue database name

@@ -66,6 +66,38 @@ impl UnityCatalogClient {
 
 #[async_trait]
 impl Catalog for UnityCatalogClient {
+    async fn create_namespace(&self, namespace: &str) -> Result<()> {
+        // Parse namespace into catalog.schema
+        let parts: Vec<&str> = namespace.split('.').collect();
+        let (catalog, schema_name) = if parts.len() == 2 {
+            (parts[0], parts[1])
+        } else {
+            ("main", namespace)
+        };
+        let req = serde_json::json!({
+            "name": schema_name,
+            "catalog_name": catalog,
+        });
+        let url = format!("{}/api/2.1/unity-catalog/schemas", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&req)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let error = resp.text().await?;
+            return Err(anyhow!(
+                "Failed to create Unity schema ({}): {}",
+                status,
+                error
+            ));
+        }
+        Ok(())
+    }
+
     async fn create_table(
         &self,
         namespace: &str, // catalog.schema

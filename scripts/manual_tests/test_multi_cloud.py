@@ -1,7 +1,7 @@
 """
-Integration tests for multi-cloud storage using MinIO and equivalents.
+Integration tests for multi-cloud storage using RustFS and equivalents.
 
-Tests S3 (MinIO), Azure (Azurite), and GCP (fake-gcs-server) storage backends.
+Tests S3 (RustFS), Azure (Azurite), and GCP (fake-gcs-server) storage backends.
 These tests require the respective services to be running via docker-compose.
 """
 
@@ -13,10 +13,10 @@ import requests
 from pathlib import Path
 
 
-def is_minio_available():
-    """Check if MinIO is running."""
+def is_rustfs_available():
+    """Check if RustFS is running."""
     try:
-        response = requests.get("http://localhost:9000/minio/health/live", timeout=1)
+        response = requests.get("http://localhost:9000/rustfs/health/live", timeout=1)
         return response.status_code == 200
     except:
         return False
@@ -32,17 +32,17 @@ def is_azurite_available():
         return False
 
 
-@pytest.mark.skipif(not is_minio_available(), reason="MinIO not running. Start with: docker-compose up -d minio")
-def test_s3_with_minio():
-    """Test S3 storage using MinIO."""
-    # MinIO credentials from docker-compose
-    os.environ["AWS_ACCESS_KEY_ID"] = "minioadmin"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "minioadmin"
+@pytest.mark.skipif(not is_rustfs_available(), reason="RustFS not running. Start with: docker-compose up -d rustfs")
+def test_s3_with_rustfs():
+    """Test S3 storage using RustFS."""
+    # RustFS credentials from docker-compose
+    os.environ["AWS_ACCESS_KEY_ID"] = "rustfsadmin"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "rustfsadmin"
     os.environ["AWS_ENDPOINT_URL"] = "http://localhost:9000"
     os.environ["AWS_REGION"] = "us-east-1"
     
     import time
-    # Create table on MinIO
+    # Create table on RustFS
     table_uri = f"s3://test-bucket/benostream-test-{int(time.time())}"
     
     try:
@@ -67,7 +67,7 @@ def test_s3_with_minio():
         assert len(df) == 3
         assert list(df['id']) == [1, 2, 3]
         
-        print("✓ S3/MinIO test passed")
+        print("✓ S3/RustFS test passed")
         
     finally:
         # Cleanup environment
@@ -194,11 +194,11 @@ if __name__ == "__main__":
     print("Testing local filesystem...")
     test_local_filesystem_comprehensive()
     
-    print("\nTesting S3/MinIO...")
-    if is_minio_available():
-        test_s3_with_minio()
+    print("\nTesting S3/RustFS...")
+    if is_rustfs_available():
+        test_s3_with_rustfs()
     else:
-        print("⚠ MinIO not available. Start with: docker-compose up -d minio")
+        print("⚠ RustFS not available. Start with: docker-compose up -d rustfs")
     
     print("\nTesting Azure/Azurite...")
     if is_azurite_available():

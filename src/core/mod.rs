@@ -29,7 +29,22 @@ pub mod wal;
 // pub mod parquet_filter;
 pub mod embeddings;
 pub mod fault_injection;
-pub mod license;
 pub mod lock;
 pub mod search;
 pub mod telemetry;
+
+/// Run `f` on the current thread, using `tokio::task::block_in_place` only when
+/// the ambient Tokio runtime is multi-threaded. `block_in_place` panics on a
+/// current-thread runtime, so callers that may run under either flavor must use
+/// this instead of calling it directly.
+pub(crate) fn run_blocking<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(f)
+        }
+        _ => f(),
+    }
+}

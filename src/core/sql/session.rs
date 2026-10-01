@@ -7,9 +7,32 @@ use std::sync::Arc;
 use crate::core::sql::BenoStreamTableProvider;
 use crate::core::table::Table;
 
+/// DataFusion catalog name -> external (Iceberg) catalog.
+type CatalogRegistry = std::sync::Arc<
+    tokio::sync::RwLock<
+        std::collections::HashMap<String, std::sync::Arc<dyn crate::core::catalog::Catalog>>,
+    >,
+>;
+
+/// Session-scoped settings that SQL `SET benostream.<key>` may write.
+///
+/// Deliberately an allowlist: SQL must never be able to rewrite process
+/// environment variables (credentials, endpoints) or affect other connections.
+pub const ALLOWED_SESSION_SETTINGS: &[&str] = &["warehouse", "default_index_algorithm"];
+
 #[derive(Clone)]
 pub struct BenoStreamSession {
     ctx: SessionContext,
+    /// External catalogs keyed by their DataFusion catalog name, so SQL DDL can
+    /// mirror `CREATE DATABASE` / `CREATE SCHEMA` / `CREATE TABLE` into the
+    /// instance's catalog.
+    catalogs: CatalogRegistry,
+    /// Base location used to derive a table URI when the catalog does not
+    /// assign one (e.g. `s3://warehouse`).
+    warehouse: Option<String>,
+    /// Session-scoped settings (`SET benostream.<key> = <value>`). Never written
+    /// to `std::env`; scoped to this session only.
+    settings: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -96,7 +119,75 @@ impl BenoStreamSession {
             tracing::error!(error = %e, "failed to register vector operators");
         }
 
-        Self { ctx }
+        Self {
+            ctx,
+            catalogs: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            warehouse: None,
+            settings: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+        }
+    }
+
+    /// Set a session-scoped setting. Returns an error for keys outside the
+    /// allowlist so SQL cannot mutate process-wide state.
+    pub async fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let key = key.strip_prefix("benostream.").unwrap_or(key);
+        if !ALLOWED_SESSION_SETTINGS.contains(&key) {
+            anyhow::bail!(
+                "unknown or disallowed session setting 'benostream.{}'; allowed: {}",
+                key,
+                ALLOWED_SESSION_SETTINGS.join(", ")
+            );
+        }
+        self.settings
+            .write()
+            .await
+            .insert(key.to_string(), value.to_string());
+        Ok(())
+    }
+
+    /// Read a session-scoped setting.
+    pub async fn get_setting(&self, key: &str) -> Option<String> {
+        let key = key.strip_prefix("benostream.").unwrap_or(key);
+        self.settings.read().await.get(key).cloned()
+    }
+
+    /// Snapshot of all session-scoped settings.
+    pub async fn settings_snapshot(&self) -> std::collections::HashMap<String, String> {
+        self.settings.read().await.clone()
+    }
+
+    /// Attach an external catalog under a DataFusion catalog name.
+    pub async fn register_catalog(
+        &self,
+        name: &str,
+        catalog: std::sync::Arc<dyn crate::core::catalog::Catalog>,
+    ) {
+        self.catalogs
+            .write()
+            .await
+            .insert(name.to_string(), catalog);
+    }
+
+    /// Look up the external catalog bound to a DataFusion catalog name.
+    pub async fn catalog_for(
+        &self,
+        name: &str,
+    ) -> Option<std::sync::Arc<dyn crate::core::catalog::Catalog>> {
+        self.catalogs.read().await.get(name).cloned()
+    }
+
+    /// Set the warehouse base location used to derive table URIs.
+    pub fn set_warehouse(&mut self, warehouse: Option<String>) {
+        self.warehouse = warehouse;
+    }
+
+    /// The configured warehouse base location, if any.
+    pub fn warehouse(&self) -> Option<&str> {
+        self.warehouse.as_deref()
     }
 
     pub fn register_table(&self, name: &str, table: Arc<Table>) -> Result<()> {
@@ -105,12 +196,82 @@ impl BenoStreamSession {
         Ok(())
     }
 
+    /// Returns `true` if `query` is a DDL statement (no result set).
+    pub async fn is_ddl(&self, query: &str) -> Result<bool> {
+        if crate::core::sql::catalog_ddl::classify(query)
+            == crate::core::sql::catalog_ddl::Handled::Ddl
+        {
+            return Ok(true);
+        }
+        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        let query_processed =
+            crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
+        let plan = self
+            .ctx
+            .state()
+            .create_logical_plan(&query_processed)
+            .await?;
+        Ok(matches!(
+            plan,
+            datafusion::logical_expr::LogicalPlan::Ddl(_)
+        ))
+    }
+
+    /// Returns `true` if `query` is a DML statement (`INSERT`/`UPDATE`/`DELETE`).
+    ///
+    /// The Flight SQL gateway must execute these inside `GetFlightInfo` because
+    /// ADBC cancels the follow-up `DoGet` for DML, so the statement would
+    /// otherwise never run.
+    pub async fn is_dml(&self, query: &str) -> Result<bool> {
+        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        let query_processed =
+            crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
+        let plan = self
+            .ctx
+            .state()
+            .create_logical_plan(&query_processed)
+            .await?;
+        Ok(matches!(
+            plan,
+            datafusion::logical_expr::LogicalPlan::Dml(_)
+        ))
+    }
+
+    /// Return the primary-key column names for a registered table, if any.
+    ///
+    /// Used by the Flight SQL `GetPrimaryKeys` metadata endpoint.
+    pub async fn get_primary_keys(&self, catalog: &str, schema: &str, table: &str) -> Vec<String> {
+        let Some(cat) = self.ctx.catalog(catalog) else {
+            return Vec::new();
+        };
+        let Some(sch) = cat.schema(schema) else {
+            return Vec::new();
+        };
+        let Ok(Some(provider)) = sch.table(table).await else {
+            return Vec::new();
+        };
+        provider
+            .as_any()
+            .downcast_ref::<BenoStreamTableProvider>()
+            .map(|p| p.table.get_primary_key())
+            .unwrap_or_default()
+    }
+
     pub async fn sql_to_df(&self, query: &str) -> Result<datafusion::dataframe::DataFrame> {
         // Pre-process string to handle pgvector syntax not supported by DataFusion parser natively
         let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
         // Strip PARTITIONED BY to bypass DataFusion's lack of Hive distribution support on memory tables
         let query_processed =
             crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
+
+        // Catalog DDL / maintenance: DataFusion has no logical plan for these,
+        // so intercept the parsed statement before planning and dispatch to the
+        // core `Table` API.
+        if let Some(batch) =
+            crate::core::sql::catalog_ddl::try_parse_and_execute(self, &query_processed).await?
+        {
+            return self.ctx.read_batch(batch).map_err(Into::into);
+        }
 
         // Native MERGE INTO: DataFusion has no logical plan for it, so intercept
         // the parsed statement before planning and execute it via the key-based
@@ -137,6 +298,14 @@ impl BenoStreamSession {
     }
 
     pub async fn get_schema(&self, query: &str) -> Result<arrow::datatypes::SchemaRef> {
+        if let Some(schema) = crate::core::sql::catalog_ddl::result_schema(query) {
+            return Ok(schema);
+        }
+        if crate::core::sql::catalog_ddl::classify(query)
+            == crate::core::sql::catalog_ddl::Handled::Ddl
+        {
+            return Ok(std::sync::Arc::new(arrow::datatypes::Schema::empty()));
+        }
         let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
         let query_processed =
             crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);

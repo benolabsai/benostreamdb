@@ -9,7 +9,7 @@ import benostreamdb as bsdb
 HIVE_METASTORE_URL = "thrift://localhost:9083"
 
 def test_hive_s3_catalog_integration():
-    """Verify that PyHiveCatalog can create a table on S3 (MinIO), write data, and query it back."""
+    """Verify that PyHiveCatalog can create a table on S3 (RustFS), write data, and query it back."""
     import socket
 
     # 0. Check if Hive Metastore is running
@@ -19,14 +19,14 @@ def test_hive_s3_catalog_integration():
     except Exception as e:
         pytest.skip(f"Hive Metastore not running on port 9083: {e}")
 
-    # Check if MinIO S3 is running
+    # Check if RustFS S3 is running
     try:
         with socket.create_connection(("localhost", 9000), timeout=1.0):
             pass
     except Exception as e:
-        pytest.skip(f"MinIO S3 not running on port 9000: {e}")
+        pytest.skip(f"RustFS S3 not running on port 9000: {e}")
 
-    # Set S3 / MinIO environment variables for the Rust object store client
+    # Set S3 / RustFS environment variables for the Rust object store client
     os.environ["AWS_ENDPOINT_URL"] = "http://localhost:9000"
     os.environ["AWS_ACCESS_KEY_ID"] = "admin"
     os.environ["AWS_SECRET_ACCESS_KEY"] = "admin123"
@@ -44,7 +44,7 @@ def test_hive_s3_catalog_integration():
         bsdb.Field("value", bsdb.DataType.float64())
     ])
 
-    # 3. Create a unique table in Hive Metastore on MinIO S3 storage
+    # 3. Create a unique table in Hive Metastore on RustFS S3 storage
     table_name = f"hdb_s3_test_{int(time.time())}"
     location = f"s3a://warehouse/{table_name}"
     

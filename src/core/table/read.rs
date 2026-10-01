@@ -558,11 +558,12 @@ impl Table {
                 let idx = self.indexing.memory_index.read();
                 if let Some(mem_idx) = idx.as_ref() {
                     let filter_bitmap = if let Some(ref e) = expr {
-                        let buffer = self.write_buffer.read();
+                        let pending = self.pending_writes.read();
                         let mut bitmap = RoaringBitmap::new();
                         let mut offset = 0;
                         let planner = QueryPlanner::new();
-                        for batch in buffer.iter() {
+                        for p in pending.iter() {
+                            let batch = &p.batch;
                             if let Ok(mask) = planner.evaluate_expr(batch, e) {
                                 for i in 0..batch.num_rows() {
                                     if mask.value(i) {
@@ -589,14 +590,14 @@ impl Table {
             };
 
             if !memory_hits.is_empty() {
-                let buffer = self.write_buffer.read();
-                if let Some(first) = buffer.first() {
-                    let schema = first.schema();
-                    let batch_offsets: Vec<usize> = buffer
+                let pending = self.pending_writes.read();
+                if let Some(first) = pending.first() {
+                    let schema = first.batch.schema();
+                    let batch_offsets: Vec<usize> = pending
                         .iter()
-                        .scan(0, |state, b| {
+                        .scan(0, |state, p| {
                             let start = *state;
-                            *state += b.num_rows();
+                            *state += p.batch.num_rows();
                             Some(start)
                         })
                         .collect();
@@ -606,8 +607,8 @@ impl Table {
                         for (i, offset) in batch_offsets.iter().enumerate().rev() {
                             if *id >= *offset {
                                 let row_idx = *id - offset;
-                                if i < buffer.len() && row_idx < buffer[i].num_rows() {
-                                    result_rows.push(buffer[i].slice(row_idx, 1));
+                                if i < pending.len() && row_idx < pending[i].batch.num_rows() {
+                                    result_rows.push(pending[i].batch.slice(row_idx, 1));
                                 }
                                 break;
                             }
@@ -743,12 +744,13 @@ impl Table {
         // --- Read from In-Memory Write Buffer ---
         let mut mem_batches = Vec::new();
         {
-            let buffer = self.write_buffer.read();
-            if !buffer.is_empty() {
+            let pending = self.pending_writes.read();
+            if !pending.is_empty() {
                 let table_schema = self.arrow_schema();
                 // Align batches to the full evolved schema first
-                let mut aligned_buffer = Vec::with_capacity(buffer.len());
-                for b in buffer.iter() {
+                let mut aligned_buffer = Vec::with_capacity(pending.len());
+                for p in pending.iter() {
+                    let b = &p.batch;
                     let aligned = if b.schema() != table_schema {
                         let mut cols = Vec::with_capacity(table_schema.fields().len());
                         for field in table_schema.fields() {
@@ -1315,6 +1317,57 @@ impl Table {
         }
         // Global best-first order: per-segment results were concatenated above,
         // and RRF rank fusion requires each input list sorted by score desc.
+        all_scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
+            .observe(start_time.elapsed().as_secs_f64());
+        Ok(all_scored)
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub async fn execute_phrase_search_as_scored(
+        &self,
+        column: &str,
+        phrase: &str,
+        slop: usize,
+        analyzer: Option<&str>,
+    ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+
+        let mut all_scored = Vec::new();
+        for entry in all_entries {
+            let file_path_str = entry.file_path.clone();
+            let segment_id = file_path_str
+                .split('/')
+                .next_back()
+                .unwrap_or(&file_path_str)
+                .strip_suffix(".parquet")
+                .unwrap_or(&file_path_str);
+
+            let config = SegmentConfig::new(&self.uri, segment_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone())
+                .with_record_count(entry.record_count as u64);
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            let matches = reader
+                .phrase_search_index(column, phrase, 1000, slop, analyzer)
+                .await?;
+
+            for (row_id, score) in matches {
+                all_scored.push(ScoredResult {
+                    segment_id: segment_id.to_string(),
+                    row_id: row_id as u32,
+                    score,
+                });
+            }
+        }
         all_scored.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
