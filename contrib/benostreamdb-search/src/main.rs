@@ -13,7 +13,7 @@
 )]
 
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -148,7 +148,14 @@ async fn main() {
         .route("/_cat/indices", get(cluster::cat_indices))
         .route("/_refresh", post(docs::refresh_all))
         .route("/_bulk", post(bulk::bulk))
+        .route("/_aliases", post(indices::post_aliases))
+        .route("/_alias", get(indices::get_all_aliases))
         .route("/metrics", get(metrics::metrics))
+        .route("/:index/_alias", get(indices::get_index_aliases))
+        .route(
+            "/:index/_alias/:alias",
+            put(indices::put_single_alias).delete(indices::delete_single_alias),
+        )
         // Index CRUD.
         .route(
             "/:index",

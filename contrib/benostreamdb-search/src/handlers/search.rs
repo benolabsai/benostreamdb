@@ -216,6 +216,13 @@ pub struct SortClause {
     pub descending: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct HighlightSpec {
+    pub fields: Vec<String>,
+    pub pre_tags: Vec<String>,
+    pub post_tags: Vec<String>,
+}
+
 #[derive(Debug)]
 struct SearchRequest {
     /// One keyword search per matched field (multi-field `match` / `q`).
@@ -234,6 +241,8 @@ struct SearchRequest {
     aggs: Option<Value>,
     /// Sort criteria
     sort: Option<Vec<SortClause>>,
+    search_after: Option<Vec<Value>>,
+    highlight: Option<HighlightSpec>,
 }
 
 impl Default for SearchRequest {
@@ -249,6 +258,8 @@ impl Default for SearchRequest {
             rrf_k: None,
             aggs: None,
             sort: None,
+            search_after: None,
+            highlight: None,
         }
     }
 }
@@ -354,6 +365,42 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
     if let Some(sort_val) = obj.get("sort") {
         req.sort = Some(parse_sort(sort_val)?);
     }
+    if let Some(sa) = obj.get("search_after").and_then(Value::as_array) {
+        req.search_after = Some(sa.clone());
+    }
+    if let Some(hl) = obj.get("highlight").and_then(Value::as_object) {
+        let mut fields = Vec::new();
+        if let Some(f_map) = hl.get("fields").and_then(Value::as_object) {
+            for k in f_map.keys() {
+                fields.push(k.clone());
+            }
+        }
+        let pre_tags = hl
+            .get("pre_tags")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["<em>".to_string()]);
+        let post_tags = hl
+            .get("post_tags")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["</em>".to_string()]);
+        req.highlight = Some(HighlightSpec {
+            fields,
+            pre_tags,
+            post_tags,
+        });
+    }
 
     if let Some(query) = obj.get("query") {
         match query {
@@ -378,6 +425,15 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                                     Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
                             }
                         }
+                        "nested" => {
+                            let sql = nested_to_sql(spec, "query.nested")?;
+                            if req.filter.is_none() {
+                                req.filter = Some(sql);
+                            } else {
+                                req.filter =
+                                    Some(format!("({}) AND ({sql})", req.filter.as_ref().unwrap()));
+                            }
+                        }
                         "term" | "terms" | "range" | "exists" | "prefix" | "wildcard" | "ids" => {
                             let mut wrap = serde_json::Map::new();
                             wrap.insert(key.clone(), spec.clone());
@@ -391,7 +447,7 @@ fn parse_request(body: &Value) -> Result<SearchRequest, BenoStreamError> {
                         }
                         other => {
                             return Err(bad_request(format!(
-                                "unsupported query clause '{other}' (supported: match, multi_match, match_phrase, match_all, knn, bool, term, terms, range, exists, prefix, wildcard, ids)"
+                                "unsupported query clause '{other}' (supported: match, multi_match, match_phrase, match_all, knn, bool, term, terms, range, exists, prefix, wildcard, ids, nested)"
                             )));
                         }
                     }
@@ -589,6 +645,107 @@ fn compare_json_values(a: Option<&Value>, b: Option<&Value>) -> Ordering {
     }
 }
 
+fn get_json_path<'a>(mut val: &'a Value, path: &str) -> Option<&'a Value> {
+    for part in path.split('.') {
+        val = val.as_object()?.get(part)?;
+    }
+    Some(val)
+}
+
+fn extract_sort_values(hit: &Hit, sort_clauses: &[SortClause]) -> Vec<Value> {
+    sort_clauses
+        .iter()
+        .map(|sc| {
+            if sc.field == "_score" {
+                Value::from(hit.score)
+            } else if sc.field == "_id" {
+                Value::String(hit.id.clone())
+            } else {
+                get_json_path(&hit.source, &sc.field)
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            }
+        })
+        .collect()
+}
+
+fn is_hit_after_cursor(hit_vals: &[Value], cursor: &[Value], sort_clauses: &[SortClause]) -> bool {
+    for (i, sc) in sort_clauses.iter().enumerate() {
+        let hv = hit_vals.get(i);
+        let cv = cursor.get(i);
+        let cmp = compare_json_values(hv, cv);
+        let directed = if sc.descending { cmp.reverse() } else { cmp };
+        match directed {
+            Ordering::Greater => return true,
+            Ordering::Less => return false,
+            Ordering::Equal => continue,
+        }
+    }
+    false
+}
+
+fn extract_highlights(
+    hit: &Hit,
+    hl: &HighlightSpec,
+    req: &SearchRequest,
+) -> Option<HashMap<String, Vec<String>>> {
+    let mut terms: Vec<String> = Vec::new();
+    if let Some(kps) = &req.keyword {
+        for kp in kps {
+            for token in kp.query.split_whitespace() {
+                let cleaned: String = token.chars().filter(|c| c.is_alphanumeric()).collect();
+                if !cleaned.is_empty() {
+                    terms.push(cleaned.to_lowercase());
+                }
+            }
+        }
+    }
+    if let Some(pp) = &req.phrase {
+        for token in pp.phrase.split_whitespace() {
+            let cleaned: String = token.chars().filter(|c| c.is_alphanumeric()).collect();
+            if !cleaned.is_empty() {
+                terms.push(cleaned.to_lowercase());
+            }
+        }
+    }
+    if terms.is_empty() {
+        return None;
+    }
+    let pre = hl.pre_tags.first().map(String::as_str).unwrap_or("<em>");
+    let post = hl.post_tags.first().map(String::as_str).unwrap_or("</em>");
+
+    let mut result_map = HashMap::new();
+    for field in &hl.fields {
+        if let Some(val) = get_json_path(&hit.source, field).and_then(Value::as_str) {
+            let mut highlighted = val.to_string();
+            let mut matched = false;
+            for t in &terms {
+                let lower = highlighted.to_lowercase();
+                if let Some(idx) = lower.find(t) {
+                    matched = true;
+                    let orig = &highlighted[idx..idx + t.len()];
+                    highlighted = format!(
+                        "{}{}{}{}{}",
+                        &highlighted[..idx],
+                        pre,
+                        orig,
+                        post,
+                        &highlighted[idx + t.len()..]
+                    );
+                }
+            }
+            if matched {
+                result_map.insert(field.clone(), vec![highlighted]);
+            }
+        }
+    }
+    if result_map.is_empty() {
+        None
+    } else {
+        Some(result_map)
+    }
+}
+
 /// Parse `_source` / `source` into a [`SourceFilter`].
 fn parse_source(v: &Value) -> Result<SourceFilter, BenoStreamError> {
     let mut f = SourceFilter::default();
@@ -666,19 +823,33 @@ fn as_f32_list(v: &Value) -> Option<Vec<f32>> {
 }
 
 /// Field names are inlined into SQL predicates, so validate them strictly.
+/// Supports standard identifiers and nested dot notation (e.g. "user.name" -> "user['name']").
 fn valid_field(field: &str) -> Result<String, BenoStreamError> {
-    let valid = !field.is_empty()
-        && field.chars().enumerate().all(|(i, c)| {
-            if i == 0 {
-                c == '_' || c.is_ascii_alphabetic()
-            } else {
-                c.is_ascii_alphanumeric() || c == '_'
-            }
-        });
-    if valid {
+    if field.is_empty() {
+        return Err(bad_request(format!("invalid field name '{field}'")));
+    }
+    let parts: Vec<&str> = field.split('.').collect();
+    let all_valid = parts.iter().all(|part| {
+        !part.is_empty()
+            && part.chars().enumerate().all(|(i, c)| {
+                if i == 0 {
+                    c == '_' || c.is_ascii_alphabetic()
+                } else {
+                    c.is_ascii_alphanumeric() || c == '_'
+                }
+            })
+    });
+    if !all_valid {
+        return Err(bad_request(format!("invalid field name '{field}'")));
+    }
+    if parts.len() == 1 {
         Ok(field.to_string())
     } else {
-        Err(bad_request(format!("invalid field name '{field}'")))
+        let mut out = parts[0].to_string();
+        for p in &parts[1..] {
+            out.push_str(&format!("['{p}']"));
+        }
+        Ok(out)
     }
 }
 
@@ -704,8 +875,9 @@ pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStr
                 "wildcard" => wildcard_to_sql(value, ctx),
                 "ids" => ids_to_sql(value, ctx),
                 "bool" => bool_to_sql(value, ctx),
+                "nested" => nested_to_sql(value, ctx),
                 other => Err(bad_request(format!(
-                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, ids, bool)"
+                    "unsupported {ctx} clause '{other}' (supported: term, terms, range, exists, prefix, wildcard, ids, bool, nested)"
                 ))),
             },
             _ => Err(bad_request(format!(
@@ -718,6 +890,65 @@ pub(crate) fn clause_to_sql(clause: &Value, ctx: &str) -> Result<String, BenoStr
             json_type_name(other)
         ))),
     }
+}
+
+fn qualify_nested_paths(val: &Value, path: &str) -> Value {
+    match val {
+        Value::Object(m) => {
+            let mut new_m = Map::new();
+            for (k, v) in m {
+                let new_v = qualify_nested_paths(v, path);
+                let is_query_keyword = matches!(
+                    k.as_str(),
+                    "query"
+                        | "bool"
+                        | "must"
+                        | "filter"
+                        | "should"
+                        | "must_not"
+                        | "term"
+                        | "terms"
+                        | "range"
+                        | "match"
+                        | "match_phrase"
+                        | "prefix"
+                        | "wildcard"
+                        | "ids"
+                        | "nested"
+                        | "exists"
+                        | "path"
+                );
+                if !is_query_keyword && !k.starts_with(path) && !k.starts_with('_') {
+                    new_m.insert(format!("{path}.{k}"), new_v);
+                } else {
+                    new_m.insert(k.clone(), new_v);
+                }
+            }
+            Value::Object(new_m)
+        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|item| qualify_nested_paths(item, path))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+fn nested_to_sql(value: &Value, ctx: &str) -> Result<String, BenoStreamError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| bad_request("nested: expected an object with 'path' and 'query'"))?;
+    let path = obj.get("path").and_then(Value::as_str).unwrap_or("");
+    let inner_query = obj
+        .get("query")
+        .ok_or_else(|| bad_request("nested: missing 'query'"))?;
+    let qualified = if !path.is_empty() {
+        qualify_nested_paths(inner_query, path)
+    } else {
+        inner_query.clone()
+    };
+    clause_to_sql(&qualified, ctx)
 }
 
 fn term_to_sql(value: &Value, _ctx: &str) -> Result<String, BenoStreamError> {
@@ -1111,8 +1342,8 @@ pub async fn search_core(
                             a.id.cmp(&b.id)
                         }
                     } else {
-                        let va = a.source.get(&sc.field);
-                        let vb = b.source.get(&sc.field);
+                        let va = get_json_path(&a.source, &sc.field);
+                        let vb = get_json_path(&b.source, &sc.field);
                         let c = compare_json_values(va, vb);
                         if sc.descending {
                             c.reverse()
@@ -1152,6 +1383,13 @@ pub async fn search_core(
         }
     }
 
+    if let (Some(sort_clauses), Some(cursor)) = (&req.sort, &req.search_after) {
+        hits.retain(|h| {
+            let hit_vals = extract_sort_values(h, sort_clauses);
+            is_hit_after_cursor(&hit_vals, cursor, sort_clauses)
+        });
+    }
+
     // Underlying BM25/HNSW candidate lists are capped per segment, so this
     // total is a best-effort approximation reported with `relation: "eq"`.
     let total = hits.len() as u64;
@@ -1161,15 +1399,28 @@ pub async fn search_core(
     }
 
     let len = hits.len();
-    let from = req.from.min(len);
+    let from = if req.search_after.is_some() {
+        0
+    } else {
+        req.from.min(len)
+    };
     let end = (from + req.size).min(len);
     let page: Vec<SearchHit> = hits[from..end]
         .iter()
-        .map(|h| SearchHit {
-            index: index.to_string(),
-            id: h.id.clone(),
-            score: Some(final_score(h, kind)),
-            source: h.source.clone(),
+        .map(|h| {
+            let sort = req.sort.as_ref().map(|scs| extract_sort_values(h, scs));
+            let highlight = req
+                .highlight
+                .as_ref()
+                .and_then(|hl| extract_highlights(h, hl, &req));
+            SearchHit {
+                index: index.to_string(),
+                id: h.id.clone(),
+                score: Some(final_score(h, kind)),
+                source: h.source.clone(),
+                sort,
+                highlight,
+            }
         })
         .collect();
 
@@ -1988,6 +2239,26 @@ mod tests {
         let state = AppState::new(root, "test-cluster".into());
         std::fs::create_dir_all(tmp.path().join("ops")).unwrap();
 
+        crate::handlers::indices::create_index_core(&state, "ops", None)
+            .await
+            .unwrap();
+        crate::handlers::mapping::put_mapping_core(
+            &state,
+            "ops",
+            &json!({
+                "properties": {
+                    "title": {"type": "text"},
+                    "tag": {"type": "keyword"},
+                    "score_val": {"type": "long"}
+                },
+                "indexes": {
+                    "title": "bm25"
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
         index_docs(
             &state,
             "ops",
@@ -2086,5 +2357,157 @@ mod tests {
         assert_eq!(resp_sorted.hits.hits[1].source["score_val"], 40);
         assert_eq!(resp_sorted.hits.hits[2].source["score_val"], 25);
         assert_eq!(resp_sorted.hits.hits[3].source["score_val"], 10);
+
+        // 6. search_after pagination
+        let page1 = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [{"score_val": {"order": "desc"}}],
+                "size": 2
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page1.hits.hits.len(), 2);
+        assert_eq!(page1.hits.hits[0].source["score_val"], 50);
+        assert_eq!(page1.hits.hits[1].source["score_val"], 40);
+        assert_eq!(page1.hits.hits[0].sort, Some(vec![json!(50)]));
+        assert_eq!(page1.hits.hits[1].sort, Some(vec![json!(40)]));
+
+        let last_sort = page1.hits.hits[1].sort.as_ref().unwrap();
+        let page2 = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [{"score_val": {"order": "desc"}}],
+                "size": 2,
+                "search_after": last_sort
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page2.hits.hits.len(), 2);
+        assert_eq!(page2.hits.hits[0].source["score_val"], 25);
+        assert_eq!(page2.hits.hits[1].source["score_val"], 10);
+        assert_eq!(page2.hits.hits[0].sort, Some(vec![json!(25)]));
+        assert_eq!(page2.hits.hits[1].sort, Some(vec![json!(10)]));
+
+        // 7. highlight
+        let resp_hl = search_core(
+            &state,
+            "ops",
+            &json!({
+                "query": {
+                    "match": {
+                        "title": "chocolate"
+                    }
+                },
+                "highlight": {
+                    "fields": {
+                        "title": {}
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_hl.hits.hits.len(), 1);
+        let hl_map = resp_hl.hits.hits[0].highlight.as_ref().unwrap();
+        let snippets = hl_map.get("title").unwrap();
+        assert!(snippets[0].contains("<em>chocolate</em>"));
+    }
+
+    #[tokio::test]
+    async fn search_nested_query_and_dot_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("nested_idx")).unwrap();
+
+        index_docs(
+            &state,
+            "nested_idx",
+            &[
+                json!({
+                    "user": {
+                        "name": "alice",
+                        "age": 30
+                    },
+                    "status": "active"
+                }),
+                json!({
+                    "user": {
+                        "name": "bob",
+                        "age": 25
+                    },
+                    "status": "pending"
+                }),
+            ],
+        )
+        .await;
+
+        // Nested query with relative field path ("name") inside "user"
+        let resp_rel = search_core(
+            &state,
+            "nested_idx",
+            &json!({
+                "query": {
+                    "nested": {
+                        "path": "user",
+                        "query": {
+                            "term": {
+                                "name": "alice"
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_rel.hits.total.value, 1);
+        assert_eq!(resp_rel.hits.hits[0].source["user"]["name"], "alice");
+
+        // Nested query with fully-qualified field path ("user.name")
+        let resp_fq = search_core(
+            &state,
+            "nested_idx",
+            &json!({
+                "query": {
+                    "nested": {
+                        "path": "user",
+                        "query": {
+                            "term": {
+                                "user.name": "bob"
+                            }
+                        }
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_fq.hits.total.value, 1);
+        assert_eq!(resp_fq.hits.hits[0].source["user"]["name"], "bob");
+
+        // Sort by nested dot path "user.age" descending
+        let resp_sorted = search_core(
+            &state,
+            "nested_idx",
+            &json!({
+                "query": {"match_all": {}},
+                "sort": [
+                    {"user.age": {"order": "desc"}}
+                ]
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp_sorted.hits.hits.len(), 2);
+        assert_eq!(resp_sorted.hits.hits[0].source["user"]["name"], "alice");
+        assert_eq!(resp_sorted.hits.hits[1].source["user"]["name"], "bob");
     }
 }
