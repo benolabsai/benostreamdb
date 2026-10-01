@@ -14,7 +14,9 @@ use axum::Json;
 use benostreamdb::BenoStreamError;
 use serde_json::Value;
 
-use crate::es_types::{DocWriteResponse, RefreshResponse, Shards};
+use crate::es_types::{
+    DeleteByQueryResponse, DocGetResponse, DocWriteResponse, RefreshResponse, Shards,
+};
 use crate::infer::{self, InferError};
 use crate::state::{table_exists, AppState};
 
@@ -282,23 +284,208 @@ pub async fn refresh_all(State(state): State<Arc<AppState>>) -> Response {
     )
 }
 
-/// `DELETE /{index}/_doc/{id}` — unsupported in v1 (append-only store).
-/// Returns a 501 with a clear ES-style error.
-pub async fn delete_document(
-    State(_state): State<Arc<AppState>>,
-    Path((index, _id)): Path<(String, String)>,
+/// `GET /{index}/_doc/{id}` — retrieve a document by client id.
+pub async fn get_document(
+    State(state): State<Arc<AppState>>,
+    Path((index, id)): Path<(String, String)>,
 ) -> Response {
-    let es = crate::es_types::EsError {
-        error: crate::es_types::EsErrorBody {
-            error_type: "unsupported_operation".to_string(),
-            reason: format!(
-                "per-document delete is not supported on index '{index}' (append-only store); use DELETE /{index} to drop the index"
-            ),
+    let result = get_document_core(&state, &index, &id).await;
+    match result {
+        Ok(resp) if resp.found => (StatusCode::OK, axum::Json(resp)).into_response(),
+        Ok(resp) => (StatusCode::NOT_FOUND, axum::Json(resp)).into_response(),
+        Err(BenoStreamError::TableNotFound { .. }) => {
+            let es = DocGetResponse {
+                index,
+                id,
+                version: None,
+                seq_no: None,
+                primary_term: None,
+                found: false,
+                source: None,
+            };
+            (StatusCode::NOT_FOUND, axum::Json(es)).into_response()
+        }
+        Err(e) => es_response_with_status::<DocGetResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e)),
+    }
+}
+
+pub async fn get_document_core(
+    state: &AppState,
+    index: &str,
+    id: &str,
+) -> Result<DocGetResponse, BenoStreamError> {
+    if !table_exists(&state.index_uri(index)).await {
+        return Err(BenoStreamError::TableNotFound {
+            namespace: String::new(),
+            name: index.to_string(),
+        });
+    }
+
+    let table = state.open_or_create(index, &None).await?;
+    let safe_id = id.replace('\'', "''");
+    let filter = format!("{ID_COLUMN} = '{safe_id}'");
+    let batches = table
+        .read_async(Some(&filter), None, None)
+        .await
+        .map_err(BenoStreamError::from)?;
+
+    if batches.is_empty() || batches[0].num_rows() == 0 {
+        return Ok(DocGetResponse {
+            index: index.to_string(),
+            id: id.to_string(),
+            version: None,
+            seq_no: None,
+            primary_term: None,
+            found: false,
+            source: None,
+        });
+    }
+
+    let batch = &batches[0];
+    let schema = batch.schema();
+    let mut source_obj = serde_json::Map::new();
+
+    for (col_idx, field) in schema.fields().iter().enumerate() {
+        if field.name() == ID_COLUMN {
+            continue;
+        }
+        let col = batch.column(col_idx);
+        let val = crate::handlers::search::value_to_json(col.as_ref(), 0);
+        source_obj.insert(field.name().clone(), val);
+    }
+
+    Ok(DocGetResponse {
+        index: index.to_string(),
+        id: id.to_string(),
+        version: Some(1),
+        seq_no: Some(0),
+        primary_term: Some(1),
+        found: true,
+        source: Some(Value::Object(source_obj)),
+    })
+}
+
+/// `DELETE /{index}/_doc/{id}` — delete a document by client id.
+pub async fn delete_document(
+    State(state): State<Arc<AppState>>,
+    Path((index, id)): Path<(String, String)>,
+) -> Response {
+    let result = delete_document_core(&state, &index, &id).await;
+    match result {
+        Ok(resp) => {
+            let status = if resp.result == "deleted" {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            (status, axum::Json(resp)).into_response()
+        }
+        Err(e) => es_response_with_status::<DocWriteResponse>(StatusCode::INTERNAL_SERVER_ERROR, Err(e)),
+    }
+}
+
+pub async fn delete_document_core(
+    state: &AppState,
+    index: &str,
+    id: &str,
+) -> Result<DocWriteResponse, BenoStreamError> {
+    if !table_exists(&state.index_uri(index)).await {
+        return Err(BenoStreamError::TableNotFound {
+            namespace: String::new(),
+            name: index.to_string(),
+        });
+    }
+
+    let table = state.open_or_create(index, &None).await?;
+    let safe_id = id.replace('\'', "''");
+    let filter = format!("{ID_COLUMN} = '{safe_id}'");
+
+    // Check if doc exists before delete
+    let existing = table
+        .read_async(Some(&filter), None, None)
+        .await
+        .map_err(BenoStreamError::from)?;
+    let found = !existing.is_empty() && existing[0].num_rows() > 0;
+
+    if found {
+        table
+            .delete_async(&filter)
+            .await
+            .map_err(BenoStreamError::from)?;
+    }
+
+    Ok(DocWriteResponse {
+        index: index.to_string(),
+        id: id.to_string(),
+        version: if found { 2 } else { 1 },
+        result: if found { "deleted".into() } else { "not_found".into() },
+        shards: Shards {
+            total: 1,
+            successful: 1,
+            failed: 0,
         },
-        status: 501,
-    };
-    let status = StatusCode::NOT_IMPLEMENTED;
-    (status, axum::Json(es)).into_response()
+    })
+}
+
+/// `POST /{index}/_delete_by_query` — delete documents matching a query DSL.
+pub async fn delete_by_query(
+    State(state): State<Arc<AppState>>,
+    Path(index): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    let result = delete_by_query_core(&state, &index, body).await;
+    es_response_with_status(StatusCode::OK, result)
+}
+
+pub async fn delete_by_query_core(
+    state: &AppState,
+    index: &str,
+    body: Value,
+) -> Result<DeleteByQueryResponse, BenoStreamError> {
+    let started = std::time::Instant::now();
+    if !table_exists(&state.index_uri(index)).await {
+        return Err(BenoStreamError::TableNotFound {
+            namespace: String::new(),
+            name: index.to_string(),
+        });
+    }
+
+    let query_clause = body.get("query").ok_or_else(|| {
+        BenoStreamError::SchemaIncompatible {
+            reason: "missing 'query' in _delete_by_query request body".into(),
+        }
+    })?;
+
+    let filter_sql = crate::handlers::search::clause_to_sql(query_clause, "_delete_by_query")?;
+    let table = state.open_or_create(index, &None).await?;
+
+    let batches = table
+        .read_async(Some(&filter_sql), None, None)
+        .await
+        .map_err(BenoStreamError::from)?;
+    let count: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+    if count > 0 {
+        table
+            .delete_async(&filter_sql)
+            .await
+            .map_err(BenoStreamError::from)?;
+    }
+
+    Ok(DeleteByQueryResponse {
+        took: started.elapsed().as_millis() as u64,
+        timed_out: false,
+        total: count as u64,
+        deleted: count as u64,
+        batches: 1,
+        version_conflicts: 0,
+        noops: 0,
+        retries: crate::es_types::RetryStats { bulk: 0, search: 0 },
+        throttled_millis: 0,
+        requests_per_second: -1.0,
+        throttled_until_millis: 0,
+        failures: vec![],
+    })
 }
 
 pub async fn refresh_core(
@@ -512,5 +699,92 @@ mod tests {
             matches!(&err, BenoStreamError::TableNotFound { .. }),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn get_and_delete_document_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("items")).unwrap();
+
+        // Index a doc
+        let resp = index_document_core(
+            &state,
+            "items",
+            Some("item-42"),
+            serde_json::json!({"title": "Rust Book", "price": 45}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.result, "created");
+        refresh_core(&state, "items").await.unwrap();
+
+        // GET doc
+        let doc = get_document_core(&state, "items", "item-42").await.unwrap();
+        assert!(doc.found);
+        assert_eq!(doc.id, "item-42");
+        let src = doc.source.expect("has source");
+        assert_eq!(src["title"], "Rust Book");
+        assert_eq!(src["price"], 45);
+
+        // GET nonexistent doc
+        let doc_none = get_document_core(&state, "items", "nonexistent").await.unwrap();
+        assert!(!doc_none.found);
+        assert!(doc_none.source.is_none());
+
+        // DELETE doc
+        let del = delete_document_core(&state, "items", "item-42").await.unwrap();
+        assert_eq!(del.result, "deleted");
+        refresh_core(&state, "items").await.unwrap();
+
+        // GET after delete
+        let doc_after = get_document_core(&state, "items", "item-42").await.unwrap();
+        assert!(!doc_after.found);
+
+        // DELETE nonexistent doc
+        let del_none = delete_document_core(&state, "items", "item-42").await.unwrap();
+        assert_eq!(del_none.result, "not_found");
+    }
+
+    #[tokio::test]
+    async fn delete_by_query_lifecycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = format!("file://{}", tmp.path().display());
+        let state = AppState::new(root, "test-cluster".into());
+        std::fs::create_dir_all(tmp.path().join("products")).unwrap();
+
+        for i in 1..=5 {
+            index_document_core(
+                &state,
+                "products",
+                Some(&format!("p-{}", i)),
+                serde_json::json!({"tag": if i <= 3 { "old" } else { "new" }, "val": i}),
+            )
+            .await
+            .unwrap();
+        }
+        refresh_core(&state, "products").await.unwrap();
+
+        // Delete where tag = 'old'
+        let del_resp = delete_by_query_core(
+            &state,
+            "products",
+            serde_json::json!({
+                "query": {
+                    "term": { "tag": "old" }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(del_resp.deleted, 3);
+        refresh_core(&state, "products").await.unwrap();
+
+        let table = state.open_or_create("products", &None).await.unwrap();
+        let batches = table.read_async(None, None, None).await.unwrap();
+        let remaining_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(remaining_rows, 2);
     }
 }
