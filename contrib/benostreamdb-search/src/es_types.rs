@@ -115,6 +115,47 @@ pub struct RefreshResponse {
     pub shards: Shards,
 }
 
+/// ES `GET /{index}/_doc/{id}` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct DocGetResponse {
+    #[serde(rename = "_index")]
+    pub index: String,
+    #[serde(rename = "_id")]
+    pub id: String,
+    #[serde(rename = "_version", skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(rename = "_seq_no", skip_serializing_if = "Option::is_none")]
+    pub seq_no: Option<u64>,
+    #[serde(rename = "_primary_term", skip_serializing_if = "Option::is_none")]
+    pub primary_term: Option<u64>,
+    pub found: bool,
+    #[serde(rename = "_source", skip_serializing_if = "Option::is_none")]
+    pub source: Option<Value>,
+}
+
+/// ES `POST /{index}/_delete_by_query` response.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteByQueryResponse {
+    pub took: u64,
+    pub timed_out: bool,
+    pub total: u64,
+    pub deleted: u64,
+    pub batches: u64,
+    pub version_conflicts: u64,
+    pub noops: u64,
+    pub retries: RetryStats,
+    pub throttled_millis: u64,
+    pub requests_per_second: f32,
+    pub throttled_until_millis: u64,
+    pub failures: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RetryStats {
+    pub bulk: u64,
+    pub search: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ClusterInfo {
     pub name: String,

@@ -1327,6 +1327,63 @@ impl Table {
         Ok(all_scored)
     }
 
+    #[tracing::instrument(skip(self))]
+    pub async fn execute_phrase_search_as_scored(
+        &self,
+        column: &str,
+        phrase: &str,
+        slop: usize,
+        analyzer: Option<&str>,
+    ) -> Result<Vec<ScoredResult>> {
+        let start_time = std::time::Instant::now();
+        let manifest = self.manifest().await?;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let all_entries = manifest_manager.load_all_entries(&manifest).await?;
+
+        let mut all_scored = Vec::new();
+        for entry in all_entries {
+            let file_path_str = entry.file_path.clone();
+            let segment_id = file_path_str
+                .split('/')
+                .next_back()
+                .unwrap_or(&file_path_str)
+                .strip_suffix(".parquet")
+                .unwrap_or(&file_path_str);
+
+            let config = SegmentConfig::new(&self.uri, segment_id)
+                .with_parquet_path(entry.file_path.clone())
+                .with_index_files(entry.index_files.clone())
+                .with_record_count(entry.record_count as u64);
+
+            let reader = HybridReader::new(config, self.store.clone(), &self.uri);
+            let matches = reader
+                .phrase_search_index(
+                    column,
+                    phrase,
+                    1000,
+                    slop,
+                    analyzer,
+                )
+                .await?;
+
+            for (row_id, score) in matches {
+                all_scored.push(ScoredResult {
+                    segment_id: segment_id.to_string(),
+                    row_id: row_id as u32,
+                    score,
+                });
+            }
+        }
+        all_scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        crate::telemetry::metrics::SEARCH_LATENCY_SECONDS
+            .observe(start_time.elapsed().as_secs_f64());
+        Ok(all_scored)
+    }
+
     /// Helper to fetch full RecordBatches for a set of fused IDs
     pub async fn fetch_results_by_id(
         &self,
