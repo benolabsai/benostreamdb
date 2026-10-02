@@ -52,9 +52,9 @@ def api(tmp_path_factory):
     storage = tmp_path_factory.mktemp("bsdb_search_graph")
     env = {
         **os.environ,
-        "BENOSEARCH_BIND": "127.0.0.1",
-        "BENOSEARCH_PORT": str(port),
-        "BENOSEARCH_STORAGE_URI": f"file://{storage}",
+        "BSDB_SEARCH_BIND": "127.0.0.1",
+        "BSDB_SEARCH_PORT": str(port),
+        "BSDB_SEARCH_STORAGE_URI": f"file://{storage}",
     }
     proc = subprocess.Popen(
         [str(BINARY)],

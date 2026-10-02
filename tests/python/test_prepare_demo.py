@@ -172,7 +172,7 @@ def test_auto_chunk_rows(gb, expected):
 
 def test_resume_offset_does_not_round_down_to_chunk_boundary():
     """A killed chunk can leave partial rows committed: the engine spills to a
-    real commit whenever the write buffer exceeds BENOSTREAM_CACHE_GB (default
+    real commit whenever the write buffer exceeds BSDB_CACHE_GB (default
     1 GB), so chunks are NOT atomic. Resume must continue from the exact
     committed count — rounding down to the chunk boundary re-wrote those rows
     and duplicated them."""

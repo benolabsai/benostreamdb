@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONED BY (day) WH%ERE v <-> '[1,2,3

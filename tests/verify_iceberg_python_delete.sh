@@ -37,7 +37,7 @@ ABS_GEN_URI="file://$GEN_DIR"
 ./target/debug/generate_iceberg_manifests "$GEN_DIR" "$ABS_GEN_URI"
 
 echo "Starting Iceberg REST Server..."
-export BENOSTREAM_STORAGE_URI="file://$DATA_DIR"
+export BSDB_STORAGE_URI="file://$DATA_DIR"
 # Assuming iceberg_rest runs on 8181 by default as per other script
 ./target/debug/iceberg_rest > /tmp/iceberg_rest_py.log 2>&1 &
 SERVER_PID=$!

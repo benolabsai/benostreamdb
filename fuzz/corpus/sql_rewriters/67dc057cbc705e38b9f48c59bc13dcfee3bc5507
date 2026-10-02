@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONEDWHERE v <-> '[0,2,3]' OR,ER BY v <-> %,3,2,3]' LIMIT 5

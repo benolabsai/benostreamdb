@@ -56,6 +56,18 @@ public final class BenoStreamDBArrowConverter {
     }
 
     private static String arrowTypeName(Type type) {
+        if (type instanceof io.trino.spi.type.ArrayType) {
+            return "List(" + arrowTypeName(((io.trino.spi.type.ArrayType) type).getElementType()) + ")";
+        }
+        if (type instanceof io.trino.spi.type.RowType) {
+            StringBuilder sb = new StringBuilder("Struct(");
+            List<io.trino.spi.type.RowType.Field> fields = ((io.trino.spi.type.RowType) type).getFields();
+            for (int i = 0; i < fields.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(fields.get(i).getName().orElse("col" + i)).append(": ").append(arrowTypeName(fields.get(i).getType()));
+            }
+            return sb.append(")").toString();
+        }
         if (type instanceof IntegerType) {
             return "Int32";
         }
@@ -83,9 +95,25 @@ public final class BenoStreamDBArrowConverter {
     public static Schema toArrowSchema(List<BenoStreamDBColumnHandle> columns) {
         List<Field> fields = new ArrayList<>();
         for (BenoStreamDBColumnHandle c : columns) {
-            fields.add(new Field(c.getColumnName(), FieldType.nullable(arrowType(c.getColumnType())), null));
+            fields.add(toArrowField(c.getColumnName(), c.getColumnType()));
         }
         return new Schema(fields);
+    }
+
+    private static Field toArrowField(String name, Type type) {
+        if (type instanceof io.trino.spi.type.ArrayType) {
+            Field child = toArrowField("item", ((io.trino.spi.type.ArrayType) type).getElementType());
+            return new Field(name, FieldType.nullable(new ArrowType.List()), List.of(child));
+        }
+        if (type instanceof io.trino.spi.type.RowType) {
+            List<Field> children = new ArrayList<>();
+            List<io.trino.spi.type.RowType.Field> fields = ((io.trino.spi.type.RowType) type).getFields();
+            for (int i = 0; i < fields.size(); i++) {
+                children.add(toArrowField(fields.get(i).getName().orElse("col" + i), fields.get(i).getType()));
+            }
+            return new Field(name, FieldType.nullable(new ArrowType.Struct()), children);
+        }
+        return new Field(name, FieldType.nullable(arrowType(type)), null);
     }
 
     private static ArrowType arrowType(Type type) {
@@ -139,7 +167,38 @@ public final class BenoStreamDBArrowConverter {
     }
 
     private static void writeValue(FieldVector vector, Type type, Block block, int pos, int out) {
-        if (type instanceof IntegerType) {
+        if (type instanceof io.trino.spi.type.ArrayType) {
+            org.apache.arrow.vector.complex.ListVector listVector = (org.apache.arrow.vector.complex.ListVector) vector;
+            io.trino.spi.block.Block arrayBlock = ((io.trino.spi.type.ArrayType) type).getObject(block, pos);
+            int startOffset = listVector.startNewValue(out);
+            int len = arrayBlock.getPositionCount();
+            Type elementType = ((io.trino.spi.type.ArrayType) type).getElementType();
+            FieldVector childVector = listVector.getDataVector();
+            for (int i = 0; i < len; i++) {
+                if (arrayBlock.isNull(i)) {
+                    childVector.setNull(startOffset + i);
+                } else {
+                    writeValue(childVector, elementType, arrayBlock, i, startOffset + i);
+                }
+            }
+            listVector.endValue(out, len);
+        } else if (type instanceof io.trino.spi.type.RowType) {
+            org.apache.arrow.vector.complex.StructVector structVector = (org.apache.arrow.vector.complex.StructVector) vector;
+            // Trino 435: RowType.getObject returns a SqlRow, not a Block.
+            io.trino.spi.block.SqlRow row = ((io.trino.spi.type.RowType) type).getObject(block, pos);
+            structVector.setIndexDefined(out);
+            List<io.trino.spi.type.RowType.Field> fields = ((io.trino.spi.type.RowType) type).getFields();
+            int rawIndex = row.getRawIndex();
+            for (int i = 0; i < fields.size(); i++) {
+                FieldVector childVector = structVector.getChild(fields.get(i).getName().orElse("col" + i));
+                io.trino.spi.block.Block fieldBlock = row.getRawFieldBlock(i);
+                if (fieldBlock.isNull(rawIndex)) {
+                    childVector.setNull(out);
+                } else {
+                    writeValue(childVector, fields.get(i).getType(), fieldBlock, rawIndex, out);
+                }
+            }
+        } else if (type instanceof IntegerType) {
             ((IntVector) vector).setSafe(out, (int) type.getLong(block, pos));
         } else if (type instanceof BigintType) {
             ((BigIntVector) vector).setSafe(out, type.getLong(block, pos));

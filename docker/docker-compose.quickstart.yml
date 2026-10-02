@@ -102,12 +102,12 @@ services:
       - "6333:6333"    # Qdrant REST
       - "50051:50051"  # Arrow Flight SQL gRPC
     environment:
-      - BENOSEARCH_BIND=0.0.0.0
-      - BENOSEARCH_PORT=9200
-      - QDRANT_BIND=0.0.0.0
-      - QDRANT_PORT=6333
-      - BENOSEARCH_STORAGE_URI=s3://benostream/
-      - BENOSEARCH_AUTO_REFRESH_SECS=5
+      - BSDB_SEARCH_BIND=0.0.0.0
+      - BSDB_SEARCH_PORT=9200
+      - BSDB_QDRANT_BIND=0.0.0.0
+      - BSDB_QDRANT_PORT=6333
+      - BSDB_SEARCH_STORAGE_URI=s3://benostream/
+      - BSDB_SEARCH_AUTO_REFRESH_SECS=5
       - AWS_ACCESS_KEY_ID=rustfsadmin
       - AWS_SECRET_ACCESS_KEY=rustfsadmin
       - AWS_ENDPOINT=http://rustfs:9000

@@ -20,8 +20,8 @@
 //! ids, so a graph that grows by a few edges does not renumber every community.
 
 use crate::core::index::csr_graph::MultiSegmentCsrGraph;
-use crate::core::sql::graph_udf::drift_search::DriftGraph;
-use std::collections::{HashMap, HashSet};
+use crate::core::sql::graph_udf::graph_view::GraphView;
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 
 /// A community: a stable id plus its member node ids (sorted).
 pub type Community = (u32, Vec<u64>);

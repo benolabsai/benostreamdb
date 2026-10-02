@@ -1,0 +1,162 @@
+{
+  "uid": "benostreamdb",
+  "title": "BenoStreamDB",
+  "tags": ["benostreamdb"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Ingest rows/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "rowsps" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(bsdb_ingest_rows_total[1m]))" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Total rows ingested",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 4, "x": 8, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(bsdb_ingest_rows_total)" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Ingest RSS (MB)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "decmbytes" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "bsdb_ingest_rss_bytes / 1048576" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Vector search latency (s)",
+      "description": "p50 and p99 of bsdb_search_latency_seconds",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "p50", "legendFormat": "p50", "expr": "histogram_quantile(0.50, sum(rate(bsdb_search_latency_seconds_bucket[5m])) by (le))" },
+        { "refId": "p99", "legendFormat": "p99", "expr": "histogram_quantile(0.99, sum(rate(bsdb_search_latency_seconds_bucket[5m])) by (le))" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Query latency p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum(rate(bsdb_query_latency_seconds_bucket[5m])) by (le))" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Cache hit ratio",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(bsdb_cache_hits_total[5m])) / clamp_min(sum(rate(bsdb_cache_hits_total[5m])) + sum(rate(bsdb_cache_misses_total[5m])), 1e-9)" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Commit latency p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum(rate(bsdb_commit_duration_seconds_bucket[5m])) by (le))" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Compaction latency p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum(rate(bsdb_compaction_duration_seconds_bucket[5m])) by (le))" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Active files / segments",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "files", "legendFormat": "active_files", "expr": "bsdb_active_files" },
+        { "refId": "segs", "legendFormat": "active_segments", "expr": "bsdb_active_segments" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Manifest conflicts/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(bsdb_manifest_conflicts_total[5m]))" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "I/O bytes/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "targets": [
+        { "refId": "read", "legendFormat": "read", "expr": "sum(rate(bsdb_io_bytes_read_total[1m]))" },
+        { "refId": "write", "legendFormat": "write", "expr": "sum(rate(bsdb_io_bytes_written_total[1m]))" }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Ingest back-pressure pauses/sec",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(bsdb_ingest_backpressure_pauses_total[1m]))" }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Index build gate wait p99 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.99, sum(rate(bsdb_index_build_gate_wait_seconds_bucket[5m])) by (le))" }
+      ]
+    }
+  ]
+}

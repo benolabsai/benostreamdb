@@ -112,9 +112,9 @@ def api(tmp_path_factory):
     storage = tmp_path_factory.mktemp("bsdb-search")
     env = {
         **os.environ,
-        "BENOSEARCH_BIND": "127.0.0.1",
-        "BENOSEARCH_PORT": str(port),
-        "BENOSEARCH_STORAGE_URI": f"file://{storage}",
+        "BSDB_SEARCH_BIND": "127.0.0.1",
+        "BSDB_SEARCH_PORT": str(port),
+        "BSDB_SEARCH_STORAGE_URI": f"file://{storage}",
     }
     proc = subprocess.Popen(
         [str(BINARY)],
@@ -189,6 +189,10 @@ def test_metrics(api):
     assert r.status_code == 200
     assert r.headers["Content-Type"].startswith("text/plain; version=0.0.4")
     assert len(r.text.strip()) > 0
+    # The merged body must include both the gateway's own registry and the
+    # core engine's metrics.
+    assert "bsdb_search_" in r.text
+    assert "bsdb_ingest_rows_total" in r.text
 
 
 def test_doc_write_semantics(api):

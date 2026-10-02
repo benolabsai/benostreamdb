@@ -847,10 +847,6 @@ impl PyTable {
             })
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-        let segments: Vec<&str> = results.iter().map(|r| r.segment_id.as_str()).collect();
-        let row_ids: Vec<u32> = results.iter().map(|r| r.row_id).collect();
-        let scores: Vec<f32> = results.iter().map(|r| r.score).collect();
-
         let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(vec![
             arrow::datatypes::Field::new("segment_id", arrow::datatypes::DataType::Utf8, false),
             arrow::datatypes::Field::new("row_id", arrow::datatypes::DataType::UInt32, false),
@@ -860,12 +856,15 @@ impl PyTable {
         let batch = arrow::record_batch::RecordBatch::try_new(
             schema.clone(),
             vec![
-                std::sync::Arc::new(arrow::array::StringArray::from(segments))
-                    as std::sync::Arc<dyn arrow::array::Array>,
-                std::sync::Arc::new(arrow::array::UInt32Array::from(row_ids))
-                    as std::sync::Arc<dyn arrow::array::Array>,
-                std::sync::Arc::new(arrow::array::Float32Array::from(scores))
-                    as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::StringArray::from_iter_values(
+                    results.iter().map(|r| r.segment_id.as_str()),
+                )) as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::UInt32Array::from_iter_values(
+                    results.iter().map(|r| r.row_id),
+                )) as std::sync::Arc<dyn arrow::array::Array>,
+                std::sync::Arc::new(arrow::array::Float32Array::from_iter_values(
+                    results.iter().map(|r| r.score),
+                )) as std::sync::Arc<dyn arrow::array::Array>,
             ],
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -1269,7 +1268,7 @@ impl PyTable {
 
     #[pyo3(signature = (damping=0.85, iterations=30))]
     fn pagerank(&self, py: Python<'_>, damping: f64, iterations: u32) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(pagerank(source, target, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
+        let query = format!("SELECT unnest(graph_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
         self.execute_sql(py, query)
     }
 
@@ -1309,12 +1308,12 @@ impl PyTable {
                 )
             };
             format!(
-                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
                 seed_sql, damping, iterations, directed, weights_sql
             )
         } else {
             format!(
-                "SELECT unnest(personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
                 seed_sql, damping, iterations, directed
             )
         };
@@ -1322,7 +1321,7 @@ impl PyTable {
     }
 
     fn shortest_path(&self, py: Python<'_>, start_node: u64, end_node: u64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(shortest_path(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
+        let query = format!("SELECT unnest(graph_shortest_path(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
         self.execute_sql(py, query)
     }
 
@@ -1417,7 +1416,7 @@ impl PyTable {
         })
     }
 
-    #[pyo3(signature = (query, seeds, top_k=5, hops=1, n_depth=1, k_followups=2))]
+    #[pyo3(signature = (query, seeds, top_k=5, hops=1, n_depth=1, k_followups=2, mode="auto"))]
     fn core_regional_drift(
         &self,
         py: Python<'_>,
@@ -1427,13 +1426,34 @@ impl PyTable {
         hops: u32,
         n_depth: u32,
         k_followups: usize,
+        mode: &str,
     ) -> PyResult<Py<pyo3::types::PyDict>> {
+        use crate::core::sql::graph_udf::graph_view::GraphMode;
+        let mode = match mode.to_ascii_lowercase().as_str() {
+            "in_memory" | "in-memory" | "memory" => GraphMode::InMemory,
+            "out_of_core" | "out-of-core" | "outofcore" | "disk" => GraphMode::OutOfCore,
+            "cached" | "cache" => GraphMode::Cached,
+            "auto" | "" => GraphMode::Auto,
+            other => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "unknown drift mode '{other}' (expected auto|in_memory|out_of_core|cached)"
+                )))
+            }
+        };
         let rt = self.table.runtime();
         let table = self.table.clone();
         let result = py.allow_threads(move || {
             rt.block_on(async {
                 table
-                    .regional_drift(&query, &seeds, top_k, hops, n_depth, k_followups)
+                    .regional_drift_with_mode(
+                        &query,
+                        &seeds,
+                        top_k,
+                        hops,
+                        n_depth,
+                        k_followups,
+                        mode,
+                    )
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
             })
@@ -1454,11 +1474,24 @@ impl PyTable {
             actions.append(ad)?;
         }
         dict.set_item("actions", actions)?;
+
+        let ppr_scores_dict = pyo3::types::PyDict::new(py);
+        for (node, score) in result.ppr_scores {
+            ppr_scores_dict.set_item(node, score)?;
+        }
+        dict.set_item("ppr_scores", ppr_scores_dict)?;
+
+        let comm_dict = pyo3::types::PyDict::new(py);
+        for (node, comm) in result.community_assignments {
+            comm_dict.set_item(node, comm)?;
+        }
+        dict.set_item("community_assignments", comm_dict)?;
+
         Ok(dict.into())
     }
 
     fn strongly_connected_components(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let query = "SELECT unnest(strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) FROM t";
+        let query = "SELECT unnest(graph_strongly_connected_components(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'))) FROM t";
         self.execute_sql(py, query.to_string())
     }
 
@@ -1758,7 +1791,7 @@ impl PyTable {
             )
         };
         let query = format!(
-            "SELECT unnest(connecting_paths(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, {})) FROM t",
+            "SELECT unnest(graph_connecting_paths(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, {})) FROM t",
             seed_sql, directed
         );
         self.execute_sql(py, query)
@@ -1784,7 +1817,7 @@ impl PyTable {
         // same shape regardless of which path produced the partition.
         let query = format!(
             "SELECT arrow_cast(row_number() OVER () - 1, 'UInt32') AS community_id, community \
-             FROM (SELECT unnest(louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
+             FROM (SELECT unnest(graph_louvain_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
             resolution
         );
         self.execute_sql(py, query)
@@ -1796,7 +1829,7 @@ impl PyTable {
     /// resident (no in-RAM edge accumulator). `algorithm` is `"louvain"` or
     /// `"leiden"`; when the table has a graph index on the other endpoint column
     /// the traversal is undirected, otherwise directed.
-    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="louvain"))]
+    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="leiden"))]
     fn communities_csr(
         &self,
         py: Python<'_>,
@@ -1834,7 +1867,7 @@ impl PyTable {
     /// previously-seen node's community id. Communities that do not change keep
     /// their ids, so an incrementally-updated graph does not renumber every
     /// community.
-    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="louvain", seed_nodes=Vec::new(), seed_communities=Vec::new()))]
+    #[pyo3(signature = (graph_column, resolution=1.0, algorithm="leiden", seed_nodes=Vec::new(), seed_communities=Vec::new()))]
     fn communities_csr_seeded(
         &self,
         py: Python<'_>,
@@ -1847,7 +1880,7 @@ impl PyTable {
         let (forward, reverse) = self
             .load_csr_pair(graph_column)
             .map_err(pyo3::exceptions::PyValueError::new_err)?;
-        let seed: std::collections::HashMap<u64, u32> =
+        let seed: ahash::AHashMap<u64, u32> =
             seed_nodes.into_iter().zip(seed_communities).collect();
         let leiden = algorithm.eq_ignore_ascii_case("leiden");
         let communities = py.allow_threads(|| {
@@ -1877,7 +1910,7 @@ impl PyTable {
     /// algorithm, then removes the temp files. This gives tables without a
     /// persisted graph index the same bounded-memory path, and enables
     /// warm-started updates (`seed_nodes`/`seed_communities`) on them.
-    #[pyo3(signature = (src_column="source", dst_column="target", resolution=1.0, algorithm="louvain", seed_nodes=Vec::new(), seed_communities=Vec::new(), undirected=true))]
+    #[pyo3(signature = (src_column="source", dst_column="target", resolution=1.0, algorithm="leiden", seed_nodes=Vec::new(), seed_communities=Vec::new(), undirected=true))]
     #[allow(clippy::too_many_arguments)]
     fn communities_temp_csr(
         &self,
@@ -1931,7 +1964,7 @@ impl PyTable {
                     crate::core::index::csr_graph::MultiSegmentCsrGraph::new(vec![r])
                 });
 
-                let seed: std::collections::HashMap<u64, u32> =
+                let seed: ahash::AHashMap<u64, u32> =
                     seed_nodes.into_iter().zip(seed_communities).collect();
 
                 use crate::core::algorithms::communities::{
@@ -1963,7 +1996,7 @@ impl PyTable {
         // mirrors the CSR path's output.
         let query = format!(
             "SELECT arrow_cast(row_number() OVER () - 1, 'UInt32') AS community_id, community \
-             FROM (SELECT unnest(leiden_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
+             FROM (SELECT unnest(graph_leiden_communities(source, target, arrow_cast(1.0, 'Float32'), arrow_cast({}, 'Float32'))) AS community FROM t)",
             resolution
         );
         self.execute_sql(py, query)
@@ -2016,7 +2049,7 @@ impl PyTable {
     }
 
     fn modularity(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.execute_sql(py, "SELECT modularity(source, target, source_community, target_community) AS modularity FROM t".to_string())
+        self.execute_sql(py, "SELECT graph_modularity(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast(source_community, 'UInt64'), arrow_cast(target_community, 'UInt64')) AS modularity FROM t".to_string())
     }
 
     fn adamic_adar(&self, py: Python<'_>, node1: u64, node2: u64) -> PyResult<Py<PyAny>> {
@@ -2055,7 +2088,7 @@ impl PyTable {
         node1: u64,
         node2: u64,
     ) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT preferential_attachment(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
+        let query = format!("SELECT graph_preferential_attachment(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64')) AS score FROM t", node1, node2);
         self.execute_sql(py, query)
     }
 
@@ -2246,7 +2279,14 @@ impl PyTable {
             hops,
             alpha: 0.85,
             confidence_threshold,
+            max_ppr_iterations: 30,
+            ppr_tolerance: 1e-6,
+            followup_decay: 0.7,
         };
+
+        // The engine's DRIFT generator stores integer-keyed community labels in
+        // an `AHashMap`; convert the Python-supplied mapping once at the boundary.
+        let community_map: ahash::AHashMap<u64, u64> = community_map.into_iter().collect();
 
         // If graph_column is provided, use MmapCsrGraph. Otherwise fallback to DiGraphMap
         let result = if let Some(col) = graph_column {
@@ -2294,9 +2334,8 @@ impl PyTable {
                 .execute_sql_internal("SELECT source, target FROM t".to_string())
                 .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
 
-            let mut graph = crate::core::sql::graph_udf::drift_search::SimpleGraph {
-                adjacency: std::collections::HashMap::new(),
-            };
+            // Collect edges, then build the (Arc-backed) adjacency in one pass.
+            let mut edges: Vec<(u64, u64)> = Vec::new();
 
             use arrow::array::Array;
             for batch in batches {
@@ -2326,12 +2365,13 @@ impl PyTable {
 
                 for i in 0..batch.num_rows() {
                     if sources.is_valid(i) && targets.is_valid(i) {
-                        let s = sources.value(i);
-                        let t = targets.value(i);
-                        graph.adjacency.entry(s).or_default().push(t);
+                        edges.push((sources.value(i), targets.value(i)));
                     }
                 }
             }
+
+            let graph =
+                crate::core::sql::graph_udf::drift_search::SimpleGraph::from_directed_edges(&edges);
 
             #[allow(deprecated)]
             py.allow_threads(move || {
@@ -2382,6 +2422,18 @@ impl PyTable {
             actions_list.append(action_dict)?;
         }
         dict.set_item("actions", actions_list)?;
+
+        let ppr_scores_dict = pyo3::types::PyDict::new(py);
+        for (node, score) in result.ppr_scores {
+            ppr_scores_dict.set_item(node, score)?;
+        }
+        dict.set_item("ppr_scores", ppr_scores_dict)?;
+
+        let comm_dict = pyo3::types::PyDict::new(py);
+        for (node, comm) in result.community_assignments {
+            comm_dict.set_item(node, comm)?;
+        }
+        dict.set_item("community_assignments", comm_dict)?;
 
         Ok(dict.into())
     }

@@ -190,7 +190,7 @@ impl VectorSearchConfig {
         // Fallback: return defaults
         // Users can register via:
         //   config.options.extensions.insert(VectorSearchConfig::new());
-        //   session.config_options().set("benostreamdb.ef_search", "128").unwrap();
+        //   session.config_options().set("bsdb.ef_search", "128").unwrap();
         Self::new()
     }
 

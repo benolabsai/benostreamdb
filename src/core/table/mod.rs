@@ -133,7 +133,7 @@ pub struct Table {
 ///   successful commit.
 /// - [`WalDurability::Async`] — a write returns once the batch is handed to the
 ///   WAL worker channel; the worker syncs on a batch/interval boundary
-///   (`BENOSTREAM_WAL_SYNC_BATCH_SIZE` / `BENOSTREAM_WAL_SYNC_INTERVAL_MS`,
+///   (`BSDB_WAL_SYNC_BATCH_SIZE` / `BSDB_WAL_SYNC_INTERVAL_MS`,
 ///   default 10 batches / 100 ms). Higher throughput, but writes inside that
 ///   un-synced window can be lost on process failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -263,7 +263,12 @@ impl Table {
     }
 
     pub fn new(uri: String) -> Result<Self> {
-        TableBuilder::new(uri).with_index_all(true).build()
+        // Do NOT default to indexing every column: that triggered large HNSW
+        // builds on every write (see the `index_all` note in write.rs). Indexes
+        // are opt-in via `add_index` / `add_index_columns`, or by explicitly
+        // building with `.with_index_all(true)` (or `index_all_columns()`).
+        // Matches `new_async`.
+        TableBuilder::new(uri).with_index_all(false).build()
     }
 
     /// Starts a background task to automatically flush the write buffer at the specified interval.

@@ -54,19 +54,19 @@ pub struct AppState {
     open_gate: Arc<Mutex<()>>,
 }
 
-/// Whether index preload-on-open is enabled (`BENOSEARCH_PRELOAD`, default on).
+/// Whether index preload-on-open is enabled (`BSDB_SEARCH_PRELOAD`, default on).
 fn preload_enabled() -> bool {
-    match std::env::var("BENOSEARCH_PRELOAD") {
+    match std::env::var("BSDB_SEARCH_PRELOAD") {
         Ok(v) => !matches!(v.as_str(), "0" | "false" | "no" | "off"),
         Err(_) => true,
     }
 }
 
 /// Preload options for the gateway: in-memory budget from
-/// `BENOSEARCH_PRELOAD_GB` (default 4 GiB), overflow spilled to the mmap
+/// `BSDB_SEARCH_PRELOAD_GB` (default 4 GiB), overflow spilled to the mmap
 /// disk cache.
 fn preload_options() -> PreloadOptions {
-    let budget_gb: u64 = std::env::var("BENOSEARCH_PRELOAD_GB")
+    let budget_gb: u64 = std::env::var("BSDB_SEARCH_PRELOAD_GB")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(4);
@@ -375,9 +375,9 @@ impl AppState {
 
         // 2b. Warm the read-path index caches so the first query is served
         // from memory (or the mmap disk cache) instead of the object store.
-        // Dgraph-style in-memory residency, bounded by `BENOSEARCH_PRELOAD_GB`
+        // Dgraph-style in-memory residency, bounded by `BSDB_SEARCH_PRELOAD_GB`
         // with the overflow spilled to the disk cache. Disable with
-        // `BENOSEARCH_PRELOAD=0`.
+        // `BSDB_SEARCH_PRELOAD=0`.
         if preload_enabled() {
             let opts = preload_options();
             match table.preload_indexes_async(opts).await {
@@ -722,11 +722,11 @@ pub fn default_storage_uri() -> String {
     }
 }
 
-/// Resolve `BENOSEARCH_STORAGE_URI` (or fallback `BENOSTREAM_STORAGE_URI`, defaulting to `file://~/.benostreamdb/search`),
+/// Resolve `BSDB_SEARCH_STORAGE_URI` (or fallback `BSDB_STORAGE_URI`, defaulting to `file://~/.benostreamdb/search`),
 /// expanding a leading `~` into `$HOME`.
 pub fn resolve_storage_uri() -> String {
-    let raw = std::env::var("BENOSEARCH_STORAGE_URI")
-        .or_else(|_| std::env::var("BENOSTREAM_STORAGE_URI"))
+    let raw = std::env::var("BSDB_SEARCH_STORAGE_URI")
+        .or_else(|_| std::env::var("BSDB_STORAGE_URI"))
         .unwrap_or_else(|_| default_storage_uri());
     let trimmed = raw.trim_end_matches('/');
     if trimmed == "~" || trimmed.starts_with("~/") {
@@ -753,14 +753,14 @@ pub(crate) async fn table_exists(uri: &str) -> bool {
 }
 
 /// Resolve the WAL durability mode for search tables from
-/// `BENOSEARCH_WAL_DURABILITY` or `BENOSTREAM_WAL_DURABILITY` (default `async`).
+/// `BSDB_SEARCH_WAL_DURABILITY` or `BSDB_WAL_DURABILITY` (default `async`).
 ///
 /// `async` hands writes to the background WAL worker (batched fsync) for
 /// maximum ingest throughput; `sync` fsyncs every write for the strongest
 /// crash guarantees. Unknown values fall back to `async`.
 fn resolve_wal_durability() -> WalDurability {
-    let var = std::env::var("BENOSEARCH_WAL_DURABILITY")
-        .or_else(|_| std::env::var("BENOSTREAM_WAL_DURABILITY"))
+    let var = std::env::var("BSDB_SEARCH_WAL_DURABILITY")
+        .or_else(|_| std::env::var("BSDB_WAL_DURABILITY"))
         .ok();
     match var.as_deref().map(str::to_ascii_lowercase) {
         Some(v) if v == "sync" => WalDurability::Sync,
@@ -779,8 +779,8 @@ fn resolve_wal_durability() -> WalDurability {
 /// Resolve external Iceberg catalog configuration from environment variables or benostream.toml.
 ///
 /// Precedence:
-/// 1. `BENOSEARCH_CATALOG_TYPE` / `BENOSTREAM_CATALOG_TYPE` (explicit environment variables)
-/// 2. `benostream.toml` / `BENOSTREAM_CONFIG` (via `CatalogConfig::load_default()`)
+/// 1. `BSDB_SEARCH_CATALOG_TYPE` / `BSDB_CATALOG_TYPE` (explicit environment variables)
+/// 2. `benostream.toml` / `BSDB_CONFIG` (via `CatalogConfig::load_default()`)
 ///
 /// Returns `Some((Arc<dyn Catalog>, namespace))` if configured, or `None` for path-based Iceberg mode.
 pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::Catalog>, String)> {
@@ -788,8 +788,8 @@ pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::C
     use std::str::FromStr;
 
     // 1. Check environment variables
-    let type_env = std::env::var("BENOSEARCH_CATALOG_TYPE")
-        .or_else(|_| std::env::var("BENOSTREAM_CATALOG_TYPE"))
+    let type_env = std::env::var("BSDB_SEARCH_CATALOG_TYPE")
+        .or_else(|_| std::env::var("BSDB_CATALOG_TYPE"))
         .ok();
 
     if let Some(type_str) = type_env {
@@ -798,35 +798,35 @@ pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::C
                 let mut config_map = HashMap::new();
 
                 // URL / URI
-                if let Ok(u) = std::env::var("BENOSEARCH_CATALOG_URL")
-                    .or_else(|_| std::env::var("BENOSEARCH_CATALOG_URI"))
-                    .or_else(|_| std::env::var("BENOSTREAM_CATALOG_URL"))
-                    .or_else(|_| std::env::var("BENOSTREAM_CATALOG_URI"))
+                if let Ok(u) = std::env::var("BSDB_SEARCH_CATALOG_URL")
+                    .or_else(|_| std::env::var("BSDB_SEARCH_CATALOG_URI"))
+                    .or_else(|_| std::env::var("BSDB_CATALOG_URL"))
+                    .or_else(|_| std::env::var("BSDB_CATALOG_URI"))
                 {
                     config_map.insert("url".to_string(), u.clone());
                     config_map.insert("uri".to_string(), u);
                 }
 
                 // Token / Credential / Prefix / Catalog ID
-                if let Ok(tok) = std::env::var("BENOSEARCH_CATALOG_TOKEN")
-                    .or_else(|_| std::env::var("BENOSTREAM_CATALOG_TOKEN"))
+                if let Ok(tok) = std::env::var("BSDB_SEARCH_CATALOG_TOKEN")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_TOKEN"))
                 {
                     config_map.insert("token".to_string(), tok);
                 }
-                if let Ok(cred) = std::env::var("BENOSEARCH_CATALOG_CREDENTIAL")
-                    .or_else(|_| std::env::var("BENOSTREAM_CATALOG_CREDENTIAL"))
+                if let Ok(cred) = std::env::var("BSDB_SEARCH_CATALOG_CREDENTIAL")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_CREDENTIAL"))
                 {
                     config_map.insert("credential".to_string(), cred);
                 }
-                if let Ok(pfx) = std::env::var("BENOSEARCH_CATALOG_PREFIX") {
+                if let Ok(pfx) = std::env::var("BSDB_SEARCH_CATALOG_PREFIX") {
                     config_map.insert("prefix".to_string(), pfx);
                 }
-                if let Ok(cid) = std::env::var("BENOSEARCH_CATALOG_ID") {
+                if let Ok(cid) = std::env::var("BSDB_SEARCH_CATALOG_ID") {
                     config_map.insert("catalog_id".to_string(), cid);
                 }
 
-                let namespace = std::env::var("BENOSEARCH_CATALOG_NAMESPACE")
-                    .or_else(|_| std::env::var("BENOSTREAM_CATALOG_NAMESPACE"))
+                let namespace = std::env::var("BSDB_SEARCH_CATALOG_NAMESPACE")
+                    .or_else(|_| std::env::var("BSDB_CATALOG_NAMESPACE"))
                     .unwrap_or_else(|_| "default".to_string());
 
                 match create_catalog_async(cat_type, config_map).await {
@@ -854,7 +854,7 @@ pub async fn resolve_catalog() -> Option<(Arc<dyn benostreamdb::core::catalog::C
                 tracing::warn!(
                     catalog_type = %type_str,
                     error = %e,
-                    "Invalid BENOSEARCH_CATALOG_TYPE; falling back to path-based Iceberg"
+                    "Invalid BSDB_SEARCH_CATALOG_TYPE; falling back to path-based Iceberg"
                 );
                 return None;
             }
@@ -914,10 +914,10 @@ mod tests {
 
     #[test]
     fn resolve_storage_uri_expands_tilde() {
-        std::env::set_var("BENOSEARCH_STORAGE_URI", "~/searches");
+        std::env::set_var("BSDB_SEARCH_STORAGE_URI", "~/searches");
         let home = std::env::var("HOME").unwrap_or_default();
         assert_eq!(resolve_storage_uri(), format!("{home}/searches"));
-        std::env::remove_var("BENOSEARCH_STORAGE_URI");
+        std::env::remove_var("BSDB_SEARCH_STORAGE_URI");
     }
 
     #[tokio::test]
@@ -939,25 +939,25 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_catalog_lifecycle() {
         // 1. Unset -> None
-        std::env::remove_var("BENOSEARCH_CATALOG_TYPE");
-        std::env::remove_var("BENOSTREAM_CATALOG_TYPE");
+        std::env::remove_var("BSDB_SEARCH_CATALOG_TYPE");
+        std::env::remove_var("BSDB_CATALOG_TYPE");
         assert!(resolve_catalog().await.is_none());
 
         // 2. Set REST catalog -> Some
-        std::env::set_var("BENOSEARCH_CATALOG_TYPE", "rest");
+        std::env::set_var("BSDB_SEARCH_CATALOG_TYPE", "rest");
         std::env::set_var(
-            "BENOSEARCH_CATALOG_URL",
+            "BSDB_SEARCH_CATALOG_URL",
             "http://localhost:8181/api/catalog/v1",
         );
-        std::env::set_var("BENOSEARCH_CATALOG_NAMESPACE", "analytics");
+        std::env::set_var("BSDB_SEARCH_CATALOG_NAMESPACE", "analytics");
 
         let resolved = resolve_catalog().await;
         assert!(resolved.is_some());
         let (_, ns) = resolved.unwrap();
         assert_eq!(ns, "analytics");
 
-        std::env::remove_var("BENOSEARCH_CATALOG_TYPE");
-        std::env::remove_var("BENOSEARCH_CATALOG_URL");
-        std::env::remove_var("BENOSEARCH_CATALOG_NAMESPACE");
+        std::env::remove_var("BSDB_SEARCH_CATALOG_TYPE");
+        std::env::remove_var("BSDB_SEARCH_CATALOG_URL");
+        std::env::remove_var("BSDB_SEARCH_CATALOG_NAMESPACE");
     }
 }

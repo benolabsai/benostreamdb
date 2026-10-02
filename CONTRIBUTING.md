@@ -64,6 +64,31 @@ cargo build --features wgpu
 
 See the [README](README.md#gpu-acceleration-optional) for hardware-specific installation guides.
 
+### Pre-release soak gate
+
+Before tagging a release, run the pre-release soak gate **locally**. It mirrors
+the `soak-gate` job in [`.github/workflows/release.yml`](.github/workflows/release.yml)
+and fails on any divergence between indexed and full-scan execution:
+
+```bash
+# Full gate (30-minute soak, the default)
+./scripts/pre_release_soak.sh
+
+# Custom duration in minutes
+./scripts/pre_release_soak.sh 5
+
+# Quick smoke run (1 minute)
+./scripts/pre_release_soak.sh --quick
+
+# Explicit seconds
+BSDB_SOAK_SECONDS=600 ./scripts/pre_release_soak.sh
+```
+
+It runs three steps: the randomized differential workload (model oracle), the
+crash-injection workload sweep, and the long soak. A non-zero exit means **do
+not tag** — fix the divergence first. The same gate runs in CI on a tag, so a
+release cannot ship without it.
+
 ---
 
 ## Coding Standards

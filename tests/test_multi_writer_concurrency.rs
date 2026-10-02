@@ -399,6 +399,240 @@ async fn randomized_mixed_workload_is_consistent() -> Result<()> {
     Ok(())
 }
 
+/// Isolation probe: N writers doing ONLY inserts must produce an exact count.
+///
+/// If this fails, the amplification is in the concurrent write/commit path
+/// (not compaction/delete).
+#[tokio::test]
+async fn multi_writer_insert_only_is_exact() -> Result<()> {
+    let uri = "memory://ws3-insert-only";
+    let tmp = tempfile::tempdir()?;
+    {
+        let t = open_shared(uri, &tmp.path().join("seed")).await?;
+        t.write_async(vec![batch(0, 1)]).await?;
+        t.commit_async().await?;
+    }
+
+    let writers = 8usize;
+    let ops_per_writer = 10usize;
+    let rows = 4i32;
+    let mut handles = Vec::new();
+    for w in 0..writers {
+        let t = open_shared(uri, &tmp.path().join(format!("w{w}"))).await?;
+        handles.push(tokio::spawn(async move {
+            for op in 0..ops_per_writer {
+                let start = 10_000 + (w as i32) * 1_000_000 + (op as i32) * 100;
+                t.write_async(vec![batch(start, rows)]).await?;
+                t.commit_async().await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        }));
+    }
+    for h in handles {
+        h.await??;
+    }
+
+    let t = open_shared(uri, &tmp.path().join("verify")).await?;
+    let count = count_rows(&t).await?;
+    let expected = 1 + (writers * ops_per_writer) as i64 * rows as i64;
+    assert_eq!(
+        count, expected,
+        "insert-only count must be exact (no duplication)"
+    );
+    Ok(())
+}
+
+/// Isolation probe: inserts + concurrent compaction must not duplicate rows.
+#[tokio::test]
+async fn multi_writer_insert_compact_is_exact() -> Result<()> {
+    let uri = "memory://ws3-insert-compact";
+    let tmp = tempfile::tempdir()?;
+    {
+        let t = open_shared(uri, &tmp.path().join("seed")).await?;
+        t.write_async(vec![batch(0, 1)]).await?;
+        t.commit_async().await?;
+    }
+
+    let writers = 8usize;
+    let ops_per_writer = 10usize;
+    let rows = 4i32;
+    let mut handles = Vec::new();
+    for w in 0..writers {
+        let t = open_shared(uri, &tmp.path().join(format!("w{w}"))).await?;
+        handles.push(tokio::spawn(async move {
+            for op in 0..ops_per_writer {
+                let start = 10_000 + (w as i32) * 1_000_000 + (op as i32) * 100;
+                t.write_async(vec![batch(start, rows)]).await?;
+                t.commit_async().await?;
+                if op % 3 == 0 {
+                    let _ = t.rewrite_data_files_async(None).await;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        }));
+    }
+    for h in handles {
+        h.await??;
+    }
+
+    let t = open_shared(uri, &tmp.path().join("verify")).await?;
+    let count = count_rows(&t).await?;
+    let expected = 1 + (writers * ops_per_writer) as i64 * rows as i64;
+    assert_eq!(
+        count, expected,
+        "insert+compact count must be exact (no duplication)"
+    );
+    Ok(())
+}
+
+/// Isolation probe: inserts + concurrent delete must not duplicate rows.
+#[tokio::test]
+async fn multi_writer_insert_delete_is_exact() -> Result<()> {
+    let uri = "memory://ws3-insert-delete";
+    let tmp = tempfile::tempdir()?;
+    {
+        let t = open_shared(uri, &tmp.path().join("seed")).await?;
+        t.write_async(vec![batch(0, 1)]).await?;
+        t.commit_async().await?;
+    }
+
+    let writers = 8usize;
+    let ops_per_writer = 10usize;
+    let rows = 4i32;
+    let mut handles = Vec::new();
+    for w in 0..writers {
+        let t = open_shared(uri, &tmp.path().join(format!("w{w}"))).await?;
+        handles.push(tokio::spawn(async move {
+            for op in 0..ops_per_writer {
+                let start = 10_000 + (w as i32) * 1_000_000 + (op as i32) * 100;
+                t.write_async(vec![batch(start, rows)]).await?;
+                t.commit_async().await?;
+                if op % 3 == 0 {
+                    let _ = t
+                        .delete_async(&format!("id >= {start} AND id < {}", start + 2))
+                        .await;
+                    let _ = t.commit_async().await;
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        }));
+    }
+    for h in handles {
+        h.await??;
+    }
+
+    let t = open_shared(uri, &tmp.path().join("verify")).await?;
+    let count = count_rows(&t).await?;
+    // Each writer deletes 2 rows on ops 0,3,6,9 → 4 deletes × 2 rows = 8 rows
+    // per writer removed.
+    let inserted = 1 + (writers * ops_per_writer) as i64 * rows as i64;
+    let deleted = (writers * 4) as i64 * 2;
+    let expected = inserted - deleted;
+    assert_eq!(
+        count, expected,
+        "insert+delete count must be exact (no duplication)"
+    );
+    Ok(())
+}
+
+/// Long-duration multi-writer soak: N writers churn a shared store for
+/// `BSDB_SOAK_SECONDS`, and the final state must be a valid serialization with
+/// no torn snapshots and no orphaned-but-referenced artifacts.
+///
+/// This is the WS3 counterpart to `tests/soak.rs`: the fast
+/// `randomized_mixed_workload_is_consistent` runs 8×6 ops; this runs until the
+/// deadline. The working set is bounded (each writer deletes its own window) so
+/// a long run does not grow without limit. `#[ignore]`d and wired into the
+/// pre-release gate.
+#[tokio::test]
+#[ignore = "soak test; run with `-- --ignored` and BSDB_SOAK_SECONDS"]
+async fn multi_writer_soak() -> Result<()> {
+    let secs: u64 = std::env::var("BSDB_SOAK_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
+    let uri = "memory://ws3-soak";
+    let tmp = tempfile::tempdir()?;
+
+    {
+        let t = open_shared(uri, &tmp.path().join("seed")).await?;
+        t.write_async(vec![batch(0, 1)]).await?;
+        t.commit_async().await?;
+    }
+
+    let writers = 8usize;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let mut handles = Vec::new();
+
+    for w in 0..writers {
+        let t = open_shared(uri, &tmp.path().join(format!("w{w}"))).await?;
+        handles.push(tokio::spawn(async move {
+            let mut rng = Lcg::new(0x5EED_0000 + w as u64);
+            let mut ops: u64 = 0;
+            // Each writer owns a disjoint, bounded id window.
+            let base = 10_000 + (w as i32) * 1_000_000;
+            while std::time::Instant::now() < deadline {
+                match rng.below(10) {
+                    // 50% insert (bounded window)
+                    0..=4 => {
+                        let start = base + ((ops % 5_000) as i32) * 100;
+                        t.write_async(vec![batch(start, 4)]).await?;
+                        t.commit_async().await?;
+                    }
+                    // 20% delete an older window (keeps the working set bounded)
+                    5..=6 => {
+                        let start = base + ((ops.saturating_sub(20) % 5_000) as i32) * 100;
+                        let _ = t
+                            .delete_async(&format!("id >= {start} AND id < {}", start + 100))
+                            .await;
+                        let _ = t.commit_async().await;
+                    }
+                    // 20% compaction
+                    7..=8 => {
+                        let _ = t.rewrite_data_files_async(None).await;
+                    }
+                    // 10% read (must never see a torn snapshot)
+                    _ => {
+                        let c = count_rows(&t).await?;
+                        assert!(c >= 1, "a reader must always see at least the seed row");
+                    }
+                }
+                ops += 1;
+            }
+            Ok::<u64, anyhow::Error>(ops)
+        }));
+    }
+
+    let mut total_ops: u64 = 0;
+    for h in handles {
+        total_ops += h.await??;
+    }
+
+    // Final state must be a valid committed snapshot.
+    let t = open_shared(uri, &tmp.path().join("verify")).await?;
+    let count = count_rows(&t).await?;
+    assert!(count >= 1, "final count must include at least the seed row");
+
+    // No orphaned-but-referenced artifacts.
+    let store = benostreamdb::core::storage::create_object_store(uri)?;
+    let manager = ManifestManager::new(store.clone(), "", uri);
+    let (_manifest, entries, _) = manager.load_latest_full().await?;
+    for entry in &entries {
+        let p = ObjPath::from(entry.file_path.as_str());
+        assert!(
+            store.head(&p).await.is_ok(),
+            "manifest references a missing data file: {}",
+            entry.file_path
+        );
+    }
+
+    eprintln!(
+        "[soak-stats] test=multi_writer_soak writers={writers} ops={total_ops} duration_s={secs} rows={count}"
+    );
+    Ok(())
+}
+
 /// A transient object-store failure during commit must not corrupt state: the
 /// table stays readable and a retry succeeds.
 #[tokio::test]

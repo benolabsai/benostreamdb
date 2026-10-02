@@ -1196,7 +1196,7 @@ impl HnswIvfIndex {
             }
         });
         candidates.dedup_by_key(|x| x.0); // Remove duplicates
-        println!("Candidates after dedup: len={}", candidates.len());
+        tracing::debug!("Candidates after dedup: len={}", candidates.len());
         candidates.truncate(k);
         let t_fine = t_fine_start.elapsed();
         tracing::debug!(

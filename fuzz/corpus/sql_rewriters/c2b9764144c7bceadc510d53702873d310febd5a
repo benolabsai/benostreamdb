@@ -1,0 +1,1 @@
+SELESELECT id FROM t PARTITIONED BT (day( WHERE v <-> '[1,2,3R,ER BY v <-> %[1,2,3]> '[1,2 5

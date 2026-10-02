@@ -407,7 +407,6 @@ async fn execute_actions() -> anyhow::Result<()> {
         "recover_indexes",
         "checkpoint",
         "rewrite_data_files",
-        "migrate_legacy_graph_indexes",
     ] {
         session
             .sql(&format!("ALTER TABLE mydb.myschema.t EXECUTE {};", action))

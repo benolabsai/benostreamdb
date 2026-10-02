@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, ListArray, ListBuilder, StructBuilder,
     UInt32Array, UInt64Array, UInt64Builder,
@@ -58,7 +59,7 @@ impl AggregateUDFImpl for PersonalizedPageRankUDF {
     }
 
     fn name(&self) -> &str {
-        "personalized_pagerank"
+        "graph_personalized_pagerank"
     }
 
     fn signature(&self) -> &Signature {
@@ -82,38 +83,27 @@ impl AggregateUDFImpl for PersonalizedPageRankUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "seeds",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new("damping", DataType::Float64, true)),
-            Arc::new(Field::new("iterations", DataType::UInt32, true)),
-            Arc::new(Field::new("directed", DataType::Boolean, true)),
-            Arc::new(Field::new(
-                "seed_weights",
-                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
-                true,
-            )),
-        ])
+        let mut fields = GraphAccumulatorBase::state_fields();
+        fields.push(Arc::new(Field::new(
+            "seeds",
+            DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
+            true,
+        )));
+        fields.push(Arc::new(Field::new("damping", DataType::Float64, true)));
+        fields.push(Arc::new(Field::new("iterations", DataType::UInt32, true)));
+        fields.push(Arc::new(Field::new("directed", DataType::Boolean, true)));
+        fields.push(Arc::new(Field::new(
+            "seed_weights",
+            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+            true,
+        )));
+        Ok(fields)
     }
 }
 
 #[derive(Debug)]
 pub struct PersonalizedPageRankAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
     seeds: Vec<u64>,
     damping: f64,
     iterations: u32,
@@ -124,8 +114,7 @@ pub struct PersonalizedPageRankAccumulator {
 impl PersonalizedPageRankAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
             seeds: Vec::new(),
             damping: 0.85,
             iterations: 30,
@@ -137,15 +126,7 @@ impl PersonalizedPageRankAccumulator {
 
 impl Accumulator for PersonalizedPageRankAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
+        let mut state = self.base.edge_state()?;
 
         let mut seeds_builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
         seeds_builder.values().append_slice(&self.seeds);
@@ -164,15 +145,13 @@ impl Accumulator for PersonalizedPageRankAccumulator {
             ScalarValue::List(Arc::new(weights_builder.finish()))
         };
 
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::List(Arc::new(seeds_builder.finish())),
-            ScalarValue::Float64(Some(self.damping)),
-            ScalarValue::UInt32(Some(self.iterations)),
-            ScalarValue::Boolean(Some(self.directed)),
-            seed_weights_val,
-        ])
+        state.push(ScalarValue::List(Arc::new(seeds_builder.finish())));
+        state.push(ScalarValue::Float64(Some(self.damping)));
+        state.push(ScalarValue::UInt32(Some(self.iterations)));
+        state.push(ScalarValue::Boolean(Some(self.directed)));
+        state.push(seed_weights_val);
+
+        Ok(state)
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -182,18 +161,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
             ));
         }
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
+        self.base.update_edge_batch(values, Some(7), Some(8))?;
 
         // seeds is a ListArray
         if let Some(seeds_list) = values[2].as_any().downcast_ref::<ListArray>() {
@@ -254,14 +222,6 @@ impl Accumulator for PersonalizedPageRankAccumulator {
             }
         }
 
-        let len = sources_arr.len();
-        for i in 0..len {
-            if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
-                self.sources.push(sources_arr.value(i));
-                self.targets.push(targets_arr.value(i));
-            }
-        }
-
         Ok(())
     }
 
@@ -269,23 +229,12 @@ impl Accumulator for PersonalizedPageRankAccumulator {
         if states.is_empty() {
             return Ok(());
         }
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "personalized_pagerank: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "personalized_pagerank: expected ListArray for targets".to_string(),
-                )
-            })?;
-        let seeds_list = states[2]
+        self.base.merge_edge_state(states, Some(2), Some(3))?;
+        if states.len() <= 4 {
+            return Ok(());
+        }
+
+        let seeds_list = states[4]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
             .ok_or_else(|| {
@@ -293,7 +242,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                     "personalized_pagerank: expected ListArray for seeds".to_string(),
                 )
             })?;
-        let damping_arr = states[3]
+        let damping_arr = states[5]
             .as_any()
             .downcast_ref::<arrow::array::Float64Array>()
             .ok_or_else(|| {
@@ -301,7 +250,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                     "personalized_pagerank: expected Float64Array for damping".to_string(),
                 )
             })?;
-        let iterations_arr = states[4]
+        let iterations_arr = states[6]
             .as_any()
             .downcast_ref::<arrow::array::UInt32Array>()
             .ok_or_else(|| {
@@ -309,7 +258,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                     "personalized_pagerank: expected UInt32Array for iterations".to_string(),
                 )
             })?;
-        let directed_arr = states[5]
+        let directed_arr = states[7]
             .as_any()
             .downcast_ref::<arrow::array::BooleanArray>()
             .ok_or_else(|| {
@@ -317,7 +266,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                     "personalized_pagerank: expected BooleanArray for directed".to_string(),
                 )
             })?;
-        let seed_weights_list = states[6]
+        let seed_weights_list = states[8]
             .as_any()
             .downcast_ref::<arrow::array::ListArray>()
             .ok_or_else(|| {
@@ -325,21 +274,6 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                     "personalized_pagerank: expected ListArray for seed weights".to_string(),
                 )
             })?;
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
 
         if !seeds_list.is_empty() && seeds_list.is_valid(0) {
             let s_arr = seeds_list.value(0);
@@ -373,7 +307,18 @@ impl Accumulator for PersonalizedPageRankAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.sources.is_empty() || self.seeds.is_empty() {
+        let graph = self.base.resolve_graph(&self.seeds, self.iterations)?;
+
+        let mut all_edges = Vec::new();
+        if !self.base.is_empty() {
+            for (_, u, v) in self.base.edges() {
+                all_edges.push((u, v));
+            }
+        } else {
+            all_edges = graph.all_edges();
+        }
+
+        if all_edges.is_empty() || self.seeds.is_empty() {
             let struct_fields = Fields::from(vec![
                 Field::new("node", DataType::UInt64, false),
                 Field::new("score", DataType::Float64, false),
@@ -392,9 +337,7 @@ impl Accumulator for PersonalizedPageRankAccumulator {
 
         let mut adjacency: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut nodes: Vec<u64> = Vec::new();
-        for i in 0..self.sources.len() {
-            let u = self.sources[i];
-            let v = self.targets[i];
+        for &(u, v) in &all_edges {
             adjacency.entry(u).or_default().push(v);
             if !self.directed {
                 adjacency.entry(v).or_default().push(u);
@@ -473,7 +416,11 @@ impl Accumulator for PersonalizedPageRankAccumulator {
         let mut node_builder = UInt64Builder::new();
         let mut score_builder = arrow::array::Float64Builder::new();
 
-        for (&node, &score) in &scores {
+        let mut sorted_nodes: Vec<_> = scores.keys().copied().collect();
+        sorted_nodes.sort_unstable();
+
+        for node in sorted_nodes {
+            let score = scores[&node];
             node_builder.append_value(node);
             score_builder.append_value(score);
         }
@@ -495,6 +442,6 @@ impl Accumulator for PersonalizedPageRankAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size()
     }
 }

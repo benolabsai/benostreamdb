@@ -1,0 +1,54 @@
+# Observability stack: OTLP collector + Prometheus + Grafana.
+#
+#   # Start the stack:
+#   docker compose -f deploy/observability/docker-compose.observability.yml up -d
+#
+#   # Point the engine at the collector (OTLP/HTTP push) and/or scrape it:
+#   export BSDB_OTLP_ENDPOINT=http://localhost:4318
+#   export BSDB_SERVICE_NAME=benostreamdb
+#   export BSDB_METRICS_BIND=0.0.0.0 BSDB_METRICS_PORT=9090   # for pull scraping
+#
+# Grafana:    http://localhost:3000  (admin / admin)
+# Prometheus: http://localhost:9091
+#
+# The engine pushes its metrics to the collector (see src/telemetry/otlp.rs);
+# the collector re-exposes them in Prometheus format on :8889, which Prometheus
+# scrapes. Prometheus also scrapes the Flight SQL server's /metrics directly.
+networks:
+  observability: {}
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP/gRPC
+      - "4318:4318"   # OTLP/HTTP (BSDB_OTLP_ENDPOINT)
+      - "8889:8889"   # Prometheus exporter
+    networks: [observability]
+
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [observability]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+    networks: [observability]

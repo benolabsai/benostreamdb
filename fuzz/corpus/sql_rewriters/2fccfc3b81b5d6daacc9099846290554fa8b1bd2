@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONED BY (day) WHERE v <-> '[0,2,3]' ORSELECT id[1

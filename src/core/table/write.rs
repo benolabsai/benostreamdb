@@ -33,7 +33,7 @@ impl Table {
     /// Write Arrow RecordBatches to the table (Buffered)
     ///
     /// Data is written to an in-memory buffer. It is NOT persisted to disk until:
-    /// 1. The buffer exceeds `BENOSTREAM_CACHE_GB`
+    /// 1. The buffer exceeds `BSDB_CACHE_GB`
     /// 2. `commit()` is called explicitly
     pub fn write(&self, batches: Vec<RecordBatch>) -> Result<()> {
         self.runtime().block_on(self.write_async(batches))
@@ -367,6 +367,43 @@ impl Table {
         let t_coerce = std::time::Instant::now();
         let mut target_schema = self.arrow_schema();
 
+        // Columns with a **declared vector index** must be stored as Float32.
+        // An index declared before any data exists otherwise sees a
+        // `list<double>` column and silently never builds (every query falls
+        // back to a brute-force scan). Coercing the declared column here makes
+        // incoming data flow into the declared index, whatever the input dtype.
+        let vector_cols: std::collections::HashSet<String> =
+            self.indexing.index_columns.read().iter().cloned().collect();
+        let f32_field = |field: &arrow::datatypes::Field| -> arrow::datatypes::Field {
+            use arrow::datatypes::{DataType, Field};
+            match field.data_type() {
+                DataType::List(inner) if inner.data_type() == &DataType::Float64 => Field::new(
+                    field.name(),
+                    DataType::List(std::sync::Arc::new(Field::new(
+                        "item",
+                        DataType::Float32,
+                        inner.is_nullable(),
+                    ))),
+                    field.is_nullable(),
+                ),
+                DataType::FixedSizeList(inner, n) if inner.data_type() == &DataType::Float64 => {
+                    Field::new(
+                        field.name(),
+                        DataType::FixedSizeList(
+                            std::sync::Arc::new(Field::new(
+                                "item",
+                                DataType::Float32,
+                                inner.is_nullable(),
+                            )),
+                            *n,
+                        ),
+                        field.is_nullable(),
+                    )
+                }
+                _ => field.clone(),
+            }
+        };
+
         if let Some(first_batch) = batches.first() {
             let incoming_schema = first_batch.schema();
             let mut evolved_schema = (*target_schema).clone();
@@ -396,7 +433,11 @@ impl Table {
                                 .iter()
                                 .map(|f| (**f).clone())
                                 .collect();
-                            fields[idx] = (**field).clone();
+                            fields[idx] = if vector_cols.contains(field.name()) {
+                                f32_field(field)
+                            } else {
+                                (**field).clone()
+                            };
                             evolved_schema = Schema::new(fields);
                             changed = true;
                         }
@@ -429,7 +470,11 @@ impl Table {
                         .iter()
                         .map(|f| (**f).clone())
                         .collect();
-                    fields.push((**field).clone());
+                    fields.push(if vector_cols.contains(field.name()) {
+                        f32_field(field)
+                    } else {
+                        (**field).clone()
+                    });
                     evolved_schema = Schema::new(fields);
                     changed = true;
                 }
@@ -460,12 +505,19 @@ impl Table {
 
         let batches: Vec<Result<RecordBatch>> = batches
             .into_iter()
-            .map(|b| {
+            .map(|b| -> Result<RecordBatch> {
                 if b.schema() != target_schema {
                     let mut cols = Vec::with_capacity(target_schema.fields().len());
                     for field in target_schema.fields() {
                         let col = if let Some(c) = b.column_by_name(field.name()) {
-                            c.clone()
+                            if c.data_type() == field.data_type() {
+                                c.clone()
+                            } else {
+                                // Cast to the declared type (e.g. the Float32 a
+                                // declared vector index forces) instead of
+                                // failing the write.
+                                arrow::compute::cast(c, field.data_type())?
+                            }
                         } else {
                             arrow::array::new_null_array(field.data_type(), b.num_rows())
                         };
@@ -692,7 +744,7 @@ impl Table {
                 .map(|p| p.batch.get_array_memory_size())
                 .sum();
 
-            let cache_gb: usize = std::env::var("BENOSTREAM_CACHE_GB")
+            let cache_gb: usize = std::env::var("BSDB_CACHE_GB")
                 .unwrap_or_else(|_| "1".to_string())
                 .parse()
                 .unwrap_or(1);

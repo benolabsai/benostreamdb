@@ -129,7 +129,7 @@ impl PyGraphAPI {
         start_node: u64,
         end_node: u64,
     ) -> PyResult<Vec<u64>> {
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
         use std::collections::{HashMap, VecDeque};
         let graph = self.load_multi_graph(graph_column)?;
 
@@ -183,7 +183,7 @@ impl PyGraphAPI {
 
     #[pyo3(signature = (graph_column, node))]
     pub fn neighbors(&self, py: Python<'_>, graph_column: &str, node: u64) -> PyResult<Vec<u64>> {
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
         let graph = self.load_multi_graph(graph_column)?;
         py.allow_threads(|| Ok(graph.get_neighbors(node)))
     }
@@ -195,7 +195,7 @@ impl PyGraphAPI {
         graph_column: &str,
         nodes: Vec<u64>,
     ) -> PyResult<Vec<(u64, u64)>> {
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
         let graph = self.load_multi_graph(graph_column)?;
         py.allow_threads(|| {
             let mut edges = Vec::new();
@@ -219,7 +219,7 @@ impl PyGraphAPI {
         graph_column: &str,
         seeds: Vec<u64>,
     ) -> PyResult<Vec<(u64, u64)>> {
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
         use std::collections::{HashMap, HashSet, VecDeque};
         let graph = self.load_multi_graph(graph_column)?;
 

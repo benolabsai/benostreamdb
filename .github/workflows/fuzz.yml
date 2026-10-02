@@ -29,12 +29,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - parse_dense
-          - parse_sparse
-          - parse_binary
-          - sql_rewriters
-          - qdrant_request_body
+        include:
+          - target: parse_dense
+          - target: parse_sparse
+          - target: parse_binary
+          - target: sql_rewriters
+          # The Qdrant target is the only one that needs the search gateway.
+          - target: qdrant_request_body
+            features: "--features qdrant"
+          - target: jni_bridge
     steps:
       - name: Maximize build space
         run: |
@@ -58,7 +61,7 @@ jobs:
           workspaces: "fuzz -> target"
 
       - name: Run ${{ matrix.target }} (5 minute budget)
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
+        run: cargo fuzz run ${{ matrix.target }} ${{ matrix.features }} -- -max_total_time=300 -rss_limit_mb=4096
         working-directory: fuzz
 
       - name: Upload crash artifacts

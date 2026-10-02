@@ -1,9 +1,13 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-//! Verify that multi-chunk HNSW search returns correct results when the
-//! vector index is split into multiple chunks (chunked build for large
-//! datasets). Uses a small `BENOSTREAM_HNSW_CHUNK_SIZE` so a modest number
-//! of vectors produces multiple chunks.
+//! Verify that HNSW-IVF search returns the global nearest neighbour when the
+//! index is split across multiple IVF clusters.
+//!
+//! The index is partitioned into `n_lists` clusters (derived from the vector
+//! count), and each cluster gets its own HNSW graph. A search must probe every
+//! cluster and merge the results, not just the first one. With a small dataset
+//! the cluster count is `min(num_cpus, 4)`, so 25 vectors produce several
+//! clusters and exercise the merge path.
 
 use std::sync::Arc;
 
@@ -14,16 +18,8 @@ use benostreamdb::core::index::VectorValue;
 use benostreamdb::core::table::Table;
 use tempfile::tempdir;
 
-/// Serialize tests that mutate the global BENOSTREAM_HNSW_CHUNK_SIZE env var.
-static CHUNK_SIZE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[tokio::test]
-async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
-    let _guard = CHUNK_SIZE_LOCK.lock().await;
-
-    // Use a tiny chunk size so 25 vectors -> 3 chunks (10, 10, 5).
-    std::env::set_var("BENOSTREAM_HNSW_CHUNK_SIZE", "10");
-
+async fn test_multi_cluster_hnsw_search() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let path = dir.path().to_str().unwrap().to_string();
     let uri = format!("file://{}", path);
@@ -56,8 +52,9 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
         ),
     ]));
 
-    // 25 vectors. Vector at id=24 (last, in chunk 3) is [9.0, 9.0, 9.0, 9.0].
-    // The query [9.0, 9.0, 9.0, 9.0] should match id=24 (in the LAST chunk).
+    // 25 vectors. Vector at id=24 (last) is [9.0, 9.0, 9.0, 9.0]. The query
+    // [9.0, 9.0, 9.0, 9.0] should match id=24, which may live in a different
+    // cluster than the query's nearest cluster.
     let n = 25i32;
     let ids: Vec<i32> = (0..n).collect();
     let vectors: Vec<Option<Vec<Option<f32>>>> = (0..n)
@@ -80,10 +77,10 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
 
-    // Clear caches so the search loads the (chunked) index from disk.
+    // Clear caches so the search loads the (clustered) index from disk.
     benostreamdb::core::cache::HNSW_IVF_CACHE.invalidate_all();
 
-    // Query closest to the LAST vector (id=24, in chunk 3).
+    // Query closest to the LAST vector (id=24).
     let hits = table
         .query()
         .vector_search(
@@ -102,16 +99,13 @@ async fn test_multi_chunk_hnsw_search() -> anyhow::Result<()> {
         .expect("id is Int32");
     let top_id = id_arr.value(0);
 
-    // The nearest neighbor should be id=24 (the last vector, in the last chunk).
-    // Before the multi-chunk fix, only chunk 1 was searched, so this would
-    // return id=9 (the closest in chunk 1) instead of id=24.
+    // The nearest neighbour should be id=24. Before the multi-cluster fix, only
+    // the first cluster was searched, so this would return id=9 (the closest in
+    // the first cluster) instead of id=24.
     assert_eq!(
         top_id, 24,
-        "multi-chunk search should find the global nearest neighbor (id=24 in the last chunk), got id={top_id}"
+        "multi-cluster search should find the global nearest neighbour (id=24), got id={top_id}"
     );
-
-    // Clean up env var.
-    std::env::remove_var("BENOSTREAM_HNSW_CHUNK_SIZE");
 
     Ok(())
 }

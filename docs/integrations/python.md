@@ -42,7 +42,7 @@ catalog = bsdb.create_catalog("unity", {
 
 You can define your catalog configuration in a standard location. BenoStreamDB searches in the following order:
 
-1.  `BENOSTREAM_CONFIG` (Environment Variable path)
+1.  `BSDB_CONFIG` (Environment Variable path)
 2.  `./benostream.toml` (Current Directory)
 3.  `~/.benostream/config.toml` (Home Directory)
 
@@ -67,7 +67,7 @@ branch = "main"
 catalog = bsdb.create_catalog_from_config("/path/to/my_config.toml")
 ```
 
-See [examples/configs/](../examples/configs/) for example configuration files for each catalog type.
+See [examples/configs/](../../examples/configs/) for example configuration files for each catalog type.
 
 ### Writing Data
 

@@ -263,6 +263,11 @@ impl Compactor {
                 // candidates, rebase onto the newer snapshot and skip it
                 // instead of aborting the whole compaction.
                 skip_missing_remove_paths: true,
+                // But if an input is already gone, a concurrent compaction has
+                // already written a replacement containing those rows. Adding
+                // ours too would duplicate the data, so discard this compaction
+                // entirely (a no-op commit).
+                discard_add_on_missing_remove: true,
                 ..Default::default()
             };
             // WS2 crash boundary: replacement files are written but the manifest
@@ -273,8 +278,7 @@ impl Compactor {
             self.manifest
                 .commit(&all_new_entries, &all_old_paths, commit_meta)
                 .await?;
-            metrics::counter!("benostreamdb_data_files_compacted")
-                .increment(all_old_paths.len() as u64);
+            metrics::counter!("bsdb_data_files_compacted").increment(all_old_paths.len() as u64);
         }
 
         Ok(())
@@ -523,7 +527,7 @@ impl Compactor {
                 if is_data_parquet {
                     main_parquet_path = remote_path.to_string();
                     main_parquet_size = file_size;
-                    metrics::counter!("benostreamdb_compaction_bytes_written").increment(file_size);
+                    metrics::counter!("bsdb_compaction_bytes_written").increment(file_size);
                 }
             }
 

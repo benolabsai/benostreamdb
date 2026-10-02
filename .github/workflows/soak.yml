@@ -91,4 +91,28 @@ jobs:
         env:
           SKIP_GPU_TESTS: "1"
           RUST_LOG: "error"
-        run: cargo test --test soak -- --ignored --nocapture
+        run: cargo test --test soak -- --ignored --nocapture 2>&1 | tee soak.log
+      - name: Write soak report
+        if: always()
+        run: |
+          {
+            echo "# Weekly soak report"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Soak duration | ${BSDB_SOAK_SECONDS}s |"
+            echo "| Result | ${{ job.status }} |"
+            echo
+            echo "## Soak stats"
+            echo
+            echo '```'
+            grep '\[soak-stats\]' soak.log || echo "(no stats emitted)"
+            echo '```'
+          } > soak-report.md
+          cat soak-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload soak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report
+          path: soak-report.md

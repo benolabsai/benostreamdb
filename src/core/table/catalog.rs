@@ -259,7 +259,7 @@ impl Table {
         let metadata = client.load_table(&namespace, &table_name).await?;
 
         // Derive local native URI (Cache location for layered index)
-        let cache_dir = std::env::var("BENOSTREAM_CACHE_DIR")
+        let cache_dir = std::env::var("BSDB_CACHE_DIR")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir().join("benostream_cache"));
 

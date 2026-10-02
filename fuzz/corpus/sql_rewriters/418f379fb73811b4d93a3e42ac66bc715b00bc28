@@ -1,0 +1,1 @@
+OM t [PARTITIONED BY (day) WHERE v`<-> '[2,2,3]' OR,ER BY v <-> 4

@@ -10,10 +10,10 @@
 //!
 //! ## Memory budget and disk spillover
 //!
-//! The in-memory caches are bounded (`BENOSTREAM_CACHE_GB`). Preload respects an
+//! The in-memory caches are bounded (`BSDB_CACHE_GB`). Preload respects an
 //! explicit `max_memory_bytes` budget: indexes are warmed into RAM until the
 //! budget is exhausted, then the remainder is warmed into the **disk cache**
-//! (`BENOSTREAM_DISK_CACHE_DIR`, mmap-backed with `MADV_RANDOM`) so it is served
+//! (`BSDB_DISK_CACHE_DIR`, mmap-backed with `MADV_RANDOM`) so it is served
 //! out-of-core instead of re-fetched from the object store. This is the same
 //! two-tier design the read path already uses for HNSW/CSR serving.
 //!
@@ -63,10 +63,10 @@ impl Default for PreloadOptions {
 }
 
 impl PreloadOptions {
-    /// Budget derived from `BENOSTREAM_CACHE_GB` (default 1 GiB), leaving the
+    /// Budget derived from `BSDB_CACHE_GB` (default 1 GiB), leaving the
     /// disk cache to absorb the overflow.
     pub fn from_env() -> Self {
-        let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+        let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
