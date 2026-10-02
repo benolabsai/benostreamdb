@@ -16,6 +16,7 @@
 //! chosen for. It is single-level (no aggregation), matching the current
 //! single-level Louvain implementation.
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
 use arrow::array::{
     Array, ArrayRef, Float32Array, Float64Array, ListBuilder, UInt64Array, UInt64Builder,
 };
@@ -62,15 +63,7 @@ impl Default for LeidenCommunitiesUDF {
 impl LeidenCommunitiesUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64,
-                    DataType::UInt64,
-                    DataType::Float32,
-                    DataType::Float32,
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -80,7 +73,7 @@ impl AggregateUDFImpl for LeidenCommunitiesUDF {
         self
     }
     fn name(&self) -> &str {
-        "leiden_communities"
+        "graph_leiden_communities"
     }
     fn signature(&self) -> &Signature {
         &self.signature
@@ -95,31 +88,20 @@ impl AggregateUDFImpl for LeidenCommunitiesUDF {
         Ok(Box::new(LeidenAccumulator::new()))
     }
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "weights",
-                DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
-                true,
-            )),
-            Arc::new(Field::new("resolution", DataType::Float32, true)),
-        ])
+        let mut fields = GraphAccumulatorBase::state_fields();
+        fields.push(Arc::new(Field::new(
+            "weights",
+            DataType::List(Arc::new(Field::new("item", DataType::Float32, true))),
+            true,
+        )));
+        fields.push(Arc::new(Field::new("resolution", DataType::Float32, true)));
+        Ok(fields)
     }
 }
 
 #[derive(Debug)]
 pub struct LeidenAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
     weights: Vec<f32>,
     resolution: f32,
 }
@@ -127,8 +109,7 @@ pub struct LeidenAccumulator {
 impl LeidenAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
             weights: Vec::new(),
             resolution: 1.0,
         }
@@ -143,20 +124,9 @@ impl Accumulator for LeidenAccumulator {
             ));
         }
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
+        self.base.update_edge_batch(values, Some(4), Some(5))?;
 
-        let len = sources_arr.len();
+        let len = values[0].len();
 
         let mut weights_vec: Vec<f32> = vec![1.0; len];
         if values.len() > 2 {
@@ -187,10 +157,11 @@ impl Accumulator for LeidenAccumulator {
             }
         }
 
+        let sources_arr = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let targets_arr = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+
         for i in 0..len {
             if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
-                self.sources.push(sources_arr.value(i));
-                self.targets.push(targets_arr.value(i));
                 self.weights.push(weights_vec[i]);
             }
         }
@@ -199,48 +170,27 @@ impl Accumulator for LeidenAccumulator {
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for sources".to_string())
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for targets".to_string())
-            })?;
-        let weights_list = states[2]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected ListArray for weights".to_string())
-            })?;
+        self.base.merge_edge_state(states, Some(2), Some(3))?;
+        if states.len() > 4 {
+            let weights_list = states[4]
+                .as_any()
+                .downcast_ref::<arrow::array::ListArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Expected ListArray for weights".to_string())
+                })?;
 
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-            if weights_list.is_valid(i) {
-                let w_arr = weights_list.value(i);
-                if let Some(w) = w_arr.as_any().downcast_ref::<Float32Array>() {
-                    self.weights.extend_from_slice(w.values());
+            for i in 0..weights_list.len() {
+                if weights_list.is_valid(i) {
+                    let w_arr = weights_list.value(i);
+                    if let Some(w) = w_arr.as_any().downcast_ref::<Float32Array>() {
+                        self.weights.extend_from_slice(w.values());
+                    }
                 }
             }
         }
 
         if let Some(r_arr) = states
-            .get(3)
+            .get(5)
             .and_then(|a| a.as_any().downcast_ref::<Float32Array>())
         {
             if !r_arr.is_empty() && r_arr.is_valid(0) {
@@ -252,34 +202,36 @@ impl Accumulator for LeidenAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder = arrow::array::ListBuilder::new(UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
+        let mut state = self.base.edge_state()?;
 
         let mut weights_builder =
             arrow::array::ListBuilder::new(arrow::array::Float32Builder::new());
         weights_builder.values().append_slice(&self.weights);
         weights_builder.append(true);
 
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::List(Arc::new(weights_builder.finish())),
-            ScalarValue::Float32(Some(self.resolution)),
-        ])
+        state.push(ScalarValue::List(Arc::new(weights_builder.finish())));
+        state.push(ScalarValue::Float32(Some(self.resolution)));
+        Ok(state)
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        let graph = self.base.resolve_graph(&[], 0)?;
+
         let mut node_map: HashMap<u64, usize> = HashMap::new();
         let mut reverse_map: Vec<u64> = Vec::new();
 
-        for i in 0..self.sources.len() {
-            let s = self.sources[i];
-            let t = self.targets[i];
+        let mut all_edges = Vec::new();
+        if !self.base.is_empty() {
+            for (i, u, v) in self.base.edges() {
+                all_edges.push((u, v, self.weights[i].max(0.0)));
+            }
+        } else {
+            for (u, v) in graph.all_edges() {
+                all_edges.push((u, v, 1.0));
+            }
+        }
+
+        for &(s, t, _) in &all_edges {
             node_map.entry(s).or_insert_with(|| {
                 reverse_map.push(s);
                 reverse_map.len() - 1
@@ -304,10 +256,9 @@ impl Accumulator for LeidenAccumulator {
         let mut node_degrees: Vec<f32> = vec![0.0; num_nodes];
         let mut total_weight: f32 = 0.0;
 
-        for i in 0..self.sources.len() {
-            let u = node_map[&self.sources[i]];
-            let v = node_map[&self.targets[i]];
-            let w = self.weights[i].max(0.0);
+        for &(s, t, w) in &all_edges {
+            let u = node_map[&s];
+            let v = node_map[&t];
 
             adj[u].push((v, w));
             adj[v].push((u, w));
@@ -420,9 +371,6 @@ impl Accumulator for LeidenAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.sources.capacity() * 8
-            + self.targets.capacity() * 8
-            + self.weights.capacity() * 4
+        self.base.size() + self.weights.capacity() * 4
     }
 }

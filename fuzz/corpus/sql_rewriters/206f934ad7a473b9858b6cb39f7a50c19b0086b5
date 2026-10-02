@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONED BY (day) W v <-> '[1,2,3]OM%t PARTI< BY v <-> '[1,2,3]' LIMIT 5

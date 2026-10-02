@@ -1,3 +1,4 @@
+use ahash::AHashMap as HashMap;
 use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, Int64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
@@ -6,7 +7,6 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ impl AggregateUDFImpl for ModularityUDF {
         self
     }
     fn name(&self) -> &str {
-        "modularity"
+        "graph_modularity"
     }
     fn signature(&self) -> &Signature {
         &self.signature

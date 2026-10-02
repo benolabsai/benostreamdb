@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use arrow::array::{
     Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
     UInt64Builder,
@@ -12,7 +14,7 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -46,15 +48,7 @@ impl Default for ShortestPathUDF {
 impl ShortestPathUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                    DataType::UInt64, // start
-                    DataType::UInt64, // end
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -65,7 +59,7 @@ impl AggregateUDFImpl for ShortestPathUDF {
     }
 
     fn name(&self) -> &str {
-        "shortest_path"
+        "graph_shortest_path"
     }
 
     fn signature(&self) -> &Signature {
@@ -83,29 +77,19 @@ impl AggregateUDFImpl for ShortestPathUDF {
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(ShortestPathAccumulator::new()))
     }
-
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
+        let mut fields = GraphAccumulatorBase::state_fields();
+        fields.extend(vec![
             Arc::new(Field::new("start", DataType::UInt64, true)),
             Arc::new(Field::new("end", DataType::UInt64, true)),
-        ])
+        ]);
+        Ok(fields)
     }
 }
 
 #[derive(Debug)]
 pub struct ShortestPathAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
     start: Option<u64>,
     end: Option<u64>,
 }
@@ -113,8 +97,7 @@ pub struct ShortestPathAccumulator {
 impl ShortestPathAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
             start: None,
             end: None,
         }
@@ -123,69 +106,26 @@ impl ShortestPathAccumulator {
 
 impl Accumulator for ShortestPathAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::UInt64(self.start),
-            ScalarValue::UInt64(self.end),
-        ])
+        let mut state = self.base.edge_state()?;
+        state.push(ScalarValue::UInt64(self.start));
+        state.push(ScalarValue::UInt64(self.end));
+        Ok(state)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "shortest_path: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "shortest_path: expected ListArray for targets".to_string(),
-                )
-            })?;
+        self.base.merge_edge_state(states, Some(2), Some(3))?;
+        let start_idx = states.len().saturating_sub(2).max(4);
+        let end_idx = states.len().saturating_sub(1).max(5);
 
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
-
-        if states.len() > 2 {
-            if let Some(start_arr) = states[2].as_any().downcast_ref::<UInt64Array>() {
+        if states.len() > start_idx {
+            if let Some(start_arr) = states[start_idx].as_any().downcast_ref::<UInt64Array>() {
                 if start_arr.is_valid(0) {
                     self.start = Some(start_arr.value(0));
                 }
             }
         }
-        if states.len() > 3 {
-            if let Some(end_arr) = states[3].as_any().downcast_ref::<UInt64Array>() {
+        if states.len() > end_idx {
+            if let Some(end_arr) = states[end_idx].as_any().downcast_ref::<UInt64Array>() {
                 if end_arr.is_valid(0) {
                     self.end = Some(end_arr.value(0));
                 }
@@ -199,14 +139,7 @@ impl Accumulator for ShortestPathAccumulator {
         let mut builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
 
         if let (Some(start), Some(end)) = (self.start, self.end) {
-            // BFS over the directed edge set.
-            let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
-            for i in 0..self.sources.len().min(self.targets.len()) {
-                adj.entry(self.sources[i])
-                    .or_default()
-                    .push(self.targets[i]);
-            }
-
+            let graph = self.base.resolve_graph(&[], 0)?;
             let path = if start == end {
                 Some(vec![start])
             } else {
@@ -216,18 +149,20 @@ impl Accumulator for ShortestPathAccumulator {
                 visited.insert(start);
                 q.push_back(start);
                 let mut found = false;
+                // One scratch buffer for the whole BFS, refilled each hop.
+                let mut neighbors: Vec<u64> = Vec::new();
 
                 while let Some(curr) = q.pop_front() {
                     if curr == end {
                         found = true;
                         break;
                     }
-                    if let Some(neighbors) = adj.get(&curr) {
-                        for &n in neighbors {
-                            if visited.insert(n) {
-                                prev.insert(n, curr);
-                                q.push_back(n);
-                            }
+                    neighbors.clear();
+                    graph.get_neighbors_into(curr, &mut neighbors);
+                    for &n in &neighbors {
+                        if visited.insert(n) {
+                            prev.insert(n, curr);
+                            q.push_back(n);
                         }
                     }
                 }
@@ -264,40 +199,24 @@ impl Accumulator for ShortestPathAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-        let sources = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "shortest_path: expected UInt64Array for sources".to_string(),
-                )
-            })?;
-        let targets = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "shortest_path: expected UInt64Array for targets".to_string(),
-                )
-            })?;
-
-        self.sources.extend(sources.iter().flatten());
-        self.targets.extend(targets.iter().flatten());
-
+        self.base.update_edge_batch(values, Some(4), Some(5))?;
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(start_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
-                if start_arr.is_valid(0) {
-                    self.start = Some(start_arr.value(0));
+            if let Some(arr) = values[2]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+            {
+                if arr.is_valid(0) {
+                    self.start = Some(arr.value(0));
                 }
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(end_arr) = values[3].as_any().downcast_ref::<UInt64Array>() {
-                if end_arr.is_valid(0) {
-                    self.end = Some(end_arr.value(0));
+            if let Some(arr) = values[3]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+            {
+                if arr.is_valid(0) {
+                    self.end = Some(arr.value(0));
                 }
             }
         }
@@ -306,6 +225,6 @@ impl Accumulator for ShortestPathAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size() + std::mem::size_of::<Option<u64>>() * 2
     }
 }

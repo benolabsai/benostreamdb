@@ -58,6 +58,10 @@ docker/data/
 benchmarks/competitive/data/
 hsdbg_bench_data/
 
+# Pre-release soak gate outputs
+soak-report.md
+soak.log
+
 # ── Documentation build output (Sphinx) ─────────────────────────────────────
 docs/build/
 

@@ -262,14 +262,9 @@ impl Table {
             for idx in &entry.index_files {
                 if idx.column_name.as_deref() == Some(column.as_str()) {
                     match idx.index_type.as_str() {
-                        // Both the legacy v1 and the current v2 graph formats
-                        // must be cleaned up so a drop leaves no orphaned CSRs.
                         // The CSR is a triple (offsets, edges, dict) — omitting
                         // the `.dict` sidecar left it orphaned on every drop.
-                        "graph" | "graph_v2" => {
-                            paths_to_delete.push(format!("{}.graph.csr.offsets", idx.file_path));
-                            paths_to_delete.push(format!("{}.graph.csr.edges", idx.file_path));
-                            paths_to_delete.push(format!("{}.graph.csr.dict", idx.file_path));
+                        "graph_v2" => {
                             paths_to_delete.push(format!("{}.graph_v2.csr.offsets", idx.file_path));
                             paths_to_delete.push(format!("{}.graph_v2.csr.edges", idx.file_path));
                             paths_to_delete.push(format!("{}.graph_v2.csr.dict", idx.file_path));
@@ -826,9 +821,7 @@ fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
         IndexAlgorithm::Bm25 { .. } => "inverted",
         IndexAlgorithm::Bloom { .. } => "bloom",
         IndexAlgorithm::Bitmap | IndexAlgorithm::CompositeBitmap { .. } => "scalar",
-        // The v2 suffix is the on-disk graph format version. Reporting it here
-        // makes `backfill_indexes_async` treat a segment carrying only legacy
-        // v1 graph files as incomplete, so it is rebuilt in the correct format.
+        // The `graph_v2` suffix is the on-disk graph format version.
         IndexAlgorithm::CsrGraph { .. } => "graph_v2",
     }
 }

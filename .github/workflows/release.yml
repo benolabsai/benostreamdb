@@ -146,11 +146,74 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  # Pre-release gate: the long-running correctness evidence. This is the
+  # "millions of operations" bar from the production-readiness plan — it does
+  # NOT run on every push (see soak.yml for the weekly canary), only before a
+  # tag is published. A divergence fails the release.
+  soak-gate:
+    name: Pre-release soak gate
+    runs-on: ubuntu-latest
+    if: "startsWith(github.ref, 'refs/tags/')"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "test"
+      - name: Randomized differential workload (model oracle)
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+        run: cargo test --test test_randomized_differential_workload -- --nocapture
+      - name: Crash-injection workload sweep
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+        run: cargo test --test test_crash_injection_workload -- --nocapture
+      - name: Long soak
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+          BSDB_SOAK_SECONDS: "1800"
+        run: cargo test --test soak -- --ignored --nocapture 2>&1 | tee soak.log
+      - name: Multi-writer soak
+        env:
+          SKIP_GPU_TESTS: "1"
+          RUST_LOG: "error"
+          BSDB_SOAK_SECONDS: "1800"
+        run: cargo test --test test_multi_writer_concurrency multi_writer_soak -- --ignored --nocapture 2>&1 | tee multi_writer.log
+      - name: Write soak report
+        if: always()
+        run: |
+          {
+            echo "# Pre-release soak report"
+            echo
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Soak duration | 1800s |"
+            echo "| Result | ${{ job.status }} |"
+            echo
+            echo "## Soak stats"
+            echo
+            echo '```'
+            grep -h '\[soak-stats\]' soak.log multi_writer.log || echo "(no stats emitted)"
+            echo '```'
+          } > soak-report.md
+          cat soak-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload soak report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-report
+          path: soak-report.md
+
   release:
     name: Final Release
     runs-on: ubuntu-latest
     if: "startsWith(github.ref, 'refs/tags/')"
-    needs: [linux, macos, sdist]
+    needs: [linux, macos, sdist, soak-gate]
     environment: release_pypi
     steps:
       - uses: actions/checkout@v5

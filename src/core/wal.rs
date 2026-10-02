@@ -63,15 +63,15 @@ impl Default for WalConfig {
 impl WalConfig {
     pub fn from_env() -> Self {
         Self {
-            compact_threshold_mb: std::env::var("BENOSTREAM_WAL_COMPACT_MB")
+            compact_threshold_mb: std::env::var("BSDB_WAL_COMPACT_MB")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1024),
-            sync_batch_size: std::env::var("BENOSTREAM_WAL_SYNC_BATCH_SIZE")
+            sync_batch_size: std::env::var("BSDB_WAL_SYNC_BATCH_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10),
-            sync_interval_ms: std::env::var("BENOSTREAM_WAL_SYNC_INTERVAL_MS")
+            sync_interval_ms: std::env::var("BSDB_WAL_SYNC_INTERVAL_MS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(100),

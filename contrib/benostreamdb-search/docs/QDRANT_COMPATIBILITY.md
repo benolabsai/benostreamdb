@@ -1,7 +1,7 @@
 # Qdrant Compatibility
 
 `bsdb-search` (the `benostreamdb-search` add-on) speaks the **Qdrant v1.x REST
-wire format** on port `6333` (override with `QDRANT_BIND` / `QDRANT_PORT`).
+wire format** on port `6333` (override with `BSDB_QDRANT_BIND` / `BSDB_QDRANT_PORT`).
 Collections are stored as BenoStreamDB tables: a reserved `_id` (Utf8) column,
 a `vector` (`FixedSizeList<Float32>`) column, and one Arrow column per inferred
 payload field. Collection parameters the engine has no native home for (the
@@ -134,7 +134,7 @@ Success responses use `{ "result": <T>, "status": "ok", "time": <seconds> }`.
 
 ## Performance notes
 
-- **Use `BENOSEARCH_DEVICE=cpu` for the search server unless you have a
+- **Use `BSDB_SEARCH_DEVICE=cpu` for the search server unless you have a
   validated GPU backend.** With the default `auto` device, index builds on
   every commit can be dramatically slower on an unaccelerated/software GPU
   backend; the CPU path is consistently fast for the small collections typical

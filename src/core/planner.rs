@@ -1192,7 +1192,7 @@ impl QueryPlanner {
             }
         }
 
-        metrics::histogram!("benostreamdb.query.segment_pruning_duration")
+        metrics::histogram!("bsdb.query.segment_pruning_duration")
             .record(pruning_start.elapsed().as_secs_f64());
         candidates
     }
@@ -1240,7 +1240,7 @@ impl QueryPlanner {
                     }
                     if let Some(r_sq) = radius_sq {
                         if total_diff_sq > r_sq {
-                            metrics::counter!("benostreamdb.pruned.vector_bbox").increment(1);
+                            metrics::counter!("bsdb.pruned.vector_bbox").increment(1);
                             tracing::debug!(
                                 "  -> Pruned by vector bbox: {} > radius {}",
                                 total_diff_sq.sqrt(),
@@ -1351,7 +1351,7 @@ impl QueryPlanner {
         };
         if filter.negated {
             // Pruning negated conditions is coarse for now.
-            bump("benostreamdb.kept.negated_condition");
+            bump("bsdb.kept.negated_condition");
             return None;
         }
         // 1. Partition-level Pruning (Coarse-grained)
@@ -1372,7 +1372,7 @@ impl QueryPlanner {
                     ord == Some(std::cmp::Ordering::Less) || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
-                    bump("benostreamdb.pruned.partition_min");
+                    bump("bsdb.pruned.partition_min");
                     tracing::debug!(
                         "  -> Pruned by partition min: {} < {:?}",
                         entry_val,
@@ -1391,7 +1391,7 @@ impl QueryPlanner {
                         || ord == Some(std::cmp::Ordering::Equal)
                 };
                 if res {
-                    bump("benostreamdb.pruned.partition_max");
+                    bump("bsdb.pruned.partition_max");
                     tracing::debug!(
                         "  -> Pruned by partition max: {} > {:?}",
                         entry_val,
@@ -1403,7 +1403,7 @@ impl QueryPlanner {
 
             if let Some(values) = &filter.values {
                 if !values.contains(entry_val) {
-                    bump("benostreamdb.pruned.partition_in_list");
+                    bump("bsdb.pruned.partition_in_list");
                     tracing::debug!(
                         "  -> Pruned by partition values IN list: {:?} not in {:?}",
                         entry_val,
@@ -1417,7 +1417,7 @@ impl QueryPlanner {
         // 2. Statistics Pruning (Fine-grained)
         if let Some(stats) = entry.column_stats.get(&filter.column) {
             if stats.null_count == entry.record_count {
-                bump("benostreamdb.pruned.stats_all_null");
+                bump("bsdb.pruned.stats_all_null");
                 return Some(PruneReason::StatsAllNull);
             }
 
@@ -1433,7 +1433,7 @@ impl QueryPlanner {
                     };
 
                     if too_small {
-                        bump("benostreamdb.pruned.stats_max");
+                        bump("bsdb.pruned.stats_max");
                         return Some(PruneReason::StatsBelowMin);
                     }
                 }
@@ -1450,7 +1450,7 @@ impl QueryPlanner {
                             || ord == Some(std::cmp::Ordering::Equal)
                     };
                     if too_large {
-                        bump("benostreamdb.pruned.stats_min");
+                        bump("bsdb.pruned.stats_min");
                         return Some(PruneReason::StatsAboveMax);
                     }
                 }
@@ -1462,7 +1462,7 @@ impl QueryPlanner {
                 let max_val = stats.max.as_ref();
 
                 if min_val.is_none() && max_val.is_none() {
-                    bump("benostreamdb.kept.missing_stats");
+                    bump("bsdb.kept.missing_stats");
                     return None;
                 }
 
@@ -1487,15 +1487,15 @@ impl QueryPlanner {
                 }
 
                 if !possible_match {
-                    bump("benostreamdb.pruned.stats_in_list");
+                    bump("bsdb.pruned.stats_in_list");
                     return Some(PruneReason::StatsNotInList);
                 }
             }
 
-            bump("benostreamdb.kept.in_range");
+            bump("bsdb.kept.in_range");
             None
         } else {
-            bump("benostreamdb.kept.missing_stats");
+            bump("bsdb.kept.missing_stats");
             None
         }
     }

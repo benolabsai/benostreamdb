@@ -2,8 +2,8 @@
 
 //! `bsdb-search` — OpenSearch / Elasticsearch 7.10-compatible REST server.
 //!
-//! Binds to `BENOSEARCH_BIND:BENOSEARCH_PORT` (default `127.0.0.1:9200`)
-//! and stores indexes under `BENOSEARCH_STORAGE_URI`
+//! Binds to `BSDB_SEARCH_BIND:BSDB_SEARCH_PORT` (default `127.0.0.1:9200`)
+//! and stores indexes under `BSDB_SEARCH_STORAGE_URI`
 //! (default `file://~/.benostreamdb/search`).
 
 // No-panic policy for production binaries (see NO_PANIC_POLICY.md).
@@ -65,8 +65,12 @@ async fn main() {
         }
     };
 
-    let bind = std::env::var("BENOSEARCH_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port: u16 = std::env::var("BENOSEARCH_PORT")
+    // Capture the engine's `metrics`-facade metrics so `/metrics` serves both
+    // the gateway's own registry and the core engine's.
+    benostreamdb::core::telemetry::install_metrics_recorder();
+
+    let bind = std::env::var("BSDB_SEARCH_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("BSDB_SEARCH_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(9200);
@@ -77,7 +81,7 @@ async fn main() {
                 error = %e,
                 bind = %bind,
                 port,
-                "Invalid BENOSEARCH_BIND/BENOSEARCH_PORT"
+                "Invalid BSDB_SEARCH_BIND/BSDB_SEARCH_PORT"
             );
             std::process::exit(1);
         }
@@ -85,7 +89,7 @@ async fn main() {
 
     let cluster_uuid = uuid::Uuid::new_v4().to_string();
 
-    let device_str = std::env::var("BENOSEARCH_DEVICE").unwrap_or_else(|_| "auto".to_string());
+    let device_str = std::env::var("BSDB_SEARCH_DEVICE").unwrap_or_else(|_| "auto".to_string());
     let compute_ctx = benostreamdb::core::index::gpu::ComputeContext::from_device_str(&device_str)
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, device = %device_str, "Failed to initialize requested compute device; falling back to auto-detect");
@@ -115,7 +119,7 @@ async fn main() {
 
     // Optional NRT convenience: periodically flush every index so newly
     // written documents become searchable without an explicit `_refresh`.
-    if let Ok(secs) = std::env::var("BENOSEARCH_AUTO_REFRESH_SECS") {
+    if let Ok(secs) = std::env::var("BSDB_SEARCH_AUTO_REFRESH_SECS") {
         if let Ok(secs) = secs.parse::<u64>() {
             if secs > 0 {
                 let state = state.clone();
@@ -270,15 +274,15 @@ async fn main() {
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
 
-    let qdrant_bind = std::env::var("QDRANT_BIND").unwrap_or_else(|_| bind.clone());
-    let qdrant_port: u16 = std::env::var("QDRANT_PORT")
+    let qdrant_bind = std::env::var("BSDB_QDRANT_BIND").unwrap_or_else(|_| bind.clone());
+    let qdrant_port: u16 = std::env::var("BSDB_QDRANT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(6333);
     let qdrant_addr: SocketAddr = match format!("{qdrant_bind}:{qdrant_port}").parse() {
         Ok(a) => a,
         Err(e) => {
-            tracing::error!(error = %e, "Invalid QDRANT_BIND/QDRANT_PORT");
+            tracing::error!(error = %e, "Invalid BSDB_QDRANT_BIND/BSDB_QDRANT_PORT");
             std::process::exit(1);
         }
     };

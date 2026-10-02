@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use benostreamdb::core::index::csr_graph::MmapCsrGraph;
-use benostreamdb::core::sql::graph_udf::drift_search::DriftGraph;
+use benostreamdb::core::sql::graph_udf::graph_view::GraphView;
 use std::fs::File;
 use std::io::Write;
 
@@ -84,7 +84,7 @@ async fn test_csr_graph_out_of_core() -> Result<()> {
     assert_eq!(graph.num_nodes, num_nodes);
     assert_eq!(graph.num_edges, 7);
 
-    // Test DriftGraph trait methods
+    // Test GraphView trait methods
     assert_eq!(graph.get_degree(0), 2);
     assert_eq!(graph.get_degree(1), 1);
     assert_eq!(graph.get_degree(2), 3);

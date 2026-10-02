@@ -20,9 +20,13 @@ use crate::state::AppState;
 /// request counters, ingestion counters, index table-cache hit/miss
 /// counters, and the active-requests gauge.
 pub async fn metrics(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    // Serve the gateway's own registry plus the core engine's metrics, so one
+    // scrape sees both `bsdb_search_*` and `benostreamdb_*`.
+    let mut body = state.metrics.gather_text();
+    body.push_str(&benostreamdb::core::telemetry::render_metrics());
     // Built by hand rather than with `Response::builder()` so there is no
     // fallible step to unwrap: the status and header are static constants.
-    let mut response = Response::new(Body::from(state.metrics.gather_text()));
+    let mut response = Response::new(Body::from(body));
     let _ = response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("text/plain; version=0.0.4"),
@@ -125,5 +129,17 @@ mod tests {
         ] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
         }
+    }
+
+    #[test]
+    fn render_metrics_includes_core_engine_metrics() {
+        // The merged `/metrics` body must include the core engine's metrics,
+        // not just the gateway's own registry.
+        benostreamdb::telemetry::metrics::INGEST_ROWS_TOTAL.inc();
+        let text = benostreamdb::core::telemetry::render_metrics();
+        assert!(
+            text.contains("bsdb_ingest_rows_total"),
+            "merged /metrics body missing core engine metrics:\n{text}"
+        );
     }
 }

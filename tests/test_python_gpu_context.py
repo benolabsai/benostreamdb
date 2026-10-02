@@ -67,9 +67,11 @@ def test_unavailable_backend_error():
     """Test that requesting an unavailable backend raises RuntimeError"""
     backends = bsdb.ComputeContext.list_available_backends()
     
-    # Try to create a context with a backend that's not available
-    # ROCM and Intel use WGPU which does not always error on immediate creation but during execution
-    all_backends = ['cuda', 'mps']
+    # Try to create a context with a backend that's not available.
+    # Only `cuda` is guaranteed to hard-error when absent: the wgpu-backed
+    # backends (rocm/intel/mps) probe and fall back to CPU instead of raising,
+    # so they cannot be asserted here.
+    all_backends = ['cuda']
     unavailable = [b for b in all_backends if b not in backends]
     
     for backend in unavailable:

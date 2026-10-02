@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONEDY B (day) WHEREXv <-> '[0,2,3]' ORDER BY v <-> G[W v <-> LIMIT 5

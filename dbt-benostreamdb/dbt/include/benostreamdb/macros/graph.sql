@@ -15,7 +15,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__pagerank(relation, damping=0.85, iterations=30, source='source', target='target') -%}
-  select unnest(pagerank({{ source }}, {{ target }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32')))
+  select unnest(graph_pagerank({{ source }}, {{ target }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32')))
   from {{ relation }}
 {%- endmacro %}
 
@@ -35,10 +35,10 @@
   {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
   {%- if seed_weights is not none and seed_weights | length > 0 -%}
     {%- set weight_arr = "make_array(" ~ (seed_weights | map('string') | map('format', "arrow_cast(%s, 'Float64')") | join(', ')) ~ ")" -%}
-    select unnest(personalized_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32'), {{ directed | lower }}, {{ weight_arr }}))
+    select unnest(graph_personalized_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32'), {{ directed | lower }}, {{ weight_arr }}))
     from {{ relation }}
   {%- else -%}
-    select unnest(personalized_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32'), {{ directed | lower }}))
+    select unnest(graph_personalized_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32'), {{ directed | lower }}))
     from {{ relation }}
   {%- endif -%}
 {%- endmacro %}
@@ -57,10 +57,10 @@
 
 {% macro benostreamdb__community_detect(relation, algorithm='louvain', resolution=1.0, source='source', target='target') -%}
   {%- if algorithm == 'louvain' -%}
-    select unnest(louvain_communities(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast(1.0, 'Float32'), arrow_cast({{ resolution }}, 'Float32'))) as community
+    select unnest(graph_louvain_communities(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast(1.0, 'Float32'), arrow_cast({{ resolution }}, 'Float32'))) as community
     from {{ relation }}
   {%- elif algorithm == 'label_propagation' -%}
-    select unnest(label_propagation(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as community
+    select unnest(graph_label_propagation(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as community
     from {{ relation }}
   {%- else -%}
     {{ exceptions.raise_compiler_error("Unsupported community detection algorithm: " ~ algorithm) }}
@@ -98,7 +98,7 @@
 
 {% macro benostreamdb__subgraph(relation, seeds, hops=1, directed=false, source='source', target='target') -%}
   {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
-  select unnest(subgraph(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ hops }}, 'UInt32'), {{ directed | lower }}))
+  select unnest(graph_subgraph(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ hops }}, 'UInt32'), {{ directed | lower }}))
   from {{ relation }}
 {%- endmacro %}
 
@@ -116,7 +116,7 @@
 
 {% macro benostreamdb__connecting_paths(relation, seeds, directed=false, source='source', target='target') -%}
   {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
-  select unnest(connecting_paths(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, {{ directed | lower }})) as path
+  select unnest(graph_connecting_paths(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, {{ directed | lower }})) as path
   from {{ relation }}
 {%- endmacro %}
 
@@ -133,7 +133,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__shortest_path(relation, start_node, end_node, source='source', target='target') -%}
-  select unnest(shortest_path(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ start_node }}, 'UInt64'), arrow_cast({{ end_node }}, 'UInt64'))) as node
+  select unnest(graph_shortest_path(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ start_node }}, 'UInt64'), arrow_cast({{ end_node }}, 'UInt64'))) as node
   from {{ relation }}
 {%- endmacro %}
 
@@ -151,10 +151,10 @@
 
 {% macro benostreamdb__connected_components(relation, directed=false, source='source', target='target') -%}
   {%- if directed -%}
-    select unnest(strongly_connected_components(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as scc_id
+    select unnest(graph_strongly_connected_components(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as scc_id
     from {{ relation }}
   {%- else -%}
-    select unnest(connected_components(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as component
+    select unnest(graph_connected_components(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as component
     from {{ relation }}
   {%- endif -%}
 {%- endmacro %}
@@ -172,7 +172,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__degree_centrality(relation, source='source', target='target') -%}
-  select unnest(degree_centrality(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64')))
+  select unnest(graph_degree_centrality(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64')))
   from {{ relation }}
 {%- endmacro %}
 
@@ -190,17 +190,51 @@
 
 {% macro benostreamdb__node_similarity(relation, node_a, node_b, method='jaccard', source='source', target='target') -%}
   {%- if method == 'jaccard' -%}
-    select jaccard_coefficient(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
+    select graph_jaccard_coefficient(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
     from {{ relation }}
   {%- elif method == 'adamic_adar' -%}
-    select adamic_adar(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
-    from {{ relation }}
+    select coalesce(sum(1.0 / ln(cast(deg.degree as double))), 0.0) as score
+    from (
+      select {{ target }} as neighbor from {{ relation }} where {{ source }} = {{ node_a }}
+      union
+      select {{ source }} as neighbor from {{ relation }} where {{ target }} = {{ node_a }}
+    ) start_neighbors
+    join (
+      select {{ target }} as neighbor from {{ relation }} where {{ source }} = {{ node_b }}
+      union
+      select {{ source }} as neighbor from {{ relation }} where {{ target }} = {{ node_b }}
+    ) end_neighbors on start_neighbors.neighbor = end_neighbors.neighbor
+    join (
+      select node_id, count(*) as degree from (
+        select {{ source }} as node_id from {{ relation }}
+        union all
+        select {{ target }} as node_id from {{ relation }}
+      ) group by node_id
+    ) deg on start_neighbors.neighbor = deg.node_id
+    where deg.degree > 1
   {%- elif method == 'preferential_attachment' -%}
-    select preferential_attachment(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
+    select graph_preferential_attachment(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
     from {{ relation }}
   {%- elif method == 'resource_allocation' -%}
-    select resource_allocation(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ node_a }}, 'UInt64'), arrow_cast({{ node_b }}, 'UInt64')) as score
-    from {{ relation }}
+    select coalesce(sum(1.0 / cast(deg.degree as double)), 0.0) as score
+    from (
+      select {{ target }} as neighbor from {{ relation }} where {{ source }} = {{ node_a }}
+      union
+      select {{ source }} as neighbor from {{ relation }} where {{ target }} = {{ node_a }}
+    ) start_neighbors
+    join (
+      select {{ target }} as neighbor from {{ relation }} where {{ source }} = {{ node_b }}
+      union
+      select {{ source }} as neighbor from {{ relation }} where {{ target }} = {{ node_b }}
+    ) end_neighbors on start_neighbors.neighbor = end_neighbors.neighbor
+    join (
+      select node_id, count(*) as degree from (
+        select {{ source }} as node_id from {{ relation }}
+        union all
+        select {{ target }} as node_id from {{ relation }}
+      ) group by node_id
+    ) deg on start_neighbors.neighbor = deg.node_id
+    where deg.degree > 0
   {%- else -%}
     {{ exceptions.raise_compiler_error("Unsupported node similarity method: " ~ method) }}
   {%- endif -%}

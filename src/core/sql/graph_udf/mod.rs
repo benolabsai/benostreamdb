@@ -1,9 +1,13 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+pub mod all_shortest_paths;
+pub mod betweenness_centrality;
+pub mod closeness_centrality;
 pub mod connected_components;
 pub mod degree_centrality;
 pub mod drift_search;
 pub mod graph_neighbors;
+pub mod graph_view;
 pub mod jaccard_coefficient;
 pub mod label_propagation;
 pub mod leiden_communities;
@@ -15,12 +19,19 @@ pub mod preferential_attachment;
 pub mod shortest_path;
 pub mod strongly_connected_components;
 pub mod subgraph;
+pub mod triangle_count;
 use datafusion::logical_expr::AggregateUDF;
 
+pub use all_shortest_paths::AllShortestPathsUDF;
+pub use betweenness_centrality::BetweennessCentralityUDF;
+pub use closeness_centrality::ClosenessCentralityUDF;
 pub use connected_components::ConnectedComponentsUDF;
 pub use degree_centrality::DegreeCentralityUDF;
 pub use drift_search::{DriftSearchUDF, RegionalDriftUDF};
 pub use graph_neighbors::GraphNeighborsUDF;
+pub use graph_view::{
+    CachingGraph, GraphAccumulatorBase, GraphMode, GraphView, SimpleGraph, SubgraphView,
+};
 pub use jaccard_coefficient::JaccardCoefficientUDF;
 pub use label_propagation::LabelPropagationUDF;
 pub use leiden_communities::LeidenCommunitiesUDF;
@@ -32,6 +43,7 @@ pub use preferential_attachment::PreferentialAttachmentUDF;
 pub use shortest_path::ShortestPathUDF;
 pub use strongly_connected_components::StronglyConnectedComponentsUDF;
 pub use subgraph::SubgraphUDF;
+pub use triangle_count::TriangleCountUDF;
 
 /// Returns a list of all custom Graph UDAFs to be registered in DataFusion
 pub fn all_graph_aggregates() -> Vec<AggregateUDF> {
@@ -55,5 +67,9 @@ pub fn all_graph_aggregates() -> Vec<AggregateUDF> {
             strongly_connected_components::StronglyConnectedComponentsUDF::new(),
         ),
         AggregateUDF::new_from_impl(preferential_attachment::PreferentialAttachmentUDF::new()),
+        AggregateUDF::new_from_impl(triangle_count::TriangleCountUDF::new()),
+        AggregateUDF::new_from_impl(all_shortest_paths::AllShortestPathsUDF::new()),
+        AggregateUDF::new_from_impl(closeness_centrality::ClosenessCentralityUDF::new()),
+        AggregateUDF::new_from_impl(betweenness_centrality::BetweennessCentralityUDF::new()),
     ]
 }

@@ -78,6 +78,22 @@ impl ManifestManager {
                 .collect();
             let new_ver = current_ver + 1;
 
+            // Compaction rebase: if any input was already removed by a
+            // concurrent compaction, this compaction is redundant. Its output
+            // would duplicate the winner's data, and removing the remaining
+            // inputs without adding the output would lose rows. Treat the whole
+            // commit as a no-op.
+            if metadata.discard_add_on_missing_remove
+                && remove_paths.iter().any(|p| !active_map.contains_key(p))
+            {
+                metrics::counter!("bsdb_manifest_commit_skipped_removals_total").increment(1);
+                tracing::debug!(
+                    "Compaction rebase: an input was already removed in snapshot v{}; discarding this compaction",
+                    current_ver
+                );
+                return Ok(current_manifest);
+            }
+
             // Hardened De-duplication and Precondition Validation.
             //
             // MVCC rebase: a concurrent writer may have already removed one of
@@ -94,7 +110,7 @@ impl ManifestManager {
                         );
                     }
                     if metadata.skip_missing_remove_paths {
-                        metrics::counter!("benostreamdb_manifest_commit_skipped_removals_total")
+                        metrics::counter!("bsdb_manifest_commit_skipped_removals_total")
                             .increment(1);
                         tracing::debug!(
                             "MVCC rebase: '{}' already removed in snapshot v{}, skipping",
@@ -484,8 +500,8 @@ impl ManifestManager {
                     return Ok(new_manifest);
                 }
                 Err(e) if is_already_exists(&e) => {
-                    metrics::counter!("benostreamdb_manifest_commit_retries_total").increment(1);
-                    metrics::counter!("benostreamdb_manifest_commit_rebases_total").increment(1);
+                    metrics::counter!("bsdb_manifest_commit_retries_total").increment(1);
+                    metrics::counter!("bsdb_manifest_commit_rebases_total").increment(1);
                     if attempt % 10 == 0 || attempt > 90 {
                         tracing::debug!(
                             "Conflict committing Manifest v{} (attempt {}), retrying...",

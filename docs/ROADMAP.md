@@ -58,6 +58,12 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
 ### Theme 2: Declarative Edge Tables & Multi-Table Graph Overlays
 *Elevating knowledge graphs into a first-class lakehouse data modeling primitive.*
 
+> **Partially delivered.** The programmatic edge-table API has shipped:
+> `Table.create_edge_table(...)`, `Table.from_networkx(...)`, and
+> `Table.to_networkx(...)` create and round-trip standard edge tables with
+> automatic endpoint/embedding sidecar indexes. The declarative DDL form
+> (`table_type = 'edge'`) and typed global URNs below remain open.
+
 - [ ] **Declarative Edge Table DDL**:
   - First-class table metadata options (`table_type = 'edge'`, `src_col`, `dst_col`) that automatically register and maintain forward and reverse CSR indexes on segment commits.
 - [ ] **Typed Global Entity URNs (`table:id`)**:

@@ -45,6 +45,7 @@ Key Features
    guides/pgvector_sql_guide
    guides/opensearch_compatibility
    guides/qdrant_compatibility
+   guides/spark_connector
    guides/resource_limits
    guides/no_panic_policy
    guides/benchmarking

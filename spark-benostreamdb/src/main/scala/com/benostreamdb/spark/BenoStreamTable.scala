@@ -35,13 +35,7 @@ class BenoStreamTable(
   }
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
-    // If it's a simple read, we could just delegate, but we might want to intercept
-    // to use our indexes for standard SELECT queries with WHERE clauses too!
-    // For now, we delegate to Iceberg. In the future, return BenoStreamScanBuilder.
-    delegate match {
-      case r: SupportsRead => r.newScanBuilder(options)
-      case _ => throw new UnsupportedOperationException("Underlying table does not support read")
-    }
+    new BenoStreamScanBuilder(this, options)
   }
 
   override def newRowLevelOperationBuilder(info: RowLevelOperationInfo): RowLevelOperationBuilder = {

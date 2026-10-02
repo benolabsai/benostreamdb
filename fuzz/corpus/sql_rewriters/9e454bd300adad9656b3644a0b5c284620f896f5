@@ -1,0 +1,1 @@
+SELECT id[1,2, t PARTITIONED BY (day) WHERE v <-> '[1,2,3]' ORDERparTv <-> '[1,2,3]' LIMIT 5

@@ -8,6 +8,10 @@ MVN_BIN="${MAVEN_DIR}/apache-maven-${MAVEN_VERSION}/bin/mvn"
 JAVA_DIR=".java"
 JDK_21_DIR="${JAVA_DIR}/jdk-21"
 
+# Derive the connector version from the core engine's Cargo.toml (single source).
+CORE_VERSION="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/^version = "([^"]+)".*/\1/')"
+echo "Core version: ${CORE_VERSION}"
+
 # Parse arguments
 CARGO_FEATURES=""
 ARTIFACT_SUFFIX=""
@@ -64,7 +68,10 @@ build_with_java() {
     
     echo "Running Maven for $project_dir with release $release_version"
     export MAVEN_OPTS="-Djava.release=$release_version -Dmaven.compiler.release=$release_version"
-    "$MVN_BIN" clean package -P"$profile" $extra_args -DskipTests -f "$project_dir/pom.xml"
+    # `maven.test.skip` (not just `skipTests`) also skips *compiling* test
+    # sources: the Spark Java interop test references Scala objects and does not
+    # compile under the packaging build's phase ordering.
+    "$MVN_BIN" clean package -P"$profile" $extra_args -Dmaven.test.skip=true -Drevision="$CORE_VERSION" -f "$project_dir/pom.xml"
 }
 
 # Find Java homes
@@ -96,28 +103,29 @@ prepare_resources() {
 
 # --- Spark Connector Matrix ---
 echo "--- Building Spark Connectors ---"
-prepare_resources "spark-benostream"
+prepare_resources "spark-benostreamdb"
 for java_version in "17" "21"; do
     java_home_var="JAVA_${java_version}_HOME"
     java_home="${!java_home_var}"
     
     for spark_version in "3.5" "4.0"; do
-        build_with_java "$java_home" "spark-$spark_version,java-$java_version" "" "spark-benostream"
-        cp spark-benostream/target/spark-benostream-*.jar "connector-artifacts/spark-benostream-spark-${spark_version}-java-${java_version}${ARTIFACT_SUFFIX}.jar"
+        build_with_java "$java_home" "spark-$spark_version,java-$java_version" "" "spark-benostreamdb"
+        cp spark-benostreamdb/target/spark-benostream-*.jar "connector-artifacts/spark-benostream-spark-${spark_version}-java-${java_version}${ARTIFACT_SUFFIX}.jar"
     done
 done
 
 # --- Trino Connector Matrix ---
 echo "--- Building Trino Connectors ---"
-prepare_resources "trino-benostream"
+prepare_resources "trino-benostreamdb"
 for java_version in "17" "21"; do
     java_home_var="JAVA_${java_version}_HOME"
     java_home="${!java_home_var}"
     
-    build_with_java "$java_home" "java-$java_version" "" "trino-benostream"
-    # For Trino, the main JAR is in target/ but the ZIP contains all deps
-    cp trino-benostream/target/trino-benostream-0.1.0-SNAPSHOT.jar "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
-    cp trino-benostream/target/trino-benostream-0.1.0-SNAPSHOT.zip "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
+    build_with_java "$java_home" "java-$java_version" "" "trino-benostreamdb"
+    # For Trino, the main JAR is in target/ but the ZIP contains all deps.
+    # The artifact version tracks the core engine version (`${revision}`).
+    cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.jar" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
+    cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.zip" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
 done
 
 echo "Build complete. Artifacts are in connector-artifacts/"

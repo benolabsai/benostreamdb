@@ -11,6 +11,7 @@ BenoStreamDB supports enterprise-grade data catalogs to provide table discovery,
 | **AWS Glue** | Native SDK | AWS cloud-native metadata management. |
 | **Iceberg REST** | REST v1 | Vendor-neutral, interoperable standard. |
 | **Unity Catalog** | REST | Databricks ecosystem integration. |
+| **JDBC Catalog** | JDBC | SQL-database-backed Iceberg catalog (Postgres / MySQL / SQLite). |
 
 ---
 
@@ -178,14 +179,14 @@ Configure `benostreamdb-search` using environment variables or a `benostream.tom
 
 ```bash
 # Storage location for Parquet data and Iceberg metadata
-export BENOSEARCH_STORAGE_URI=s3://my-lakehouse-bucket/tables
+export BSDB_SEARCH_STORAGE_URI=s3://my-lakehouse-bucket/tables
 
 # Polaris Iceberg REST catalog configuration
-export BENOSEARCH_CATALOG_TYPE=rest
-export BENOSEARCH_CATALOG_URL=https://polaris.example.com/api/catalog/v1
-export BENOSEARCH_CATALOG_CREDENTIAL="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>"
-export BENOSEARCH_CATALOG_PREFIX="my_warehouse"
-export BENOSEARCH_CATALOG_NAMESPACE="production"
+export BSDB_SEARCH_CATALOG_TYPE=rest
+export BSDB_SEARCH_CATALOG_URL=https://polaris.example.com/api/catalog/v1
+export BSDB_SEARCH_CATALOG_CREDENTIAL="<POLARIS_CLIENT_ID>:<POLARIS_CLIENT_SECRET>"
+export BSDB_SEARCH_CATALOG_PREFIX="my_warehouse"
+export BSDB_SEARCH_CATALOG_NAMESPACE="production"
 ```
 
 ### Option B: `benostream.toml`

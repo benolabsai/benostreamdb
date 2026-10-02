@@ -13,7 +13,7 @@ def test_write_buffer_and_index():
     
     # Set Cache Limit to something small to test triggering (or we trigger manually)
     # Even better, we test the buffering behavior specifically.
-    os.environ["BENOSTREAM_CACHE_GB"] = "1" 
+    os.environ["BSDB_CACHE_GB"] = "1" 
     
     table = bsdb.Table(uri)
     table.index_all_columns() # Enable indexing

@@ -15,6 +15,12 @@
 //!
 //! See `plans/production_readiness_plan.md` §WS2.
 
+// The `SERIAL` guard below is deliberately held across `.await` points: the
+// fault injector is process-global, so cases must run one-at-a-time. A
+// std `MutexGuard` is intentional here (there is no async lock to hold and no
+// re-entrancy), so silence the lint rather than restructuring the guard.
+#![allow(clippy::await_holding_lock)]
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 

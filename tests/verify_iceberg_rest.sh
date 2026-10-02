@@ -3,12 +3,12 @@ set -e
 
 # 1. Seed data
 echo "Seeding data..."
-export BENOSTREAM_STORAGE_URI="file:///tmp/hdb_test/default/sample_table"
+export BSDB_STORAGE_URI="file:///tmp/hdb_test/default/sample_table"
 cargo run --bin setup_test_data
 
 # 2. Start REST server in background
 echo "Starting REST server..."
-export BENOSTREAM_STORAGE_URI="file:///tmp/hdb_test"
+export BSDB_STORAGE_URI="file:///tmp/hdb_test"
 cargo run --bin iceberg_rest > /tmp/iceberg_rest.log 2>&1 &
 SERVER_PID=$!
 

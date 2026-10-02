@@ -13,6 +13,32 @@ use std::sync::Arc;
 use crate::core::index::hnsw_rs::arrow_ipc::ArrowType;
 use crate::core::index::hnsw_rs::dist::Distance;
 use crate::core::index::hnsw_rs::hnsw::Neighbour;
+use ahash::AHashSet;
+
+#[derive(Clone)]
+struct Candidate {
+    idx: usize,
+    dist: f32,
+}
+
+impl PartialEq for Candidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.dist == other.dist && self.idx == other.idx
+    }
+}
+impl Eq for Candidate {}
+
+impl PartialOrd for Candidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.dist.partial_cmp(&other.dist)
+    }
+}
+
+impl Ord for Candidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+    }
+}
 
 pub struct ArrowHnsw<T: ArrowType, D: Distance<T>> {
     batch: RecordBatch,
@@ -22,6 +48,9 @@ pub struct ArrowHnsw<T: ArrowType, D: Distance<T>> {
     vector_array: Arc<BinaryArray>,
     max_layer_array: Arc<UInt8Array>,
     neighbors_array: Arc<ListArray>, // List of Layers
+    l0_offsets: arrow::buffer::OffsetBuffer<i32>,
+    l1_offsets: arrow::buffer::OffsetBuffer<i32>,
+    neighbors_flat: Arc<UInt32Array>,
     dimension: usize,
     entry_point: usize,
     max_layer: u8,
@@ -150,6 +179,23 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
                 .clone(),
         );
 
+        let l0_offsets = neighbors_array.offsets().clone();
+        let l1 = neighbors_array.values();
+        let l1 = l1.as_any().downcast_ref::<ListArray>().unwrap();
+        let l1_offsets = l1.offsets().clone();
+        let s = l1.values();
+        let s = s
+            .as_any()
+            .downcast_ref::<arrow::array::StructArray>()
+            .unwrap();
+        let neighbors_flat = Arc::new(
+            s.column(0)
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .unwrap()
+                .clone(),
+        );
+
         // Assume all vectors have the same dimension
         let dimension = if vector_array.len() > 0 {
             let b = vector_array.value(0);
@@ -176,6 +222,9 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             vector_array,
             max_layer_array,
             neighbors_array,
+            l0_offsets,
+            l1_offsets,
+            neighbors_flat,
             dimension,
             entry_point,
             max_layer,
@@ -193,30 +242,35 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         T::from_bytes(bytes)
     }
 
-    fn get_neighbors(&self, point_idx: usize, layer: usize) -> Vec<u32> {
-        let layers_list = self.neighbors_array.value(point_idx);
-        let layers_list = layers_list.as_any().downcast_ref::<ListArray>().unwrap();
+    pub fn get_vector_slice<'a>(&'a self, idx: usize, scratch: &'a mut Vec<T>) -> &'a [T] {
+        let bytes = self.vector_array.value(idx);
+        if let Some(s) = T::slice_from_bytes(bytes) {
+            s
+        } else {
+            *scratch = T::from_bytes(bytes);
+            scratch.as_slice()
+        }
+    }
 
-        if layer >= layers_list.len() {
-            return Vec::new();
+    fn with_neighbors<F>(&self, point_idx: usize, layer: usize, mut f: F)
+    where
+        F: FnMut(&[u32]),
+    {
+        let l1_start = self.l0_offsets[point_idx] as usize;
+        let l1_end = self.l0_offsets[point_idx + 1] as usize;
+        let l1_len = l1_end - l1_start;
+
+        if layer >= l1_len {
+            f(&[]);
+            return;
         }
 
-        let neighbors_structs = layers_list.value(layer);
-        let neighbors_structs = neighbors_structs
-            .as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap();
-        let idx_array = neighbors_structs
-            .column(0)
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .unwrap();
+        let l1_idx = l1_start + layer;
+        let u_start = self.l1_offsets[l1_idx] as usize;
+        let u_end = self.l1_offsets[l1_idx + 1] as usize;
 
-        let mut result = Vec::with_capacity(neighbors_structs.len());
-        for i in 0..neighbors_structs.len() {
-            result.push(idx_array.value(i));
-        }
-        result
+        let flat_values = self.neighbors_flat.values();
+        f(&flat_values[u_start..u_end])
     }
 
     fn search_layer(
@@ -226,10 +280,8 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         ef: usize,
         layer: usize,
         filter: Option<&roaring::RoaringBitmap>,
-    ) -> std::collections::BinaryHeap<
-        std::sync::Arc<crate::core::index::hnsw_rs::hnsw::PointWithOrder<T>>,
-    > {
-        let mut return_points = std::collections::BinaryHeap::new();
+    ) -> std::collections::BinaryHeap<Candidate> {
+        let mut return_points = std::collections::BinaryHeap::with_capacity(ef);
         if self.neighbors_array.len() == 0 {
             return return_points;
         }
@@ -237,26 +289,16 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         let dist_to_entry = self.distance.eval(query, &self.get_vector(entry_point));
 
         // visited points
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = AHashSet::with_capacity(ef * 4);
         visited.insert(entry_point);
 
         // Min-heap for candidates (using negative distance)
-        let mut candidate_points = std::collections::BinaryHeap::new();
+        let mut candidate_points = std::collections::BinaryHeap::with_capacity(ef);
 
-        // We need dummy points to reuse hnsw::PointWithOrder for binary heap
-        let dummy_pt = |idx: usize, dist: f32| {
-            let p = crate::core::index::hnsw_rs::hnsw::Point::new(
-                &[],
-                self.data_id_array.value(idx) as usize,
-                crate::core::index::hnsw_rs::hnsw::PointId(0, idx as i32),
-            );
-            std::sync::Arc::new(crate::core::index::hnsw_rs::hnsw::PointWithOrder::new(
-                &std::sync::Arc::new(p),
-                dist,
-            ))
-        };
-
-        candidate_points.push(dummy_pt(entry_point, -dist_to_entry));
+        candidate_points.push(Candidate {
+            idx: entry_point,
+            dist: -dist_to_entry,
+        });
 
         let mut entry_valid = true;
         if let Some(f) = filter {
@@ -265,64 +307,63 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
             }
         }
         if entry_valid {
-            return_points.push(dummy_pt(entry_point, dist_to_entry));
+            return_points.push(Candidate {
+                idx: entry_point,
+                dist: dist_to_entry,
+            });
         }
 
         while !candidate_points.is_empty() {
             let c = candidate_points.pop().unwrap();
 
             if let Some(f) = return_points.peek() {
-                if return_points.len() >= ef && -(c.dist_to_ref) > f.dist_to_ref {
+                if return_points.len() >= ef && -(c.dist) > f.dist {
                     break;
                 }
             }
 
-            let neighbors = self.get_neighbors(c.point_ref.get_point_id().1 as usize, layer);
-            for e_idx in neighbors {
-                let e_idx = e_idx as usize;
-                if !visited.contains(&e_idx) {
-                    visited.insert(e_idx);
-                    let v = self.get_vector(e_idx);
-                    let e_dist = self.distance.eval(query, &v);
+            let mut scratch = Vec::new();
+            self.with_neighbors(c.idx, layer, |neighbors| {
+                for &e_idx in neighbors {
+                    let e_idx = e_idx as usize;
+                    if !visited.contains(&e_idx) {
+                        visited.insert(e_idx);
+                        let v_slice = self.get_vector_slice(e_idx, &mut scratch);
+                        let e_dist = self.distance.eval(query, v_slice);
 
-                    let mut enters_return = false;
-                    if let Some(f) = filter {
-                        if !f.contains(self.data_id_array.value(e_idx) as u32) {
-                            enters_return = false;
-                        } else if return_points.len() < ef {
-                            enters_return = true;
+                        let is_promising = if return_points.len() < ef {
+                            true
                         } else if let Some(f_pt) = return_points.peek() {
-                            if e_dist < f_pt.dist_to_ref {
-                                enters_return = true;
+                            e_dist < f_pt.dist
+                        } else {
+                            true
+                        };
+
+                        let mut enters_return = is_promising;
+                        if let Some(f) = filter {
+                            if !f.contains(self.data_id_array.value(e_idx) as u32) {
+                                enters_return = false;
                             }
                         }
-                    } else if return_points.len() < ef {
-                        enters_return = true;
-                    } else if let Some(f_pt) = return_points.peek() {
-                        if e_dist < f_pt.dist_to_ref {
-                            enters_return = true;
-                        }
-                    }
 
-                    let is_promising = if return_points.len() < ef {
-                        true
-                    } else if let Some(f_pt) = return_points.peek() {
-                        e_dist < f_pt.dist_to_ref
-                    } else {
-                        true
-                    };
-
-                    if is_promising || enters_return {
-                        candidate_points.push(dummy_pt(e_idx, -e_dist));
-                        if enters_return {
-                            return_points.push(dummy_pt(e_idx, e_dist));
-                            if return_points.len() > ef {
-                                return_points.pop();
+                        if is_promising || enters_return {
+                            candidate_points.push(Candidate {
+                                idx: e_idx,
+                                dist: -e_dist,
+                            });
+                            if enters_return {
+                                return_points.push(Candidate {
+                                    idx: e_idx,
+                                    dist: e_dist,
+                                });
+                                if return_points.len() > ef {
+                                    return_points.pop();
+                                }
                             }
                         }
                     }
                 }
-            }
+            });
         }
         return_points
     }
@@ -339,22 +380,26 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         }
 
         let mut pivot = self.entry_point;
-        let mut dist_to_entry = self.distance.eval(query, &self.get_vector(pivot));
+        let mut scratch = Vec::new();
+        let v_slice = self.get_vector_slice(pivot, &mut scratch);
+        let mut dist_to_entry = self.distance.eval(query, v_slice);
         let mut new_pivot = None;
 
         for layer in (1..=self.max_layer as usize).rev() {
             loop {
                 let mut has_changed = false;
-                let neighbors = self.get_neighbors(pivot, layer);
-                for n_idx in neighbors {
-                    let n_idx = n_idx as usize;
-                    let tmp_dist = self.distance.eval(query, &self.get_vector(n_idx));
-                    if tmp_dist < dist_to_entry {
-                        new_pivot = Some(n_idx);
-                        has_changed = true;
-                        dist_to_entry = tmp_dist;
+                self.with_neighbors(pivot, layer, |neighbors| {
+                    for &n_idx in neighbors {
+                        let n_idx = n_idx as usize;
+                        let tmp_slice = self.get_vector_slice(n_idx, &mut scratch);
+                        let tmp_dist = self.distance.eval(query, tmp_slice);
+                        if tmp_dist < dist_to_entry {
+                            new_pivot = Some(n_idx);
+                            has_changed = true;
+                            dist_to_entry = tmp_dist;
+                        }
                     }
-                }
+                });
                 if has_changed {
                     pivot = new_pivot.unwrap();
                 } else {
@@ -364,23 +409,18 @@ impl<T: ArrowType, D: Distance<T>> ArrowHnsw<T, D> {
         }
 
         let ef = ef_s.max(knbn);
-        let mut neighbours_heap = self.search_layer(query, pivot, ef, 0, filter);
+        let neighbours_heap = self.search_layer(query, pivot, ef, 0, filter);
 
-        // Heap is a max-heap of distances. We want a sorted vector of increasing distances.
-        let mut neighbours = Vec::with_capacity(neighbours_heap.len());
-        while let Some(p) = neighbours_heap.pop() {
-            neighbours.push(p);
-        }
-        neighbours.reverse();
+        let neighbours = neighbours_heap.into_sorted_vec();
 
         let last = knbn.min(ef).min(neighbours.len());
         let mut results = Vec::with_capacity(last);
         for i in 0..last {
             let p = &neighbours[i];
             results.push(Neighbour {
-                d_id: p.point_ref.get_origin_id(),
-                distance: p.dist_to_ref,
-                p_id: p.point_ref.get_point_id(),
+                d_id: self.data_id_array.value(p.idx) as usize,
+                distance: p.dist,
+                p_id: crate::core::index::hnsw_rs::hnsw::PointId(0, p.idx as i32),
             });
         }
         results

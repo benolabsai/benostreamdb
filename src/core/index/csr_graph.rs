@@ -151,14 +151,8 @@ impl MmapCsrGraph {
             current_src += 1;
         }
 
-        // The `graph_v2` suffix is the on-disk format version. v1 files were
-        // written by a buggy `add_index` that registered a graph index under
-        // both its `src_column` and the original `column` argument, so two
-        // graph indexes (forward + reverse) collided and the physical CSRs
-        // could be mislabeled (wrong direction). v2 files are keyed solely by
-        // `src_column`; `load_multi_csr` ignores v1 files so a legacy table
-        // falls back to the SQL BFS path (correct, just slower) until its graph
-        // indexes are rebuilt.
+        // The `graph_v2` suffix is the on-disk format version. Graph indexes
+        // are keyed solely by `src_column`.
         let offsets_path = std::path::PathBuf::from(format!(
             "{}.graph_v2.csr.offsets",
             local_base_path.to_string_lossy()
@@ -184,9 +178,9 @@ impl MmapCsrGraph {
     }
 }
 
-use crate::core::sql::graph_udf::drift_search::DriftGraph;
+use crate::core::sql::graph_udf::graph_view::GraphView;
 
-impl DriftGraph for MmapCsrGraph {
+impl GraphView for MmapCsrGraph {
     fn get_neighbors(&self, node: u64) -> Vec<u64> {
         if let Some(dense_node) = self.to_dense(node) {
             self.get_neighbors_raw(dense_node)
@@ -195,6 +189,16 @@ impl DriftGraph for MmapCsrGraph {
                 .collect()
         } else {
             Vec::new()
+        }
+    }
+
+    fn get_neighbors_into(&self, node: u64, out: &mut Vec<u64>) {
+        if let Some(dense_node) = self.to_dense(node) {
+            out.extend(
+                self.get_neighbors_raw(dense_node)
+                    .iter()
+                    .map(|e| self.to_original(e.dst_id as usize)),
+            );
         }
     }
 
@@ -223,13 +227,19 @@ impl MultiSegmentCsrGraph {
     }
 }
 
-impl DriftGraph for MultiSegmentCsrGraph {
+impl GraphView for MultiSegmentCsrGraph {
     fn get_neighbors(&self, node: u64) -> Vec<u64> {
         let mut all_neighbors = Vec::new();
         for seg in &self.segments {
             all_neighbors.extend(seg.get_neighbors(node));
         }
         all_neighbors
+    }
+
+    fn get_neighbors_into(&self, node: u64, out: &mut Vec<u64>) {
+        for seg in &self.segments {
+            seg.get_neighbors_into(node, out);
+        }
     }
 
     fn get_degree(&self, node: u64) -> usize {

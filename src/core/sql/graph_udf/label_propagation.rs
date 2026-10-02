@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
 use arrow::array::{
     Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
     UInt64Builder,
@@ -45,13 +46,7 @@ impl Default for LabelPropagationUDF {
 impl LabelPropagationUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -62,7 +57,7 @@ impl AggregateUDFImpl for LabelPropagationUDF {
     }
 
     fn name(&self) -> &str {
-        "label_propagation"
+        "graph_label_propagation"
     }
 
     fn signature(&self) -> &Signature {
@@ -81,93 +76,35 @@ impl AggregateUDFImpl for LabelPropagationUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-        ])
+        Ok(GraphAccumulatorBase::state_fields())
     }
 }
 
 #[derive(Debug)]
 pub struct LabelPropagationAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
 }
 
 impl LabelPropagationAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
         }
     }
 }
 
 impl Accumulator for LabelPropagationAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-        ])
+        self.base.edge_state()
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "label_propagation: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "label_propagation: expected ListArray for targets".to_string(),
-                )
-            })?;
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
-        Ok(())
+        self.base.merge_edge_state(states, Some(2), Some(3))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
+        let _graph = self.base.resolve_graph(&[], 0)?;
+
         let mut builder = arrow::array::ListBuilder::new(arrow::array::ListBuilder::new(
             arrow::array::UInt64Builder::new(),
         ));
@@ -179,33 +116,10 @@ impl Accumulator for LabelPropagationAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-        let sources = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "label_propagation: expected UInt64Array for sources".to_string(),
-                )
-            })?;
-        let targets = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "label_propagation: expected UInt64Array for targets".to_string(),
-                )
-            })?;
-
-        self.sources.extend(sources.iter().flatten());
-        self.targets.extend(targets.iter().flatten());
-
-        Ok(())
+        self.base.update_edge_batch(values, Some(2), Some(3))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size()
     }
 }

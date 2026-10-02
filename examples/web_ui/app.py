@@ -32,8 +32,8 @@ from contextlib import contextmanager
 # Serving default: the engine's 1 GB index-cache cannot hold whole-site segment
 # indexes (69 segments x ~300 MB TQ8 graphs), so every query would evict and
 # re-deserialize them. Size it to 40 GB unless the operator set it explicitly.
-# On smaller hosts lower it via BENOSTREAM_CACHE_GB, or use the pruned dataset.
-os.environ.setdefault("BENOSTREAM_CACHE_GB", "40")
+# On smaller hosts lower it via BSDB_CACHE_GB, or use the pruned dataset.
+os.environ.setdefault("BSDB_CACHE_GB", "40")
 
 import shutil
 import time

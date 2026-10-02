@@ -56,9 +56,9 @@ class BenoStreamDeltaWriter(tableName: String, gpuDevice: String) extends DeltaW
       
       val jsonStr = mapper.writeValueAsString(javaMap)
       
-      // Call Rust Core
+      // Call Rust Core with dynamically resolved GPU context
+      val effectiveDevice = com.benostreamdb.spark.gpu.GpuContextResolver.bindTaskGpuContext(gpuDevice)
       val jniBridge = com.benostreamdb.spark.jni.BenoStreamJNIBridge.getInstance()
-      jniBridge.setGpuContext(gpuDevice)
       val success = jniBridge.commitPositionDeletes(tableName.split("\\.").last, jsonStr)
       // For now, print what would happen
       println(s"BenoStreamDB: Committing position deletes to Rust Core for $tableName")

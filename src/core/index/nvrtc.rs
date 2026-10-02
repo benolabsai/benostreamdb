@@ -274,32 +274,48 @@ pub fn resolve_nvrtc() -> Option<PathBuf> {
 /// libnvrtc-builtins.alt.so.13.0"). Loading it ourselves with `RTLD_GLOBAL`
 /// registers it under its soname, so nvrtc's lookup succeeds.
 fn preload_builtins(nvrtc_path: &Path) {
-    static PRELOADED: OnceLock<()> = OnceLock::new();
-    PRELOADED.get_or_init(|| {
-        let Some(dir) = nvrtc_path.parent() else {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    // Track which directories we have already preloaded. A single global
+    // "done" flag is wrong: different callers can resolve nvrtc from different
+    // directories (e.g. a bogus path in a test, then the real pip wheel), and
+    // the first call would suppress the preload the second one needs.
+    static PRELOADED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    let Some(dir) = nvrtc_path.parent() else {
+        return;
+    };
+    let preloaded = PRELOADED.get_or_init(|| Mutex::new(HashSet::new()));
+    {
+        let guard = preloaded.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.contains(dir) {
             return;
-        };
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("libnvrtc-builtins") || !name.contains(".so") {
-                continue;
-            }
-            // SAFETY: loading a shared library from a directory we just
-            // resolved; RTLD_GLOBAL makes it visible to nvrtc's own dlopen.
-            if let Ok(lib) = unsafe {
-                libloading::os::unix::Library::open(
-                    Some(entry.path()),
-                    libloading::os::unix::RTLD_NOW | libloading::os::unix::RTLD_GLOBAL,
-                )
-            } {
-                // Keep it loaded for the process lifetime.
-                std::mem::forget(lib);
-            }
         }
-    });
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("libnvrtc-builtins") || !name.contains(".so") {
+            continue;
+        }
+        // SAFETY: loading a shared library from a directory we just
+        // resolved; RTLD_GLOBAL makes it visible to nvrtc's own dlopen.
+        if let Ok(lib) = unsafe {
+            libloading::os::unix::Library::open(
+                Some(entry.path()),
+                libloading::os::unix::RTLD_NOW | libloading::os::unix::RTLD_GLOBAL,
+            )
+        } {
+            // Keep it loaded for the process lifetime.
+            std::mem::forget(lib);
+        }
+    }
+    preloaded
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(dir.to_path_buf());
 }
 
 /// Read the nvrtc program log (best-effort; used for error messages).
@@ -335,16 +351,64 @@ pub fn compile_ptx(src: &str) -> Result<String> {
     compile_ptx_with_path(src, &path)
 }
 
-/// Compile CUDA C source to PTX using a specific nvrtc library.
-pub fn compile_ptx_with_path(src: &str, path: &Path) -> Result<String> {
+/// `dlopen` flags for nvrtc.
+///
+/// We deliberately keep the loader default (`RTLD_LAZY | RTLD_LOCAL`). Eager
+/// binding (`RTLD_NOW`) was tried but regressed the pip-wheel layout: the
+/// `nvidia-*-cu13` `libnvrtc.so.13` resolves some symbols against its
+/// `libnvrtc-builtins.alt.so.13.0` companion, and forcing eager resolution at
+/// load time broke nvrtc's own runtime lookup of that companion
+/// (`failed to open libnvrtc-builtins.alt.so.13.0`). Note that `RTLD_NOW` would
+/// not have helped the original failure anyway: the crash was in the loader's
+/// initializer loop (`_dl_init`), which runs at `dlopen` regardless of the
+/// binding mode. Process-level eager binding is available via `LD_BIND_NOW=1`
+/// (set by the demo load) when a caller wants lazy-resolution faults surfaced
+/// as load errors.
+const NVRTC_DLOPEN_FLAGS: c_int =
+    libloading::os::unix::RTLD_LAZY | libloading::os::unix::RTLD_LOCAL;
+
+/// Open the resolved nvrtc library with eager binding.
+fn open_nvrtc(path: &Path) -> Result<libloading::os::unix::Library> {
     // nvrtc needs its builtins companion on the loader path; preload it.
     preload_builtins(path);
+    // SAFETY: `path` points at a real shared library.
+    unsafe { libloading::os::unix::Library::open(Some(path), NVRTC_DLOPEN_FLAGS) }
+        .with_context(|| format!("dlopen {}", path.display()))
+}
 
-    // SAFETY: `path` points at a real shared library; the symbol signatures
-    // below match the nvrtc C API.
-    let lib = unsafe { libloading::Library::new(path) }
-        .with_context(|| format!("dlopen {}", path.display()))?;
+/// Loader-safe probe: resolve nvrtc, `dlopen` it with `RTLD_NOW`, and confirm
+/// the symbols we call are present — without compiling anything.
+///
+/// Call this before constructing a CUDA backend so a missing or conflicting
+/// nvrtc fails as an `Err` (→ CPU fallback) instead of crashing the process in
+/// the dynamic linker. Returns the resolved library path on success.
+pub fn preflight() -> Result<PathBuf> {
+    let path = resolve_nvrtc().ok_or_else(|| {
+        anyhow!(
+            "libnvrtc not found. Install a CUDA toolkit or the `nvidia-cuda-nvrtc-cuXX` \
+             wheel, or set BSDB_NVRTC_PATH to the library."
+        )
+    })?;
+    let lib = open_nvrtc(&path)?;
+    // SAFETY: symbol signatures match the nvrtc C API; we only check presence.
+    unsafe {
+        lib.get::<NvrtcCreateProgram>(b"nvrtcCreateProgram\0")
+            .context("nvrtcCreateProgram symbol")?;
+        lib.get::<NvrtcCompileProgram>(b"nvrtcCompileProgram\0")
+            .context("nvrtcCompileProgram symbol")?;
+        lib.get::<NvrtcGetPtxSize>(b"nvrtcGetPTXSize\0")
+            .context("nvrtcGetPTXSize symbol")?;
+        lib.get::<NvrtcGetPtx>(b"nvrtcGetPTX\0")
+            .context("nvrtcGetPTX symbol")?;
+    }
+    Ok(path)
+}
 
+/// Compile CUDA C source to PTX using a specific nvrtc library.
+pub fn compile_ptx_with_path(src: &str, path: &Path) -> Result<String> {
+    let lib = open_nvrtc(path)?;
+
+    // SAFETY: the symbol signatures below match the nvrtc C API.
     unsafe {
         let create: NvrtcCreateProgram = *lib
             .get(b"nvrtcCreateProgram\0")
@@ -464,5 +528,31 @@ mod tests {
         let ptx = compile_ptx_with_path("extern \"C\" __global__ void noop_kernel() { }", &path)
             .expect("nvrtc should compile a trivial kernel");
         assert!(ptx.contains(".version"), "expected PTX, got: {ptx:.80}");
+    }
+
+    /// The loader-safe probe must return `Ok` or a clean `Err` — never crash
+    /// the dynamic linker. This is the regression guard for the `_dl_init`
+    /// SIGSEGV seen when a conflicting nvrtc was on the loader path.
+    #[test]
+    fn preflight_never_crashes() {
+        match preflight() {
+            Ok(p) => eprintln!("nvrtc preflight ok: {}", p.display()),
+            Err(e) => eprintln!("nvrtc preflight unavailable (expected on CPU-only hosts): {e}"),
+        }
+    }
+
+    /// Opening a nonexistent library must be a clean `Err`, not a crash.
+    #[test]
+    fn open_bogus_nvrtc_is_err_not_crash() {
+        let bogus = Path::new("/nonexistent/libnvrtc.so.999");
+        assert!(open_nvrtc(bogus).is_err());
+    }
+
+    /// We keep the loader default (lazy) for the main library; eager binding is
+    /// opt-in at the process level via `LD_BIND_NOW`. `RTLD_NOW` here regressed
+    /// the pip-wheel builtins lookup (see `NVRTC_DLOPEN_FLAGS`).
+    #[test]
+    fn nvrtc_dlopen_flags_keep_loader_default() {
+        assert_ne!(NVRTC_DLOPEN_FLAGS & libloading::os::unix::RTLD_LAZY, 0);
     }
 }

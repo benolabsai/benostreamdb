@@ -8,6 +8,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use ahash::AHashMap;
+
 use anyhow::{Context, Result};
 use arrow::array::{Array, Int32Array, Int64Array, UInt32Array, UInt64Array};
 
@@ -318,7 +320,7 @@ impl Table {
         const MAX_SHORTEST_PATH_NODES: usize = 100_000;
         const MAX_BFS_DEGREE: usize = 10_000;
 
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
 
         // Fast path: CSR index
         let col_to_check = graph_column.unwrap_or("source");
@@ -565,7 +567,7 @@ impl Table {
         max_nodes: Option<usize>,
         graph_column: Option<&str>,
     ) -> Result<Vec<(u64, u64)>> {
-        use crate::core::sql::graph_udf::drift_search::DriftGraph;
+        use crate::core::sql::graph_udf::graph_view::GraphView;
 
         let opts = GraphNeighborhoodOptions {
             seeds: seeds.to_vec(),
@@ -638,6 +640,9 @@ impl Table {
     }
 
     /// Execute regional DRIFT search around query `seeds` over this edge table.
+    ///
+    /// Uses [`GraphMode::Auto`]: the in-memory graph when the regional
+    /// subgraph fits the DRIFT memory budget, else the out-of-core CSR.
     pub async fn regional_drift(
         &self,
         query: &str,
@@ -647,78 +652,162 @@ impl Table {
         n_depth: u32,
         k_followups: usize,
     ) -> Result<crate::core::sql::graph_udf::drift_search::DriftSearchResult> {
-        use crate::core::sql::graph_udf::drift_search::{
-            execute_drift_search, DriftGraph, DriftSearchParams, HeuristicFollowUpGenerator,
-            SimpleGraph,
-        };
+        self.regional_drift_with_mode(
+            query,
+            seeds,
+            top_k,
+            hops,
+            n_depth,
+            k_followups,
+            crate::core::sql::graph_udf::graph_view::GraphMode::Auto,
+        )
+        .await
+    }
 
-        let edges = self
-            .subgraph_edges(seeds, hops, false, Some(1000), Some(50000), None)
-            .await?;
-
-        let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
-        for (u, v) in &edges {
-            adj.entry(*u).or_default().push(*v);
-            adj.entry(*v).or_default().push(*u);
-        }
-
-        let graph = SimpleGraph { adjacency: adj };
-
-        // Community partitioning: connected components over regional subgraph
-        let mut community_map = HashMap::new();
-        let mut current_comm = 0u64;
-
-        let mut all_nodes = seeds.to_vec();
-        for (u, v) in &edges {
-            all_nodes.push(*u);
-            all_nodes.push(*v);
-        }
-
-        for &node in &all_nodes {
-            if community_map.contains_key(&node) {
-                continue;
-            }
-            let mut q = VecDeque::new();
-            q.push_back(node);
-            community_map.insert(node, current_comm);
-
-            while let Some(curr) = q.pop_front() {
-                for neighbor in graph.get_neighbors(curr) {
-                    if let std::collections::hash_map::Entry::Vacant(e) =
-                        community_map.entry(neighbor)
-                    {
-                        e.insert(current_comm);
-                        q.push_back(neighbor);
-                    }
+    /// Resolve a [`GraphMode`] into a concrete graph view mode.
+    /// `Auto` estimates the regional subgraph and picks
+    /// `InMemory` when it fits the DRIFT memory budget, else `OutOfCore`.
+    pub async fn resolve_graph_mode(
+        &self,
+        mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+        seeds: &[u64],
+        hops: u32,
+    ) -> Result<crate::core::sql::graph_udf::graph_view::GraphMode> {
+        use crate::core::sql::graph_udf::graph_view::{graph_memory_budget_bytes, GraphMode};
+        match mode {
+            GraphMode::Auto => {
+                let est = self.estimate_regional_subgraph_bytes(seeds, hops).await?;
+                if est <= graph_memory_budget_bytes() as usize {
+                    Ok(GraphMode::InMemory)
+                } else {
+                    Ok(GraphMode::OutOfCore)
                 }
             }
-            current_comm += 1;
+            m => Ok(m),
         }
+    }
 
-        // Top communities prioritized by seed presence and degree
-        let mut comm_scores: HashMap<u64, usize> = HashMap::new();
-        for &s in seeds {
-            if let Some(&c) = community_map.get(&s) {
-                *comm_scores.entry(c).or_default() += 10;
+    /// Load the graph backing for OutOfCore or Cached modes.
+    async fn load_graph_backing(
+        &self,
+        mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+    ) -> Result<Box<dyn crate::core::sql::graph_udf::graph_view::GraphView>> {
+        use crate::core::sql::graph_udf::graph_view::{
+            graph_memory_budget_bytes, CachingGraph, GraphMode,
+        };
+        match mode {
+            GraphMode::InMemory => unreachable!("InMemory mode handled separately"),
+            GraphMode::OutOfCore => {
+                let graph = self.load_graph_index("source").await?.ok_or_else(|| {
+                    anyhow::anyhow!("out-of-core graph requires a CSR graph index on 'source'")
+                })?;
+                Ok(Box::new(graph))
+            }
+            GraphMode::Cached => {
+                let graph = self.load_graph_index("source").await?.ok_or_else(|| {
+                    anyhow::anyhow!("cached graph requires a CSR graph index on 'source'")
+                })?;
+                let cached = CachingGraph::new(graph, graph_memory_budget_bytes() as usize);
+                Ok(Box::new(cached))
+            }
+            GraphMode::Auto => unreachable!("Auto resolved above"),
+        }
+    }
+
+    /// Construct a [`GraphView`] according to the given mode, seeds, and hops.
+    pub async fn graph_view(
+        &self,
+        mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+        seeds: &[u64],
+        hops: u32,
+    ) -> Result<Box<dyn crate::core::sql::graph_udf::graph_view::GraphView>> {
+        use crate::core::sql::graph_udf::graph_view::{GraphMode, SimpleGraph, SubgraphView};
+
+        let mode = self.resolve_graph_mode(mode, seeds, hops).await?;
+
+        match mode {
+            GraphMode::InMemory => {
+                let edges = self
+                    .subgraph_edges(seeds, hops, false, Some(1000), Some(50000), None)
+                    .await?;
+                Ok(Box::new(SimpleGraph::from_directed_edges(&edges)))
+            }
+            _ => {
+                let backing = self.load_graph_backing(mode).await?;
+                let region = self.region_nodes(seeds, hops).await?;
+                Ok(Box::new(SubgraphView::new(backing, region)))
             }
         }
-        for (&node, &c) in &community_map {
-            *comm_scores.entry(c).or_default() += graph.get_degree(node);
-        }
+    }
 
-        let mut sorted_comms: Vec<(u64, usize)> = comm_scores.into_iter().collect();
-        sorted_comms.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
-        let top_communities: Vec<u64> = sorted_comms
+    /// The set of nodes within `hops` of `seeds` — the regional subgraph every
+    /// graph mode operates on.
+    async fn region_nodes(&self, seeds: &[u64], hops: u32) -> Result<HashSet<u64>> {
+        Ok(self
+            .graph_neighborhood(&GraphNeighborhoodOptions {
+                seeds: seeds.to_vec(),
+                hops,
+                directed: false,
+                max_degree: Some(1000),
+                max_nodes: Some(50000),
+                ..Default::default()
+            })
+            .await?
             .into_iter()
-            .take(top_k)
-            .map(|(c, _)| c)
-            .collect();
+            .collect())
+    }
 
-        let generator = HeuristicFollowUpGenerator {
-            graph: &graph,
-            community_map: &community_map,
+    /// Order-of-magnitude estimate of the in-memory regional subgraph size.
+    async fn estimate_regional_subgraph_bytes(&self, seeds: &[u64], hops: u32) -> Result<usize> {
+        use crate::core::sql::graph_udf::drift_search::estimate_subgraph_bytes;
+
+        let nodes = self.region_nodes(seeds, hops).await?.len();
+        // A modest average degree is enough to choose a mode.
+        Ok(estimate_subgraph_bytes(nodes, 16))
+    }
+
+    /// Execute regional DRIFT search with an explicit graph mode.
+    ///
+    /// - `InMemory` materializes the regional subgraph (`SimpleGraph`).
+    /// - `OutOfCore` walks the mmap CSR directly (no materialization).
+    /// - `Cached` walks the CSR with a bounded in-memory neighbor cache.
+    /// - `Auto` picks `InMemory` when the estimated subgraph fits the DRIFT
+    ///   memory budget, else `OutOfCore`.
+    pub async fn regional_drift_with_mode(
+        &self,
+        query: &str,
+        seeds: &[u64],
+        top_k: usize,
+        hops: u32,
+        n_depth: u32,
+        k_followups: usize,
+        mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+    ) -> Result<crate::core::sql::graph_udf::drift_search::DriftSearchResult> {
+        use crate::core::sql::graph_udf::drift_search::{
+            execute_drift_search, DriftSearchParams, HeuristicFollowUpGenerator,
         };
 
+        // `graph_view` already restricts every mode to the regional node set, so
+        // the in-memory and out-of-core paths traverse the identical induced
+        // subgraph and return the same result.
+        let graph = self.graph_view(mode, seeds, hops).await?;
+        let visited = self
+            .graph_neighborhood(&GraphNeighborhoodOptions {
+                seeds: seeds.to_vec(),
+                hops,
+                directed: false,
+                max_degree: Some(1000),
+                max_nodes: Some(50000),
+                ..Default::default()
+            })
+            .await?;
+        let (community_map, top_communities) =
+            drift_communities_and_top(graph.as_ref(), seeds, &visited, top_k);
+
+        let generator = HeuristicFollowUpGenerator {
+            graph: graph.as_ref(),
+            community_map: &community_map,
+        };
         let params = DriftSearchParams {
             n_depth,
             k_followups,
@@ -726,16 +815,71 @@ impl Table {
             hops,
             alpha: 0.85,
             confidence_threshold: 0.0,
+            ..Default::default()
         };
-
-        Ok(execute_drift_search(
-            query,
-            &graph,
-            &top_communities,
-            &generator,
-            &params,
-        ))
+        let mut result =
+            execute_drift_search(query, graph.as_ref(), &top_communities, &generator, &params);
+        result.community_assignments = community_map;
+        Ok(result)
     }
+}
+
+/// Connected-component communities over `visited`, scored by seed presence and
+/// degree, returning `(community_map, top_communities)`.
+fn drift_communities_and_top(
+    graph: &dyn crate::core::sql::graph_udf::graph_view::GraphView,
+    seeds: &[u64],
+    visited: &[u64],
+    top_k: usize,
+) -> (AHashMap<u64, u64>, Vec<u64>) {
+    // Integer-keyed label maps: ahash plus a single reused neighbor scratch
+    // buffer keeps this 15-round label-propagation pass allocation-light. The
+    // return type is `AHashMap` to match `DriftSearchResult::community_assignments`
+    // and `HeuristicFollowUpGenerator::community_map`.
+    let mut community_map: AHashMap<u64, u64> = visited.iter().map(|&n| (n, n)).collect();
+    let mut neighbors: Vec<u64> = Vec::new();
+    for _ in 0..15 {
+        let mut changed = false;
+        for &node in visited {
+            let mut label_counts: AHashMap<u64, usize> = AHashMap::new();
+            neighbors.clear();
+            graph.get_neighbors_into(node, &mut neighbors);
+            for &neighbor in &neighbors {
+                if let Some(&lbl) = community_map.get(&neighbor) {
+                    *label_counts.entry(lbl).or_default() += 1;
+                }
+            }
+            if label_counts.is_empty() {
+                continue;
+            }
+            let best = label_counts
+                .into_iter()
+                .max_by_key(|&(lbl, count)| (count, std::cmp::Reverse(lbl)))
+                .map(|(lbl, _)| lbl)
+                .unwrap_or(node);
+            if community_map.get(&node) != Some(&best) {
+                community_map.insert(node, best);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut comm_scores: AHashMap<u64, usize> = AHashMap::new();
+    for &s in seeds {
+        if let Some(&c) = community_map.get(&s) {
+            *comm_scores.entry(c).or_default() += 10;
+        }
+    }
+    for (&node, &c) in &community_map {
+        *comm_scores.entry(c).or_default() += graph.get_degree(node);
+    }
+    let mut sorted: Vec<(u64, usize)> = comm_scores.into_iter().collect();
+    sorted.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
+    let top: Vec<u64> = sorted.into_iter().take(top_k).map(|(c, _)| c).collect();
+    (community_map, top)
 }
 
 /// Multi-hop BFS over a CSR graph, returning the sorted visited node set (seeds included).
@@ -748,7 +892,7 @@ pub fn csr_bfs_visited(
     max_degree: Option<usize>,
     max_nodes: Option<usize>,
 ) -> Vec<u64> {
-    use crate::core::sql::graph_udf::drift_search::DriftGraph;
+    use crate::core::sql::graph_udf::graph_view::GraphView;
 
     let mut visited: HashSet<u64> = seeds.iter().copied().collect();
     let mut frontier: Vec<u64> = visited.iter().copied().collect();

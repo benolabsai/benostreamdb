@@ -1,6 +1,8 @@
 # Plan: Make Graph RAG hybrid (in-RAM + out-of-core)
 
-Status: proposed
+Status: implemented — G1 (CSR-backed community detection), G2 (default
+DataFusion memory limit), G3 (bounded Graph RAG materialization), and G4
+(independent knobs) have all shipped. See the per-item notes below.
 Related: [`src/core/memory.rs`](../src/core/memory.rs), [`src/core/resources.rs`](../src/core/resources.rs), [`src/core/cache.rs`](../src/core/cache.rs), [`src/core/sql/session.rs`](../src/core/sql/session.rs), [`src/core/sql/graph_udf/louvain_communities.rs`](../src/core/sql/graph_udf/louvain_communities.rs), [`src/core/sql/graph_udf/leiden_communities.rs`](../src/core/sql/graph_udf/leiden_communities.rs), [`src/core/index/csr_graph.rs`](../src/core/index/csr_graph.rs)
 
 ## Principle
@@ -23,6 +25,8 @@ flowchart LR
 
 ## G1 — CSR-backed community detection (biggest risk)
 
+**Status: implemented.** [`src/core/algorithms/communities.rs`](../src/core/algorithms/communities.rs:1) provides `csr_louvain` / `csr_leiden` (and their `_seeded` variants) reading adjacency from the mmap'd CSR with O(V) resident state; `Table.communities()` routes to the CSR path when a graph index is present.
+
 **Problem.** [`LouvainAccumulator`](../src/core/sql/graph_udf/louvain_communities.rs:104) and [`LeidenAccumulator`](../src/core/sql/graph_udf/leiden_communities.rs:110) hold `sources`/`targets`/`weights` as `Vec`s — ~20 bytes/edge, ~7.7 GB at 383M edges.
 
 **Design.** Add `src/core/algorithms/communities.rs` with `louvain_csr(forward, resolution)` and `leiden_csr(forward, resolution)` that read adjacency from the mmap'd CSR via `get_neighbors_raw` and keep only O(V) state:
@@ -37,6 +41,8 @@ The local-move and refinement phases are identical to the UDF versions; only the
 
 ## G2 — Default DataFusion memory limit
 
+**Status: implemented.** [`default_datafusion_memory_bytes`](../src/core/resources.rs:222) derives the limit from `DATAFUSION_MEMORY_FRACTION` (0.5) of the effective memory, overridable with `BSDB_DATAFUSION_MEMORY_GB`, and it is applied to both `Session` and `Table.execute_sql`.
+
 **Problem.** [`BenoStreamSession::new(None)`](../src/core/sql/session.rs:27) sets no limit, and that is what [`bsdb.rs:122`](../src/bin/bsdb.rs:122) and [`graph.rs:58`](../src/python/graph.rs:58) use — so SQL sorts/joins/aggregations never spill.
 
 **Design.** When `memory_limit_bytes` is `None`, default it to `effective_memory_bytes() * 0.5` (leaving headroom for the ingest buffer and index builds). Add `BSDB_DATAFUSION_MEMORY_GB` to override. This turns on DataFusion's disk spilling for the SQL path.
@@ -44,6 +50,8 @@ The local-move and refinement phases are identical to the UDF versions; only the
 **Acceptance.** A large `ORDER BY`/join spills to disk instead of OOMing.
 
 ## G3 — Avoid full materialization in Graph RAG
+
+**Status: implemented.** `subgraph_nodes()` (visited set only, no edge join) is exposed on the Python `Table` and used for `neighborhood_nodes`; the final edge materialization is capped by `max_nodes`.
 
 **Problem.** [`graph_rag_search`](../python/benostreamdb/__init__.py:1134) materializes subgraph edges into pandas just to compute `neighborhood_nodes`; [`summarize_communities`](../python/benostreamdb/__init__.py:1564) does `SELECT * FROM t` over the whole doc table.
 
@@ -71,9 +79,9 @@ defaults to `DATAFUSION_MEMORY_FRACTION` (50%) of the effective memory, and
 `Table.execute_sql` — the path the graph UDFs run on — now applies it too (it
 previously used an unbounded `SessionContext::new()`).
 
-## Priority
+## Priority (completed)
 
-1. **G1** — biggest risk, clear win, reuses the existing CSR.
-2. **G2** — bounded + configurable DataFusion limit, enables spilling.
-3. **G3** — bounded materialization in the Graph RAG path.
-4. **G4** — resolved: independent knobs, no fixed split.
+1. ✅ **G1** — biggest risk, clear win, reuses the existing CSR.
+2. ✅ **G2** — bounded + configurable DataFusion limit, enables spilling.
+3. ✅ **G3** — bounded materialization in the Graph RAG path.
+4. ✅ **G4** — resolved: independent knobs, no fixed split.

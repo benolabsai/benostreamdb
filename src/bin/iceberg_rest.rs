@@ -184,7 +184,7 @@ async fn list_namespaces(
     ax_lib::extract::Path(prefix): ax_lib::extract::Path<String>,
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}", prefix);
-    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     let store = match benostreamdb::core::storage::create_object_store(&uri) {
         Ok(s) => s,
         Err(e) => {
@@ -228,7 +228,7 @@ async fn list_tables(
     ax_lib::extract::Path((prefix, namespace)): ax_lib::extract::Path<(String, String)>,
 ) -> impl IntoResponse {
     println!("Catalog prefix: {}, namespace: {}", prefix, namespace);
-    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     let store = match benostreamdb::core::storage::create_object_store(&uri) {
         Ok(s) => s,
         Err(e) => {
@@ -283,7 +283,7 @@ async fn get_table(
         String,
     )>,
 ) -> impl IntoResponse {
-    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     println!(
         "Prefix: {}, Getting metadata for {}.{} (Storage: {})",
         prefix, namespace, table, uri
@@ -390,8 +390,7 @@ async fn create_table(
 ) -> impl IntoResponse {
     println!("Creating table {}.{}.{}", prefix, namespace, payload.name);
 
-    let base_uri =
-        std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let base_uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
 
     // Determine location
     let location = payload.location.unwrap_or_else(|| {
@@ -566,7 +565,7 @@ async fn update_table(
         payload.updates.len()
     );
 
-    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     let store = match benostreamdb::core::storage::create_object_store(&uri) {
         Ok(s) => s,
         Err(e) => {

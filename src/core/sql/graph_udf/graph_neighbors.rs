@@ -1,10 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
-use arrow::array::{
-    Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
-    UInt64Builder,
-};
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use arrow::array::{Array, ArrayRef, Float64Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -46,15 +44,7 @@ impl Default for GraphNeighborsUDF {
 impl GraphNeighborsUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                    DataType::UInt64, // node
-                    DataType::UInt32, // hops
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -85,27 +75,16 @@ impl AggregateUDFImpl for GraphNeighborsUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new("node", DataType::UInt64, true)),
-            Arc::new(Field::new("hops", DataType::UInt32, true)),
-        ])
+        let mut fields = GraphAccumulatorBase::state_fields();
+        fields.push(Arc::new(Field::new("node", DataType::UInt64, true)));
+        fields.push(Arc::new(Field::new("hops", DataType::UInt32, true)));
+        Ok(fields)
     }
 }
 
 #[derive(Debug)]
 pub struct GraphNeighborsAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
     node: Option<u64>,
     hops: Option<u32>,
 }
@@ -113,8 +92,7 @@ pub struct GraphNeighborsAccumulator {
 impl GraphNeighborsAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
             node: None,
             hops: None,
         }
@@ -123,69 +101,32 @@ impl GraphNeighborsAccumulator {
 
 impl Accumulator for GraphNeighborsAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::UInt64(self.node),
-            ScalarValue::UInt32(self.hops),
-        ])
+        let mut state = self.base.edge_state()?;
+        state.push(ScalarValue::UInt64(self.node));
+        state.push(ScalarValue::UInt32(self.hops));
+        Ok(state)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "graph_neighbors: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "graph_neighbors: expected ListArray for targets".to_string(),
-                )
-            })?;
+        self.base.merge_edge_state(states, Some(2), Some(3))?;
+        let node_idx = 4;
+        let hops_idx = 5;
 
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
-
-        if states.len() > 2 {
-            if let Some(node_arr) = states[2].as_any().downcast_ref::<UInt64Array>() {
+        if states.len() > node_idx {
+            if let Some(node_arr) = states[node_idx]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+            {
                 if node_arr.is_valid(0) {
                     self.node = Some(node_arr.value(0));
                 }
             }
         }
-        if states.len() > 3 {
-            if let Some(hops_arr) = states[3].as_any().downcast_ref::<UInt32Array>() {
+        if states.len() > hops_idx {
+            if let Some(hops_arr) = states[hops_idx]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt32Array>()
+            {
                 if hops_arr.is_valid(0) && self.hops.is_none() {
                     self.hops = Some(hops_arr.value(0));
                 }
@@ -199,33 +140,28 @@ impl Accumulator for GraphNeighborsAccumulator {
         let mut builder = arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
 
         if let Some(node) = self.node {
-            // BFS from `node` over the directed edge set, up to `hops` steps.
+            let graph = self.base.resolve_graph(&[], 0)?;
             let hops = self.hops.unwrap_or(1);
-            let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
-            for i in 0..self.sources.len().min(self.targets.len()) {
-                adj.entry(self.sources[i])
-                    .or_default()
-                    .push(self.targets[i]);
-            }
 
             let mut visited: HashSet<u64> = HashSet::new();
             let mut q = VecDeque::new();
             visited.insert(node);
             q.push_back((node, 0u32));
             let mut neighbors: Vec<u64> = Vec::new();
+            let mut scratch: Vec<u64> = Vec::new();
 
             while let Some((curr, dist)) = q.pop_front() {
                 if dist >= hops {
                     continue;
                 }
-                if let Some(ns) = adj.get(&curr) {
-                    for &n in ns {
-                        if visited.insert(n) {
-                            if n != node {
-                                neighbors.push(n);
-                            }
-                            q.push_back((n, dist + 1));
+                scratch.clear();
+                graph.get_neighbors_into(curr, &mut scratch);
+                for &n in &scratch {
+                    if visited.insert(n) {
+                        if n != node {
+                            neighbors.push(n);
                         }
+                        q.push_back((n, dist + 1));
                     }
                 }
             }
@@ -242,38 +178,22 @@ impl Accumulator for GraphNeighborsAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-        let sources = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "graph_neighbors: expected UInt64Array for sources".to_string(),
-                )
-            })?;
-        let targets = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "graph_neighbors: expected UInt64Array for targets".to_string(),
-                )
-            })?;
-
-        self.sources.extend(sources.iter().flatten());
-        self.targets.extend(targets.iter().flatten());
-
+        self.base.update_edge_batch(values, Some(4), Some(5))?;
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(node_arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
+            if let Some(node_arr) = values[2]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+            {
                 if node_arr.is_valid(0) {
                     self.node = Some(node_arr.value(0));
                 }
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(hops_arr) = values[3].as_any().downcast_ref::<UInt32Array>() {
+            if let Some(hops_arr) = values[3]
+                .as_any()
+                .downcast_ref::<arrow::array::UInt32Array>()
+            {
                 if hops_arr.is_valid(0) {
                     self.hops = Some(hops_arr.value(0));
                 }
@@ -284,6 +204,6 @@ impl Accumulator for GraphNeighborsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size() + std::mem::size_of::<Option<u64>>() + std::mem::size_of::<Option<u32>>()
     }
 }

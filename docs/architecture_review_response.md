@@ -1,5 +1,14 @@
 # Architecture Review Evaluation & Improvement Plan
 
+> **Status: implemented.** The Phase 1 concurrency fixes (H1, H2, H3) have
+> shipped: writes use a unified `pending_writes: Arc<RwLock<Vec<PendingWrite>>>`
+> ([`src/core/table/mod.rs`](../src/core/table/mod.rs:66)), destructive
+> operations take a table-wide `maintenance_lock`
+> ([`src/core/table/builder.rs`](../src/core/table/builder.rs:494)), and
+> `truncate_async` propagates manifest-load errors instead of substituting an
+> empty manifest. The three-tier repository split is reflected in the current
+> workspace layout. The sections below are retained as the original plan.
+
 This document evaluates the recent deep-dive architecture review of BenoStreamDB and outlines a concrete plan to address the high-priority concurrency risks and repository structure recommendations.
 
 ## 1. Evaluation of Findings

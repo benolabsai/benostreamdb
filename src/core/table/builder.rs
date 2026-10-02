@@ -210,8 +210,8 @@ impl TableBuilder {
             data_store: None,
             label_pattern: crate::core::table::LabelPattern::default(),
             wal_dir: None,
-            durability: std::env::var("BENOSTREAM_WAL_DURABILITY")
-                .or_else(|_| std::env::var("BENOSEARCH_WAL_DURABILITY"))
+            durability: std::env::var("BSDB_WAL_DURABILITY")
+                .or_else(|_| std::env::var("BSDB_SEARCH_WAL_DURABILITY"))
                 .ok()
                 .as_deref()
                 .map(|v| match v.to_ascii_lowercase().as_str() {
@@ -219,7 +219,7 @@ impl TableBuilder {
                     _ => crate::core::table::WalDurability::Sync,
                 })
                 .unwrap_or_default(),
-            streaming_flush_interval: std::env::var("BENOSTREAM_STREAMING_FLUSH_INTERVAL_SECS")
+            streaming_flush_interval: std::env::var("BSDB_STREAMING_FLUSH_INTERVAL_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .map(std::time::Duration::from_secs),
@@ -343,7 +343,7 @@ impl TableBuilder {
         // Initialize WAL
         let wal_dir = if let Some(dir) = self.wal_dir {
             dir
-        } else if let Ok(env_dir) = std::env::var("BENOSTREAM_WAL_DIR") {
+        } else if let Ok(env_dir) = std::env::var("BSDB_WAL_DIR") {
             std::path::PathBuf::from(env_dir)
         } else if uri.starts_with("file://") {
             let path = uri.strip_prefix("file://").unwrap_or(&uri);
@@ -356,7 +356,7 @@ impl TableBuilder {
             // must see in production logs.
             tracing::warn!(
                 "Table initialized with remote URI '{}' using default WAL directory '{}'. \
-                For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or BENOSTREAM_WAL_DIR.",
+                For persistent machine-loss durability, configure a persistent WAL path using with_wal_dir() or BSDB_WAL_DIR.",
                 uri,
                 dir.display()
             );
@@ -510,20 +510,6 @@ impl TableBuilder {
 
         table.sync_primary_key_from_schema_async().await.ok();
         let _ = table.infer_index_metadata_from_physical_async().await;
-
-        // One-time migration of legacy v1 graph indexes (see
-        // `migrate_legacy_graph_indexes_async`). Run in the background so
-        // opening a large table is not blocked; queries during the rebuild use
-        // the SQL BFS fallback, which is correct. Set
-        // BENOSTREAM_DISABLE_GRAPH_MIGRATION=1 to opt out.
-        if std::env::var("BENOSTREAM_DISABLE_GRAPH_MIGRATION").as_deref() != Ok("1") {
-            let migration_table = table.clone();
-            tokio::spawn(async move {
-                if let Err(e) = migration_table.migrate_legacy_graph_indexes_async().await {
-                    tracing::warn!("legacy graph index migration failed: {e}");
-                }
-            });
-        }
 
         if let Some(interval) = self.streaming_flush_interval {
             table.start_streaming_flush_task(interval);

@@ -404,11 +404,17 @@ impl MergePlanner {
     fn runtime_block_on<T: Send, F: std::future::Future<Output = T> + Send>(&self, future: F) -> T {
         // A nested `block_on` on a freshly built runtime panics with
         // "Cannot start a runtime from within a runtime" when the current
-        // thread is already driving an async context. Detect that case and
-        // offload the future to a dedicated thread with its own
-        // single-threaded runtime instead.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            std::thread::scope(|s| {
+        // thread is already driving an async context.
+        match tokio::runtime::Handle::try_current() {
+            // Fast path: reuse the ambient multi-threaded runtime in place.
+            // `block_in_place` parks this worker so the rest of the pool keeps
+            // running; no runtime or thread is created per call.
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(future))
+            }
+            // A current-thread runtime would panic on `block_in_place`; offload
+            // the future to a dedicated thread with its own runtime.
+            Ok(_) => std::thread::scope(|s| {
                 s.spawn(|| {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -418,18 +424,18 @@ impl MergePlanner {
                 })
                 .join()
                 .expect("Merge runtime thread panicked")
-            })
-        } else {
-            // Fast path: reuse one current-thread runtime for the whole
-            // planner lifetime.
-            self.runtime
+            }),
+            // No ambient runtime: reuse one current-thread runtime for the
+            // whole planner lifetime.
+            Err(_) => self
+                .runtime
                 .get_or_init(|| {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                         .expect("Failed to create Tokio runtime for merge operation")
                 })
-                .block_on(future)
+                .block_on(future),
         }
     }
 }

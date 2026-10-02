@@ -43,7 +43,7 @@ where
 }
 
 pub static DISK_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
-    std::env::var("BENOSTREAM_DISK_CACHE_DIR")
+    std::env::var("BSDB_DISK_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
         .or_else(|| {
@@ -210,7 +210,7 @@ pub static INDEX_CACHE: Lazy<Cache<String, Arc<RoaringBitmap>>> = Lazy::new(|| {
 });
 
 pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
-    let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+    let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
         .unwrap_or_else(|_| "1".to_string())
         .parse()
         .unwrap_or(1);
@@ -244,7 +244,7 @@ pub static BYTE_CACHE: Lazy<Cache<String, Arc<Vec<u8>>>> = Lazy::new(|| {
 /// larger files are read through `ParquetObjectReader`, which fetches only the
 /// needed column chunks.
 pub static PARQUET_BYTES_CACHE: Lazy<Cache<String, bytes::Bytes>> = Lazy::new(|| {
-    let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+    let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
         .unwrap_or_else(|_| "1".to_string())
         .parse()
         .unwrap_or(1);
@@ -275,7 +275,7 @@ pub static HNSW_CACHE: Lazy<Cache<String, Arc<Hnsw<f32, DistL2>>>> = Lazy::new(|
 /// These are more memory-efficient than plain HNSW since they only load needed clusters
 pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(|| {
     // Default to 1GB cache if not set
-    let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+    let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
         .unwrap_or_else(|_| "1".to_string())
         .parse()
         .unwrap_or(1);
@@ -296,7 +296,7 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
 });
 
 pub static INVERTED_INDEX_CACHE: Lazy<Cache<String, Arc<Vec<RecordBatch>>>> = Lazy::new(|| {
-    let cache_gb: u64 = std::env::var("BENOSTREAM_CACHE_GB")
+    let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
         .unwrap_or_else(|_| "1".to_string())
         .parse()
         .unwrap_or(1);
@@ -391,7 +391,7 @@ pub static EQUALITY_DELETE_CACHE: Lazy<
 /// Bypasses Parquet decoding/decompression for frequently accessed blocks.
 pub static BLOCK_CACHE: Lazy<Cache<String, Arc<RecordBatch>>> = Lazy::new(|| {
     // Default to 1GB cache if not set
-    let cache_gb: u64 = std::env::var("BENOSTREAM_BLOCK_CACHE_GB")
+    let cache_gb: u64 = std::env::var("BSDB_BLOCK_CACHE_GB")
         .unwrap_or_else(|_| "1".to_string())
         .parse()
         .unwrap_or(1);

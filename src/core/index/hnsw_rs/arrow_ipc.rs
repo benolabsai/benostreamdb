@@ -22,6 +22,10 @@ pub trait ArrowType: Clone + Send + Sync + 'static {
     fn to_bytes(slice: &[Self]) -> Vec<u8>;
     /// Decode a blob produced by [`ArrowType::to_bytes`].
     fn from_bytes(bytes: &[u8]) -> Vec<Self>;
+    /// Zero-copy decode (if possible)
+    fn slice_from_bytes(_bytes: &[u8]) -> Option<&[Self]> {
+        None
+    }
 }
 
 impl ArrowType for f32 {
@@ -31,6 +35,9 @@ impl ArrowType for f32 {
     fn from_bytes(bytes: &[u8]) -> Vec<f32> {
         bytemuck::cast_slice(bytes).to_vec()
     }
+    fn slice_from_bytes(bytes: &[u8]) -> Option<&[f32]> {
+        Some(bytemuck::cast_slice(bytes))
+    }
 }
 
 impl ArrowType for u8 {
@@ -39,6 +46,9 @@ impl ArrowType for u8 {
     }
     fn from_bytes(bytes: &[u8]) -> Vec<u8> {
         bytes.to_vec()
+    }
+    fn slice_from_bytes(bytes: &[u8]) -> Option<&[u8]> {
+        Some(bytes)
     }
 }
 

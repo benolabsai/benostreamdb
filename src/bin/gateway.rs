@@ -166,7 +166,7 @@ async fn query_handler(Json(payload): Json<QueryRequest>) -> impl IntoResponse {
     // Demonstrate the "Index-First" Read
     // Use factory to support s3://, az://, etc.
     // Ideally this comes from payload or config. defaulting to /tmp for local PoC
-    let uri = std::env::var("BENOSTREAM_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
+    let uri = std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp".to_string());
     println!("Connecting to storage: {}", uri);
     let store = match benostreamdb::core::storage::create_object_store(&uri) {
         Ok(s) => s,

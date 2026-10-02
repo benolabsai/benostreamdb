@@ -1,0 +1,1 @@
+SELECT id FROM t zPARTITIONED BY (day) WHERE v <-> '[1,2,3

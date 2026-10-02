@@ -107,8 +107,8 @@ When `format_version >= 3`, two metadata columns are automatically added:
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `_row_id` | String | UUID v4 unique identifier |
-| `_last_updated_sequence_number` | Int64 | Manifest version when row was written |
+| `_row_id` | Int64 | Monotonic row id (`first_row_id + row_position`); table metadata tracks `next-row-id`. |
+| `_last_updated_sequence_number` | Int64 | Sequence number of the snapshot that last wrote the row. |
 
 ### Usage
 

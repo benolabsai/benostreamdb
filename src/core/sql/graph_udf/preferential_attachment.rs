@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
 use arrow::array::{Array, ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
@@ -43,15 +44,7 @@ impl Default for PreferentialAttachmentUDF {
 impl PreferentialAttachmentUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64,
-                    DataType::UInt64,
-                    DataType::UInt64,
-                    DataType::UInt64,
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -62,7 +55,7 @@ impl AggregateUDFImpl for PreferentialAttachmentUDF {
     }
 
     fn name(&self) -> &str {
-        "preferential_attachment"
+        "graph_preferential_attachment"
     }
 
     fn signature(&self) -> &Signature {
@@ -78,27 +71,16 @@ impl AggregateUDFImpl for PreferentialAttachmentUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new("node1", DataType::UInt64, true)),
-            Arc::new(Field::new("node2", DataType::UInt64, true)),
-        ])
+        let mut fields = GraphAccumulatorBase::state_fields();
+        fields.push(Arc::new(Field::new("node1", DataType::UInt64, true)));
+        fields.push(Arc::new(Field::new("node2", DataType::UInt64, true)));
+        Ok(fields)
     }
 }
 
 #[derive(Debug)]
 pub struct PreferentialAttachmentAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
     node1: u64,
     node2: u64,
 }
@@ -106,8 +88,7 @@ pub struct PreferentialAttachmentAccumulator {
 impl PreferentialAttachmentAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
             node1: 0,
             node2: 0,
         }
@@ -116,42 +97,22 @@ impl PreferentialAttachmentAccumulator {
 
 impl Accumulator for PreferentialAttachmentAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-            ScalarValue::UInt64(Some(self.node1)),
-            ScalarValue::UInt64(Some(self.node2)),
-        ])
+        let mut state = self.base.edge_state()?;
+        state.push(ScalarValue::UInt64(Some(self.node1)));
+        state.push(ScalarValue::UInt64(Some(self.node2)));
+        Ok(state)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "preferential_attachment: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "preferential_attachment: expected ListArray for targets".to_string(),
-                )
-            })?;
-        let node1_arr = states[2]
+        if states.is_empty() {
+            return Ok(());
+        }
+        self.base.merge_edge_state(states, Some(2), Some(3))?;
+        if states.len() <= 4 {
+            return Ok(());
+        }
+
+        let node1_arr = states[4]
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
             .ok_or_else(|| {
@@ -159,7 +120,7 @@ impl Accumulator for PreferentialAttachmentAccumulator {
                     "preferential_attachment: expected UInt64Array for node1".to_string(),
                 )
             })?;
-        let node2_arr = states[3]
+        let node2_arr = states[5]
             .as_any()
             .downcast_ref::<arrow::array::UInt64Array>()
             .ok_or_else(|| {
@@ -167,21 +128,6 @@ impl Accumulator for PreferentialAttachmentAccumulator {
                     "preferential_attachment: expected UInt64Array for node2".to_string(),
                 )
             })?;
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
 
         if !node1_arr.is_empty() && node1_arr.is_valid(0) {
             self.node1 = node1_arr.value(0);
@@ -194,24 +140,14 @@ impl Accumulator for PreferentialAttachmentAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.len() != 4 {
+        if values.len() < 4 {
             return Err(DataFusionError::Execution(
-                "preferential_attachment expects 4 arguments".to_string(),
+                "preferential_attachment expects at least 4 arguments".to_string(),
             ));
         }
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
+        self.base.update_edge_batch(values, Some(4), Some(5))?;
+
         let n1_arr = values[2]
             .as_any()
             .downcast_ref::<UInt64Array>()
@@ -232,43 +168,39 @@ impl Accumulator for PreferentialAttachmentAccumulator {
             self.node2 = n2_arr.value(0);
         }
 
-        let len = sources_arr.len();
-        for i in 0..len {
-            if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
-                self.sources.push(sources_arr.value(i));
-                self.targets.push(targets_arr.value(i));
-            }
-        }
-
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut deg1 = 0;
-        let mut deg2 = 0;
+        if !self.base.is_empty() {
+            let mut deg1 = 0;
+            let mut deg2 = 0;
 
-        for i in 0..self.sources.len() {
-            let u = self.sources[i];
-            let v = self.targets[i];
+            for (_, u, v) in self.base.edges() {
+                if u == self.node1 {
+                    deg1 += 1;
+                }
+                if v == self.node1 {
+                    deg1 += 1;
+                }
+                if u == self.node2 {
+                    deg2 += 1;
+                }
+                if v == self.node2 {
+                    deg2 += 1;
+                }
+            }
 
-            if u == self.node1 {
-                deg1 += 1;
-            }
-            if v == self.node1 {
-                deg1 += 1;
-            }
-            if u == self.node2 {
-                deg2 += 1;
-            }
-            if v == self.node2 {
-                deg2 += 1;
-            }
+            Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
+        } else {
+            let graph = self.base.resolve_graph(&[self.node1, self.node2], 1)?;
+            let deg1 = graph.get_degree(self.node1);
+            let deg2 = graph.get_degree(self.node2);
+            Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
         }
-
-        Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size()
     }
 }

@@ -1,12 +1,22 @@
 # Plan: Fix the CSR/SQL subgraph mismatch + Graph RAG feature specs
 
-Status: proposed
+Status: implemented — Part 1 (CSR/SQL subgraph mismatch) is fixed and all six
+Part 2 features (F1–F6) have shipped. See the per-feature status notes below.
 Owner: architect
 Related: [`src/python/helpers.rs`](../src/python/helpers.rs), [`src/python/table.rs`](../src/python/table.rs), [`src/core/table/index_config.rs`](../src/core/table/index_config.rs), [`src/core/segment.rs`](../src/core/segment.rs), [`src/core/index/build_graph.rs`](../src/core/index/build_graph.rs), [`tests/python/test_csr_subgraph.py`](../tests/python/test_csr_subgraph.py)
 
 ---
 
 ## Part 1 — Fix the CSR/SQL subgraph mismatch
+
+**Status: fixed.** The duplicate `index_configs[column]` entry for `CsrGraph` is
+no longer created — [`add_index`](../src/core/table/index_config.rs:212) now
+guards the spurious entry with
+`if target_col != column && !matches!(algorithm, IndexAlgorithm::CsrGraph { .. })`,
+so a graph index is keyed solely by its `src_column` and the forward CSR loads
+correctly. The regression coverage lives in
+[`tests/python/test_csr_subgraph.py`](../tests/python/test_csr_subgraph.py) and
+[`tests/integration_test_csr_graph.rs`](../tests/integration_test_csr_graph.rs).
 
 ### Symptom
 
@@ -91,7 +101,7 @@ Existing tables built with the buggy code have mislabeled CSR files, and the bac
 
 ## Part 2 — Graph RAG feature specs
 
-The following six capabilities are not yet implemented. Each spec lists goal, design, API, data model, acceptance criteria, and dependencies.
+The following six capabilities are now implemented. Each spec lists goal, design, API, data model, acceptance criteria, and dependencies, with a status note recording where it landed.
 
 ```mermaid
 flowchart LR
@@ -104,6 +114,7 @@ flowchart LR
 
 ### F1 — Leiden community detection
 
+- **Status**: ✅ Implemented. [`csr_leiden`](../src/core/algorithms/communities.rs:277) / [`csr_leiden_seeded`](../src/core/algorithms/communities.rs:300) in Rust, the [`graph_leiden_communities`](../src/core/sql/graph_udf/leiden_communities.rs:76) SQL UDF, and `Table.leiden_communities()` / `communities(algorithm="leiden")` in Python. Leiden is the default community algorithm.
 - **Goal**: produce well-connected communities, fixing Louvain's badly-connected-community failure mode. Listed as an open question in [`docs/ROADMAP.md`](../docs/ROADMAP.md:18).
 - **Design**: implement Leiden (local move + refinement + aggregation) in Rust under `src/core/algorithms/leiden.rs`, reusing the CSR adjacency for the local-move phase. Keep Louvain as the default; select via an `algorithm` parameter.
 - **API**: `Table.leiden_communities(resolution=1.0, max_levels=...)`; `summarize_communities(..., algorithm="leiden")`; `graph_rag_search(..., community_algorithm="leiden")`.
@@ -113,6 +124,7 @@ flowchart LR
 
 ### F2 — Token-budget-aware traversal truncation
 
+- **Status**: ✅ Implemented. `max_nodes` is threaded through [`GraphNeighborhoodOptions`](../src/core/table/graph.rs:36), `Table::graph_neighborhood`, and the Python `subgraph` / `graph_neighbors` / `subgraph_nodes` / `core_subgraph_edges` APIs; `graph_rag_search` exposes it as `traversal_max_nodes`.
 - **Goal**: stop BFS expansion when the accumulated context budget is exhausted, not only by degree. `max_degree` is a degree proxy; this is the true budget.
 - **Design**: extend [`csr_bfs_visited`](../src/python/helpers.rs:137) with `max_nodes: Option<usize>`. Track `visited.len()`; stop expanding once the cap is reached. Optionally rank the frontier by PPR or degree so the most relevant nodes are kept. The SQL fallback applies the same cap after `bfs_visited`.
 - **API**: `subgraph(..., max_nodes=...)`; `graph_rag_search(..., context_budget_tokens=..., max_nodes=...)`.
@@ -122,6 +134,7 @@ flowchart LR
 
 ### F3 — LLM-generated community reports
 
+- **Status**: ✅ Implemented. `Table.summarize_communities(..., llm=..., embed=..., report_column=...)` generates and embeds per-community reports.
 - **Goal**: model-authored community summaries, embedded as first-class retrieval units (Microsoft GraphRAG parity).
 - **Design**: extend [`summarize_communities`](../python/benostreamdb/__init__.py:1484) with an optional `llm` callable and an `embed` callable. Generate a report per community from member text, store it, and build an HNSW index on the report embedding.
 - **API**: `summarize_communities(doc_table, target_uri, llm=..., embed=..., report_column="report")`.
@@ -131,6 +144,7 @@ flowchart LR
 
 ### F4 — Dynamic community selection via an LLM router
 
+- **Status**: ✅ Implemented. `graph_rag_search(..., llm_router=..., relevance_threshold=...)` rates and prunes community branches, falling back to the `seed_overlap` heuristic when no router is supplied.
 - **Goal**: rate branch relevance with a cheap model before descending, pruning irrelevant subtrees.
 - **Design**: in global search, for each top-level community, call `llm_router(query, community_report) -> score`; prune subtrees below `relevance_threshold`. Fall back to the existing `seed_overlap` heuristic when no router is supplied.
 - **API**: `graph_rag_search(mode="global", llm_router=..., relevance_threshold=...)`.
@@ -139,6 +153,7 @@ flowchart LR
 
 ### F5 — Claim/co-variate extraction
 
+- **Status**: ✅ Implemented. `Table.extract_graph(doc_table, target_uri, llm=..., schema=...)` produces nodes, edges, and a claims table.
 - **Goal**: extract entities, relationships, and claims from text into the edge table, so the graph is built rather than assumed.
 - **Design**: `extract_graph(doc_table, llm=..., schema=...)` produces nodes, edges, and a separate claims table with `subject`, `object`, `claim`, `source_doc`, `confidence`. Idempotent and resumable per document.
 - **API**: `Table.extract_graph(doc_table, target_uri, llm=..., schema=...)`.
@@ -148,6 +163,7 @@ flowchart LR
 
 ### F6 — Incremental community updates
 
+- **Status**: ✅ Implemented. `Table.update_communities(incremental=True)` warm-starts from a previous partition via `csr_leiden_seeded` / `csr_louvain_seeded`, keeping unchanged community ids stable.
 - **Goal**: maintain communities as edges arrive without a full recompute.
 - **Design**: track a dirty node set on commit; run local Leiden/Louvain refinement on affected communities; periodically full recompute to bound drift. Persist community IDs so they remain stable across updates.
 - **API**: `Table.update_communities(incremental=True)`; `summarize_communities(..., incremental=True)`.
@@ -156,12 +172,12 @@ flowchart LR
 
 ---
 
-## Execution order
+## Execution order (completed)
 
-1. Part 1 fix + regression tests (unblocks the CSR fast path).
-2. F2 token-budget traversal (small, independent, high value).
-3. F1 Leiden.
-4. F3 LLM community reports.
-5. F4 LLM router selection.
-6. F5 claim extraction.
-7. F6 incremental communities.
+1. ✅ Part 1 fix + regression tests (unblocks the CSR fast path).
+2. ✅ F2 token-budget traversal (small, independent, high value).
+3. ✅ F1 Leiden.
+4. ✅ F3 LLM community reports.
+5. ✅ F4 LLM router selection.
+6. ✅ F5 claim extraction.
+7. ✅ F6 incremental communities.

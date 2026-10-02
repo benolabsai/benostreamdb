@@ -10,6 +10,7 @@ pub mod error;
 pub mod ffi;
 pub mod iceberg;
 pub mod index;
+pub mod jni_util;
 pub mod maintenance;
 pub mod manifest;
 pub mod memory;

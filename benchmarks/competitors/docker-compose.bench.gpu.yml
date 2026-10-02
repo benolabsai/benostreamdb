@@ -1,0 +1,35 @@
+# GPU override: adds NVIDIA device access to the runner and a GPU runner image.
+#
+# Merge with the base file:
+#   docker compose -f benchmarks/competitors/docker-compose.bench.yml \
+#     -f benchmarks/competitors/docker-compose.bench.gpu.yml \
+#     --profile run run --rm bench-gpu
+#
+# docker_bench.sh --gpu (or --both) does this automatically and tags results
+# with device=gpu. Only GPU-capable engines run here (faiss, benostreamdb;
+# add cugraph once installed).
+services:
+  bench:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  bench-gpu:
+    extends:
+      file: docker-compose.bench.yml
+      service: bench
+    image: bsdb-bench-runner-gpu:latest
+    build:
+      context: ../..
+      dockerfile: benchmarks/competitors/Dockerfile.bench.gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

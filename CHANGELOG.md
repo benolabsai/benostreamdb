@@ -8,29 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Native in-memory regional DRIFT search** — `Table.regional_drift_search(...)`
-  (Python) / `Table::regional_drift(...)` (Rust) plus the `drift_search` UDAF.
-  Ports Microsoft GraphRAG's DRIFT (Dynamic Reasoning and Inference with
-  Flexible Traversal) algorithm — the multi-phase primer / follow-up / reduction
-  architecture over a `DriftAction` search tree — onto BenoStreamDB-native graph
-  primitives, running entirely in memory with no temporary table creation or
-  disk I/O. Adapted from the MIT-licensed Microsoft GraphRAG project.
-- **First-class graph traversal primitives in the core engine** — new
-  `src/core/table/graph.rs` exposes `GraphNeighborhoodOptions` and
-  `Table::{load_graph_index, shortest_path, connecting_paths, graph_neighbors,
-  subgraph_edges}` as native Rust APIs (previously Python-only helpers in
-  `src/python/helpers.rs`). The shared `csr_bfs_visited` BFS (max-degree
-  truncation + token-budget cap) now lives in core and is reused by the Python
-  bindings.
-- **Python graph result containers** — `PathResult`, `ConnectingPathsResult`,
-  and `GraphNeighborsResult` subclass `list` for direct indexing/iteration while
-  adding `.to_pandas()` / `.to_arrow()`.
-- **New Python `Table` helpers** — `subgraph_edges(...)`,
-  `regional_drift_search(...)`, `find_entities(...)` (full-text index with ILIKE
-  fallback), and `lookup_entities(...)` (bulk id → name resolution).
-- **Graph RAG vector re-ranking** — `graph_rag_search(..., rerank_vector=True,
-  rerank_k=N)` re-ranks the local-mode candidate node set with a vector search
-  restricted to the discovered ids.
+- **BenoStreamDB Native DRIFT Search (Global & Regional)** — Ported Microsoft GraphRAG's DRIFT (Dynamic Reasoning and Inference with Flexible Traversal) algorithm onto native graph primitives. Exposes `Table.drift_search(...)` and `Table.regional_drift_search(...)` in Python, corresponding Rust core methods, and `drift_search` / `regional_drift` SQL UDAFs. Both support an adaptive `GraphMode` (`auto` / `in_memory` / `out_of_core` / `cached`) that dynamically selects between in-memory structures and mmap-backed CSRs depending on the available memory budget. Includes vector-based community search, early PPR convergence checks, score decay, and returns full search traces with PPR scores and community assignments.
+- **First-class graph traversal primitives in the core engine** — `src/core/table/graph.rs` exposes core Rust APIs (`load_graph_index`, `shortest_path`, `connecting_paths`, `graph_neighbors`, `subgraph_edges`) alongside robust Python result containers (`PathResult`, etc.) that directly integrate with `.to_pandas()` and `.to_arrow()`. All graph operations unify under a shared `GraphView` trait for memory-adaptive multi-modal execution.
+- **Graph RAG vector re-ranking & Neo4j-style global search** — `graph_rag_search(..., rerank_vector=True, rerank_k=N)` re-ranks local-mode candidate node sets using restricted vector searches. `graph_rag_search(mode="global")` now selects communities via vector search over community report embeddings (HNSW) and recursively descends the hierarchy to leaves, falling back to heuristics when embeddings are missing.
+- **New Python `Table` helpers** — `find_entities(...)` (full-text index with ILIKE fallback), and `lookup_entities(...)` (bulk id → name resolution).
 - **`commit_synced_snapshot`** — commits an externally synchronized Iceberg
   snapshot with full reconciliation against the current manifest (retries on
   conflict, preserves delete files).
@@ -79,8 +60,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   BenoStream manifest entries, and the Avro manifest list / manifest files. An
   optional `--catalog-type` step repoints a catalog's metadata-location via a
   `set-metadata-location` commit.
+- **Trino connector: real metadata + SQL pushdown over JNI** — the connector no
+  longer hardcodes `listSchemaNames`/`listTables` or silently returns mock data
+  on `UnsatisfiedLinkError`. New JNI entry points (`listSchemas`, `listTables`,
+  `openQuery`/`readQueryBatch`/`closeQuery`) let the connector enumerate the
+  warehouse and run each scan through the engine's DataFusion session, so the
+  pushed-down predicate travels as a SQL `WHERE` clause and the planner applies
+  the full index/vector-search pushdown. The split is now `(tableUri, sql)`
+  instead of a file range, and the page source streams the query result.
+- **`jni_bridge` fuzz target** — fuzzes the JNI bridge's untrusted-input
+  parsing (the `[{name,type,nullable}]` schema JSON and the Arrow type-name
+  mapping), shared by the Trino and Spark connectors. The pure-Rust helpers
+  moved to `core::jni_util` so they can be fuzzed without a JVM. The
+  `benostreamdb-search` dependency is now optional in the fuzz workspace (only
+  the Qdrant target needs it), so the other targets build independently.
 
 ### Changed
+- **Community detection now defaults to Leiden** — `communities`,
+  `update_communities`, `graph_rag_search(community_algorithm=...)`,
+  `summarize_communities(algorithm=...)`, and the Rust `communities_csr*`
+  bindings default to `"leiden"` (connected communities) instead of `"louvain"`.
 - **Repository restructured into a three-tier layout.** The core workspace is
   now strictly the database engine plus first-class data-platform connectors,
   with experimental integrations moved out of the root package:

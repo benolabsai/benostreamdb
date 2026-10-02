@@ -155,3 +155,23 @@ def test_graph_rag_on_networkx_table(temp_dir):
     edges_found = set(zip(paths_df['source'], paths_df['target']))
     assert (0, 1) in edges_found
     assert (3, 4) in edges_found
+
+def test_networkx_parity_pagerank(temp_dir):
+    # Create a random directed graph in NetworkX
+    G = nx.erdos_renyi_graph(50, 0.1, directed=True, seed=42)
+    
+    uri = f"file://{temp_dir}/t_parity"
+    table = Table.from_networkx(uri, G)
+    table.commit()
+
+    # NetworkX PageRank
+    nx_pr = nx.pagerank(G, alpha=0.85, max_iter=20, tol=1e-6)
+
+    # BenoStreamDB PageRank
+    db_pr_df = table.pagerank().to_pandas()
+    db_pr = dict(zip(db_pr_df['node'], db_pr_df['score']))
+
+    # Compare
+    for node, nx_score in nx_pr.items():
+        db_score = db_pr.get(node, 0.0)
+        assert np.isclose(nx_score, db_score, rtol=1e-2, atol=1e-3)

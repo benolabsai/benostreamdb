@@ -6,7 +6,7 @@ rm -rf /tmp/benostream_rest_test
 mkdir -p /tmp/benostream_rest_test
 
 # Start Server in background
-export BENOSTREAM_STORAGE_URI="file:///tmp/benostream_rest_test"
+export BSDB_STORAGE_URI="file:///tmp/benostream_rest_test"
 cargo run --bin iceberg_rest > /tmp/rest_server.log 2>&1 &
 SERVER_PID=$!
 echo "Server started with PID $SERVER_PID"

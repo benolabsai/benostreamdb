@@ -1,0 +1,1 @@
+T id[,3]' ORDER BY v <-> 'SELECT id[,1]' ORDELECT id[,3]' ORDER BY v <-> '

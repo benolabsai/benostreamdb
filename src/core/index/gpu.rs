@@ -137,6 +137,10 @@ pub struct CudaBackend {
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 impl CudaBackend {
     pub fn new(id: usize) -> Result<Self> {
+        // Loader-safe probe first: a missing or version-conflicting nvrtc must
+        // fail as an `Err` (→ CPU fallback) rather than crash the dynamic
+        // linker mid-build. See `core::index::nvrtc::preflight`.
+        crate::core::index::nvrtc::preflight()?;
         let device = cudarc::driver::CudaDevice::new(id)?;
 
         // JIT-compile .cu source to PTX at runtime via nvrtc (no nvcc needed at

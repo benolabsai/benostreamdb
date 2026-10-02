@@ -22,12 +22,20 @@ DEFAULT_RSS_CEILING_GB = float(os.environ.get("BSDB_STRESS_RSS_CEILING_GB", "16"
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip the whole directory unless explicitly enabled."""
+    """Skip this directory's tests unless explicitly enabled.
+
+    `items` is the *whole session's* collection, not just this directory, so the
+    skip must be scoped by path — otherwise this hook silently disables every
+    test in the run (which is exactly what it used to do).
+    """
     if BSDB_STRESS:
         return
+    stress_dir = os.path.dirname(os.path.abspath(__file__))
     skip = pytest.mark.skip(reason="soak/stress suite; set BSDB_STRESS=1 to run")
     for item in items:
-        item.add_marker(skip)
+        item_path = str(item.path) if hasattr(item, "path") else str(item.fspath)
+        if os.path.abspath(item_path).startswith(stress_dir):
+            item.add_marker(skip)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,51 @@
+name: Coverage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  coverage:
+    name: Line coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage (lcov)
+        run: cargo llvm-cov --workspace --lcov --output-path lcov.info
+
+      - name: Enforce workspace line-coverage floor
+        # The floor is deliberately conservative: the goal is to catch a
+        # regression, not to gate on the absolute number. The storage /
+        # transaction / recovery modules are the ones that matter and are
+        # expected to sit well above this.
+        run: cargo llvm-cov report --summary-only --fail-under-lines 60
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info
+          if-no-files-found: error

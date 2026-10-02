@@ -1307,10 +1307,11 @@ dependencies = [
 
 [[package]]
 name = "benostreamdb-flight"
-version = "0.7.0"
+version = "0.12.0"
 dependencies = [
  "arrow",
  "arrow-flight",
+ "axum 0.7.9",
  "benostreamdb",
  "datafusion",
  "futures",
@@ -1318,11 +1319,12 @@ dependencies = [
  "prost-types",
  "tokio",
  "tonic 0.14.6",
+ "tracing",
 ]
 
 [[package]]
 name = "benostreamdb-search"
-version = "0.7.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "arrow",

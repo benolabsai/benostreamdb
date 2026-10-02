@@ -373,9 +373,6 @@ async fn execute_action(
         "recover_indexes" => {
             table.recover_indexes_async().await?;
         }
-        "migrate_legacy_graph_indexes" => {
-            table.migrate_legacy_graph_indexes_async().await?;
-        }
         "rollback" | "rollback_to_snapshot" => {
             let id = parse_named_i64(args, "snapshot_id")
                 .or_else(|| args.trim().parse::<i64>().ok())

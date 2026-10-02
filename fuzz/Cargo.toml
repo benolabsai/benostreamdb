@@ -19,8 +19,15 @@ serde_json = "1"
 [dependencies.benostreamdb]
 path = ".."
 
+# Only the `qdrant_request_body` target needs the search gateway. Keeping it
+# optional lets the other targets (including `jni_bridge`) build and run even
+# while the search crate is mid-refactor.
 [dependencies.benostreamdb-search]
-path = "../benostreamdb-search"
+path = "../contrib/benostreamdb-search"
+optional = true
+
+[features]
+qdrant = ["dep:benostreamdb-search"]
 
 [[bin]]
 name = "parse_dense"
@@ -53,6 +60,14 @@ bench = false
 [[bin]]
 name = "qdrant_request_body"
 path = "fuzz_targets/qdrant_request_body.rs"
+test = false
+doc = false
+bench = false
+required-features = ["qdrant"]
+
+[[bin]]
+name = "jni_bridge"
+path = "fuzz_targets/jni_bridge.rs"
 test = false
 doc = false
 bench = false

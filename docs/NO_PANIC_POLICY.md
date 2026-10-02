@@ -11,7 +11,7 @@ production code, not as an acceptable error strategy.
 | Code | Rule |
 | --- | --- |
 | Production library code (`src/**` compiled without `cfg(test)`) | No `unwrap()` / `expect()` / `panic!` except documented invariants |
-| Production binaries (`src/bin/{bsdb,gateway,iceberg_rest,benostreamdb-admin}.rs`, `benostreamdb-search/src/main.rs`) | Same rule |
+| Production binaries (`src/bin/{bsdb,gateway,iceberg_rest,bsdb-admin}.rs`, `benostreamdb-search/src/main.rs`) | Same rule |
 | `#[cfg(test)] mod tests` blocks | Exempt — tests may unwrap freely |
 | `tests/**` integration crates | Exempt |
 | `build.rs` | Build scripts are exempt in spirit, but `build.rs` was converted to return `Result` anyway |

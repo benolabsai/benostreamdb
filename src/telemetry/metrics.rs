@@ -32,14 +32,14 @@ fn latency_buckets() -> Vec<f64> {
 lazy_static! {
     /// Total number of rows ingested
     pub static ref INGEST_ROWS_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_ingest_rows_total",
+        "bsdb_ingest_rows_total",
         "Total number of rows ingested"
     )
     .unwrap();
 
     /// Query latency in seconds
     pub static ref QUERY_LATENCY_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_query_latency_seconds",
+        "bsdb_query_latency_seconds",
         "Query latency in seconds",
         latency_buckets()
     )
@@ -47,7 +47,7 @@ lazy_static! {
 
     /// Compaction duration in seconds
     pub static ref COMPACTION_DURATION_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_compaction_duration_seconds",
+        "bsdb_compaction_duration_seconds",
         "Compaction duration in seconds",
         latency_buckets()
     )
@@ -55,97 +55,97 @@ lazy_static! {
 
     /// Number of active parquet files
     pub static ref ACTIVE_FILES_GAUGE: IntGauge = register_int_gauge!(
-        "benostreamdb_active_files",
+        "bsdb_active_files",
         "Number of active parquet files in the table"
     ).unwrap();
 
     /// Cache hits across various system caches
     pub static ref CACHE_HITS_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_cache_hits_total",
+        "bsdb_cache_hits_total",
         "Total number of cache hits",
         &["cache_name"]
     ).unwrap();
 
     /// Cache misses across various system caches
     pub static ref CACHE_MISSES_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_cache_misses_total",
+        "bsdb_cache_misses_total",
         "Total number of cache misses",
         &["cache_name"]
     ).unwrap();
 
     /// Total I/O bytes read
     pub static ref IO_BYTES_READ_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_io_bytes_read_total",
+        "bsdb_io_bytes_read_total",
         "Total number of bytes read from storage"
     ).unwrap();
 
     /// Total I/O bytes written
     pub static ref IO_BYTES_WRITTEN_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_io_bytes_written_total",
+        "bsdb_io_bytes_written_total",
         "Total number of bytes written to storage"
     ).unwrap();
 
     /// Search latency in seconds (for vector and keyword searches)
     pub static ref SEARCH_LATENCY_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_search_latency_seconds",
+        "bsdb_search_latency_seconds",
         "Search operation latency in seconds",
         latency_buckets()
     ).unwrap();
 
     /// Commit duration in seconds (manifest flush)
     pub static ref COMMIT_DURATION_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_commit_duration_seconds",
+        "bsdb_commit_duration_seconds",
         "Commit (manifest flush) duration in seconds",
         latency_buckets()
     ).unwrap();
 
     /// Index build duration in seconds (HNSW-IVF construction)
     pub static ref INDEX_BUILD_DURATION_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_index_build_duration_seconds",
+        "bsdb_index_build_duration_seconds",
         "Index build (HNSW-IVF) duration in seconds",
         latency_buckets()
     ).unwrap();
 
     /// Number of active segments (distinct from active parquet files)
     pub static ref ACTIVE_SEGMENTS_GAUGE: IntGauge = register_int_gauge!(
-        "benostreamdb_active_segments",
+        "bsdb_active_segments",
         "Number of active segments in the table"
     ).unwrap();
 
     /// Number of manifest commit conflicts (concurrent writers)
     pub static ref MANIFEST_CONFLICTS_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_manifest_conflicts_total",
+        "bsdb_manifest_conflicts_total",
         "Number of manifest commit conflicts detected"
     ).unwrap();
 
     /// Process RSS in bytes, sampled while ingest is running.
     pub static ref INGEST_RSS_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "benostreamdb_ingest_rss_bytes",
+        "bsdb_ingest_rss_bytes",
         "Resident set size of the process in bytes, sampled during ingest"
     ).unwrap();
 
     /// Times ingestion paused on the ingest RAM high-water mark.
     pub static ref INGEST_BACKPRESSURE_PAUSES_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_ingest_backpressure_pauses_total",
+        "bsdb_ingest_backpressure_pauses_total",
         "Number of times ingestion paused on the ingest RAM high-water mark"
     ).unwrap();
 
     /// Free bytes on the filesystem backing a local table, sampled at flush time.
     pub static ref FREE_DISK_BYTES_GAUGE: IntGauge = register_int_gauge!(
-        "benostreamdb_free_disk_bytes",
+        "bsdb_free_disk_bytes",
         "Free bytes on the filesystem that will hold new segment files"
     ).unwrap();
 
     /// Duration of each ingest back-pressure pause, in seconds.
     pub static ref INGEST_BACKPRESSURE_PAUSE_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_ingest_backpressure_pause_seconds",
+        "bsdb_ingest_backpressure_pause_seconds",
         "Duration of each ingest back-pressure pause on the RAM high-water mark, in seconds",
         latency_buckets()
     ).unwrap();
 
     /// Time spent waiting for a segment index-build permit, in seconds.
     pub static ref INDEX_BUILD_GATE_WAIT_SECONDS: Histogram = register_histogram!(
-        "benostreamdb_index_build_gate_wait_seconds",
+        "bsdb_index_build_gate_wait_seconds",
         "Time spent waiting for a segment index-build permit",
         latency_buckets()
     ).unwrap();
@@ -161,7 +161,7 @@ lazy_static! {
     /// `position_join_all`, `position_convert`, `position_merge`,
     /// `deletion_vector`, `equality`, `merged_cache_insert`, `total`.
     pub static ref MERGED_DELETES_PHASE_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
-        "benostreamdb_merged_deletes_phase_seconds",
+        "bsdb_merged_deletes_phase_seconds",
         "Wall time of each phase of load_merged_deletes_inner, in seconds",
         &["phase"],
         latency_buckets()
@@ -170,7 +170,7 @@ lazy_static! {
     /// Outcome of the merged-deletes cache lookup. Label `result` is
     /// `hit` or `miss`.
     pub static ref MERGED_DELETES_CACHE_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_merged_deletes_cache_total",
+        "bsdb_merged_deletes_cache_total",
         "Merged-deletes cache lookups by outcome",
         &["result"]
     ).unwrap();
@@ -178,7 +178,7 @@ lazy_static! {
     /// Outcome of the per-file parsed-delete cache lookup. Label `result`
     /// is `hit` or `miss`.
     pub static ref DELETE_FILE_CACHE_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_delete_file_cache_total",
+        "bsdb_delete_file_cache_total",
         "Per-file parsed-delete cache lookups by outcome",
         &["result"]
     ).unwrap();
@@ -187,14 +187,14 @@ lazy_static! {
     /// call, by content kind. Label `kind` is `position`, `deletion_vector`,
     /// or `equality`.
     pub static ref MERGED_DELETES_FILES_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_merged_deletes_files_total",
+        "bsdb_merged_deletes_files_total",
         "Delete files merged by content kind",
         &["kind"]
     ).unwrap();
 
     /// Number of times `load_merged_deletes` was invoked (per reader).
     pub static ref MERGED_DELETES_CALLS_TOTAL: IntCounter = register_int_counter!(
-        "benostreamdb_merged_deletes_calls_total",
+        "bsdb_merged_deletes_calls_total",
         "Number of load_merged_deletes invocations"
     ).unwrap();
 
@@ -207,7 +207,7 @@ lazy_static! {
     /// Wall time of each phase of `stream_row_groups`, in seconds. Label
     /// `phase` is one of: `meta`, `projection`, `deletes`, `build`, `total`.
     pub static ref READ_PHASE_SECONDS: prometheus::HistogramVec = prometheus::register_histogram_vec!(
-        "benostreamdb_read_phase_seconds",
+        "bsdb_read_phase_seconds",
         "Wall time of each phase of stream_row_groups, in seconds",
         &["phase"],
         latency_buckets()
@@ -216,7 +216,7 @@ lazy_static! {
     /// Outcome of the parquet-metadata cache lookup. Label `result` is
     /// `hit` or `miss`.
     pub static ref PARQUET_META_CACHE_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "benostreamdb_parquet_meta_cache_total",
+        "bsdb_parquet_meta_cache_total",
         "Parquet-metadata cache lookups by outcome",
         &["result"]
     ).unwrap();
@@ -229,9 +229,7 @@ pub fn dump_merged_deletes_metrics() -> String {
     let mut out = String::new();
     for mf in prometheus::gather() {
         let name = mf.get_name();
-        if !name.starts_with("benostreamdb_merged_deletes")
-            && !name.starts_with("benostreamdb_delete_file_cache")
-        {
+        if !name.starts_with("bsdb_merged_deletes") && !name.starts_with("bsdb_delete_file_cache") {
             continue;
         }
         for m in mf.get_metric() {
@@ -273,9 +271,7 @@ pub fn dump_read_metrics() -> String {
     let mut out = String::new();
     for mf in prometheus::gather() {
         let name = mf.get_name();
-        if !name.starts_with("benostreamdb_read_phase")
-            && !name.starts_with("benostreamdb_parquet_meta_cache")
-        {
+        if !name.starts_with("bsdb_read_phase") && !name.starts_with("bsdb_parquet_meta_cache") {
             continue;
         }
         for m in mf.get_metric() {
@@ -309,4 +305,41 @@ pub fn dump_read_metrics() -> String {
         }
     }
     out
+}
+
+/// Render every metric in the default registry in Prometheus text format
+/// (version 0.0.4).
+///
+/// This is the single source of truth for the engine's metrics. Every host
+/// (the embedded library, the Flight SQL server, the search gateway, and the
+/// JVM connectors via the JNI bridge) serves this same text, so a scrape sees
+/// the engine's ingest/query/compaction/index metrics regardless of how the
+/// engine is deployed.
+pub fn gather_text() -> String {
+    use prometheus::TextEncoder;
+    let encoder = TextEncoder::new();
+    let mut out = String::new();
+    encoder
+        .encode_utf8(&prometheus::gather(), &mut out)
+        .unwrap_or_default();
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gather_text_includes_registered_metrics() {
+        INGEST_ROWS_TOTAL.inc();
+        let text = gather_text();
+        assert!(
+            text.contains("bsdb_ingest_rows_total"),
+            "gather_text() missing a registered metric:\n{text}"
+        );
+        assert!(
+            text.contains("# TYPE bsdb_ingest_rows_total counter"),
+            "gather_text() missing the TYPE line:\n{text}"
+        );
+    }
 }

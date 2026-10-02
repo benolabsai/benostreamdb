@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use ahash::AHashMap as HashMap;
 use arrow::array::{
     Array, ArrayRef, Float64Array, ListBuilder, StructBuilder, UInt32Array, UInt64Array,
     UInt64Builder,
@@ -12,7 +14,6 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -46,13 +47,7 @@ impl Default for ConnectedComponentsUDF {
 impl ConnectedComponentsUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::UInt64, // source
-                    DataType::UInt64, // target
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -63,7 +58,7 @@ impl AggregateUDFImpl for ConnectedComponentsUDF {
     }
 
     fn name(&self) -> &str {
-        "connected_components"
+        "graph_connected_components"
     }
 
     fn signature(&self) -> &Signature {
@@ -83,97 +78,34 @@ impl AggregateUDFImpl for ConnectedComponentsUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-        ])
+        Ok(GraphAccumulatorBase::state_fields())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ConnectedComponentsAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
 }
 
 impl ConnectedComponentsAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
         }
     }
 }
 
 impl Accumulator for ConnectedComponentsAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-        ])
+        self.base.edge_state()
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        }
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "connected_components: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "connected_components: expected ListArray for targets".to_string(),
-                )
-            })?;
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
-        }
-        Ok(())
+        self.base.merge_edge_state(states, Some(2), Some(3))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        // Union-find over the undirected edge set. The result is a list of
-        // interleaved [node, component_label] pairs, ordered by ascending
-        // node id, where the component label is the minimum node id in the
-        // weakly connected component.
+        let graph = self.base.resolve_graph(&[], 0)?;
         let mut parent: HashMap<u64, u64> = HashMap::new();
 
         fn find(parent: &mut HashMap<u64, u64>, x: u64) -> u64 {
@@ -181,7 +113,6 @@ impl Accumulator for ConnectedComponentsAccumulator {
             while parent[&root] != root {
                 root = parent[&root];
             }
-            // Path compression
             let mut cur = x;
             while parent[&cur] != root {
                 let next = parent[&cur];
@@ -191,8 +122,7 @@ impl Accumulator for ConnectedComponentsAccumulator {
             root
         }
 
-        for i in 0..self.sources.len().min(self.targets.len()) {
-            let (u, v) = (self.sources[i], self.targets[i]);
+        for (u, v) in graph.all_edges() {
             parent.entry(u).or_insert(u);
             parent.entry(v).or_insert(v);
             let ru = find(&mut parent, u);
@@ -218,33 +148,10 @@ impl Accumulator for ConnectedComponentsAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-        let sources = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "connected_components: expected UInt64Array for sources".to_string(),
-                )
-            })?;
-        let targets = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "connected_components: expected UInt64Array for targets".to_string(),
-                )
-            })?;
-
-        self.sources.extend(sources.iter().flatten());
-        self.targets.extend(targets.iter().flatten());
-
-        Ok(())
+        self.base.update_edge_batch(values, Some(2), Some(3))
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size()
     }
 }

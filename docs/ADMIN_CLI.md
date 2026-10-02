@@ -1,14 +1,14 @@
 # BenoStreamDB Admin CLI
 
-`benostreamdb-admin` is the official administrative tooling for BenoStreamDB. It provides cluster operators with safe, easy-to-use commands to manage storage, optimize performance, and clean up historical data.
+`bsdb-admin` is the official administrative tooling for BenoStreamDB. It provides cluster operators with safe, easy-to-use commands to manage storage, optimize performance, and clean up historical data.
 
 ## Installation / Building
 If you are compiling from source, the admin CLI is built alongside the main engine:
 ```bash
-cargo build --release --bin benostreamdb-admin
+cargo build --release --bin bsdb-admin
 ```
 
-The compiled binary will be located at `target/release/benostreamdb-admin`.
+The compiled binary will be located at `target/release/bsdb-admin`.
 
 ## Commands
 
@@ -17,7 +17,7 @@ Over time, continuous ingestion can lead to fragmentation—creating hundreds or
 
 **Usage:**
 ```bash
-benostreamdb-admin compact --uri <TABLE_URI> [OPTIONS]
+bsdb-admin compact --uri <TABLE_URI> [OPTIONS]
 ```
 
 **Options:**
@@ -26,7 +26,7 @@ benostreamdb-admin compact --uri <TABLE_URI> [OPTIONS]
 
 **Example:**
 ```bash
-benostreamdb-admin compact --uri "s3://production-data/events_table" --target-file-size 128MB
+bsdb-admin compact --uri "s3://production-data/events_table" --target-file-size 128MB
 ```
 
 ### 2. `vacuum`
@@ -39,7 +39,7 @@ The `vacuum` command permanently deletes these unreferenced historical files to 
 
 **Usage:**
 ```bash
-benostreamdb-admin vacuum --uri <TABLE_URI> [OPTIONS]
+bsdb-admin vacuum --uri <TABLE_URI> [OPTIONS]
 ```
 
 **Options:**
@@ -48,7 +48,7 @@ benostreamdb-admin vacuum --uri <TABLE_URI> [OPTIONS]
 
 **Example:**
 ```bash
-benostreamdb-admin vacuum --uri "s3://production-data/events_table" --retain-versions 5
+bsdb-admin vacuum --uri "s3://production-data/events_table" --retain-versions 5
 ```
 
 ## E2E Testing

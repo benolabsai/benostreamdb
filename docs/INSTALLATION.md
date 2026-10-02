@@ -20,6 +20,32 @@ maturin develop --features cuda
 # Windows users should use WSL2 (Windows Subsystem for Linux).
 ```
 
+## ⚠️ Deployment Security
+
+**BenoStreamDB's network servers are not hardened for untrusted networks.**
+`benostreamdb-flight`, `bsdb-search`, the gateway, and the Iceberg REST binary
+ship with **no authentication, no authorization, and no TLS**. Run them on a
+**trusted internal network**, bound to `127.0.0.1` or an internal interface,
+behind a gateway/reverse proxy that terminates TLS and enforces authentication.
+Do **not** expose them directly to the public internet.
+
+Recommended topology:
+
+```text
+Untrusted clients ──► Gateway / reverse proxy (TLS + authn) ──► internal network
+                                                                   │
+                                          ┌────────────────────────┼────────────────────────┐
+                                          ▼                        ▼                        ▼
+                                   benostreamdb-flight      bsdb-search              gateway / iceberg_rest
+                                          │                        │                        │
+                                          └────────────────────────┴────────────────────────┘
+                                                                   ▼
+                                                          Object storage (S3/GCS/Azure)
+```
+
+The embedded library (Python/Rust) is in-process and inherits the trust boundary
+of the host application. See [SECURITY.md](../SECURITY.md) for the full posture.
+
 ## GPU Acceleration (Optional)
 
 For GPU-accelerated vector operations, install the appropriate backend:
@@ -51,7 +77,7 @@ Intel Arc, Data Center GPUs, and Iris Xe graphics are supported natively on Linu
 vulkaninfo | grep vendor
 ```
 
-See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
+See [Python Vector API Documentation](PYTHON_VECTOR_API.md) for detailed GPU setup instructions.
 
 ## pgvector SQL Compatibility
 
@@ -76,7 +102,7 @@ LIMIT 10;
 -- <%>  Jaccard
 ```
 
-See [pgvector SQL Guide](docs/PGVECTOR_SQL_GUIDE.md) for complete documentation.
+See [pgvector SQL Guide](PGVECTOR_SQL_GUIDE.md) for complete documentation.
 
 ## Basic Usage
 
@@ -244,7 +270,7 @@ distance = bsdb.hamming_distance_packed(binary1, binary2)
 **Supported Distance Metrics:**
 - L2 (Euclidean), Cosine, Inner Product, L1 (Manhattan), Hamming, Jaccard
 
-See [Python Vector API Documentation](docs/PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
+See [Python Vector API Documentation](PYTHON_VECTOR_API.md) for complete API reference and GPU installation instructions
 
 # SQL queries (full DataFusion support with pgvector syntax)
 import benostreamdb as bsdb
@@ -491,7 +517,7 @@ benostreamdb/
 
 ## 🤝 Contributing
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+We welcome contributions! See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
 
 ## 📄 License
 
@@ -549,9 +575,9 @@ The binary is produced at `target/release/bsdb-search`.
 ./target/release/bsdb-search
 
 # Or with explicit configuration:
-BENOSEARCH_BIND=0.0.0.0 \
-BENOSEARCH_PORT=9200 \
-BENOSEARCH_STORAGE_URI=file:///data/search \
+BSDB_SEARCH_BIND=0.0.0.0 \
+BSDB_SEARCH_PORT=9200 \
+BSDB_SEARCH_STORAGE_URI=file:///data/search \
 ./target/release/bsdb-search
 ```
 
@@ -559,15 +585,15 @@ BENOSEARCH_STORAGE_URI=file:///data/search \
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `BENOSEARCH_STORAGE_URI` | `file://~/.benostreamdb/search` | Index root. Each index `<name>` is a table at `{root}/{name}`. Supports `file://`, `s3://`, `gs://`, `az://`, `http(s)://`. |
-| `BENOSEARCH_BIND` | `127.0.0.1` | OpenSearch/ES API bind address. |
-| `BENOSEARCH_PORT` | `9200` | OpenSearch/ES API port. |
-| `BENOSEARCH_AUTO_REFRESH_SECS` | `0` (off) | Periodically flush every index so new docs become searchable without an explicit `_refresh`. |
-| `BENOSEARCH_RRF_K` | `60` | Default RRF fusion constant for hybrid (BM25 + HNSW) search. Overridable per-request with `rrf_k`. |
-| `QDRANT_BIND` | `127.0.0.1` | Qdrant-compatible API bind address. |
-| `QDRANT_PORT` | `6333` | Qdrant-compatible API port. |
-| `BENOSTREAM_CACHE_GB` | — | (inherited) read-cache size in GB. |
-| `BENOSTREAM_WAL_SYNC_INTERVAL_MS` | — | (inherited) WAL sync interval. |
+| `BSDB_SEARCH_STORAGE_URI` | `file://~/.benostreamdb/search` | Index root. Each index `<name>` is a table at `{root}/{name}`. Supports `file://`, `s3://`, `gs://`, `az://`, `http(s)://`. |
+| `BSDB_SEARCH_BIND` | `127.0.0.1` | OpenSearch/ES API bind address. |
+| `BSDB_SEARCH_PORT` | `9200` | OpenSearch/ES API port. |
+| `BSDB_SEARCH_AUTO_REFRESH_SECS` | `0` (off) | Periodically flush every index so new docs become searchable without an explicit `_refresh`. |
+| `BSDB_SEARCH_RRF_K` | `60` | Default RRF fusion constant for hybrid (BM25 + HNSW) search. Overridable per-request with `rrf_k`. |
+| `BSDB_QDRANT_BIND` | `127.0.0.1` | Qdrant-compatible API bind address. |
+| `BSDB_QDRANT_PORT` | `6333` | Qdrant-compatible API port. |
+| `BSDB_CACHE_GB` | — | (inherited) read-cache size in GB. |
+| `BSDB_WAL_SYNC_INTERVAL_MS` | — | (inherited) WAL sync interval. |
 
 > **Security note:** `bsdb-search` v1 has **no authentication** and binds to
 > `127.0.0.1` by default. If you expose it beyond localhost, place it behind a
@@ -704,4 +730,4 @@ pytest benostreamdb-search/tests/test_search_api.py
 
 - [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) — full API compatibility matrix.
 - [OPENSEARCH_COMPATIBILITY.md](OPENSEARCH_COMPATIBILITY.md) — design and positioning.
-- [README.md](README.md) — core engine features, Iceberg compliance, and query engines.
+- [README.md](../README.md) — core engine features, Iceberg compliance, and query engines.

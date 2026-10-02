@@ -1,6 +1,6 @@
 [package]
 name = "benostreamdb-flight"
-version = "0.7.0"
+version.workspace = true
 edition = "2021"
 license = "MIT AND Apache-2.0"
 description = "BenoStreamDB Flight SQL - Arrow Flight SQL gateway over BenoStreamDB"
@@ -12,13 +12,15 @@ categories = ["database-implementations"]
 [dependencies]
 arrow = "57.2.0"
 arrow-flight = { version = "57.2.0", features = ["flight-sql-experimental"] }
+axum = "0.7"
 datafusion = "52.0.0"
 futures = "0.3.34"
 prost = "0.14.4"
 prost-types = "0.14.4"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net"] }
 tonic = "0.14"
-benostreamdb = { version = "0.12.0", path = "../.." }
+tracing = "0.1"
+benostreamdb = { version = "0.12.0", path = "../..", features = ["observability"] }
 
 [features]
 default = []

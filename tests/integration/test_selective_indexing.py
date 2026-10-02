@@ -61,6 +61,9 @@ def test_selective_indexing():
     })
     table.write_pandas(df2)
     table.commit()
+    # Index builds are spawned after the manifest commit (async), so wait for
+    # them before counting sidecars.
+    table.wait_for_background_tasks()
     inv_count_2 = count_index_files(TABLE_URI, "inv.parquet")
     print(f"After Second Write: Found {inv_count_2} .inv.parquet files")
     assert inv_count_2 == inv_count + 1, "Should have indexed new segment for 'tag'"
@@ -76,6 +79,7 @@ def test_selective_indexing():
     })
     table.write_pandas(df3)
     table.commit()
+    table.wait_for_background_tasks()
     inv_count_3 = count_index_files(TABLE_URI, "inv.parquet")
     print(f"After Remove Index: Found {inv_count_3} .inv.parquet files")
     assert inv_count_3 == inv_count_2, "Should NOT have indexed new segment"

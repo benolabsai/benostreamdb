@@ -20,15 +20,15 @@ services:
     container_name: bsdb-search
     restart: unless-stopped
     ports:
-      - "${BENOSEARCH_PORT:-9200}:9200"
-      - "${QDRANT_PORT:-6333}:6333"
+      - "${BSDB_SEARCH_PORT:-9200}:9200"
+      - "${BSDB_QDRANT_PORT:-6333}:6333"
     environment:
-      - BENOSEARCH_BIND=0.0.0.0
-      - BENOSEARCH_PORT=9200
-      - QDRANT_BIND=0.0.0.0
-      - QDRANT_PORT=6333
-      - BENOSEARCH_STORAGE_URI=${BENOSEARCH_STORAGE_URI:-s3://benostream/}
-      - BENOSEARCH_AUTO_REFRESH_SECS=${BENOSEARCH_AUTO_REFRESH_SECS:-5}
+      - BSDB_SEARCH_BIND=0.0.0.0
+      - BSDB_SEARCH_PORT=9200
+      - BSDB_QDRANT_BIND=0.0.0.0
+      - BSDB_QDRANT_PORT=6333
+      - BSDB_SEARCH_STORAGE_URI=${BSDB_SEARCH_STORAGE_URI:-s3://benostream/}
+      - BSDB_SEARCH_AUTO_REFRESH_SECS=${BSDB_SEARCH_AUTO_REFRESH_SECS:-5}
       # Resource limits are derived from the container's cgroup memory limit
       # (see RESOURCE_LIMITS.md). Leave these empty to use the derived defaults;
       # set them only to pin a value explicitly.

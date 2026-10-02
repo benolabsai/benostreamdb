@@ -296,7 +296,7 @@ struct SearchRequest {
     from: usize,
     source: Option<SourceFilter>,
     /// RRF fusion constant override (request-level; falls back to
-    /// `BENOSEARCH_RRF_K`, then the core default of 60).
+    /// `BSDB_SEARCH_RRF_K`, then the core default of 60).
     rrf_k: Option<f32>,
     /// ES `aggs` / `aggregations` object, computed over the top-level filter.
     aggs: Option<Value>,
@@ -1909,9 +1909,9 @@ pub async fn search_core(
     let table = state.open_or_create(index, &None).await?;
 
     // RRF fusion constant: request-level `rrf_k` wins, then the
-    // `BENOSEARCH_RRF_K` env var, then the core default (60).
+    // `BSDB_SEARCH_RRF_K` env var, then the core default (60).
     let rrf_k = req.rrf_k.or_else(|| {
-        std::env::var("BENOSEARCH_RRF_K")
+        std::env::var("BSDB_SEARCH_RRF_K")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
             .filter(|k| *k > 0.0)

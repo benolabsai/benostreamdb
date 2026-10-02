@@ -41,9 +41,9 @@ import pyarrow.parquet as pq
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Dumps (raw XML, parsed parquets, embedding shards) live on the 14 TB HDD by
 # default so they never fill the root disk. Override with --dumps-dir or
-# BENOSTREAM_DATA.
+# BSDB_DATA.
 DATA = os.environ.get(
-    "BENOSTREAM_DATA",
+    "BSDB_DATA",
     os.path.join(os.path.expanduser("~"), "data", "benostreamdb"),
 )
 EMB = os.path.join(DATA, "embeddings")
@@ -453,7 +453,7 @@ def _resume_offset(loaded: int, chunk_rows: int) -> int:
     """Row offset to resume a chunked load from.
 
     Writes are NOT chunk-atomic: the engine spills to a real commit whenever the
-    write buffer exceeds ``BENOSTREAM_CACHE_GB`` (default 1 GB), so a killed
+    write buffer exceeds ``BSDB_CACHE_GB`` (default 1 GB), so a killed
     chunk leaves partial rows committed. Resuming from the exact committed count
     avoids re-writing (and duplicating) those rows. ``chunk_rows`` is accepted
     for call-site clarity but deliberately not used to round down.
@@ -501,7 +501,7 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
 
     # Resume from the EXACT committed row count. Chunks are NOT atomic: the
     # write path spills to a real commit whenever the buffer exceeds
-    # BENOSTREAM_CACHE_GB (default 1 GB), so a killed chunk leaves partial rows
+    # BSDB_CACHE_GB (default 1 GB), so a killed chunk leaves partial rows
     # committed. Rounding down to the chunk boundary would re-write those rows
     # and duplicate them, so continue from `loaded` itself.
     loaded = 0
@@ -526,13 +526,24 @@ def stage_load(rebuild: bool, quant: str, delete_shards: bool,
     while s < total:
         e = min(s + chunk_rows, total)
         log(f"load nodes: chunk [{s:,}, {e:,}) in a fresh process")
-        rc = subprocess.run(
-            [sys.executable, os.path.abspath(__file__), "--stage", "load",
-             "--dumps-dir", DATA,
-             "--load-chunk-rows", "0", "--row-start", str(s), "--row-end", str(e),
-             "--quant", quant, "--keep-shards"])
+        # Eager binding + eager CUDA module loading turn lazy-resolution /
+        # lazy-module crashes into clean load errors (see the nvrtc hardening in
+        # core::index::nvrtc). Harmless when the build is CPU-only.
+        env = dict(os.environ, LD_BIND_NOW="1", CUDA_MODULE_LOADING="EAGER")
+        cmd = [sys.executable, os.path.abspath(__file__), "--stage", "load",
+               "--dumps-dir", DATA,
+               "--load-chunk-rows", "0", "--row-start", str(s), "--row-end", str(e),
+               "--quant", quant, "--keep-shards"]
+        rc = subprocess.run(cmd, env=env)
         if rc.returncode != 0:
-            raise SystemExit(f"load chunk [{s:,}, {e:,}) failed (rc={rc.returncode})")
+            # A native loader crash (SIGSEGV/SIGBUS) is not a Python error and
+            # cannot be caught in-process. Retry the chunk with the GPU hidden so
+            # the build is forced onto the CPU path.
+            log(f"load nodes: chunk [{s:,}, {e:,}) failed (rc={rc.returncode}); "
+                f"retrying with CUDA_VISIBLE_DEVICES=''")
+            rc = subprocess.run(cmd, env=dict(env, CUDA_VISIBLE_DEVICES=""))
+            if rc.returncode != 0:
+                raise SystemExit(f"load chunk [{s:,}, {e:,}) failed (rc={rc.returncode})")
         s = e
     if delete_shards:
         _delete_shards()

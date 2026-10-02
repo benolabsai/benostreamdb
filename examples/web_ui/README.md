@@ -250,7 +250,7 @@ pruned path share the same app and engine APIs — only scale differs.
   config (fixed: the config persists in the manifest and is restored on open).
   `--stage compact` rewrites and re-indexes them.
 - **Queries slow despite indexes** → the engine's index cache defaults to 1 GB;
-  the app sets `BENOSTREAM_CACHE_GB=40` (69 segment indexes ≈ 20 GB). Set it
+  the app sets `BSDB_CACHE_GB=40` (69 segment indexes ≈ 20 GB). Set it
   for any other client too.
 - **Load stage RAM climbs into tens of GB** → expected only if you forced
   `--load-chunk-rows 0`; the default fresh-process chunking exists precisely

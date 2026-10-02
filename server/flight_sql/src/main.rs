@@ -9,6 +9,14 @@ use benostreamdb_flight::BenoStreamFlightSqlService;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting BenoStreamDB Arrow Flight SQL Server...");
 
+    // Structured tracing (OTLP when JAEGER_ENABLED=true) and the metrics
+    // recorder, so the engine's `metrics`-facade metrics are captured.
+    let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("flight_sql")?;
+    benostreamdb::core::telemetry::install_metrics_recorder();
+
+    // HTTP observability surface: /metrics, /health, /readyz.
+    spawn_observability_server();
+
     let mut session = benostreamdb::core::sql::session::BenoStreamSession::new(None);
 
     // Base location used to derive `CREATE TABLE` URIs when the catalog does
@@ -18,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Optional external catalog (Nessie / REST / Glue / Hive / Unity / JDBC),
-    // loaded from BENOSTREAM_CONFIG, ./benostream.toml, or
+    // loaded from BSDB_CONFIG, ./benostream.toml, or
     // ~/.benostream/config.toml. Bound under BSDB_CATALOG_NAME (default: the
     // catalog type, e.g. "rest") so `CREATE TABLE <name>.<schema>.<table>`
     // mirrors into it.
@@ -57,4 +65,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Server::builder().add_service(svc).serve(addr).await?;
 
     Ok(())
+}
+
+/// Spawn the HTTP observability server on `BSDB_METRICS_BIND:BSDB_METRICS_PORT`
+/// (default `127.0.0.1:9090`), serving `/metrics`, `/health`, and `/readyz`.
+fn spawn_observability_server() {
+    let addr = benostreamdb::core::telemetry::metrics_addr();
+    tokio::spawn(async move {
+        use axum::{routing::get, Router};
+        let app = Router::new()
+            .route(
+                "/metrics",
+                get(|| async { benostreamdb::core::telemetry::render_metrics() }),
+            )
+            .route("/health", get(|| async { "ok" }))
+            .route("/readyz", get(|| async { "ok" }));
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => {
+                tracing::info!("Observability server listening on http://{addr}/metrics");
+                if let Err(e) = axum::serve(listener, app).await {
+                    tracing::warn!("Observability server stopped: {e}");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to bind observability listener {addr}: {e}"),
+        }
+    });
 }

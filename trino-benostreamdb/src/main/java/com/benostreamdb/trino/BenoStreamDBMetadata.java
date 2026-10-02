@@ -39,11 +39,20 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     @Override
     public List<String> listSchemaNames(ConnectorSession session) {
-        return List.of("default");
+        requireNative();
+        return parseStringList(BenoStreamDBJNIBridge.listSchemas(warehouse));
     }
 
     @Override
     public ConnectorTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName) {
+        // Verify the table exists so Trino reports "table not found" up front
+        // instead of failing later during split generation.
+        requireNative();
+        String uri = BenoStreamDBTableUri.of(warehouse, tableName.getSchemaName(), tableName.getTableName());
+        String json = BenoStreamDBJNIBridge.getTableSchema(uri);
+        if (json == null || json.isEmpty()) {
+            return null;
+        }
         return new BenoStreamDBTableHandle(tableName.getSchemaName(), tableName.getTableName());
     }
 
@@ -57,7 +66,17 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     @Override
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> schemaName) {
-        return List.of(new SchemaTableName("default", "test_table"));
+        requireNative();
+        List<SchemaTableName> result = new ArrayList<>();
+        List<String> schemas = schemaName.isPresent()
+                ? List.of(schemaName.get())
+                : listSchemaNames(session);
+        for (String schema : schemas) {
+            for (String table : parseStringList(BenoStreamDBJNIBridge.listTables(warehouse, schema))) {
+                result.add(new SchemaTableName(schema, table));
+            }
+        }
+        return result;
     }
 
     @Override
@@ -139,21 +158,23 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     /** The first primary-key column, or the first column when no PK is declared. */
     private String resolvePrimaryKeyColumn(String schemaName, String tableName, List<ColumnMetadata> columns) {
+        requireNative();
         String uri = BenoStreamDBTableUri.of(warehouse, schemaName, tableName);
-        if (BenoStreamDBJNIBridge.isLoaded()) {
-            String json = BenoStreamDBJNIBridge.getPrimaryKey(uri);
-            if (json != null && !json.isEmpty()) {
-                try {
-                    List<String> pk = MAPPER.readValue(json, new TypeReference<>() {
-                    });
-                    if (!pk.isEmpty()) {
-                        return pk.get(0);
-                    }
-                } catch (Exception ignored) {
-                    // fall through to the first column
+        String json = BenoStreamDBJNIBridge.getPrimaryKey(uri);
+        if (json != null && !json.isEmpty()) {
+            try {
+                List<String> pk = MAPPER.readValue(json, new TypeReference<>() {
+                });
+                if (!pk.isEmpty()) {
+                    return pk.get(0);
                 }
+            } catch (Exception e) {
+                throw new RuntimeException(
+                        "Failed to parse BenoStreamDB primary key for " + uri + ": " + e.getMessage(), e);
             }
         }
+        // No declared primary key: fall back to the first column (a real column,
+        // not mock data).
         return columns.isEmpty() ? "_row_id" : columns.get(0).getName();
     }
 
@@ -242,16 +263,11 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
     // -------------------------------------------------------------------------
 
     private List<ColumnMetadata> resolveColumns(String schemaName, String tableName) {
+        requireNative();
         String uri = BenoStreamDBTableUri.of(warehouse, schemaName, tableName);
-        String json = null;
-        if (BenoStreamDBJNIBridge.isLoaded()) {
-            json = BenoStreamDBJNIBridge.getTableSchema(uri);
-        }
+        String json = BenoStreamDBJNIBridge.getTableSchema(uri);
         if (json == null || json.isEmpty()) {
-            // Fallback for tests / when the native library is unavailable.
-            return List.of(
-                    new ColumnMetadata("id", IntegerType.INTEGER),
-                    new ColumnMetadata("name", VarcharType.VARCHAR));
+            throw new IllegalArgumentException("BenoStreamDB table not found: " + uri);
         }
         try {
             List<Map<String, Object>> fields = MAPPER.readValue(json, new TypeReference<>() {
@@ -268,7 +284,47 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         }
     }
 
+    /** Fail loudly when the native engine is unavailable — never return mock data. */
+    private static void requireNative() {
+        if (!BenoStreamDBJNIBridge.isLoaded()) {
+            throw new IllegalStateException(
+                    "BenoStreamDB native library (libbenostreamdb) is not loaded; "
+                            + "add it to java.library.path");
+        }
+    }
+
+    /** Parse a JSON array of strings, tolerating null/empty input. */
+    private static List<String> parseStringList(String json) {
+        if (json == null || json.isEmpty()) {
+            return List.of();
+        }
+        try {
+            return MAPPER.readValue(json, new TypeReference<List<String>>() {
+            });
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse BenoStreamDB metadata JSON: " + e.getMessage(), e);
+        }
+    }
+
     private static Type trinoType(String arrowType) {
+        if (arrowType.startsWith("List(") && arrowType.endsWith(")")) {
+            String inner = arrowType.substring(5, arrowType.length() - 1);
+            return new io.trino.spi.type.ArrayType(trinoType(inner));
+        }
+        if (arrowType.startsWith("Struct(") && arrowType.endsWith(")")) {
+            String inner = arrowType.substring(7, arrowType.length() - 1);
+            List<io.trino.spi.type.RowType.Field> fields = new ArrayList<>();
+            for (String part : inner.split(", ")) {
+                int colonIdx = part.indexOf(": ");
+                if (colonIdx > 0) {
+                    String name = part.substring(0, colonIdx);
+                    String ty = part.substring(colonIdx + 2);
+                    fields.add(io.trino.spi.type.RowType.field(name, trinoType(ty)));
+                }
+            }
+            return io.trino.spi.type.RowType.from(fields);
+        }
+
         switch (arrowType) {
             case "Int8":
             case "Int16":

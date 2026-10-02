@@ -67,6 +67,15 @@ pub struct CommitMetadata {
     /// meaningful together with `require_remove_paths_exist`; when that is
     /// false, missing paths are already ignored.
     pub skip_missing_remove_paths: bool,
+    /// Compaction rebase policy: when true, if *any* `remove_path` is already
+    /// gone from the current snapshot, the whole commit is a no-op.
+    ///
+    /// This is required for compaction. A concurrent compaction that already
+    /// removed one of our inputs has written its own replacement containing
+    /// those rows; adding our replacement too would duplicate the data, and
+    /// removing our remaining inputs without adding our replacement would lose
+    /// rows. The only correct outcome is to discard this compaction entirely.
+    pub discard_add_on_missing_remove: bool,
 }
 
 impl ManifestManager {

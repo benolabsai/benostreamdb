@@ -15,6 +15,9 @@ fn generate_random_vectors(n: usize, dim: usize, seed: u64) -> (Vec<f32>, Vec<f3
 }
 
 fn get_active_backends() -> Vec<Box<dyn GpuBackend>> {
+    // `mut` is only exercised when a GPU backend is compiled in (cuda/macos);
+    // on a CPU-only build the pushes below are cfg'd out.
+    #[allow(unused_mut)]
     let mut backends: Vec<Box<dyn GpuBackend>> = vec![Box::new(CpuBackend::new())];
 
     #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
@@ -196,7 +199,11 @@ fn test_ivf_flat_gpu_vs_cpu_recall() {
 
     let cpu = CpuBackend::new();
     let k = 10;
-    let n_probe = 16;
+    // Probe 24 of 32 lists (75%). At 16 probes (50%) recall@10 floats around
+    // 89-90% on this uniform random set and the >=90% assertion is a coin flip;
+    // probing more keeps the test a real (still approximate) IVF check without
+    // sitting on the threshold.
+    let n_probe = 24;
     let mut total_hits = 0;
     let n_queries = 50;
 

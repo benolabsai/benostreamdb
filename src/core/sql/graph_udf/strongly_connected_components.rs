@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use arrow::array::{Array, ArrayRef, ListBuilder, StructBuilder, UInt64Array, UInt64Builder};
+use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use ahash::{AHashMap, AHashSet};
+use arrow::array::{ArrayRef, ListBuilder, StructBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -8,7 +10,6 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_functions_aggregate_common::accumulator::{AccumulatorArgs, StateFieldsArgs};
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 macro_rules! impl_dyn_traits {
@@ -44,10 +45,7 @@ impl Default for StronglyConnectedComponentsUDF {
 impl StronglyConnectedComponentsUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::UInt64, DataType::UInt64],
-                Volatility::Immutable,
-            ),
+            signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 }
@@ -58,7 +56,7 @@ impl AggregateUDFImpl for StronglyConnectedComponentsUDF {
     }
 
     fn name(&self) -> &str {
-        "strongly_connected_components"
+        "graph_strongly_connected_components"
     }
 
     fn signature(&self) -> &Signature {
@@ -82,146 +80,61 @@ impl AggregateUDFImpl for StronglyConnectedComponentsUDF {
     }
 
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<Field>>> {
-        Ok(vec![
-            Arc::new(Field::new(
-                "sources",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-            Arc::new(Field::new(
-                "targets",
-                DataType::List(Arc::new(Field::new("item", DataType::UInt64, true))),
-                true,
-            )),
-        ])
+        Ok(GraphAccumulatorBase::state_fields())
     }
 }
 
 #[derive(Debug)]
 pub struct StronglyConnectedComponentsAccumulator {
-    sources: Vec<u64>,
-    targets: Vec<u64>,
+    base: GraphAccumulatorBase,
 }
 
 impl StronglyConnectedComponentsAccumulator {
     fn new() -> Self {
         Self {
-            sources: Vec::new(),
-            targets: Vec::new(),
+            base: GraphAccumulatorBase::new(),
         }
     }
 }
 
 impl Accumulator for StronglyConnectedComponentsAccumulator {
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        let mut sources_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        sources_builder.values().append_slice(&self.sources);
-        sources_builder.append(true);
-
-        let mut targets_builder =
-            arrow::array::ListBuilder::new(arrow::array::UInt64Builder::new());
-        targets_builder.values().append_slice(&self.targets);
-        targets_builder.append(true);
-
-        Ok(vec![
-            ScalarValue::List(Arc::new(sources_builder.finish())),
-            ScalarValue::List(Arc::new(targets_builder.finish())),
-        ])
+        self.base.edge_state()
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let sources_list = states[0]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "strongly_connected_components: expected ListArray for sources".to_string(),
-                )
-            })?;
-        let targets_list = states[1]
-            .as_any()
-            .downcast_ref::<arrow::array::ListArray>()
-            .ok_or_else(|| {
-                datafusion::error::DataFusionError::Execution(
-                    "strongly_connected_components: expected ListArray for targets".to_string(),
-                )
-            })?;
-
-        for i in 0..sources_list.len() {
-            if sources_list.is_valid(i) {
-                let s_arr = sources_list.value(i);
-                if let Some(s) = s_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.sources.extend_from_slice(s.values());
-                }
-            }
-            if targets_list.is_valid(i) {
-                let t_arr = targets_list.value(i);
-                if let Some(t) = t_arr.as_any().downcast_ref::<arrow::array::UInt64Array>() {
-                    self.targets.extend_from_slice(t.values());
-                }
-            }
+        if states.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.base.merge_edge_state(states, Some(2), Some(3))
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.len() != 2 {
+        if values.len() < 2 {
             return Err(DataFusionError::Execution(
-                "strongly_connected_components expects 2 arguments".to_string(),
+                "strongly_connected_components expects at least 2 arguments".to_string(),
             ));
         }
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
-
-        let len = sources_arr.len();
-        for i in 0..len {
-            if sources_arr.is_valid(i) && targets_arr.is_valid(i) {
-                self.sources.push(sources_arr.value(i));
-                self.targets.push(targets_arr.value(i));
-            }
-        }
-
-        Ok(())
+        self.base.update_edge_batch(values, Some(2), Some(3))
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.sources.is_empty() {
-            return Ok(ScalarValue::List(Arc::new(
-                arrow::array::ListArray::from_iter_primitive::<arrow::datatypes::UInt64Type, _, _>(
-                    vec![None::<Vec<Option<u64>>>],
-                ),
-            )));
-        }
+        let graph = self.base.resolve_graph(&[], 1)?;
+        let nodes = graph.all_nodes();
 
-        let mut adjacency: HashMap<u64, Vec<u64>> = HashMap::new();
-        let mut nodes: HashSet<u64> = HashSet::new();
-        for i in 0..self.sources.len() {
-            let u = self.sources[i];
-            let v = self.targets[i];
-            adjacency.entry(u).or_default().push(v);
-            nodes.insert(u);
-            nodes.insert(v);
-        }
-
-        // Tarjan's algorithm
-        let mut index: HashMap<u64, usize> = HashMap::new();
-        let mut lowlink: HashMap<u64, usize> = HashMap::new();
-        let mut on_stack: HashSet<u64> = HashSet::new();
+        // Tarjan's algorithm.
+        //
+        // The per-node maps/sets are keyed by integer node ids and are probed
+        // several times per edge (index/lowlink/on_stack). The default
+        // SipHash `std` hasher is needlessly slow (and DoS-hardened, which is
+        // irrelevant for these internal integer keys), so use ahash.
+        let mut index: AHashMap<u64, usize> = AHashMap::new();
+        let mut lowlink: AHashMap<u64, usize> = AHashMap::new();
+        let mut on_stack: AHashSet<u64> = AHashSet::new();
         let mut stack: Vec<u64> = Vec::new();
         let mut current_index = 0;
-        let mut components: HashMap<u64, u64> = HashMap::new();
+        let mut components: AHashMap<u64, u64> = AHashMap::new();
         let mut current_scc_id = 1;
 
         // Recursive DFS can blow stack, use iterative or careful recursion
@@ -238,11 +151,7 @@ impl Accumulator for StronglyConnectedComponentsAccumulator {
             if !index.contains_key(&start_v) {
                 call_stack.push(State {
                     v: start_v,
-                    neighbors: adjacency
-                        .get(&start_v)
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter(),
+                    neighbors: graph.get_neighbors(start_v).into_iter(),
                     has_pushed_children: false,
                 });
 
@@ -268,11 +177,7 @@ impl Accumulator for StronglyConnectedComponentsAccumulator {
                             });
                             call_stack.push(State {
                                 v: w,
-                                neighbors: adjacency
-                                    .get(&w)
-                                    .cloned()
-                                    .unwrap_or_default()
-                                    .into_iter(),
+                                neighbors: graph.get_neighbors(w).into_iter(),
                                 has_pushed_children: false,
                             });
                             pushed_child = true;
@@ -321,7 +226,11 @@ impl Accumulator for StronglyConnectedComponentsAccumulator {
         let mut node_builder = UInt64Builder::new();
         let mut scc_id_builder = UInt64Builder::new();
 
-        for (&node, &scc_id) in &components {
+        let mut sorted_nodes: Vec<_> = components.keys().copied().collect();
+        sorted_nodes.sort_unstable();
+
+        for node in sorted_nodes {
+            let scc_id = components[&node];
             node_builder.append_value(node);
             scc_id_builder.append_value(scc_id);
         }
@@ -343,6 +252,6 @@ impl Accumulator for StronglyConnectedComponentsAccumulator {
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self) + self.sources.capacity() * 8 + self.targets.capacity() * 8
+        self.base.size()
     }
 }

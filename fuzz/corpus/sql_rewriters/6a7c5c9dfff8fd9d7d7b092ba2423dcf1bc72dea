@@ -1,0 +1,1 @@
+SELECT id[1,2, t PARTITIONED BY (dcy) WHERE < v-> '[1,2,3]' ORDER BY v <-> '[1,2,3]' LIMIT 5
