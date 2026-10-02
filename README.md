@@ -28,6 +28,16 @@ An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructib
 3. **Distributed / Clustered**:
    *Status: Future / Experimental (Not currently supported).* Distributed coordinator and multi-node write/compaction scheduling are under design.
 
+> ## ⚠️ Security: internal networks only
+>
+> **BenoStreamDB's network servers are not hardened for untrusted networks.**
+> `benostreamdb-flight`, `bsdb-search`, the gateway, and the Iceberg REST binary
+> ship with **no authentication, no authorization, and no TLS**. Run them on a
+> **trusted internal network**, bound to `127.0.0.1` or an internal interface,
+> behind a gateway/reverse proxy that terminates TLS and enforces
+> authentication. Do **not** expose them directly to the public internet. See
+> [SECURITY.md](SECURITY.md) for the full posture.
+
 It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table you do not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
 
 ## 🎯 Architecture: The Indexed Lakehouse
@@ -115,7 +125,7 @@ Both APIs are hosted concurrently from a single binary, completely share the exa
 
 To start the dual-API server:
 ```bash
-# Uses BENOSEARCH_PORT=9200 and BENOSEARCH_QDRANT_PORT=6333 by default
+# Uses BSDB_SEARCH_PORT=9200 and BSDB_QDRANT_PORT=6333 by default
 cargo run -p benostreamdb-search
 ```
 
@@ -558,11 +568,11 @@ stats = table.preload_indexes(max_memory_bytes=8 * 1024**3)
 ```
 
 Indexes are warmed into RAM until `max_memory_bytes` is exhausted; the
-remainder **spills into the mmap disk cache** (`BENOSTREAM_DISK_CACHE_DIR`,
+remainder **spills into the mmap disk cache** (`BSDB_DISK_CACHE_DIR`,
 `MADV_RANDOM`) for out-of-core serving. The bounded caches evict by
 LRU/TinyLFU + TTI, so overflow evicts the least-recently-used entries. The
 `benostream-search` gateway calls this on open, controlled by
-`BENOSEARCH_PRELOAD` (default on) and `BENOSEARCH_PRELOAD_GB` (default 4 GiB).
+`BSDB_SEARCH_PRELOAD` (default on) and `BSDB_SEARCH_PRELOAD_GB` (default 4 GiB).
 
 ## 🔌 Connectors
 
@@ -725,7 +735,7 @@ benostreamdb/
 │   │   ├── reader/             # Index-aware Parquet reader
 │   │   ├── manifest/           # Manifest management (Iceberg/Avro)
 │   │   ├── index/              # HNSW, inverted, bitmap indexes
-│   │   ├── catalog/            # REST, Nessie, Glue, Hive, Unity catalogs
+│   │   ├── catalog/            # REST, Nessie, Glue, Hive, Unity, JDBC catalogs
 │   │   ├── sql/                # DataFusion integration & pgvector operators
 │   │   ├── planner.rs          # Query planner & optimizer
 │   │   ├── iceberg/            # Iceberg V2/V3 metadata & schema
@@ -765,7 +775,7 @@ envelope is acceptable and object-storage-native, scale-to-zero hosting is desir
 
 ```bash
 cargo build --release -p benostreamdb-search --bin bsdb-search
-BENOSEARCH_BIND=127.0.0.1 BENOSEARCH_PORT=9200 ./target/release/bsdb-search
+BSDB_SEARCH_BIND=127.0.0.1 BSDB_SEARCH_PORT=9200 ./target/release/bsdb-search
 
 # Index + search (ES 7.10 wire format)
 curl -X POST localhost:9200/articles/_doc -H 'content-type: application/json' \
@@ -790,8 +800,8 @@ This will automatically generate the configuration file and start the service. S
 `term`/`terms`/`range`/`exists`, `match_all`), `_count`, `_source` filtering,
 `from`/`size`, and Prometheus `/metrics`.
 
-**Not supported (v1):** per-document delete (501, append-only), aggregations, aliases,
-reindex, ILM, snapshots, auth, multi-node. See
+**Not supported (v1):** ILM (index lifecycle), authentication/security, multi-node
+sharding/replicas, and Kibana. See
 [contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md](contrib/benostreamdb-search/docs/OPENSEARCH_COMPATIBILITY.md) for the full matrix and
 [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete quickstart.
 
@@ -806,7 +816,7 @@ reindex, ILM, snapshots, auth, multi-node. See
 
 ### 📋 Active Roadmap Themes
 - [ ] **Reactive Lakehouse Streaming & Flight Subscriptions**: `Table::subscribe()` core API with live Arrow Flight push streams ("Live Queries") and predicate pushdown.
-- [ ] **Declarative Edge Tables & Multi-Table Graph Overlays**: `table_type = 'edge'` DDL, typed global URNs (`table:id`), and native DataFusion SQL graph walk functions.
+- [ ] **Declarative Edge Tables & Multi-Table Graph Overlays**: programmatic `Table.create_edge_table` / `from_networkx` / `to_networkx` APIs have shipped; `table_type = 'edge'` DDL, typed global URNs (`table:id`), and native DataFusion SQL graph walk functions remain.
 - [ ] **Domain-Specific BM25 Analyzers**: Configurable table tokenizers (CamelCase code tokenizer, multilingual Snowball stemmers, CJK segmentation).
 - [ ] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`), LangChain/LlamaIndex vector store adapters.
 

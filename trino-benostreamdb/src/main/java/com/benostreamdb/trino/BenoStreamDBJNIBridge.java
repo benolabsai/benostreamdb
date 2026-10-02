@@ -9,7 +9,8 @@ public class BenoStreamDBJNIBridge {
             loaded = true;
             System.out.println("Successfully loaded native BenoStreamDB library for Trino.");
         } catch (UnsatisfiedLinkError e) {
-            System.err.println("Failed to load native BenoStreamDB library: " + e.getMessage() + ". Using fallback/mock implementation for testing.");
+            System.err.println("Failed to load native BenoStreamDB library: " + e.getMessage()
+                    + ". The connector will fail on use; add libbenostreamdb to java.library.path.");
         }
     }
 
@@ -29,6 +30,19 @@ public class BenoStreamDBJNIBridge {
     // Primary key: returns a JSON array of column names.
     public static native String getPrimaryKey(String tableUri);
 
+    // Metadata listing: JSON arrays of schema / table names under the warehouse.
+    public static native String listSchemas(String warehouse);
+
+    public static native String listTables(String warehouse, String schema);
+
+    // SQL query pushdown: run a query through the engine's session (full index
+    // and vector-search pushdown) and stream the result batches.
+    public static native long openQuery(String tableUri, String sql);
+
+    public static native long readQueryBatch(long handle, long outArrayPtr, long outSchemaPtr);
+
+    public static native void closeQuery(long handle);
+
     // DDL: create a table from a JSON array of {name, type, nullable}.
     public static native boolean createTable(String tableUri, String schemaJson);
 
@@ -40,4 +54,7 @@ public class BenoStreamDBJNIBridge {
 
     // Delete path: delete rows matching a SQL filter.
     public static native boolean deleteRows(String tableUri, String filter);
+
+    // Observability: render the engine's Prometheus metrics as text.
+    public static native String gatherMetrics();
 }

@@ -14,7 +14,7 @@ use std::time::{Instant, SystemTime};
 
 use std::cmp::Ordering;
 
-use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use parking_lot::{RwLock, RwLockReadGuard};
 use rayon::prelude::*;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -375,7 +375,6 @@ use rand::prelude::*;
 /// of parameter given by scale.
 /// The distribution is constrained to be in [0..maxlevel[
 pub struct LayerGenerator {
-    rng: Arc<Mutex<rand::rngs::StdRng>>,
     unif: Uniform<f64>,
     scale: f64,
     maxlevel: usize,
@@ -385,7 +384,6 @@ impl LayerGenerator {
     pub fn new(max_nb_connection: usize, maxlevel: usize) -> Self {
         let scale = 1. / (max_nb_connection as f64).ln();
         LayerGenerator {
-            rng: Arc::new(Mutex::new(StdRng::from_entropy())),
             unif: Uniform::<f64>::new(0., 1.),
             scale,
             maxlevel,
@@ -401,14 +399,14 @@ impl LayerGenerator {
     /// generate a layer with given maxlevel. upper layers (higher index) are of decreasing probabilities.
     /// thread safe method.
     fn generate(&self) -> usize {
-        let mut protected_rng = self.rng.lock();
-        let xsi = protected_rng.sample(self.unif);
+        let mut rng = rand::thread_rng();
+        let xsi = rng.sample(self.unif);
         let level = -xsi.ln() * self.scale;
         let mut ulevel = level.floor() as usize;
         // we redispatch possibly sampled level  >= maxlevel to required range
         if ulevel >= self.maxlevel {
             // This occurs with very low probability. Cf commentary above.
-            ulevel = protected_rng.sample(Uniform::<usize>::new(0, self.maxlevel));
+            ulevel = rng.sample(Uniform::<usize>::new(0, self.maxlevel));
         }
         ulevel
     }

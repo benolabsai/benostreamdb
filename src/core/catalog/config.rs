@@ -26,7 +26,7 @@ impl CatalogConfig {
 
     pub fn load_default() -> Result<Self> {
         // 1. Check environment variable
-        if let Ok(path) = std::env::var("BENOSTREAM_CONFIG") {
+        if let Ok(path) = std::env::var("BSDB_CONFIG") {
             if fs::metadata(&path).is_ok() {
                 return Self::load_from_file(&path);
             }
@@ -50,6 +50,6 @@ impl CatalogConfig {
         }
 
         // 4. Fallback/Error
-        anyhow::bail!("No configuration file found. Checked ENV 'BENOSTREAM_CONFIG', ./benostream.toml, and ~/.benostream/config.toml")
+        anyhow::bail!("No configuration file found. Checked ENV 'BSDB_CONFIG', ./benostream.toml, and ~/.benostream/config.toml")
     }
 }

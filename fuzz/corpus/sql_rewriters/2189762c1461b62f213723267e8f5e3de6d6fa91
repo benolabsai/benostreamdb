@@ -1,0 +1,1 @@
+SELECT id FROM t PARTITIONED BY (<-> '[1, B FROM t PAR2,3]' ORDER LIMAT 5

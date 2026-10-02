@@ -1,8 +1,27 @@
 #!/usr/bin/env python
+import os
+import re
+
 from setuptools import find_namespace_packages, setup
 
 package_name = "dbt-benostreamdb"
-package_version = "0.1.0"
+
+
+def _core_version() -> str:
+    """Derive the version from the core engine's Cargo.toml (single source)."""
+    cargo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Cargo.toml")
+    try:
+        with open(cargo, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'^version = "([^"]+)"', line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+package_version = _core_version()
 description = """The BenoStreamDB adapter plugin for dbt"""
 
 setup(
@@ -18,7 +37,6 @@ setup(
     install_requires=[
         "dbt-core>=1.8.0",
         "benostreamdb>=0.11.1",
-        "adbc-driver-flightsql>=1.12.0",
         "pyarrow>=15.0.0",
         "pandas",
     ],

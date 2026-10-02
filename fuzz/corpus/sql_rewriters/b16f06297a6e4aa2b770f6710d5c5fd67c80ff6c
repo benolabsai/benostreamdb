@@ -1,0 +1,1 @@
+SELECTWHERE v <-> &[1,2,3]' OE v <LIMIT 5

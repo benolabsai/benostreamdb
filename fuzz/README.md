@@ -15,6 +15,7 @@ outside the system first meet the engine.
 | `parse_binary` | bit/hex literals `B'10110101'`, `'\xB5'` with/without expected bit count |
 | `sql_rewriters` | `strip_partitioned_by` + `rewrite_sql_string` (pgvector operators/casts) |
 | `qdrant_request_body` | Qdrant-compatible request bodies (`#[serde(untagged)]` enums) |
+| `jni_bridge` | JNI bridge untrusted input: the `[{name,type,nullable}]` schema JSON (`createTable`) and the Arrow type-name mapping |
 
 The Elasticsearch `_search`/`_bulk` bodies are not covered yet: the request types
 live in private handler modules. Exposing a `#[doc(hidden)] pub` parse hook for

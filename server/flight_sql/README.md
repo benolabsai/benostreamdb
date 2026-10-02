@@ -3,6 +3,8 @@
 `benostreamdb-flight` provides a high-performance native Apache Arrow Flight and Flight SQL interface over BenoStreamDB.
 
 > **Architecture Note:** BenoStreamDB is **serverless-first**. Arrow Flight SQL is an optional server interface for network-accessible database access. Flight SQL currently provides **single-process server access**; distributed or clustered execution across multiple nodes is not currently supported or implied.
+>
+> **⚠️ Security:** This server has **no authentication, no authorization, and no TLS**. Run it on a **trusted internal network**, bound to `127.0.0.1` or an internal interface, behind a gateway/reverse proxy that terminates TLS and enforces authentication. Do **not** expose it directly to the public internet. See [SECURITY.md](../../SECURITY.md).
 
 ## Overview
 
@@ -11,7 +13,7 @@ Arrow Flight SQL is the standard, language-agnostic data transport and database 
 ### Architecture
 
 ```
-Client Application (Python pyarrow.flight / JDBC / Go / C++ / Rust)
+Client Application (JDBC / ODBC / ADBC / Go / C++ / BI tools)
                     │
                     ▼
          Arrow Flight SQL (gRPC / HTTP2)
@@ -26,13 +28,19 @@ Client Application (Python pyarrow.flight / JDBC / Go / C++ / Rust)
        DataFusion Query Engine + BenoStreamDB Core
 ```
 
+> Applications with a native path — Rust (the `benostreamdb` crate), Python (the
+> `benostreamdb` package), and JVM (the Spark/Trino connectors) — normally use
+> those directly rather than going through the gateway. Flight SQL is for
+> polyglot clients and BI tools that speak the protocol (JDBC/ODBC/ADBC, Go,
+> C++, DBeaver, …).
+
 ## Features
 
 - **Standard Flight SQL Protocol**: Supports `CommandStatementQuery`, `CommandPreparedStatementQuery`, and metadata introspection (`CommandGetTables`, `CommandGetCatalogs`, `CommandGetDbSchemas`, etc.).
 - **Zero-Copy Arrow Transport**: Streams record batches directly into memory without row-wise serialization or deserialization penalties.
 - **DataFusion Integration**: Direct query execution backed by DataFusion with vector search and indexing pushdowns.
 - **Full DDL / maintenance surface**: `CREATE DATABASE`/`SCHEMA`/`TABLE`, index and primary-key DDL, schema evolution, compaction, vacuum, and `ALTER TABLE ... EXECUTE` procedures — all over the wire.
-- **Ecosystem Compatibility**: Works out-of-the-box with any Flight SQL compliant client (DBeaver, JDBC Flight SQL driver, PyArrow, DuckDB, Apache Spark, etc.).
+- **Ecosystem Compatibility**: Works out-of-the-box with any Flight SQL compliant client (DBeaver, JDBC/ODBC/ADBC drivers, DuckDB, Go, C++, BI tools). Applications with a native path (Python, Rust, Spark/Trino) should prefer those.
 
 ## Running the Server
 
@@ -46,9 +54,24 @@ cargo run -p benostreamdb-flight
 |---|---|
 | `BSDB_WAREHOUSE` | Base location for `CREATE TABLE` when no `LOCATION` is given. Tables land at `<warehouse>/<schema>/<table>`. |
 | `BSDB_CATALOG_NAME` | DataFusion catalog name to bind the external catalog to (default: the catalog type, e.g. `rest`). |
-| `BENOSTREAM_CONFIG` | Path to a catalog config TOML (Nessie / REST / Glue / Hive / Unity / JDBC). Falls back to `./benostream.toml` then `~/.benostream/config.toml`. |
+| `BSDB_CONFIG` | Path to a catalog config TOML (Nessie / REST / Glue / Hive / Unity / JDBC). Falls back to `./benostream.toml` then `~/.benostream/config.toml`. |
+| `BSDB_METRICS_BIND` | Bind address for the observability HTTP listener. | `127.0.0.1` |
+| `BSDB_METRICS_PORT` | Port for the observability HTTP listener. | `9090` |
 
 Without a warehouse or catalog config, the server still serves queries against tables registered in-process, but `CREATE TABLE` requires either `BSDB_WAREHOUSE` or an explicit `LOCATION`.
+
+### Observability
+
+The server exposes an HTTP observability surface on
+`BSDB_METRICS_BIND:BSDB_METRICS_PORT` (default `127.0.0.1:9090`):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /metrics` | Prometheus text format — the engine's `benostreamdb_*` metrics. |
+| `GET /health` | Liveness (`200 ok`). |
+| `GET /readyz` | Readiness (`200 ok`). |
+
+See [docs/monitoring.md](../../docs/monitoring.md) for the full metric catalog.
 
 ## Connecting with Python (ADBC Flight SQL)
 
@@ -207,7 +230,6 @@ Iceberg/Spark-style maintenance procedures:
 ```sql
 ALTER TABLE mydb.myschema.t EXECUTE verify_integrity;
 ALTER TABLE mydb.myschema.t EXECUTE recover_indexes;
-ALTER TABLE mydb.myschema.t EXECUTE migrate_legacy_graph_indexes;
 ALTER TABLE mydb.myschema.t EXECUTE checkpoint;
 ALTER TABLE mydb.myschema.t EXECUTE rewrite_data_files;
 ALTER TABLE mydb.myschema.t EXECUTE remove_orphan_files(older_than_ms => 0);
@@ -220,7 +242,6 @@ ALTER TABLE mydb.myschema.t EXECUTE preload_indexes;
 |---|---|
 | `verify_integrity` | Verify file checksums against the manifest |
 | `recover_indexes` | Rebuild sidecars for externally-rewritten segments |
-| `migrate_legacy_graph_indexes` | Migrate v1 CSR graph indexes to v2 |
 | `checkpoint` | Compact the write-ahead log |
 | `rewrite_data_files` / `compact` | Compaction |
 | `remove_orphan_files(older_than_ms => N)` | Delete unreferenced files |
@@ -329,6 +350,22 @@ SELECT vector_avg(embedding) FROM docs GROUP BY category;
 SELECT pagerank(source, target) FROM edges;
 SELECT louvain_communities(source, target) FROM edges;
 ```
+
+`drift_search` and `regional_drift` take two trailing optional arguments —
+`graph_uri` and `mode` — that select how the graph is sourced:
+
+```sql
+-- In-memory graph built from the aggregated edge rows (default).
+SELECT regional_drift(source, target, 'query', [1, 2], 2, 2) FROM edges;
+
+-- Out-of-core: load the table's CSR index and walk it directly.
+SELECT regional_drift(source, target, 'query', [1, 2], 2, 2,
+                      'file:///data/edges', 'out_of_core') FROM edges;
+```
+
+`mode` is one of `in_memory`, `out_of_core`, `cached`, or `auto` (the default
+when `graph_uri` is supplied). Every mode is restricted to the same regional
+induced subgraph, so the mode is a memory strategy, not a different answer.
 
 ## Introspection
 

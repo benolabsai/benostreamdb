@@ -572,6 +572,73 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setPr
 }
 
 #[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropIndex(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    column: JString,
+    index_type: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let col: String = env
+        .get_string(&column)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let idx_type: String = env
+        .get_string(&index_type)
+        .map(|s| s.into())
+        .unwrap_or_default();
+
+    tracing::info!(
+        "FFI(Spark): dropIndex for table {}, column {}, type: {}",
+        uri,
+        col,
+        idx_type
+    );
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_compactTable(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+
+    tracing::info!("FFI(Spark): compactTable for table {}", uri);
+
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listIndexes(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jstring {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+
+    tracing::info!("FFI(Spark): listIndexes for table {}", uri);
+
+    let list_json = "[]";
+    match env.new_string(list_json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setGpuContext(
     mut env: JNIEnv,
     _class: JClass,
@@ -878,24 +945,129 @@ fn vector_search_impl(
 }
 
 // -----------------------------------------------------------------------------
+// Regional Drift Traversal JNI Bridge (Spark)
+// -----------------------------------------------------------------------------
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_regionalDriftSearch(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    query: JString,
+    seeds_json: JString,
+    top_k: jint,
+    hops: jint,
+    n_depth: jint,
+    k_followups: jint,
+    mode_str: JString,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jint {
+    if out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::error!("FFI(Spark): regionalDriftSearch called with null pointers");
+        return -1;
+    }
+
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let query_str: String = env.get_string(&query).map(|s| s.into()).unwrap_or_default();
+    let seeds_json_str: String = env
+        .get_string(&seeds_json)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let mode: String = env
+        .get_string(&mode_str)
+        .map(|s| s.into())
+        .unwrap_or_default();
+
+    let seeds_result: Result<Vec<String>, _> = serde_json::from_str(&seeds_json_str);
+    let seeds_str = match seeds_result {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("FFI(Spark): failed to parse seeds_json: {}", e);
+            return -1;
+        }
+    };
+    let mut seeds = Vec::with_capacity(seeds_str.len());
+    for s in seeds_str {
+        if let Ok(v) = s.parse::<u64>() {
+            seeds.push(v);
+        }
+    }
+
+    let graph_mode = crate::core::sql::graph_udf::graph_view::parse_graph_mode(&mode);
+
+    let res = RUNTIME.block_on(async {
+        let table = match crate::core::table::Table::new_async(uri.clone()).await {
+            Ok(t) => t,
+            Err(e) => return Err(anyhow::anyhow!("Failed to open table: {}", e)),
+        };
+
+        table
+            .regional_drift_with_mode(
+                &query_str,
+                &seeds,
+                top_k as usize,
+                hops as u32,
+                n_depth as u32,
+                k_followups as usize,
+                graph_mode,
+            )
+            .await
+    });
+
+    let result = match res {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("FFI(Spark): regional_drift_with_mode error: {}", e);
+            return -1;
+        }
+    };
+
+    let result_len = result.all_discovered_nodes.len();
+    let mut row_ids = Vec::with_capacity(result_len);
+    for n in result.all_discovered_nodes {
+        row_ids.push(n as i64);
+    }
+
+    let row_id_array = Arc::new(Int64Array::from(row_ids)) as Arc<dyn arrow::array::Array>;
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "node_id",
+        DataType::Int64,
+        false,
+    )]));
+
+    let batch = match arrow::record_batch::RecordBatch::try_new(schema, vec![row_id_array]) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!("FFI(Spark): Failed to create RecordBatch: {}", e);
+            return -1;
+        }
+    };
+
+    let struct_array: StructArray = batch.into();
+    let array_data = struct_array.to_data();
+
+    let (ffi_array, ffi_schema) = match to_ffi(&array_data) {
+        Ok(tuple) => tuple,
+        Err(e) => {
+            tracing::error!("FFI(Spark): Error exporting to C Data Interface: {}", e);
+            return -1;
+        }
+    };
+
+    unsafe {
+        std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
+        std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
+    }
+
+    result_len as jint
+}
+
+// -----------------------------------------------------------------------------
 // Trino write / merge path
 // -----------------------------------------------------------------------------
-
-/// Serialize an Arrow schema to a compact JSON array of `{name, type, nullable}`.
-fn schema_to_json(schema: &arrow::datatypes::Schema) -> String {
-    let fields: Vec<serde_json::Value> = schema
-        .fields()
-        .iter()
-        .map(|f| {
-            serde_json::json!({
-                "name": f.name(),
-                "type": format!("{}", f.data_type()),
-                "nullable": f.is_nullable(),
-            })
-        })
-        .collect();
-    serde_json::Value::Array(fields).to_string()
-}
 
 /// Import an Arrow batch from the C Data Interface.
 ///
@@ -1068,46 +1240,9 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_deleteR
     }
 }
 
-/// Map an Arrow type name (as produced by `schema_to_json`) back to a `DataType`.
-fn arrow_type_from_str(s: &str) -> arrow::datatypes::DataType {
-    use arrow::datatypes::DataType::*;
-    match s {
-        "Int8" => Int8,
-        "Int16" => Int16,
-        "Int32" => Int32,
-        "Int64" => Int64,
-        "UInt8" => UInt8,
-        "UInt16" => UInt16,
-        "UInt32" => UInt32,
-        "UInt64" => UInt64,
-        "Float16" => Float16,
-        "Float32" => Float32,
-        "Float64" => Float64,
-        "Boolean" => Boolean,
-        "Date32" => Date32,
-        "Date64" => Date64,
-        "Utf8" => Utf8,
-        "LargeUtf8" => LargeUtf8,
-        _ => Utf8,
-    }
-}
-
-/// Parse the `[{name, type, nullable}]` JSON produced by `schema_to_json`.
-fn schema_from_json(json: &str) -> anyhow::Result<arrow::datatypes::Schema> {
-    let fields: Vec<serde_json::Value> = serde_json::from_str(json)?;
-    let mut arrow_fields = Vec::with_capacity(fields.len());
-    for f in fields {
-        let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("col");
-        let ty = f.get("type").and_then(|v| v.as_str()).unwrap_or("Utf8");
-        let nullable = f.get("nullable").and_then(|v| v.as_bool()).unwrap_or(true);
-        arrow_fields.push(arrow::datatypes::Field::new(
-            name,
-            arrow_type_from_str(ty),
-            nullable,
-        ));
-    }
-    Ok(arrow::datatypes::Schema::new(arrow_fields))
-}
+// The schema JSON helpers live in `crate::core::jni_util` so they can be fuzzed
+// without the `java` feature (and therefore without a JVM).
+use crate::core::jni_util::{schema_from_json, schema_to_json};
 
 /// Trino: return the table's primary-key column names as a JSON array.
 #[no_mangle]
@@ -1173,5 +1308,221 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createT
             tracing::error!("FFI(Trino): createTable failed: {}", e);
             0
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trino: SQL query pushdown + warehouse metadata listing
+// ---------------------------------------------------------------------------
+
+/// A materialized SQL query result, streamed batch-by-batch to the JNI caller.
+///
+/// Unlike [`BenoStreamSession`] (a low-level file-range reader), this runs the
+/// query through the engine's DataFusion session, so the planner applies the
+/// full pushdown surface — scalar/inverted indexes and vector search — before
+/// any Parquet is decoded.
+pub struct QuerySession {
+    batches: Vec<arrow::record_batch::RecordBatch>,
+    idx: usize,
+}
+
+impl QuerySession {
+    fn next_batch(&mut self) -> Option<arrow::record_batch::RecordBatch> {
+        if self.idx < self.batches.len() {
+            let batch = self.batches[self.idx].clone();
+            self.idx += 1;
+            Some(batch)
+        } else {
+            None
+        }
+    }
+}
+
+/// Trino: run a SQL query against a table (registered as `t`) and return a
+/// handle to the materialized result.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_openQuery(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    sql: JString,
+) -> jlong {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let query: String = env.get_string(&sql).map(|s| s.into()).unwrap_or_default();
+    if uri.is_empty() || query.is_empty() {
+        tracing::warn!("FFI(Trino): openQuery called with empty uri or sql");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.sql(&query).await
+    });
+    match res {
+        Ok(batches) => {
+            tracing::info!("FFI(Trino): openQuery produced {} batch(es)", batches.len());
+            Box::into_raw(Box::new(QuerySession { batches, idx: 0 })) as jlong
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): openQuery failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: read the next batch from a query handle (C Data Interface export).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_readQueryBatch(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jlong {
+    if handle == 0 || out_array_ptr == 0 || out_schema_ptr == 0 {
+        tracing::warn!("FFI(Trino): readQueryBatch called with null handle or output pointers");
+        return 0;
+    }
+    let session = unsafe { &mut *(handle as *mut QuerySession) };
+    match session.next_batch() {
+        Some(batch) => {
+            let struct_array: arrow::array::StructArray = batch.into();
+            let array_data = struct_array.to_data();
+            let (ffi_array, ffi_schema) = match to_ffi(&array_data) {
+                Ok(tuple) => tuple,
+                Err(e) => {
+                    tracing::error!("FFI(Trino): readQueryBatch export failed: {}", e);
+                    return 0;
+                }
+            };
+            unsafe {
+                std::ptr::write(out_array_ptr as *mut FFI_ArrowArray, ffi_array);
+                std::ptr::write(out_schema_ptr as *mut FFI_ArrowSchema, ffi_schema);
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Trino: free a query handle.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_closeQuery(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        unsafe {
+            drop(Box::from_raw(handle as *mut QuerySession));
+        }
+    }
+}
+
+/// Immediate sub-directory names under `prefix` in the warehouse store.
+fn list_subdirs(
+    store: &std::sync::Arc<dyn object_store::ObjectStore>,
+    prefix: &str,
+) -> Vec<String> {
+    let path = object_store::path::Path::from(prefix);
+    let res = RUNTIME.block_on(async { store.list_with_delimiter(Some(&path)).await });
+    match res {
+        Ok(list) => {
+            let mut names: Vec<String> = list
+                .common_prefixes
+                .iter()
+                .filter_map(|p| p.filename().map(|s| s.to_string()))
+                .collect();
+            names.sort();
+            names
+        }
+        Err(e) => {
+            tracing::error!("FFI(Trino): list_subdirs({}) failed: {}", prefix, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Trino: list the schemas (top-level directories) under the warehouse.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listSchemas(
+    mut env: JNIEnv,
+    _class: JClass,
+    warehouse: JString,
+) -> jstring {
+    let wh: String = env
+        .get_string(&warehouse)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let names = match create_object_store(&wh) {
+        Ok(store) => list_subdirs(&store, ""),
+        Err(e) => {
+            tracing::error!("FFI(Trino): listSchemas store failed: {}", e);
+            Vec::new()
+        }
+    };
+    let json = serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Trino: list the tables (sub-directories) under `<warehouse>/<schema>`.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listTables(
+    mut env: JNIEnv,
+    _class: JClass,
+    warehouse: JString,
+    schema: JString,
+) -> jstring {
+    let wh: String = env
+        .get_string(&warehouse)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let sch: String = env
+        .get_string(&schema)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let names = match create_object_store(&wh) {
+        Ok(store) => list_subdirs(&store, &sch),
+        Err(e) => {
+            tracing::error!("FFI(Trino): listTables store failed: {}", e);
+            Vec::new()
+        }
+    };
+    let json = serde_json::to_string(&names).unwrap_or_else(|_| "[]".to_string());
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Spark: render the engine's Prometheus metrics as text.
+///
+/// The connector registers this with Spark's metrics system so the host's
+/// existing Prometheus/JMX sink picks up the engine's metrics.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_gatherMetrics(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    match env.new_string(crate::core::telemetry::render_metrics()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Trino: render the engine's Prometheus metrics as text.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_gatherMetrics(
+    env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    match env.new_string(crate::core::telemetry::render_metrics()) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
     }
 }

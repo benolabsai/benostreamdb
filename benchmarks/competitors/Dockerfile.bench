@@ -1,0 +1,30 @@
+# Benchmark runner image: contains the harness plus every competitor *client*.
+#
+# It runs with the SAME cgroup profile (--cpus/--memory) as the server engines
+# and as BenoStreamDB, so every participant is measured under an identical
+# envelope. See docker_bench.sh.
+#
+# Build:
+#   docker build -f benchmarks/competitors/Dockerfile.bench -t bsdb-bench-runner .
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+# Core numerics + ANN-Benchmarks I/O.
+RUN pip install numpy h5py pandas pyarrow
+
+# Competitor clients. faiss-cpu/hnswlib/lancedb/duckdb are embedded;
+# psycopg/opensearch-py/neo4j are clients for the compose services.
+RUN pip install faiss-cpu hnswlib lancedb duckdb "psycopg[binary]" opensearch-py neo4j
+
+WORKDIR /opt/bench
+COPY benchmarks/competitors/run_competitor.py /opt/bench/run_competitor.py
+COPY benchmarks/ann_benchmarks/run.py /opt/bench/ann_benchmarks.py
+
+# BenoStreamDB itself: install the abi3 wheel if one is mounted at /wheels.
+# abi3 wheels built for >=3.10 load on 3.12, so the host `maturin build`
+# output is reusable here (see docker_bench.sh).
+RUN mkdir -p /wheels
+
+ENTRYPOINT ["/bin/sh", "-lc"]
+CMD ["python /opt/bench/run_competitor.py --help"]

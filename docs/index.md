@@ -2,6 +2,8 @@
 
 BenoStreamDB is a high-performance, indexed streaming lakehouse built in Rust. It combines authoritative open table storage (Apache Iceberg V2 & V3) with reconstructible persistent index overlays (Roaring Bitmaps, BM25 Okapi, and HNSW vector search) directly on object storage.
 
+> **⚠️ Security:** BenoStreamDB's network servers are **not hardened for untrusted networks** — no authentication, no authorization, no TLS. Run them on a **trusted internal network**, behind a gateway/reverse proxy that terminates TLS and enforces authentication. See [SECURITY.md](../SECURITY.md).
+
 ## Key Features
 
 *   **Streaming-First**: Designed for continuous ingestion with WAL durability modes and non-blocking background index construction.
@@ -9,7 +11,7 @@ BenoStreamDB is a high-performance, indexed streaming lakehouse built in Rust. I
 *   **Hot Row Cache**: In-memory decoded `RecordBatch` cache (`BLOCK_CACHE`) eliminating disk I/O on scattered kNN row lookups for sub-2ms query responses.
 *   **Dual REST Search API (`bsdb-search`)**: Drop-in OpenSearch / Elasticsearch 7.10 compatibility (port 9200) and Qdrant v1.x REST emulation (port 6333) from a single server. See the [Qdrant compatibility matrix](QDRANT_COMPATIBILITY.md).
 *   **Multi-Vector Search**: Concurrent retrieval across multiple vector columns with Reciprocal Rank Fusion (RRF) ranking.
-*   **Multi-Catalog & Governance**: Native support for Apache Polaris and Lakekeeper with OAuth2 client credentials, Project Nessie, AWS Glue, and Hive Metastore.
+*   **Multi-Catalog & Governance**: Native support for Apache Polaris and Lakekeeper with OAuth2 client credentials, Project Nessie, AWS Glue, Hive Metastore, Databricks Unity Catalog, and JDBC catalogs.
 *   **Zero-Copy Multiglot**: Core in Rust, with high-performance Python bindings, DataFusion vectorized SQL with pgvector operators, and connectors for Trino and Spark.
 
 ## Getting Started

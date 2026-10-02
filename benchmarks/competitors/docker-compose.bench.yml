@@ -1,0 +1,133 @@
+# Competitor + BenoStreamDB benchmark stack with a single, shared hardware
+# profile so every participant is measured under an identical envelope.
+#
+#   BENCH_CPUS=8 BENCH_MEM=16g \
+#     docker compose -f benchmarks/competitors/docker-compose.bench.yml up -d
+#
+#   # Run one competitor on the runner image (same envelope as the engines):
+#   ENGINE=pgvector DATASET=sift-128-euclidean LIMIT=20000 QUERIES=500 \
+#     docker compose -f benchmarks/competitors/docker-compose.bench.yml \
+#     --profile run run --rm bench
+#
+#   # Run BenoStreamDB through the same runner image (installs the abi3 wheel):
+#   ENGINE=benostreamdb DATASET=sift-128-euclidean LIMIT=20000 QUERIES=500 \
+#     docker compose -f benchmarks/competitors/docker-compose.bench.yml \
+#     --profile run run --rm bench
+#
+# The envelope (BENCH_CPUS / BENCH_MEM) is applied to BOTH the server engines
+# and the runner, so no participant gets more cores or RAM than another.
+# docker_bench.sh drives the full matrix.
+
+x-envelope: &envelope
+  deploy:
+    resources:
+      limits:
+        cpus: "${BENCH_CPUS:-8}"
+        memory: "${BENCH_MEM:-16g}"
+      reservations:
+        cpus: "${BENCH_CPUS:-8}"
+        memory: "${BENCH_MEM:-16g}"
+
+x-bench-env: &bench-env
+  BENCH_CPUS: "${BENCH_CPUS:-8}"
+  BENCH_MEM: "${BENCH_MEM:-16g}"
+  DATASET: "${DATASET:-sift-128-euclidean}"
+  LIMIT: "${LIMIT:-20000}"
+  QUERIES: "${QUERIES:-500}"
+  K: "${K:-10}"
+  M: "${M:-16}"
+  EF_CONSTRUCTION: "${EF_CONSTRUCTION:-200}"
+  EF_SEARCH: "${EF_SEARCH:-200}"
+  ENGINE: "${ENGINE:-faiss}"
+  DEVICE: "${DEVICE:-cpu}"
+  PGVECTOR_DSN: "postgresql://bench:bench@pgvector:5432/bench"
+  ES_URL: "http://opensearch:9200"
+  NEO4J_URI: "bolt://neo4j:7687"
+  NEO4J_USER: "neo4j"
+  NEO4J_PASSWORD: "benchpass"
+
+networks:
+  bench: {}
+
+services:
+  # --- Server engines (each limited by the shared envelope) ----------------- #
+  pgvector:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: bench
+      POSTGRES_PASSWORD: bench
+      POSTGRES_DB: bench
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bench -d bench"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    <<: *envelope
+
+  opensearch:
+    image: opensearchproject/opensearch:2.19.1
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: "Bench-passw0rd!"
+      OPENSEARCH_JAVA_OPTS: "-Xms4g -Xmx4g"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    <<: *envelope
+
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: "neo4j/benchpass"
+      NEO4J_PLUGINS: '["graph-data-science"]'
+      NEO4J_dbms_security_procedures_unrestricted: "gds.*"
+      NEO4J_dbms_security_procedures_allowlist: "gds.*"
+      NEO4J_server_memory_heap_max__size: "6G"
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    <<: *envelope
+
+  # --- Runner (competitors AND BenoStreamDB) under the SAME envelope -------- #
+  bench:
+    build:
+      context: ../..
+      dockerfile: benchmarks/competitors/Dockerfile.bench
+    image: bsdb-bench-runner:latest
+    profiles: ["run"]
+    networks: [bench]
+    environment: *bench-env
+    volumes:
+      - ./results:/results
+      - ./data:/opt/bench/data
+      - ../../dist:/wheels:ro
+    command: >
+      sh -lc '
+        if [ "$$ENGINE" = "benostreamdb" ]; then
+          pip install /wheels/*.whl && \
+          python /opt/bench/ann_benchmarks.py
+            --dataset "$$DATASET" --limit "$$LIMIT" --queries "$$QUERIES"
+            --k "$$K" --m "$$M" --ef-construction "$$EF_CONSTRUCTION"
+            --ef-search "$$EF_SEARCH" --cores "$$BENCH_CPUS"
+            --out "/results/benostreamdb_$${DATASET}_$${DEVICE}.json";
+        else
+          python /opt/bench/run_competitor.py
+            --engine "$$ENGINE" --dataset "$$DATASET" --limit "$$LIMIT"
+            --queries "$$QUERIES" --k "$$K" --m "$$M"
+            --ef-construction "$$EF_CONSTRUCTION" --ef-search "$$EF_SEARCH"
+            --device "$$DEVICE"
+            --cores "$$BENCH_CPUS" --ram-gb "$${BENCH_RAM_GB:-16}"
+            --out "/results/$${ENGINE}_$${DATASET}_$${DEVICE}.json";
+        fi'
+    <<: *envelope

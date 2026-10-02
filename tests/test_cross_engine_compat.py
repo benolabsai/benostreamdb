@@ -15,6 +15,8 @@ import benostreamdb as bsdb
 import pandas as pd
 import pytest
 from pathlib import Path
+import importlib.util
+import shutil
 import subprocess
 import json
 
@@ -33,7 +35,7 @@ class TestSparkCompatibility:
         # Write test data with V2 features
         df = pd.DataFrame({
             "id": range(1000),
-            "timestamp": pd.date_range("2024-01-01", periods=1000, freq="1H"),
+            "timestamp": pd.date_range("2024-01-01", periods=1000, freq="1h"),
             "value": range(1000, 2000),
             "category": ["A", "B", "C"] * 333 + ["A"]
         })
@@ -44,6 +46,8 @@ class TestSparkCompatibility:
     
     def test_spark_read_basic(self):
         """Test Spark can read BenoStreamDB table"""
+        if shutil.which("spark-submit") is None or importlib.util.find_spec("pyspark") is None:
+            pytest.skip("pyspark/spark-submit not available")
         spark_script = f"""
         from pyspark.sql import SparkSession
         

@@ -13,8 +13,8 @@
 //! API served on top of the BenoStreamDB core engine.
 //!
 //! The server binds to `127.0.0.1:9200` by default (override with
-//! `BENOSEARCH_BIND` / `BENOSEARCH_PORT`) and stores index data under
-//! `BENOSEARCH_STORAGE_URI` (default `file://~/.benostreamdb/search`).
+//! `BSDB_SEARCH_BIND` / `BSDB_SEARCH_PORT`) and stores index data under
+//! `BSDB_SEARCH_STORAGE_URI` (default `file://~/.benostreamdb/search`).
 
 pub mod es_types;
 pub mod handlers;

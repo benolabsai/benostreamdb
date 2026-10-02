@@ -7,7 +7,7 @@
 //! locally so repeated searches do not re-fetch them. The cache is:
 //!
 //! - **LRU** — least-recently-used entries are evicted first.
-//! - **Size-capped** — bounded by `BENOSEARCH_INDEX_CACHE_GB` (default 1 GB).
+//! - **Size-capped** — bounded by `BSDB_SEARCH_INDEX_CACHE_GB` (default 1 GB).
 //! - **Versioned** — keyed by `(index, segment_id, column, file, manifest_version)`
 //!   so a new segment / refresh (which bumps the manifest version) invalidates
 //!   stale entries.
@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Instant;
 
-/// Default cache cap in GiB when `BENOSEARCH_INDEX_CACHE_GB` is unset.
+/// Default cache cap in GiB when `BSDB_SEARCH_INDEX_CACHE_GB` is unset.
 const DEFAULT_CACHE_GB: u64 = 1;
 
 /// Identifies a single cached index file.
@@ -128,9 +128,9 @@ impl IndexFileCache {
         }
     }
 
-    /// Create a cache sized from `BENOSEARCH_INDEX_CACHE_GB` (default 2 GiB).
+    /// Create a cache sized from `BSDB_SEARCH_INDEX_CACHE_GB` (default 2 GiB).
     pub fn from_env() -> Self {
-        let gb = std::env::var("BENOSEARCH_INDEX_CACHE_GB")
+        let gb = std::env::var("BSDB_SEARCH_INDEX_CACHE_GB")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_CACHE_GB);
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn from_env_uses_default_when_unset() {
         // Remove the var so the default (1 GiB) applies.
-        std::env::remove_var("BENOSEARCH_INDEX_CACHE_GB");
+        std::env::remove_var("BSDB_SEARCH_INDEX_CACHE_GB");
         let cache = IndexFileCache::from_env();
         assert_eq!(cache.max_size(), 1024 * 1024 * 1024);
     }

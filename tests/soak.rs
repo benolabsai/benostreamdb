@@ -57,6 +57,34 @@ fn batch(start: i64) -> RecordBatch {
     .expect("record batch")
 }
 
+/// Resident set size in bytes (Linux `/proc/self/status` `VmRSS`).
+///
+/// Returns `None` on platforms without `/proc` (the soak then skips the memory
+/// assertion rather than failing spuriously).
+fn rss_bytes() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+/// The soak's RSS ceiling in bytes (`BSDB_SOAK_RSS_CEILING_GB`, default 8 GiB).
+///
+/// The soak must degrade gracefully (throttle/trim) rather than grow until the
+/// OS OOM-kills it — this is the memory half of the "no process death" bar.
+fn rss_ceiling_bytes() -> u64 {
+    std::env::var("BSDB_SOAK_RSS_CEILING_GB")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|gb| *gb > 0.0)
+        .map(|gb| (gb * 1024.0 * 1024.0 * 1024.0) as u64)
+        .unwrap_or(8 * 1024 * 1024 * 1024)
+}
+
 #[tokio::test]
 #[ignore = "soak test; run with `-- --ignored` and BSDB_SOAK_SECONDS"]
 async fn mixed_workload_soak() {
@@ -71,6 +99,8 @@ async fn mixed_workload_soak() {
 
     let deadline = Instant::now() + Duration::from_secs(secs);
     let mut writes: usize = 0;
+    let ceiling = rss_ceiling_bytes();
+    let mut peak_rss: u64 = 0;
 
     while Instant::now() < deadline {
         table
@@ -89,6 +119,26 @@ async fn mixed_workload_soak() {
                 "read returned no rows mid-soak"
             );
         }
+
+        // Bound the working set: trim the oldest rows so a long soak does not
+        // grow without limit (and OOM). The churn is what matters, not growth.
+        if writes.is_multiple_of(20) {
+            let cutoff = (writes as i64 - 10) * ROWS as i64;
+            let _ = table.delete_async(&format!("id < {cutoff}")).await;
+            table.commit_async().await.expect("commit after trim");
+        }
+
+        // Memory half of the "no process death" bar: the soak must stay under
+        // the ceiling rather than grow until the OS OOM-kills it.
+        if let Some(rss) = rss_bytes() {
+            peak_rss = peak_rss.max(rss);
+            assert!(
+                rss <= ceiling,
+                "RSS {} MiB exceeded the {} MiB ceiling at write {writes}",
+                rss / (1024 * 1024),
+                ceiling / (1024 * 1024)
+            );
+        }
     }
 
     table.commit_async().await.expect("final commit");
@@ -99,7 +149,14 @@ async fn mixed_workload_soak() {
         .read_async(None, None, None)
         .await
         .expect("final read");
-    assert!(batches.iter().map(|b| b.num_rows()).sum::<usize>() >= ROWS);
+    let final_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert!(final_rows >= ROWS);
+
+    // Publishable summary (parsed by scripts/pre_release_soak.sh and CI).
+    eprintln!(
+        "[soak-stats] test=mixed_workload_soak writes={writes} duration_s={secs} rows={final_rows} peak_rss_mb={}",
+        peak_rss / (1024 * 1024)
+    );
 }
 
 /// Total rows currently visible.
@@ -150,6 +207,8 @@ async fn maintenance_churn_soak() {
 
     let deadline = Instant::now() + Duration::from_secs(secs);
     let mut round: i64 = 1;
+    let ceiling = rss_ceiling_bytes();
+    let mut peak_rss: u64 = 0;
 
     while Instant::now() < deadline {
         let start = round * ROWS as i64;
@@ -218,12 +277,44 @@ async fn maintenance_churn_soak() {
             visible_rows(&table).await >= 1,
             "table lost all rows after round {round}"
         );
+
+        // Bound the working set: remove this round's inserts so a long soak
+        // stays memory-bounded. The churn (insert/delete/compact/vacuum) is
+        // what matters, not unbounded growth.
+        let _ = table
+            .delete_async(&format!("id >= {} AND id < {}", start, start + ROWS as i64))
+            .await;
+        let _ = table
+            .delete_async(&format!(
+                "id >= {} AND id < {}",
+                start + 10_000_000,
+                start + 10_000_000 + ROWS as i64
+            ))
+            .await;
+        let _ = table.commit_async().await;
+
+        // Memory half of the "no process death" bar.
+        if let Some(rss) = rss_bytes() {
+            peak_rss = peak_rss.max(rss);
+            assert!(
+                rss <= ceiling,
+                "RSS {} MiB exceeded the {} MiB ceiling at round {round}",
+                rss / (1024 * 1024),
+                ceiling / (1024 * 1024)
+            );
+        }
+
         round += 1;
     }
 
     assert!(round > 1, "maintenance soak performed no rounds");
-    assert!(
-        visible_rows(&table).await >= 1,
-        "table empty after the maintenance soak"
+    let final_rows = visible_rows(&table).await;
+    assert!(final_rows >= 1, "table empty after the maintenance soak");
+
+    // Publishable summary (parsed by scripts/pre_release_soak.sh and CI).
+    eprintln!(
+        "[soak-stats] test=maintenance_churn_soak rounds={} duration_s={secs} rows={final_rows} peak_rss_mb={}",
+        round - 1,
+        peak_rss / (1024 * 1024)
     );
 }

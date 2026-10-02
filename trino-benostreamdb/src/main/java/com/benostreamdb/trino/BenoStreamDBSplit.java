@@ -7,19 +7,23 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Collections;
 
+/**
+ * A single scan of a BenoStreamDB table.
+ *
+ * The split carries the table URI and the SQL query (with the pushed-down
+ * predicate) that the page source runs through the engine's session. The engine
+ * does the parallelism internally, so there is no file-range split fan-out.
+ */
 public class BenoStreamDBSplit implements ConnectorSplit {
-    private final String segmentId;
-    private final String path;
-    private final String rowSelection;
+    private final String tableUri;
+    private final String sql;
 
     @JsonCreator
     public BenoStreamDBSplit(
-        @JsonProperty("segmentId") String segmentId,
-        @JsonProperty("path") String path,
-        @JsonProperty("rowSelection") String rowSelection) {
-        this.segmentId = segmentId;
-        this.path = path;
-        this.rowSelection = rowSelection;
+        @JsonProperty("tableUri") String tableUri,
+        @JsonProperty("sql") String sql) {
+        this.tableUri = tableUri;
+        this.sql = sql;
     }
 
     @Override
@@ -36,13 +40,14 @@ public class BenoStreamDBSplit implements ConnectorSplit {
     public Object getInfo() {
         return this;
     }
-    
-    @JsonProperty
-    public String getSegmentId() { return segmentId; }
 
     @JsonProperty
-    public String getPath() { return path; }
+    public String getTableUri() {
+        return tableUri;
+    }
 
     @JsonProperty
-    public String getRowSelection() { return rowSelection; }
+    public String getSql() {
+        return sql;
+    }
 }

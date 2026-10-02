@@ -1,6 +1,6 @@
 [package]
 name = "benostreamdb"
-version = "0.12.0"
+version.workspace = true
 edition = "2021"
 license = "MIT AND Apache-2.0"
 authors = ["Richard Albright and BenoStreamDB Contributors"]
@@ -38,6 +38,13 @@ members = [
     "server/flight_sql",
     "contrib/benostreamdb-search",
 ]
+
+# Single source of truth for the version of the core engine and the connectors
+# that ship with it (Flight SQL, search gateway). `benostream-gpu-ann` is an
+# independent crate and keeps its own version. The release workflow bumps this
+# one line from the git tag; Maven and dbt derive from it.
+[workspace.package]
+version = "0.12.0"
 
 
 

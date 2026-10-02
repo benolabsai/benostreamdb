@@ -31,10 +31,10 @@ In addition to catalog-level atomicity, BenoStreamDB includes a built-in cloud-a
 
 ## Write-Ahead Log (WAL) Durability Modes
 
-BenoStreamDB provides configurable durability policies for streaming writes (`BENOSTREAM_WAL_DURABILITY`):
+BenoStreamDB provides configurable durability policies for streaming writes (`BSDB_WAL_DURABILITY`):
 - **`always`**: Strict fsync on every append before acknowledging write.
 - **`adaptive` (Default)**: Dynamically batches flushes based on incoming request velocity, maintaining sub-millisecond write latency while preserving crash recovery guarantees.
-- **`periodic`**: Asynchronously flushes WAL buffers on a timer (configured via `BENOSEARCH_AUTO_REFRESH_SECS`).
+- **`periodic`**: Asynchronously flushes WAL buffers on a timer (configured via `BSDB_SEARCH_AUTO_REFRESH_SECS`).
 
 ## Read Isolation
 
@@ -44,12 +44,12 @@ Readers in BenoStreamDB always see a **consistent snapshot** of the table. Once 
 
 BenoStreamDB decouples I/O stream concurrency from CPU compute parallelism:
 
-1. **I/O Pipeline (`BENOSTREAM_MAX_CONCURRENCY`)**: Tokio asynchronously pulls up to $N$ Parquet segments concurrently via non-blocking streams (`buffer_unordered`). Non-blocking tasks spend the majority of their time awaiting network packets or NVMe block reads without consuming CPU cores.
+1. **I/O Pipeline (`BSDB_MAX_CONCURRENCY`)**: Tokio asynchronously pulls up to $N$ Parquet segments concurrently via non-blocking streams (`buffer_unordered`). Non-blocking tasks spend the majority of their time awaiting network packets or NVMe block reads without consuming CPU cores.
 2. **Compute Pipeline (`RAYON_NUM_THREADS`)**: As segment buffers arrive in memory, Rayon parallelizes CPU-intensive SIMD distance metrics, HNSW graph deserialization, and scalar filters across dedicated OS worker threads.
 
 ### Sizing & Tuning Matrix
 
-| Deployment Profile | Machine Specs | `RAYON_NUM_THREADS` (Compute) | `BENOSTREAM_MAX_CONCURRENCY` (I/O) | Focus |
+| Deployment Profile | Machine Specs | `RAYON_NUM_THREADS` (Compute) | `BSDB_MAX_CONCURRENCY` (I/O) | Focus |
 |:---|:---|:---|:---|:---|
 | **Benchmark / Container** | 4 Cores, 4 GB RAM | `2` – `4` | `4` – `8` | Low memory footprint, zero cache thrashing. |
 | **Production Server** | 16 Cores, 32 GB RAM | `8` – `14` | `16` – `32` | High-throughput mixed analytics and hybrid search. |

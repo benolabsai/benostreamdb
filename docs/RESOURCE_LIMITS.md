@@ -28,7 +28,7 @@ flowchart TD
     G -- "yes" --> PARK["writer parks<br/>tokio::Notify + 250 ms poll"]
     PARK -. "memory_reclaimed" .-> G
 
-    BUF -- "flush<br/>(BENOSTREAM_CACHE_GB, default 1 GB)" --> SEG["segment write<br/>data parquet + stats"]
+    BUF -- "flush<br/>(BSDB_CACHE_GB, default 1 GB)" --> SEG["segment write<br/>data parquet + stats"]
     SEG -- "spawn one build per segment" --> GATE["index-build gate<br/>clamp(M / 8 GiB, 1, nproc)<br/>(BSDB_INDEX_BUILD_CONCURRENCY)"]
     GATE -- "permit (bounded concurrency)" --> BUILD["build HNSW / TQ4·TQ8 / BM25 / CSR"]
     BUILD -- "release permit" --> NOTIFY["notify(memory_reclaimed)"]
@@ -153,6 +153,18 @@ runtime's worker count:
 | Native bulk ingest | `IngestOptions::parallelism` (default 4) |
 | Vector aggregation / GPU dispatches | one block per row, fixed block size (no unbounded grid) |
 
+## Index, manifest & maintenance tuning
+
+| Knob | Default | Effect |
+| --- | --- | --- |
+| `BSDB_HNSW_M` | `16` | HNSW per-node neighbour count (`M`) for index builds. |
+| `BSDB_HNSW_EF_CONSTRUCTION` | engine default | HNSW build beam width (`ef_construction`). |
+| `BSDB_HNSW_N_LISTS` | size-derived | IVF list count for HNSW-IVF builds (more lists = smaller, faster-to-build buckets). |
+| `BSDB_DRIFT_MEMORY_MB` | derived memory budget | Memory budget for drift search (`graph_view`). |
+| `BSDB_MANIFEST_MAX_FILES_BEFORE_CONSOLIDATION` | `32` | Append-only manifest files accumulated before a full-rewrite consolidation. Bounds read cost while amortizing small appends. |
+| `BSDB_VACUUM_MIN_FILE_AGE_SECS` | `60` | Grace period before vacuum may delete an unreferenced file; closes the GC-vs-writer race. `0` disables the grace period. |
+| `BSDB_NVRTC_PATH` | auto-discovered | Explicit path (file or directory) to the CUDA NVRTC library for GPU index builds. |
+
 ## Containers
 
 The engine reads the container's cgroup limit directly, so no configuration is
@@ -165,7 +177,7 @@ in the service's `environment:` block.
 ## Validation
 
 Memory and disk behaviour under saturation is asserted by
-[`tests/stress/`](tests/stress/README.md) — a low ingest high-water mark must
+[`tests/stress/`](../tests/stress/README.md) — a low ingest high-water mark must
 pause and resume rather than OOM, and many commit cycles must stay durable. The
 long-running variants run on push via
-[`.github/workflows/soak.yml`](.github/workflows/soak.yml).
+[`.github/workflows/soak.yml`](../.github/workflows/soak.yml).

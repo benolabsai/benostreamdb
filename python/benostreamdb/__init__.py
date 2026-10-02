@@ -16,6 +16,47 @@ def _has_torch():
     except ImportError:
         return False
 
+
+# Cache of loader-safe GPU probes, keyed by backend name.
+_BACKEND_PROBE_CACHE: Dict[str, bool] = {}
+
+
+def _probe_backend_subprocess(backend: str) -> bool:
+    """Probe a GPU backend in a throwaway subprocess.
+
+    A broken or version-conflicting CUDA/nvrtc library can crash the *dynamic
+    linker* (SIGSEGV in ``_dl_init`` / ``_dl_runtime_resolve``), which no
+    in-process ``try``/``except`` can catch. Running the probe in a child means
+    such a crash is observed as a non-zero exit instead of killing the caller,
+    so we can fall back to CPU safely.
+
+    The child sets ``BSDB_SKIP_GPU_PROBE=1`` so it does not recurse.
+    """
+    if os.environ.get("BSDB_SKIP_GPU_PROBE") == "1":
+        return True  # already inside a probe child: let it try for real
+    if backend in _BACKEND_PROBE_CACHE:
+        return _BACKEND_PROBE_CACHE[backend]
+
+    import subprocess
+    import sys
+
+    code = f"import benostreamdb as b; b.Device({backend!r})"
+    ok = False
+    try:
+        rc = subprocess.run(
+            [sys.executable, "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=dict(os.environ, BSDB_SKIP_GPU_PROBE="1"),
+            timeout=180,
+        )
+        ok = rc.returncode == 0
+    except Exception:
+        ok = False
+    _BACKEND_PROBE_CACHE[backend] = ok
+    return ok
+
+
 class Device:
     """
     BenoStreamDB Compute Device (CPU, CUDA, MPS, ROCm, Intel).
@@ -23,6 +64,20 @@ class Device:
     """
     def __new__(cls, device: str = "cpu", index: Optional[int] = None):
         device = device.lower()
+
+        # 0. Loader-safe GPU guard: a broken/conflicting CUDA/nvrtc library can
+        #    crash the dynamic linker, which is uncatchable in-process. Probe in
+        #    a throwaway subprocess and fall back to CPU if the probe dies.
+        base = device.split(":", 1)[0]
+        if base in ("cuda", "rocm", "mps", "intel", "xpu"):
+            probe = "intel" if base == "xpu" else base
+            if not _probe_backend_subprocess(probe):
+                logger.warning(
+                    "GPU backend %r failed its loader-safe probe; falling back to CPU",
+                    device,
+                )
+                return _Device("cpu")
+
         # 1. Handle Torch-style alignment
         if device.startswith("cuda"):
             # If Torch is present and on AMD, or if native probing finds only ROCm
@@ -787,7 +842,7 @@ class Table:
             source_col, target_col = self.edge_endpoints() if self.is_edge_table() else ("source", "target")
             seed_sql = "make_array(" + ", ".join(f"arrow_cast({s}, 'UInt64')" for s in seeds) + ")" if seeds else "make_array()"
             where_clause = " AND ".join(predicates)
-            query = f"SELECT unnest(subgraph(arrow_cast({source_col}, 'UInt64'), arrow_cast({target_col}, 'UInt64'), {seed_sql}, arrow_cast({hops}, 'UInt32'), {str(directed).lower()})) FROM t WHERE {where_clause}"
+            query = f"SELECT unnest(graph_subgraph(arrow_cast({source_col}, 'UInt64'), arrow_cast({target_col}, 'UInt64'), {seed_sql}, arrow_cast({hops}, 'UInt32'), {str(directed).lower()})) FROM t WHERE {where_clause}"
             return self.execute_sql(query)
         return self._inner.subgraph(seeds, hops, directed, None, max_degree, max_nodes)
 
@@ -839,7 +894,7 @@ class Table:
     def communities(
         self,
         resolution: float = 1.0,
-        algorithm: str = "louvain",
+        algorithm: str = "leiden",
         graph_column: Optional[str] = None,
     ) -> Any:
         """
@@ -847,7 +902,7 @@ class Table:
 
         Args:
             resolution: Modularity resolution parameter.
-            algorithm: 'louvain' (default) or 'leiden'. Leiden guarantees
+            algorithm: 'leiden' (default) or 'louvain'. Leiden guarantees
                 connected communities; Louvain is faster.
             graph_column: Optional CSR graph column. When given — or when the
                 table already has a graph index on `source` — community
@@ -877,7 +932,7 @@ class Table:
         self,
         previous: Optional[Any] = None,
         resolution: float = 1.0,
-        algorithm: str = "louvain",
+        algorithm: str = "leiden",
         graph_column: Optional[str] = None,
     ) -> Any:
         """
@@ -889,7 +944,7 @@ class Table:
                 not change keep their IDs. When None, a full computation assigns
                 IDs 0..n-1.
             resolution: Modularity resolution parameter.
-            algorithm: 'louvain' (default) or 'leiden'.
+            algorithm: 'leiden' (default) or 'louvain'.
             graph_column: Optional CSR graph column (defaults to 'source' when a
                 graph index exists).
 
@@ -1117,13 +1172,29 @@ class Table:
         hops: int = 1,
         n_depth: int = 1,
         k_followups: int = 2,
+        mode: str = "auto",
     ) -> Dict[str, Any]:
         """
-        Execute native in-memory regional DRIFT search around query `seeds` over this edge table.
-        Avoids all temporary table creation and disk I/O.
+        **Experimental.** Execute regional DRIFT search around query `seeds` over
+        this edge table.
+
+        Regional DRIFT is a BenoStreamDB-specific variant. The standard GraphRAG
+        DRIFT search is *global* — see :meth:`drift_search` and
+        :meth:`graph_rag_search` with ``mode="global"``. This regional form
+        restricts the traversal to the ``hops``-neighborhood of ``seeds`` and is
+        kept for experimentation; prefer the global search for production use.
+
+        `mode` selects the graph backend:
+          - ``"auto"`` (default): in-memory when the regional subgraph fits the
+            DRIFT memory budget (``BSDB_DRIFT_MEMORY_MB``, else the derived
+            budget), else out-of-core.
+          - ``"in_memory"``: materialize the regional subgraph (fastest per hop).
+          - ``"out_of_core"``: walk the mmap CSR directly (no materialization).
+          - ``"cached"``: CSR backing with a bounded in-memory neighbor cache.
         """
         return self._inner.core_regional_drift(
-            str(query), [int(s) for s in seeds], int(top_k), int(hops), int(n_depth), int(k_followups)
+            str(query), [int(s) for s in seeds], int(top_k), int(hops), int(n_depth),
+            int(k_followups), str(mode),
         )
 
     def find_entities(
@@ -1632,11 +1703,12 @@ class Table:
         time_end: Optional[str] = None,
         max_degree: Optional[int] = None,
         traversal_max_nodes: Optional[int] = None,
-        community_algorithm: str = "louvain",
+        community_algorithm: str = "leiden",
         llm_router: Optional[Any] = None,
         relevance_threshold: float = 0.0,
         rerank_vector: bool = False,
         rerank_k: Optional[int] = None,
+        embed: Optional[Any] = None,
     ) -> 'GraphRagResult':
         """
         Execute end-to-end Graph RAG search combining vector retrieval and topological graph reasoning.
@@ -1682,7 +1754,7 @@ class Table:
                 regardless of graph density. Distinct from `max_nodes`, which caps
                 the number of enriched nodes returned. Ignored by the SQL fallback.
             community_algorithm: Community detection algorithm for global mode:
-                'louvain' (default) or 'leiden' (connected communities).
+                'leiden' (default) or 'louvain' (connected communities).
             llm_router: Optional callable `llm_router(query, community_summary) -> float`
                 used in global mode to rate each community's relevance before
                 descending. Communities scoring below `relevance_threshold` are
@@ -1690,6 +1762,14 @@ class Table:
                 existing `seed_overlap`/`member_count` heuristic is used.
             relevance_threshold: Minimum router score for a community to be kept
                 (default 0.0). Only used when `llm_router` is provided.
+            embed: Optional callable `embed(texts: List[str]) -> List[List[float]]`
+                used in global mode to embed the query for vector search over the
+                community report embeddings. When the community table has an
+                `embedding` column and either `query` is already a vector or
+                `embed` is provided, communities are selected by vector similarity
+                and the hierarchy is descended recursively (Neo4j-style). When
+                None, the `llm_router`/`seed_overlap`/`member_count` heuristic is
+                used.
             
         Returns:
             GraphRagResult object with `.nodes`, `.edges`, `.seeds`, and `.format_context()` for prompt injection.
@@ -2019,31 +2099,87 @@ class Table:
                     })
                 comm_df = pd.DataFrame(comm_records)
 
-            if not comm_df.empty:
-                if llm_router is not None:
-                    # Dynamic community selection: rate each branch with a cheap
-                    # model and prune irrelevant subtrees before descending.
-                    if not callable(llm_router):
-                        raise TypeError(
-                            "llm_router must be a callable (query, community_summary) -> float"
+            # --- Neo4j-style community selection ---
+            # 1. Vector search over the community report embeddings to pick the
+            #    most relevant communities (O(log C) with the HNSW index) rather
+            #    than rating every community.
+            selected_comm_ids = None
+            if (
+                community_table is not None
+                and not comm_df.empty
+                and "embedding" in comm_df.columns
+            ):
+                qvec = None
+                if isinstance(query, list):
+                    qvec = query
+                elif embed is not None and callable(embed):
+                    try:
+                        qvec = list(embed([query]))[0]
+                    except Exception:
+                        qvec = None
+                if qvec is not None:
+                    try:
+                        hits = community_table.vector_search(
+                            "embedding", [float(x) for x in qvec], k=top_k
                         )
-                    scores = []
-                    for _, row in comm_df.iterrows():
-                        summary = str(row.get("summary", row.get("title", "")))
-                        try:
-                            scores.append(float(llm_router(query, summary)))
-                        except Exception:
-                            scores.append(0.0)
-                    comm_df = comm_df.copy()
-                    comm_df["relevance"] = scores
-                    comm_df = comm_df[comm_df["relevance"] >= relevance_threshold]
-                    comm_df = comm_df.sort_values(by="relevance", ascending=False)
-                elif "seed_overlap" in comm_df.columns and comm_df["seed_overlap"].sum() > 0:
-                    comm_df = comm_df.sort_values(by=["seed_overlap", "member_count"], ascending=[False, False])
-                else:
-                    comm_df = comm_df.sort_values(by="member_count", ascending=False)
+                        hits_df = hits if isinstance(hits, pd.DataFrame) else (
+                            hits.to_pandas() if hasattr(hits, "to_pandas") else pd.DataFrame(hits)
+                        )
+                        if "community_id" in hits_df.columns:
+                            selected_comm_ids = [int(x) for x in hits_df["community_id"].tolist()]
+                    except Exception:
+                        selected_comm_ids = None
 
-            top_comm_df = comm_df.head(top_k)
+            if selected_comm_ids:
+                # 2. Recursive descent through the community hierarchy: expand
+                #    each selected community to its children until the leaves,
+                #    then retrieve the leaf communities' members.
+                children: Dict[int, List[int]] = {}
+                for _, row in comm_df.iterrows():
+                    pid = int(row.get("parent_community_id", 0) or 0)
+                    children.setdefault(pid, []).append(int(row["community_id"]))
+                leaf_ids: List[int] = []
+                seen: set = set()
+                stack = list(selected_comm_ids)
+                while stack:
+                    cid = stack.pop()
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    kids = children.get(cid, [])
+                    if kids:
+                        stack.extend(kids)
+                    else:
+                        leaf_ids.append(cid)
+                keep = leaf_ids or selected_comm_ids
+                top_comm_df = comm_df[comm_df["community_id"].isin(keep)].copy()
+            else:
+                # Heuristic fallback: rank by llm_router / seed_overlap / member_count.
+                if not comm_df.empty:
+                    if llm_router is not None:
+                        # Dynamic community selection: rate each branch with a cheap
+                        # model and prune irrelevant subtrees before descending.
+                        if not callable(llm_router):
+                            raise TypeError(
+                                "llm_router must be a callable (query, community_summary) -> float"
+                            )
+                        scores = []
+                        for _, row in comm_df.iterrows():
+                            summary = str(row.get("summary", row.get("title", "")))
+                            try:
+                                scores.append(float(llm_router(query, summary)))
+                            except Exception:
+                                scores.append(0.0)
+                        comm_df = comm_df.copy()
+                        comm_df["relevance"] = scores
+                        comm_df = comm_df[comm_df["relevance"] >= relevance_threshold]
+                        comm_df = comm_df.sort_values(by="relevance", ascending=False)
+                    elif "seed_overlap" in comm_df.columns and comm_df["seed_overlap"].sum() > 0:
+                        comm_df = comm_df.sort_values(by=["seed_overlap", "member_count"], ascending=[False, False])
+                    else:
+                        comm_df = comm_df.sort_values(by="member_count", ascending=False)
+
+                top_comm_df = comm_df.head(top_k)
             top_comm_ids = top_comm_df["community_id"].tolist() if not top_comm_df.empty else []
 
             selected_nodes = []
@@ -2100,7 +2236,7 @@ class Table:
         hierarchical: bool = False,
         top_entities_per_comm: int = 5,
         device: Optional[Any] = None,
-        algorithm: str = "louvain",
+        algorithm: str = "leiden",
         llm: Optional[Any] = None,
         embed: Optional[Any] = None,
         report_column: str = "report",
@@ -2122,7 +2258,7 @@ class Table:
             hierarchical: Whether to build a multi-level hierarchical community tree.
             top_entities_per_comm: Number of top central entities to feature per community.
             device: Optional compute device.
-            algorithm: Community detection algorithm: 'louvain' (default) or 'leiden'.
+            algorithm: Community detection algorithm: 'leiden' (default) or 'louvain'.
             llm: Optional callable `llm(prompt: str) -> str` that generates a
                 model-authored report per community (Microsoft GraphRAG parity).
                 The report is stored in `report_column`.
@@ -2502,10 +2638,13 @@ class Table:
         top_k: int = 5,
         hops: int = 2,
         confidence_threshold: float = 0.0,
+        mode: str = "auto",
+        graph_column: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Execute a DRIFT (Dynamic Reasoning and Inference with Flexible Traversal) search.
-        
+        Execute a global DRIFT (Dynamic Reasoning and Inference with Flexible
+        Traversal) search over the whole graph.
+
         Args:
             query: The initial query string.
             community_table: A Table containing community summaries (e.g. from summarize_communities).
@@ -2515,7 +2654,14 @@ class Table:
             top_k: Number of top communities to select for the primer phase.
             hops: Max hops for multi-hop induced subgraph extraction.
             confidence_threshold: Minimum confidence score to continue exploring a follow-up.
-            
+            mode: Graph backend for the traversal:
+                - ``"auto"`` (default): out-of-core (mmap CSR) when the edge table
+                  has a graph index, else in-memory.
+                - ``"in_memory"``: build the full adjacency in RAM from the edge rows.
+                - ``"out_of_core"``: walk the mmap CSR directly (no materialization).
+            graph_column: Explicit CSR graph column. Overrides the auto-detected
+                ``"source"`` when ``mode`` is ``"auto"``/``"out_of_core"``.
+
         Returns:
             Dictionary containing 'all_discovered_nodes' and 'actions'.
         """
@@ -2548,11 +2694,30 @@ class Table:
                     
         if follow_up_llm is not None and not callable(follow_up_llm):
             raise TypeError("follow_up_llm must be a callable that takes kwargs: (query, phase, top_communities|discovered_nodes, round_num)")
-            
+
+        # Resolve the graph backend: out-of-core (mmap CSR) when a graph index
+        # exists, else in-memory. `mode` forces one or the other.
+        resolved_col = graph_column
+        if mode == "in_memory":
+            resolved_col = None
+        elif mode in ("out_of_core", "auto"):
+            if resolved_col is None and self.has_graph_index("source"):
+                resolved_col = "source"
+            if mode == "out_of_core" and resolved_col is None:
+                raise ValueError(
+                    "mode='out_of_core' requires a graph index on 'source' "
+                    "(or an explicit graph_column)"
+                )
+        else:
+            raise ValueError(
+                f"Unknown mode '{mode}'. Supported: 'auto', 'in_memory', 'out_of_core'."
+            )
+
         return self._inner.drift_search(
             query,
             community_map,
             top_communities,
+            graph_column=resolved_col,
             follow_up_fn=follow_up_llm,
             n_depth=n_depth,
             k_followups=k_followups,
@@ -3570,7 +3735,7 @@ class Table:
         "in-memory posting list" residency, but on demand and bounded.
 
         Indexes are warmed into RAM until ``max_memory_bytes`` is exhausted;
-        the remainder spills into the mmap disk cache (``BENOSTREAM_DISK_CACHE_DIR``)
+        the remainder spills into the mmap disk cache (``BSDB_DISK_CACHE_DIR``)
         for out-of-core serving when ``spill_to_disk`` is true. The bounded
         caches evict by LRU/TinyLFU + TTI, so overflow evicts the
         least-recently-used entries.

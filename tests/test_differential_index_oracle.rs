@@ -288,3 +288,77 @@ async fn differential_ann_ivf_recall() -> anyhow::Result<()> {
     )
     .await
 }
+
+// ── Bloom / composite / predicate coverage ──────────────────────────────────
+
+/// A bloom index must not change the answer for an exact filter.
+#[tokio::test]
+async fn differential_bloom_index_matches_full_scan() -> anyhow::Result<()> {
+    assert_scalar_matches_full_scan(Some(IndexAlgorithm::Bloom { fpr: 0.01 }), "bloom").await
+}
+
+/// A composite bitmap index must equal the full-scan result for a multi-column
+/// predicate.
+#[tokio::test]
+async fn differential_composite_bitmap_matches_full_scan() -> anyhow::Result<()> {
+    let d1 = tempdir()?;
+    let d2 = tempdir()?;
+    let plain = build_scalar_table(format!("file://{}", d1.path().to_str().unwrap()), None).await?;
+    let indexed = {
+        let table = Table::new_async(format!("file://{}", d2.path().to_str().unwrap())).await?;
+        table.set_autocommit(false);
+        table
+            .add_index(
+                "category".to_string(),
+                IndexAlgorithm::CompositeBitmap {
+                    columns: vec!["id".to_string(), "category".to_string()],
+                },
+            )
+            .await?;
+        table.write_async(vec![scalar_batch(64)?]).await?;
+        table.commit_async().await?;
+        table.wait_for_background_tasks_async().await?;
+        table
+    };
+
+    for filter in [
+        "id >= 30 AND category = 'cat_1'",
+        "id < 20 AND category = 'cat_3'",
+    ] {
+        let a = ids_of(&plain.filter(filter).to_batches().await?);
+        let b = ids_of(&indexed.filter(filter).to_batches().await?);
+        assert_eq!(
+            a, b,
+            "composite bitmap: indexed result diverged from full scan for `{filter}`"
+        );
+    }
+    Ok(())
+}
+
+/// Range and IN predicates must match the full scan for a bitmap index.
+#[tokio::test]
+async fn differential_bitmap_range_and_in_match_full_scan() -> anyhow::Result<()> {
+    let d1 = tempdir()?;
+    let d2 = tempdir()?;
+    let plain = build_scalar_table(format!("file://{}", d1.path().to_str().unwrap()), None).await?;
+    let indexed = build_scalar_table(
+        format!("file://{}", d2.path().to_str().unwrap()),
+        Some(IndexAlgorithm::Bitmap),
+    )
+    .await?;
+
+    for filter in [
+        "id >= 10 AND id < 25",
+        "category IN ('cat_0', 'cat_2')",
+        "id = 7 OR id = 42",
+    ] {
+        let a = ids_of(&plain.filter(filter).to_batches().await?);
+        let b = ids_of(&indexed.filter(filter).to_batches().await?);
+        assert_eq!(
+            a, b,
+            "bitmap: indexed result diverged from full scan for `{filter}`"
+        );
+        assert!(!a.is_empty(), "bitmap: filter `{filter}` returned no rows");
+    }
+    Ok(())
+}

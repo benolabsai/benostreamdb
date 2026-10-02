@@ -92,7 +92,7 @@ to SQL and executed with DataFusion. Aggregations run over the top-level
 | `query_string`, `simple_query_string` | Lucene AST parser supporting boolean operators (`AND`, `OR`, `NOT`, `&&`, `\|\|`, `!`), field qualifiers (`field:val`), phrases, ranges (`[A TO B]`), wildcards (`*`), and grouping `()`. |
 | `fuzzy` | Levenshtein edit-distance matching with `fuzziness` (`AUTO` or integer distance) and `prefix_length` pruning. |
 | `knn` | HNSW vector search. `k`, `num_candidates` (→ `ef_search`), `filter`. |
-| `hybrid` (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `BENOSEARCH_RRF_K`. |
+| `hybrid` (`match` + `knn`) | Fused with Reciprocal Rank Fusion (RRF). `rrf_k` overridable per-request or via `BSDB_SEARCH_RRF_K`. |
 | `match_all` | Returns all docs (uniform score 1.0). |
 | `filter` / `bool` | `term`, `terms`, `range`, `exists`, `prefix`, `wildcard`, `regexp`, `ids`, `fuzzy`, `nested`, and `bool { must, filter, should, must_not }`. |
 | `sort`, `search_after` | Multi-field sorting (`asc`/`desc`), `_score`, `_id`, and cursor-based deep pagination (`search_after`). |

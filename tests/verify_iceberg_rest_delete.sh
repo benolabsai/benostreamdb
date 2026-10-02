@@ -22,7 +22,7 @@ ABS_GEN_URI="file://$GEN_DIR"
 
 # 3. Start Server
 echo "Starting Iceberg REST Server..."
-export BENOSTREAM_STORAGE_URI="file://$DATA_DIR"
+export BSDB_STORAGE_URI="file://$DATA_DIR"
 ./target/debug/iceberg_rest > /tmp/iceberg_rest_delete.log 2>&1 &
 SERVER_PID=$!
 
