@@ -20,6 +20,51 @@ static MEMORY_STORES: once_cell::sync::Lazy<
     parking_lot::Mutex<HashMap<String, Arc<dyn ObjectStore>>>,
 > = once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(HashMap::new()));
 
+/// Whether the SSRF guard is active. Off by default so local catalogs
+/// (`http://localhost:8181`) keep working; enable in production with
+/// `BSDB_SSRF_GUARD=1`.
+pub fn ssrf_guard_enabled() -> bool {
+    matches!(
+        std::env::var("BSDB_SSRF_GUARD").as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// Reject URIs whose host is a private, loopback, or link-local address.
+///
+/// Basic SSRF (Server-Side Request Forgery) guard applied at the trust
+/// boundary where user-supplied URIs enter the engine (`register_external`,
+/// catalog creation). DNS rebinding is not covered here.
+pub fn validate_external_uri(uri: &str) -> Result<()> {
+    let url = Url::parse(uri).context("Invalid URI")?;
+    let host = match url.host() {
+        Some(h) => h,
+        None => return Ok(()), // no host → nothing to check (e.g. `memory://`)
+    };
+    match host {
+        url::Host::Domain(d) => {
+            if d == "localhost" {
+                anyhow::bail!("SSRF guard: host 'localhost' is not allowed in external URIs");
+            }
+        }
+        url::Host::Ipv4(ip) => {
+            if ip.is_loopback() || ip.is_private() || ip.is_unspecified() || ip.is_link_local() {
+                anyhow::bail!(
+                    "SSRF guard: private/loopback/link-local IPv4 address {ip} is not allowed in external URIs"
+                );
+            }
+        }
+        url::Host::Ipv6(ip) => {
+            if ip.is_loopback() || ip.is_unspecified() {
+                anyhow::bail!(
+                    "SSRF guard: loopback/unspecified IPv6 address {ip} is not allowed in external URIs"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Factory to create an ObjectStore based on the URI scheme.
 ///
 /// Supported schemes:
@@ -29,6 +74,17 @@ static MEMORY_STORES: once_cell::sync::Lazy<
 /// - http:// or https:// -> HttpStore
 /// - file:// or /path/to/dir -> LocalFileSystem
 pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
+    // SSRF guard: reject non-file URIs that point at internal hosts.
+    // `memory://` and `file://` are always local; remote schemes must
+    // pass the address check below.
+    if ssrf_guard_enabled()
+        && uri.contains("://")
+        && !uri.starts_with("file://")
+        && !uri.starts_with("memory://")
+    {
+        validate_external_uri(uri)?;
+    }
+
     let output_store: Arc<dyn ObjectStore>;
 
     if uri.starts_with('/') || uri.starts_with("file://") || !uri.contains("://") {
@@ -122,6 +178,22 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn ssrf_guard_rejects_internal_hosts() {
+        // Loopback / private / link-local must be rejected.
+        assert!(validate_external_uri("http://localhost:8181").is_err());
+        assert!(validate_external_uri("http://127.0.0.1:9000").is_err());
+        assert!(validate_external_uri("http://10.0.0.5/").is_err());
+        assert!(validate_external_uri("http://192.168.1.1/").is_err());
+        assert!(validate_external_uri("http://172.16.0.1/").is_err());
+        assert!(validate_external_uri("http://169.254.169.254/").is_err());
+        assert!(validate_external_uri("http://[::1]:8080/").is_err());
+        // Public hosts and host-less schemes are allowed.
+        assert!(validate_external_uri("https://catalog.example.com").is_ok());
+        assert!(validate_external_uri("s3://my-bucket/prefix").is_ok());
+        assert!(validate_external_uri("memory://shared").is_ok());
+    }
 
     #[test]
     fn test_local_filesystem_absolute_path() -> Result<()> {

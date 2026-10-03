@@ -17,6 +17,16 @@ def _has_torch():
         return False
 
 
+def _escape_sql_string(s: str) -> str:
+    """Escape a string literal for safe embedding in a SQL query.
+
+    Doubles single-quote characters per the SQL standard so that
+    user-controlled values (relation names, time filter bounds, …)
+    cannot inject SQL when interpolated into a query string.
+    """
+    return s.replace("'", "''")
+
+
 # Cache of loader-safe GPU probes, keyed by backend name.
 _BACKEND_PROBE_CACHE: Dict[str, bool] = {}
 
@@ -828,15 +838,15 @@ class Table:
         if allowed_relations:
             rel_col = next((c for c in ["relation", "predicate", "type", "rel", "edge_type"] if c in self.columns), None)
             if rel_col:
-                rel_list = ", ".join(f"'{r}'" for r in allowed_relations)
+                rel_list = ", ".join(f"'{_escape_sql_string(r)}'" for r in allowed_relations)
                 predicates.append(f"{rel_col} IN ({rel_list})")
 
         # Temporal filtering
         if time_column and time_column in self.columns:
             if time_start:
-                predicates.append(f"{time_column} >= '{time_start}'")
+                predicates.append(f"{time_column} >= '{_escape_sql_string(time_start)}'")
             if time_end:
-                predicates.append(f"{time_column} <= '{time_end}'")
+                predicates.append(f"{time_column} <= '{_escape_sql_string(time_end)}'")
 
         if predicates:
             source_col, target_col = self.edge_endpoints() if self.is_edge_table() else ("source", "target")
@@ -2759,7 +2769,7 @@ class Table:
                 
         rel_col = next((c for c in ["relation", "predicate", "type", "rel", "edge_type"] if c in self.columns), None)
         if rel_col:
-            sql = f"SELECT {source_col}, {target_col} FROM t WHERE {rel_col} = '{relation}'"
+            sql = f"SELECT {source_col}, {target_col} FROM t WHERE {rel_col} = '{_escape_sql_string(relation)}'"
         else:
             sql = f"SELECT {source_col}, {target_col} FROM t"
             

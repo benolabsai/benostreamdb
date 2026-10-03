@@ -106,6 +106,19 @@ pub async fn create_catalog_async(
     catalog_type: CatalogType,
     config: std::collections::HashMap<String, String>,
 ) -> Result<Box<dyn Catalog>> {
+    // SSRF guard (opt-in via `BSDB_SSRF_GUARD=1`): catalog endpoints are
+    // user-supplied and fetched server-side. Reject internal/loopback hosts
+    // before constructing any client.
+    if crate::core::storage::ssrf_guard_enabled() {
+        for key in ["url", "uri", "oauth2-server-uri", "oauth2_server_uri"] {
+            if let Some(v) = config.get(key) {
+                if v.contains("://") {
+                    crate::core::storage::validate_external_uri(v)?;
+                }
+            }
+        }
+    }
+
     match catalog_type {
         CatalogType::Nessie => {
             let url = config
