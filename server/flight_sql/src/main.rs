@@ -59,12 +59,66 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // We can try to use it directly with FlightServiceServer if it auto-implements FlightService
     let svc = FlightServiceServer::new(flight_sql_service);
 
-    let addr: SocketAddr = "0.0.0.0:50051".parse()?;
+    // Stateless auth (API key / JWT) via a tonic interceptor. No user database:
+    // identity is delegated to a shared secret or an external IdP's signing key.
+    let auth = Arc::new(benostreamdb::core::auth::AuthConfig::from_env());
+    if auth.enabled() {
+        tracing::info!("Flight SQL authentication enabled (API key and/or JWT)");
+    } else {
+        tracing::warn!(
+            "Flight SQL authentication disabled — bind to a private interface or front with a proxy"
+        );
+    }
+    let interceptor = tonic::service::interceptor::InterceptorLayer::new(AuthInterceptor { auth });
+
+    // Default to loopback; expose externally only via an explicit bind.
+    let bind = std::env::var("BSDB_FLIGHT_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("BSDB_FLIGHT_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50051);
+    let addr: SocketAddr = format!("{bind}:{port}").parse()?;
     println!("Listening on grpc://{}", addr);
 
-    Server::builder().add_service(svc).serve(addr).await?;
+    Server::builder()
+        .layer(interceptor)
+        .add_service(svc)
+        .serve(addr)
+        .await?;
 
     Ok(())
+}
+
+/// Tonic interceptor enforcing [`benostreamdb::core::auth::AuthConfig`].
+#[derive(Clone)]
+struct AuthInterceptor {
+    auth: Arc<benostreamdb::core::auth::AuthConfig>,
+}
+
+impl tonic::service::Interceptor for AuthInterceptor {
+    fn call(&mut self, req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        if !self.auth.enabled() {
+            if self.auth.required() {
+                return Err(tonic::Status::unauthenticated("authentication required"));
+            }
+            return Ok(req);
+        }
+        let token = req
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|s| s.trim().to_string());
+        match token {
+            Some(t) => match self.auth.verify(&t) {
+                Ok(_subject) => Ok(req),
+                Err(e) => Err(tonic::Status::unauthenticated(format!(
+                    "invalid credentials: {e}"
+                ))),
+            },
+            None => Err(tonic::Status::unauthenticated("missing bearer token")),
+        }
+    }
 }
 
 /// Spawn the HTTP observability server on `BSDB_METRICS_BIND:BSDB_METRICS_PORT`

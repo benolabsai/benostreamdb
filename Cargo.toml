@@ -163,6 +163,10 @@ opentelemetry-otlp = { version = "0.15", features = ["grpc-tonic"] }
 opentelemetry_sdk = { version = "0.22", features = ["rt-tokio"] }
 tracing-opentelemetry = "0.23"
 base64 = "0.22.1"
+# Stateless auth (API key + HS256/RS256 JWT) for the HTTP gateways.
+hmac = "0.12"
+ring = "0.17"
+subtle = "2.5"
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "any"] }
 murmur3 = "0.5.2"
 regex = "1.10"

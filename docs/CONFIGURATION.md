@@ -39,6 +39,30 @@ BenoStreamDB is designed to be highly configurable through environment variables
 
 ### Security
 
+#### Authentication (search gateway + Flight SQL)
+
+Stateless auth — no user database. Identity is delegated to a shared secret or
+an external IdP's signing key. The same credentials protect the OpenSearch/ES
+API, the Qdrant API, and the Flight SQL gRPC service.
+
+| Variable | Description | Default |
+|:---|:---|:---|
+| `BSDB_API_KEY` | Shared secret. HTTP: `Authorization: Bearer <key>`, `Authorization: ApiKey <key>`, or `api-key: <key>` (Qdrant). Flight: `authorization: Bearer <key>`. | unset |
+| `BSDB_JWT_SECRET` | HS256 shared secret for JWT verification. | unset |
+| `BSDB_JWT_PUBLIC_KEY` | RS256 public key (PEM) for JWT verification — the "delegate to your IdP" path. | unset |
+| `BSDB_JWT_AUDIENCE` | Required `aud` claim (if set). | unset |
+| `BSDB_JWT_ISSUER` | Required `iss` claim (if set). | unset |
+| `BSDB_AUTH_REQUIRED` | Fail closed (`401`/`UNAUTHENTICATED`) when no credential is configured. | `false` |
+| `BSDB_METRICS_PUBLIC` | Exempt `/metrics` from auth (for an internal Prometheus scraper). | `false` |
+
+Keep the secret in a secret manager (Vault, AWS/GCP/Azure Secrets Manager) or a
+`0600` file mounted at `/run/secrets/` (Docker/K8s) or
+`/etc/benostreamdb/secrets/`, loaded via systemd `LoadCredential=` /
+`EnvironmentFile=` (mode `0600`). Never commit it or place it in a
+world-readable env file.
+
+#### SSRF guard
+
 | Variable | Description | Default |
 |:---|:---|:---|
 | `BSDB_SSRF_GUARD` | Enable the SSRF guard. When set to `1`/`true`/`yes`, external URIs and custom object-store endpoints (`AWS_ENDPOINT_URL`, `AZURE_STORAGE_ENDPOINT`, `AZURE_ENDPOINT`, `GOOGLE_STORAGE_ENDPOINT`, `GOOGLE_ENDPOINT`, `GCS_ENDPOINT`) that resolve to loopback, private, or link-local addresses are rejected. Off by default so local catalogs (`http://localhost:8181`) keep working; enable it in production. | off |

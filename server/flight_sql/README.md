@@ -4,7 +4,7 @@
 
 > **Architecture Note:** BenoStreamDB is **serverless-first**. Arrow Flight SQL is an optional server interface for network-accessible database access. Flight SQL currently provides **single-process server access**; distributed or clustered execution across multiple nodes is not currently supported or implied.
 >
-> **⚠️ Security:** This server has **no authentication, no authorization, and no TLS**. Run it on a **trusted internal network**, bound to `127.0.0.1` or an internal interface, behind a gateway/reverse proxy that terminates TLS and enforces authentication. Do **not** expose it directly to the public internet. See [SECURITY.md](../../SECURITY.md).
+> **⚠️ Security:** This server ships **stateless authentication** (API key and/or JWT — see [Authentication](#authentication)) but **no TLS**. Bind to `127.0.0.1` or an internal interface and terminate TLS at a reverse proxy. Do **not** expose it directly to the public internet. See [SECURITY.md](../../SECURITY.md).
 
 ## Overview
 
@@ -55,10 +55,41 @@ cargo run -p benostreamdb-flight
 | `BSDB_WAREHOUSE` | Base location for `CREATE TABLE` when no `LOCATION` is given. Tables land at `<warehouse>/<schema>/<table>`. |
 | `BSDB_CATALOG_NAME` | DataFusion catalog name to bind the external catalog to (default: the catalog type, e.g. `rest`). |
 | `BSDB_CONFIG` | Path to a catalog config TOML (Nessie / REST / Glue / Hive / Unity / JDBC). Falls back to `./benostream.toml` then `~/.benostream/config.toml`. |
+| `BSDB_FLIGHT_BIND` | Bind address for the Flight SQL gRPC listener. | `127.0.0.1` |
+| `BSDB_FLIGHT_PORT` | Port for the Flight SQL gRPC listener. | `50051` |
 | `BSDB_METRICS_BIND` | Bind address for the observability HTTP listener. | `127.0.0.1` |
 | `BSDB_METRICS_PORT` | Port for the observability HTTP listener. | `9090` |
 
 Without a warehouse or catalog config, the server still serves queries against tables registered in-process, but `CREATE TABLE` requires either `BSDB_WAREHOUSE` or an explicit `LOCATION`.
+
+### Authentication
+
+The server supports **stateless** authentication — no user database to maintain.
+Identity is delegated to a shared secret or an external IdP's signing key. The
+token is read from the gRPC `authorization: Bearer <token>` metadata.
+
+| Variable | Description | Default |
+|:---|:---|:---|
+| `BSDB_API_KEY` | Shared secret (API key). | unset |
+| `BSDB_JWT_SECRET` | HS256 shared secret for JWT verification. | unset |
+| `BSDB_JWT_PUBLIC_KEY` | RS256 public key (PEM) for JWT verification — the "delegate to your IdP" path. | unset |
+| `BSDB_JWT_AUDIENCE` | Required `aud` claim (if set). | unset |
+| `BSDB_JWT_ISSUER` | Required `iss` claim (if set). | unset |
+| `BSDB_AUTH_REQUIRED` | Fail closed (`UNAUTHENTICATED`) when no credential is configured. | `false` |
+
+```python
+# ADBC with a bearer token
+with flight_sql.connect(
+    uri="grpc://localhost:50051",
+    db_kwargs={"adbc.flight.sql.rpc.call_header.authorization": f"Bearer {token}"},
+) as conn:
+    ...
+```
+
+**Where to keep the secret:** never in the repo or a world-readable env file.
+Use a secret manager (Vault, AWS/GCP/Azure Secrets Manager) or a `0600` file
+mounted at `/run/secrets/` (Docker/K8s) or `/etc/benostreamdb/secrets/`, loaded
+via systemd `LoadCredential=`/`EnvironmentFile=` (mode `0600`).
 
 ### Observability
 
