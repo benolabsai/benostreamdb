@@ -38,6 +38,7 @@ object_store = { version = "0.12.4", features = ["aws", "azure", "gcp", "http"] 
 rayon = "1.12.0"
 dhat = "0.3"
 base64 = "0.22.1"
+# Auth (API key + JWT) is provided by `benostreamdb::core::auth`.
 
 [features]
 default = []
