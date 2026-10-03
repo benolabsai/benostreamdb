@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dbt-benostreamdb"
+# dbt adapters version as `<dbt-core-major>.<minor>.<patch>` (see __version__.py),
+# independent of the BenoStreamDB engine version.
+dynamic = ["version"]
+description = "The BenoStreamDB adapter plugin for dbt"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Richard Albright", email = "rla3rd@gmail.com" }]
+keywords = ["dbt", "benostreamdb", "iceberg", "vector-search", "analytics"]
+dependencies = [
+    # Pin the dbt-core minor to match the adapter version (1.8.x). A new
+    # dbt-core minor gets a new adapter release (e.g. 1.9.0).
+    "dbt-core>=1.8.0,<1.9.0",
+    "benostreamdb>=0.12.0",
+    "pyarrow>=15.0.0",
+    "pandas",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+[project.urls]
+Homepage = "https://github.com/benolabsai/benostreamdb"
+Repository = "https://github.com/benolabsai/benostreamdb"
+Documentation = "https://github.com/benolabsai/benostreamdb/blob/main/dbt-benostreamdb/README.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "dbt.adapters.benostreamdb.__version__.version" }
+
+[tool.setuptools.packages.find]
+include = ["dbt", "dbt.*"]
+
+# Ship the dbt macros / project files that live under dbt/include/.
+[tool.setuptools.package-data]
+"dbt.include.benostreamdb" = ["**/*.sql", "**/*.yml"]
