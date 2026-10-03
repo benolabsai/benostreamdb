@@ -28,15 +28,12 @@ An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructib
 3. **Distributed / Clustered**:
    *Status: Future / Experimental (Not currently supported).* Distributed coordinator and multi-node write/compaction scheduling are under design.
 
-> ## ⚠️ Security: internal networks only
+> ## 🔒 Security & RBAC
 >
-> **BenoStreamDB's network servers are not hardened for untrusted networks.**
-> `benostreamdb-flight`, `bsdb-search`, the gateway, and the Iceberg REST binary
-> ship with **no authentication, no authorization, and no TLS**. Run them on a
-> **trusted internal network**, bound to `127.0.0.1` or an internal interface,
-> behind a gateway/reverse proxy that terminates TLS and enforces
-> authentication. Do **not** expose them directly to the public internet. See
-> [SECURITY.md](SECURITY.md) for the full posture.
+> **BenoStreamDB supports stateless authentication and Role-Based Access Control (RBAC).**
+> Both `benostreamdb-flight` and `bsdb-search` support stateless authentication via static API keys (`BSDB_API_KEY`) and JWTs (HS256/RS256). JWT payloads are parsed to extract user roles (`"roles"` array) for native RBAC enforcement within the engine.
+> 
+> *Note on TLS:* The network servers do not terminate TLS natively within the Rust binaries. When deploying over untrusted networks or the public internet, you must deploy BenoStreamDB behind a reverse proxy (like NGINX, Envoy, or an AWS ALB) that terminates TLS. See [SECURITY.md](SECURITY.md) for the full posture.
 
 It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table you do not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
 

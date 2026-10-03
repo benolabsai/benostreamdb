@@ -17,6 +17,13 @@ use base64::Engine as _;
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 
+/// Extracted claims from an authenticated token.
+#[derive(Clone, Debug, Default)]
+pub struct AuthClaims {
+    pub subject: String,
+    pub roles: Vec<String>,
+}
+
 /// Authentication configuration, resolved once at startup.
 #[derive(Clone, Default)]
 pub struct AuthConfig {
@@ -76,12 +83,15 @@ impl AuthConfig {
         self.metrics_public
     }
 
-    /// Verify a bearer token (API key or JWT). Returns the subject on success.
-    pub fn verify(&self, token: &str) -> Result<String, String> {
+    /// Verify a bearer token (API key or JWT). Returns the claims on success.
+    pub fn verify(&self, token: &str) -> Result<AuthClaims, String> {
         // API key first (constant-time).
         if let Some(expected) = &self.api_key {
             if expected.as_bytes().ct_eq(token.as_bytes()).into() {
-                return Ok("api-key".to_string());
+                return Ok(AuthClaims {
+                    subject: "api-key".to_string(),
+                    roles: vec!["admin".to_string()],
+                });
             }
         }
         // JWT.
@@ -91,7 +101,7 @@ impl AuthConfig {
         Err("no credential configured".to_string())
     }
 
-    fn verify_jwt(&self, token: &str) -> Result<String, String> {
+    fn verify_jwt(&self, token: &str) -> Result<AuthClaims, String> {
         let parts: Vec<&str> = token.split('.').collect();
         if parts.len() != 3 {
             return Err("malformed JWT".to_string());
@@ -136,11 +146,20 @@ impl AuthConfig {
         let claims: Value =
             serde_json::from_slice(&payload_bytes).map_err(|_| "bad JWT payload".to_string())?;
         self.check_claims(&claims)?;
-        Ok(claims
+        
+        let subject = claims
             .get("sub")
             .and_then(|v| v.as_str())
             .unwrap_or("jwt")
-            .to_string())
+            .to_string();
+            
+        let roles = claims
+            .get("roles")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+            
+        Ok(AuthClaims { subject, roles })
     }
 
     fn check_claims(&self, claims: &Value) -> Result<(), String> {
@@ -251,7 +270,7 @@ mod tests {
             .as_secs()
             + 3600;
         let good = hs256_token(secret, &format!(r#"{{"sub":"alice","exp":{future}}}"#));
-        assert_eq!(cfg.verify(&good).unwrap(), "alice");
+        assert_eq!(cfg.verify(&good).unwrap().subject, "alice");
 
         let expired = hs256_token(secret, r#"{"sub":"bob","exp":1}"#);
         assert!(cfg.verify(&expired).is_err());
@@ -261,6 +280,40 @@ mod tests {
             ..Default::default()
         };
         assert!(other.verify(&good).is_err());
+    }
+
+    #[test]
+    fn rbac_roles_extraction() {
+        let secret = b"rbac-secret";
+        let cfg = AuthConfig {
+            jwt_secret: Some(secret.to_vec()),
+            ..Default::default()
+        };
+        let future = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600;
+            
+        // Test JWT with roles
+        let token_with_roles = hs256_token(
+            secret, 
+            &format!(r#"{{"sub":"charlie","exp":{},"roles":["admin","data_engineer"]}}"#, future)
+        );
+        let claims = cfg.verify(&token_with_roles).unwrap();
+        assert_eq!(claims.subject, "charlie");
+        assert_eq!(claims.roles.len(), 2);
+        assert!(claims.roles.contains(&"admin".to_string()));
+        assert!(claims.roles.contains(&"data_engineer".to_string()));
+        
+        // Test JWT without roles gracefully falls back to empty roles
+        let token_without_roles = hs256_token(
+            secret, 
+            &format!(r#"{{"sub":"david","exp":{}}}"#, future)
+        );
+        let claims = cfg.verify(&token_without_roles).unwrap();
+        assert_eq!(claims.subject, "david");
+        assert!(claims.roles.is_empty());
     }
 
     #[test]

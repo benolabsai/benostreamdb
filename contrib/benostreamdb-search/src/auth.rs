@@ -37,7 +37,7 @@ fn is_public_path(cfg: &AuthConfig, method: &Method, path: &str) -> bool {
 /// Axum middleware enforcing [`AuthConfig`].
 pub async fn auth_middleware(
     State(cfg): State<Arc<AuthConfig>>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> Response {
     if !cfg.enabled() {
@@ -69,7 +69,10 @@ pub async fn auth_middleware(
 
     match token {
         Some(t) => match cfg.verify(&t) {
-            Ok(_subject) => next.run(req).await,
+            Ok(claims) => {
+                req.extensions_mut().insert(claims);
+                next.run(req).await
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "authentication failed");
                 (StatusCode::UNAUTHORIZED, "invalid credentials").into_response()

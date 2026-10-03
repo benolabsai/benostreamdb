@@ -96,7 +96,7 @@ struct AuthInterceptor {
 }
 
 impl tonic::service::Interceptor for AuthInterceptor {
-    fn call(&mut self, req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+    fn call(&mut self, mut req: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
         if !self.auth.enabled() {
             if self.auth.required() {
                 return Err(tonic::Status::unauthenticated("authentication required"));
@@ -111,7 +111,10 @@ impl tonic::service::Interceptor for AuthInterceptor {
             .map(|s| s.trim().to_string());
         match token {
             Some(t) => match self.auth.verify(&t) {
-                Ok(_subject) => Ok(req),
+                Ok(claims) => {
+                    req.extensions_mut().insert(claims);
+                    Ok(req)
+                }
                 Err(e) => Err(tonic::Status::unauthenticated(format!(
                     "invalid credentials: {e}"
                 ))),
