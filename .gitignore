@@ -17,6 +17,10 @@ test_venv/
 !venv/.gitkeep
 *.egg-info/
 
+# Python packaging build output (setuptools / maturin / `python -m build`)
+dist/
+build/
+
 # Compiled Python extension (built by `maturin develop`)
 python/**/*.so
 python/**/*.pyd
