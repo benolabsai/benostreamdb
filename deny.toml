@@ -15,7 +15,9 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
 unmaintained = "none"
 
-# Ignore specific advisories that have been reviewed and deemed low-risk in transitive dependencies
+# Ignore specific advisories that have been reviewed and deemed low-risk in
+# transitive dependencies. The full tracking plan (owner, chain, reachability,
+# migration path, review date) lives in `docs/DEPENDENCY_RISK.md`.
 ignore = [
     "RUSTSEC-2026-0258",
     "RUSTSEC-2026-0195",
@@ -27,9 +29,11 @@ ignore = [
     # by datafusion-common 52.x; it cannot be removed without forking DataFusion.
     # It is a compile-time proc-macro with no runtime attack surface.
     "RUSTSEC-2024-0436",
-    # Transitive dependencies from PyO3, quick-xml, bincode, protobuf, and webpki
-    "RUSTSEC-2024-0437",
+    # `bincode` 2.0.1 is unmaintained (RUSTSEC-2025-0141); direct dep used only
+    # for HNSW point-vector dump/load. Migration tracked in docs/DEPENDENCY_RISK.md.
     "RUSTSEC-2025-0141",
+    # Transitive dependencies from PyO3, quick-xml, protobuf, and webpki
+    "RUSTSEC-2024-0437",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
