@@ -4,10 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "benostreamdb-search"
-version = "0.7.0"
+version = "0.12.0"
 description = "BenoStreamDB Search - OpenSearch and Qdrant REST compatibility gateway for BenoStreamDB"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT AND Apache-2.0" }
 authors = [
     { name = "Richard Albright and BenoStreamDB Contributors" }
@@ -18,10 +18,15 @@ classifiers = [
     "Intended Audience :: Developers",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
 ]
 dependencies = [
-    "benostreamdb>=0.11.1",
+    "benostreamdb>=0.12.0",
 ]
 
 [project.scripts]
