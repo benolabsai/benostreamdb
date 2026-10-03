@@ -16,6 +16,7 @@
 //! `BSDB_SEARCH_BIND` / `BSDB_SEARCH_PORT`) and stores index data under
 //! `BSDB_SEARCH_STORAGE_URI` (default `file://~/.benostreamdb/search`).
 
+pub mod auth;
 pub mod es_types;
 pub mod handlers;
 pub mod index_cache;

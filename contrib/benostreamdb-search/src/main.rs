@@ -117,6 +117,17 @@ async fn main() {
         catalog_ns,
     ));
 
+    // Stateless auth (API key / JWT). No user database: identity is delegated
+    // to a shared secret or an external IdP's signing key.
+    let auth = Arc::new(benostreamdb_search::auth::AuthConfig::from_env());
+    if auth.enabled() {
+        tracing::info!("authentication enabled (API key and/or JWT)");
+    } else {
+        tracing::warn!(
+            "authentication disabled — bind to a private interface or front with a proxy"
+        );
+    }
+
     // Optional NRT convenience: periodically flush every index so newly
     // written documents become searchable without an explicit `_refresh`.
     if let Ok(secs) = std::env::var("BSDB_SEARCH_AUTO_REFRESH_SECS") {
@@ -267,12 +278,20 @@ async fn main() {
             metrics::track_request,
         ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            benostreamdb_search::auth::auth_middleware,
+        ));
 
     // Qdrant-compatible API on 6333
     let qdrant_app = benostreamdb_search::handlers::qdrant::router(state.clone())
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024));
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            auth.clone(),
+            benostreamdb_search::auth::auth_middleware,
+        ));
 
     let qdrant_bind = std::env::var("BSDB_QDRANT_BIND").unwrap_or_else(|_| bind.clone());
     let qdrant_port: u16 = std::env::var("BSDB_QDRANT_PORT")
