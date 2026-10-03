@@ -4,21 +4,34 @@
 
 **BenoStreamDB is not hardened for untrusted networks.** The network servers
 (`benostreamdb-flight`, `bsdb-search`, the gateway, and the Iceberg REST binary)
-ship with **no authentication, no authorization, and no TLS**. They are designed
-to run on a **trusted internal network**, behind a gateway or reverse proxy that
-terminates TLS and enforces authentication.
+ship with **no TLS**. They support **stateless authentication** (API key and/or
+JWT — see [docs/CONFIGURATION.md](docs/CONFIGURATION.md#authentication-search-gateway--flight-sql)),
+but it is **opt-in**: with no credential configured the servers are open. They
+are designed to run on a **trusted internal network**, behind a gateway or
+reverse proxy that terminates TLS.
 
 - **Do not** expose any BenoStreamDB server directly to the public internet or
   to an untrusted network.
-- Bind to `127.0.0.1` (the default for the metrics listener and the search
-  gateway) or an internal interface only.
-- Put an authenticating reverse proxy (mTLS, OAuth2, or your platform's
+- Bind to `127.0.0.1` (the default for the metrics listener, the search
+  gateway, and Flight SQL) or an internal interface only.
+- Set `BSDB_API_KEY` (or a JWT secret/public key) and, for a hardened
+  deployment, `BSDB_AUTH_REQUIRED=1` to fail closed.
+- Put a TLS-terminating reverse proxy (mTLS, OAuth2, or your platform's
   identity-aware proxy) in front of every listener.
 - Treat the embedded library (Python/Rust) as in-process code: it inherits the
   trust boundary of the host application.
 
 See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the recommended deployment
 topology.
+
+## Dependency Advisories
+
+Reviewed-and-accepted advisories (unmaintained or low-reachability transitive
+dependencies) are tracked with an owner, dependency chain, reachability
+assessment, migration path, and review date in
+[docs/DEPENDENCY_RISK.md](docs/DEPENDENCY_RISK.md). `cargo audit` and
+`cargo deny` run in CI; a new advisory fails the build unless it is added to
+both allow-lists and to that document.
 
 ## Supported Versions
 
