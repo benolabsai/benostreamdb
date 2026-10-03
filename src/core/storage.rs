@@ -46,19 +46,60 @@ pub fn validate_external_uri(uri: &str) -> Result<()> {
             if d == "localhost" {
                 anyhow::bail!("SSRF guard: host 'localhost' is not allowed in external URIs");
             }
+            // Non-special schemes (`az://`, `gs://`) parse IP literals as
+            // opaque domains rather than `Host::Ipv4`/`Ipv6`, so re-check.
+            if let Ok(ip) = d.parse::<std::net::IpAddr>() {
+                if is_internal_ip(ip) {
+                    anyhow::bail!(
+                        "SSRF guard: internal address {ip} is not allowed in external URIs"
+                    );
+                }
+            }
         }
         url::Host::Ipv4(ip) => {
-            if ip.is_loopback() || ip.is_private() || ip.is_unspecified() || ip.is_link_local() {
+            if is_internal_ip(std::net::IpAddr::V4(ip)) {
                 anyhow::bail!(
                     "SSRF guard: private/loopback/link-local IPv4 address {ip} is not allowed in external URIs"
                 );
             }
         }
         url::Host::Ipv6(ip) => {
-            if ip.is_loopback() || ip.is_unspecified() {
+            if is_internal_ip(std::net::IpAddr::V6(ip)) {
                 anyhow::bail!(
                     "SSRF guard: loopback/unspecified IPv6 address {ip} is not allowed in external URIs"
                 );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// True for loopback, private, link-local, or unspecified addresses.
+fn is_internal_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback() || v4.is_private() || v4.is_unspecified() || v4.is_link_local()
+        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+    }
+}
+
+/// SSRF guard for custom object-store endpoints supplied via environment
+/// variables. S3 (`AWS_ENDPOINT_URL`), Azure, and GCS all allow overriding the
+/// service endpoint; those are network targets and must not point at internal
+/// hosts when the guard is enabled.
+fn validate_endpoint_env_vars() -> Result<()> {
+    for key in [
+        "AWS_ENDPOINT_URL",
+        "AZURE_STORAGE_ENDPOINT",
+        "AZURE_ENDPOINT",
+        "GOOGLE_STORAGE_ENDPOINT",
+        "GOOGLE_ENDPOINT",
+        "GCS_ENDPOINT",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            if v.contains("://") {
+                validate_external_uri(&v).with_context(|| format!("SSRF guard: {key}"))?;
             }
         }
     }
@@ -77,12 +118,12 @@ pub fn create_object_store(uri: &str) -> Result<Arc<dyn ObjectStore>> {
     // SSRF guard: reject non-file URIs that point at internal hosts.
     // `memory://` and `file://` are always local; remote schemes must
     // pass the address check below.
-    if ssrf_guard_enabled()
-        && uri.contains("://")
-        && !uri.starts_with("file://")
-        && !uri.starts_with("memory://")
-    {
-        validate_external_uri(uri)?;
+    if ssrf_guard_enabled() {
+        if uri.contains("://") && !uri.starts_with("file://") && !uri.starts_with("memory://") {
+            validate_external_uri(uri)?;
+        }
+        // Custom S3/Azure/GCS endpoints come from env vars, not the URI.
+        validate_endpoint_env_vars()?;
     }
 
     let output_store: Arc<dyn ObjectStore>;
@@ -193,6 +234,15 @@ mod tests {
         assert!(validate_external_uri("https://catalog.example.com").is_ok());
         assert!(validate_external_uri("s3://my-bucket/prefix").is_ok());
         assert!(validate_external_uri("memory://shared").is_ok());
+        // Azure/GCP: the URI host is a bucket/container name, not a network
+        // endpoint, so ordinary names pass...
+        assert!(validate_external_uri("az://my-container/prefix").is_ok());
+        assert!(validate_external_uri("abfs://my-container/prefix").is_ok());
+        assert!(validate_external_uri("gs://my-bucket/prefix").is_ok());
+        assert!(validate_external_uri("gcs://my-bucket/prefix").is_ok());
+        // ...but an IP-like host is still rejected regardless of scheme.
+        assert!(validate_external_uri("az://127.0.0.1/prefix").is_err());
+        assert!(validate_external_uri("gs://10.0.0.1/prefix").is_err());
     }
 
     #[test]
