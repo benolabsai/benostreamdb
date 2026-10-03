@@ -37,6 +37,12 @@ BenoStreamDB is designed to be highly configurable through environment variables
 | **Production Server** | 16 Cores, 32 GB RAM | `8` – `14` | `16` – `32` | High throughput for mixed scalar + vector queries. |
 | **Cloud Object Store (S3/GCS)** | 8 Cores, 32 GB RAM | `6` | `32` – `48` | High I/O concurrency hides cloud object storage latency. |
 
+### Security
+
+| Variable | Description | Default |
+|:---|:---|:---|
+| `BSDB_SSRF_GUARD` | Enable the SSRF guard. When set to `1`/`true`/`yes`, external URIs and custom object-store endpoints (`AWS_ENDPOINT_URL`, `AZURE_STORAGE_ENDPOINT`, `AZURE_ENDPOINT`, `GOOGLE_STORAGE_ENDPOINT`, `GOOGLE_ENDPOINT`, `GCS_ENDPOINT`) that resolve to loopback, private, or link-local addresses are rejected. Off by default so local catalogs (`http://localhost:8181`) keep working; enable it in production. | off |
+
 ### Write-Ahead Log (WAL) & Ingestion
 
 | Variable | Description | Default |
