@@ -262,16 +262,17 @@ impl HybridReader {
     ) -> Result<Option<RoaringBitmap>> {
         let filter_column = &filter.column;
 
-        // Inverted (parquet) indexes: exact (`inverted`) or tokenized (`bm25`).
-        // A `scalar` index is a roaring bitmap (`.idx`), handled separately below.
+        // Lexical (parquet) indexes: canonical `lexical`, legacy `inverted`, or
+        // tokenized `bm25`. A `scalar` index is a roaring bitmap (`.idx`),
+        // handled separately below.
         let inv_idx_info = self.config.index_files.iter().find(|f| {
-            (f.index_type == "inverted" || f.index_type == "bm25")
-                && f.column_name.as_deref() == Some(filter_column)
+            f.is_lexical() && f.column_name == *filter_column && self.config.is_index_valid(f)
         });
-        let bitmap_idx_info =
-            self.config.index_files.iter().find(|f| {
-                f.index_type == "scalar" && f.column_name.as_deref() == Some(filter_column)
-            });
+        let bitmap_idx_info = self.config.index_files.iter().find(|f| {
+            f.index_category == "scalar"
+                && f.column_name == *filter_column
+                && self.config.is_index_valid(f)
+        });
 
         let matching_bitmap = if let Some(idx_info) = inv_idx_info {
             let inv_path_str = &idx_info.file_path;
@@ -290,7 +291,7 @@ impl HybridReader {
 
             // Use Inverted Index (Value -> RowIDs)
             // 1. Check Object Cache (Decoded RecordBatches)
-            let cache_key = if let Some(offset) = idx_info.offset {
+            let cache_key = if let Some(offset) = idx_info.blob_offset {
                 format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
             } else {
                 format!("{}/{}", self.root_uri, full_inv_path_str)
@@ -312,7 +313,7 @@ impl HybridReader {
                     Some(cached) => cached.as_ref().clone(),
                     None => {
                         let bytes = if let (Some(offset), Some(length)) =
-                            (idx_info.offset, idx_info.length)
+                            (idx_info.blob_offset, idx_info.blob_length)
                         {
                             // Puffin Blob: Byte Range Read
                             {
@@ -783,24 +784,48 @@ impl HybridReader {
             };
             let idx_path_str = idx_path.to_string();
 
+            let cache_key = if let Some(info) = bitmap_idx_info {
+                if let Some(offset) = info.blob_offset {
+                    format!("{}/{}:{}", self.root_uri, idx_path_str, offset)
+                } else {
+                    format!("{}/{}", self.root_uri, idx_path_str)
+                }
+            } else {
+                format!("{}/{}", self.root_uri, idx_path_str)
+            };
+
             // Check Cache
             if let Some(cached) = crate::core::cache::INDEX_CACHE
-                .get_with_metrics(&format!("{}/{}", self.root_uri, idx_path_str), "index")
+                .get_with_metrics(&cache_key, "index")
                 .await
             {
                 cached.as_ref().clone()
             } else {
-                match self.store.get(&idx_path).await {
-                    Ok(resp) => {
-                        let index_bytes = resp.bytes().await?;
+                let bytes_res = if let Some(info) = bitmap_idx_info {
+                    if let (Some(offset), Some(length)) = (info.blob_offset, info.blob_length) {
+                        self.store
+                            .get_range(&idx_path, (offset as u64)..(offset as u64 + length as u64))
+                            .await
+                    } else {
+                        match self.store.get(&idx_path).await {
+                            Ok(resp) => resp.bytes().await,
+                            Err(e) => Err(e),
+                        }
+                    }
+                } else {
+                    match self.store.get(&idx_path).await {
+                        Ok(resp) => resp.bytes().await,
+                        Err(e) => Err(e),
+                    }
+                };
+
+                match bytes_res {
+                    Ok(index_bytes) => {
                         crate::telemetry::metrics::IO_BYTES_READ_TOTAL
                             .inc_by(index_bytes.len() as u64);
                         let bitmap = RoaringBitmap::deserialize_from(&index_bytes[..])?;
                         crate::core::cache::INDEX_CACHE
-                            .insert(
-                                format!("{}/{}", self.root_uri, idx_path_str),
-                                Arc::new(bitmap.clone()),
-                            )
+                            .insert(cache_key, Arc::new(bitmap.clone()))
                             .await;
                         bitmap
                     }
@@ -845,7 +870,147 @@ impl HybridReader {
             Some(bm) => bm,
             None => return Err(anyhow::anyhow!("No index for column {}", filter.column)),
         };
+        self.read_rows_by_bitmap(&matching_bitmap, target_schema)
+            .await
+    }
 
+    /// Load the `json_path` overlay for `column` and return the row bitmap for a
+    /// `(path, value)` lookup, or every row where `path` resolves when `value`
+    /// is `None`. Returns `None` when the segment has no `json_path` index for
+    /// the column, or when the index does not cover `path` — so the caller
+    /// falls back to a full scan rather than trusting a subset bitmap.
+    pub async fn get_json_path_bitmap(
+        &self,
+        column: &str,
+        path: &str,
+        value: Option<&str>,
+    ) -> Result<Option<RoaringBitmap>> {
+        let idx_info = self.config.index_files.iter().find(|f| {
+            f.index_category == "json_path"
+                && f.column_name == column
+                && self.config.is_index_valid(f)
+        });
+        let Some(idx_info) = idx_info else {
+            return Ok(None);
+        };
+
+        let jp_path = Path::from(idx_info.file_path.as_str());
+        let jp_path_str = jp_path.to_string();
+        let cache_key = if let Some(offset) = idx_info.blob_offset {
+            format!("{}/{}:{}", self.root_uri, jp_path_str, offset)
+        } else {
+            format!("{}/{}", self.root_uri, jp_path_str)
+        };
+
+        let bytes = if let Some(cached) = crate::core::cache::BYTE_CACHE
+            .get_with_metrics(&cache_key, "byte")
+            .await
+        {
+            cached.as_ref().clone()
+        } else {
+            let b = if let (Some(offset), Some(length)) =
+                (idx_info.blob_offset, idx_info.blob_length)
+            {
+                self.store
+                    .get_range(&jp_path, (offset as u64)..(offset as u64 + length as u64))
+                    .await?
+                    .to_vec()
+            } else {
+                match self.store.get(&jp_path).await {
+                    Ok(res) => res.bytes().await?.to_vec(),
+                    Err(e) => {
+                        if e.to_string().contains("not found") || e.to_string().contains("404") {
+                            return Ok(None);
+                        }
+                        return Err(e.into());
+                    }
+                }
+            };
+            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+            crate::core::cache::BYTE_CACHE
+                .insert(cache_key, Arc::new(b.clone()))
+                .await;
+            b
+        };
+
+        // The index only covers the paths it was built for; a query on any
+        // other path must not use it (an empty bitmap would be a subset).
+        let covered = crate::core::index::json_path::indexed_paths(&bytes)?;
+        if !covered.iter().any(|p| p == path) {
+            return Ok(None);
+        }
+
+        let mut bitmap = match value {
+            Some(v) => crate::core::index::json_path::load_json_path_bitmap(&bytes, path, v)?,
+            None => crate::core::index::json_path::load_json_path_exists_bitmap(&bytes, path)?,
+        };
+
+        // Apply deletes (difference), matching the scalar/inverted path.
+        let deleted = self.load_merged_deletes().await?;
+        if !deleted.is_empty() {
+            bitmap -= deleted;
+        }
+        Ok(Some(bitmap))
+    }
+
+    /// Answer a set of JSON-path predicates from the `json_path` overlay.
+    ///
+    /// Returns `Ok(None)` when any predicate has no usable index, so the caller
+    /// falls back to a full scan. The returned rows are a superset of the true
+    /// matches; the caller re-applies the filter.
+    pub async fn query_json_path_first(
+        &self,
+        predicates: &[crate::core::planner::JsonPathPredicate],
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+    ) -> Result<Option<Vec<arrow::record_batch::RecordBatch>>> {
+        use crate::core::planner::JsonPathOp;
+        let mut combined: Option<RoaringBitmap> = None;
+        for p in predicates {
+            let bm = match p.op {
+                // `json_exists` matches a top-level object key *or* an array
+                // element, so union the `$.key` presence lookup with the root
+                // array-element lookup.
+                JsonPathOp::Exists => {
+                    let key = p.path.strip_prefix("$.").unwrap_or(&p.path);
+                    let a = self.get_json_path_bitmap(&p.column, &p.path, None).await?;
+                    let b = self
+                        .get_json_path_bitmap(&p.column, "$", Some(key))
+                        .await?;
+                    match (a, b) {
+                        (Some(a), Some(b)) => Some(a | b),
+                        (Some(a), None) => Some(a),
+                        (None, Some(b)) => Some(b),
+                        (None, None) => None,
+                    }
+                }
+                _ => {
+                    self.get_json_path_bitmap(&p.column, &p.path, p.value.as_deref())
+                        .await?
+                }
+            };
+            match bm {
+                Some(bm) => {
+                    combined = Some(match combined {
+                        Some(acc) => acc & bm,
+                        None => bm,
+                    });
+                }
+                None => return Ok(None),
+            }
+        }
+        match combined {
+            Some(bm) => Ok(Some(self.read_rows_by_bitmap(&bm, target_schema).await?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Materialize the rows selected by `matching_bitmap` from the segment's
+    /// Parquet file, applying schema evolution to `target_schema`.
+    pub(crate) async fn read_rows_by_bitmap(
+        &self,
+        matching_bitmap: &RoaringBitmap,
+        target_schema: Option<arrow::datatypes::SchemaRef>,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>> {
         if matching_bitmap.is_empty() {
             return Ok(vec![]);
         }
@@ -937,7 +1102,7 @@ impl HybridReader {
 
         // Construct RowSelection from Bitmap
         let selection = self.bitmap_to_row_selection(
-            &matching_bitmap,
+            matching_bitmap,
             builder.metadata().file_metadata().num_rows() as usize,
         );
         builder = builder.with_row_selection(selection);
@@ -1050,7 +1215,8 @@ impl HybridReader {
     ) -> Vec<crate::core::planner::QueryFilter> {
         let mut composite_indices = Vec::new();
         for idx in &self.config.index_files {
-            if let Some(col_name) = &idx.column_name {
+            let col_name = &idx.column_name;
+            {
                 if col_name.contains(',') {
                     let parts: Vec<String> = col_name.split(',').map(|s| s.to_string()).collect();
                     composite_indices.push((col_name.clone(), parts));

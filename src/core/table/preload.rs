@@ -211,7 +211,7 @@ impl Table {
     /// Best-effort size of an index file (or its multi-file family).
     async fn index_size_bytes(&self, full_path: &str, idx: &IndexFile) -> u64 {
         // Puffin blob: the manifest records the exact length.
-        if let Some(len) = idx.length {
+        if let Some(len) = idx.blob_length {
             if len > 0 {
                 return len as u64;
             }
@@ -250,13 +250,24 @@ impl Table {
         match kind {
             IndexKind::Vector => {
                 // Populates HNSW_IVF_CACHE (the reader's vector fast path).
-                let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
-                    self.store.clone(),
-                    full_path,
-                    &cache_key,
-                    false,
-                )
-                .await?;
+                if idx.blob_offset.is_some() {
+                    let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_from_puffin(
+                        self.store.clone(),
+                        full_path,
+                        &cache_key,
+                        false,
+                        &idx.column_name,
+                    )
+                    .await?;
+                } else {
+                    let _ = crate::core::index::hnsw_ivf::HnswIvfIndex::load_async_with_cache_key(
+                        self.store.clone(),
+                        full_path,
+                        &cache_key,
+                        false,
+                    )
+                    .await?;
+                }
                 Ok(())
             }
             IndexKind::Inverted => {
@@ -323,7 +334,7 @@ impl Table {
     ) -> Result<Vec<arrow::record_batch::RecordBatch>> {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-        let bytes = if let (Some(offset), Some(length)) = (idx.offset, idx.length) {
+        let bytes = if let (Some(offset), Some(length)) = (idx.blob_offset, idx.blob_length) {
             self.store
                 .get_range(
                     &object_store::path::Path::from(full_path),
@@ -348,7 +359,7 @@ impl Table {
     }
 }
 
-/// The kind of index, derived from the manifest's `index_type` / `blob_type`.
+/// The kind of index, derived from the manifest's `index_category` / `blob_type`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IndexKind {
     Vector,
@@ -359,7 +370,7 @@ enum IndexKind {
 
 fn classify(idx: &IndexFile) -> IndexKind {
     let blob = idx.blob_type.as_deref().unwrap_or("");
-    let itype = idx.index_type.as_str();
+    let itype = idx.index_category.as_str();
 
     if blob.starts_with("hnsw") || blob.starts_with("tq") || itype == "vector" {
         return IndexKind::Vector;
@@ -367,14 +378,14 @@ fn classify(idx: &IndexFile) -> IndexKind {
     if blob == "csr_graph" || itype == "graph" {
         return IndexKind::Graph;
     }
-    if itype == "inverted" || itype == "bm25" {
+    if idx.is_lexical() {
         return IndexKind::Inverted;
     }
     IndexKind::Other
 }
 
 fn cache_key_for(root_uri: &str, full_path: &str, idx: &IndexFile) -> String {
-    if let Some(offset) = idx.offset {
+    if let Some(offset) = idx.blob_offset {
         format!("{}/{}:{}", root_uri, full_path, offset)
     } else {
         format!("{}/{}", root_uri, full_path)

@@ -315,8 +315,12 @@ impl<G: GraphView> GraphView for CachingGraph<G> {
                 return;
             }
         }
+        // `out` is an append buffer that callers reuse across hops, so cache
+        // only the slice this call appended — not any pre-existing prefix.
+        let start = out.len();
         self.backing.get_neighbors_into(node, out);
-        let bytes = neighbor_bytes(out.len());
+        let appended = &out[start..];
+        let bytes = neighbor_bytes(appended.len());
         let mut state = self.cache.lock();
         // Evict (FIFO) until the new entry fits within the budget.
         while state.used_bytes + bytes > self.budget_bytes && !state.order.is_empty() {
@@ -326,13 +330,25 @@ impl<G: GraphView> GraphView for CachingGraph<G> {
                 }
             }
         }
-        state.map.insert(node, Arc::from(out.as_slice()));
+        state.map.insert(node, Arc::from(appended));
         state.order.push_back(node);
         state.used_bytes += bytes;
     }
 
     fn get_degree(&self, node: u64) -> usize {
         self.backing.get_degree(node)
+    }
+
+    fn all_nodes(&self) -> Vec<u64> {
+        self.backing.all_nodes()
+    }
+
+    fn num_edges(&self) -> usize {
+        self.backing.num_edges()
+    }
+
+    fn all_edges(&self) -> Vec<(u64, u64)> {
+        self.backing.all_edges()
     }
 }
 
@@ -400,6 +416,27 @@ impl GraphView for SubgraphView {
         self.get_neighbors_into(node, &mut scratch);
         scratch.len()
     }
+
+    /// Nodes with at least one in-set outgoing edge.
+    ///
+    /// This mirrors [`SimpleGraph::all_nodes`] (which only records source
+    /// nodes), so the in-memory and CSR-backed modes report the *same* node
+    /// set to global algorithms. Returning the whole region would include
+    /// target-only nodes and break mode invariance.
+    fn all_nodes(&self) -> Vec<u64> {
+        let mut nodes: Vec<u64> = self
+            .nodes
+            .iter()
+            .copied()
+            .filter(|&n| self.get_degree(n) > 0)
+            .collect();
+        nodes.sort_unstable();
+        nodes
+    }
+
+    fn num_edges(&self) -> usize {
+        self.nodes.iter().map(|&n| self.get_degree(n)).sum()
+    }
 }
 
 /// Parse a SQL `mode` string into a [`GraphMode`].
@@ -436,6 +473,13 @@ pub fn load_graph_view(
 ) -> anyhow::Result<Box<dyn GraphView>> {
     let uri = uri.to_string();
     let seeds = seeds.to_vec();
+    tracing::debug!(
+        uri = %uri,
+        mode = ?mode,
+        seeds = seeds.len(),
+        hops,
+        "load_graph_view: resolving graph view"
+    );
     let future = async move {
         let table = Table::new_async(uri).await?;
         table.graph_view(mode, &seeds, hops).await
@@ -657,6 +701,21 @@ impl GraphAccumulatorBase {
         }
 
         Ok(())
+    }
+
+    /// True if a partial-aggregation state carries at least one edge row.
+    ///
+    /// DataFusion fans the aggregate out over `target_partitions` input
+    /// partitions; every partition that holds no rows still produces a partial
+    /// state whose scalar arguments are the accumulator defaults. Callers must
+    /// not adopt those defaults, or the result becomes dependent on the
+    /// non-deterministic order in which partials are merged.
+    pub fn state_has_edges(states: &[ArrayRef]) -> bool {
+        states
+            .first()
+            .and_then(|s| s.as_any().downcast_ref::<ListArray>())
+            .map(|l| (0..l.len()).any(|i| l.is_valid(i) && !l.value(i).is_empty()))
+            .unwrap_or(false)
     }
 
     /// Merge edge state from partial aggregation results.
@@ -1007,6 +1066,34 @@ mod tests {
             merged.edges().collect::<Vec<_>>(),
             vec![(0, 1, 3), (1, 2, 4)]
         );
+        Ok(())
+    }
+
+    /// An empty partial-aggregation state must be distinguishable from a
+    /// non-empty one, so UDAFs can avoid adopting default scalar arguments
+    /// from empty input partitions (which would make results depend on the
+    /// non-deterministic merge order).
+    #[test]
+    fn state_has_edges_distinguishes_empty_partials() -> Result<()> {
+        let empty = GraphAccumulatorBase::new();
+        let empty_state: Vec<ArrayRef> = empty
+            .edge_state()?
+            .iter()
+            .map(|s| s.to_array())
+            .collect::<Result<Vec<_>>>()?;
+        assert!(!GraphAccumulatorBase::state_has_edges(&empty_state));
+
+        let mut non_empty = GraphAccumulatorBase::new();
+        let s: ArrayRef = Arc::new(UInt64Array::from(vec![1u64]));
+        let t: ArrayRef = Arc::new(UInt64Array::from(vec![2u64]));
+        non_empty.update_edge_batch(&[s, t], None, None)?;
+        let non_empty_state: Vec<ArrayRef> = non_empty
+            .edge_state()?
+            .iter()
+            .map(|s| s.to_array())
+            .collect::<Result<Vec<_>>>()?;
+        assert!(GraphAccumulatorBase::state_has_edges(&non_empty_state));
+
         Ok(())
     }
 }

@@ -11,6 +11,7 @@ pub mod gpu;
 pub mod hnsw_ivf;
 pub mod hnsw_rs;
 pub mod ivf;
+pub mod json_path;
 pub mod memory;
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 pub mod nvrtc;

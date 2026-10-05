@@ -234,6 +234,8 @@ pub struct SegmentConfig {
     pub index_files: Vec<crate::core::manifest::IndexFile>,
     pub file_size: Option<u64>,
     pub record_count: Option<u64>,
+    pub file_checksum: Option<String>,
+    pub active_snapshot_id: Option<i64>,
     /// Build indexes for ALL columns (overrides columns_to_index if true)
     pub index_all: bool,
     /// Columns to build indexes for. If None or empty, no indexes are built.
@@ -258,6 +260,8 @@ impl SegmentConfig {
             index_files: Vec::new(),
             file_size: None,
             record_count: None,
+            file_checksum: None,
+            active_snapshot_id: None,
             index_all: false,
             columns_to_index: None,
             partition_values: std::collections::HashMap::new(),
@@ -313,6 +317,61 @@ impl SegmentConfig {
     pub fn with_record_count(mut self, count: u64) -> Self {
         self.record_count = Some(count);
         self
+    }
+
+    pub fn with_file_checksum(mut self, checksum: Option<String>) -> Self {
+        self.file_checksum = checksum;
+        self
+    }
+
+    pub fn with_active_snapshot_id(mut self, id: i64) -> Self {
+        self.active_snapshot_id = Some(id);
+        self
+    }
+
+    /// Verifies the cryptographic and structural lineage of an index artifact
+    /// against this segment's authoritative data constraints.
+    pub fn is_index_valid(&self, idx: &crate::core::manifest::IndexFile) -> bool {
+        // 1. Checksum Match (if present on data file)
+        if let Some(ref data_checksum) = self.file_checksum {
+            if !idx.source_data_checksum.is_empty() && idx.source_data_checksum != *data_checksum {
+                tracing::warn!(
+                    "Index {} rejected: checksum mismatch (expected {}, got {})",
+                    idx.file_path,
+                    data_checksum,
+                    idx.source_data_checksum
+                );
+                return false;
+            }
+        }
+
+        // 2. Record Count Match
+        if let Some(data_records) = self.record_count {
+            if idx.source_record_count > 0 && idx.source_record_count as u64 != data_records {
+                tracing::warn!(
+                    "Index {} rejected: record count mismatch (expected {}, got {})",
+                    idx.file_path,
+                    data_records,
+                    idx.source_record_count
+                );
+                return false;
+            }
+        }
+
+        // 3. Snapshot ID
+        if let Some(active_snapshot) = self.active_snapshot_id {
+            if idx.source_snapshot_id > 0 && idx.source_snapshot_id > active_snapshot {
+                tracing::warn!(
+                    "Index {} rejected: from future snapshot {} (active {})",
+                    idx.file_path,
+                    idx.source_snapshot_id,
+                    active_snapshot
+                );
+                return false;
+            }
+        }
+
+        true
     }
 
     pub fn with_index_all(mut self, index_all: bool) -> Self {

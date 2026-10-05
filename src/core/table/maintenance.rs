@@ -192,7 +192,8 @@ impl Table {
 
             let config = SegmentConfig::new(&full_base_path, segment_id)
                 .with_index_files(entry.index_files.clone())
-                .with_record_count(entry.record_count as u64);
+                .with_record_count(entry.record_count as u64)
+                .with_file_checksum(entry.file_checksum.clone());
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
 
             let mut new_deletes = Vec::new();

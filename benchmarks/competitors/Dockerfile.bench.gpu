@@ -8,7 +8,10 @@ FROM bsdb-bench-runner:latest
 RUN pip uninstall -y faiss-cpu || true
 RUN pip install faiss-gpu-cu12
 
-# Optional GPU graph library (large; uncomment to enable cuGraph comparisons):
-# RUN pip install cugraph-cu12
+# GPU graph library (large). Enables the cuGraph graph competitor.
+# Use the CUDA 13 build: the cu12 wheels have no Blackwell (sm_120) kernels, so
+# on an RTX 50-series card they fail at CUDA context init with a misleading
+# "cudaErrorMemoryAllocation: out of memory".
+RUN pip install cugraph-cu13
 
 WORKDIR /opt/bench

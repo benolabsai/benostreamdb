@@ -505,6 +505,7 @@ impl TableBuilder {
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: Arc::new(tokio::sync::Notify::new()),
+            caller_reserved_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             format_version: Arc::new(std::sync::atomic::AtomicI32::new(manifest.format_version)),
         };
 

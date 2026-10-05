@@ -501,7 +501,7 @@ pub enum TableUpdateAction {
     #[serde(rename = "remove-sidecar-index")]
     RemoveSidecarIndex {
         #[serde(rename = "index-type")]
-        index_type: Option<String>,
+        index_category: Option<String>,
         #[serde(rename = "column-name")]
         column_name: Option<String>,
     },
@@ -643,7 +643,7 @@ async fn update_table(
                 }
             }
             TableUpdateAction::RemoveSidecarIndex {
-                index_type,
+                index_category,
                 column_name,
             } => {
                 println!("Processing RemoveSidecarIndex...");
@@ -654,10 +654,10 @@ async fn update_table(
                             let old_len = entry.index_files.len();
                             entry.index_files.retain(|idx| {
                                 let match_type =
-                                    index_type.as_ref().is_none_or(|t| idx.index_type == *t);
+                                    index_category.as_ref().is_none_or(|t| idx.index_category == *t);
                                 let match_col = column_name
                                     .as_ref()
-                                    .is_none_or(|c| idx.column_name.as_ref() == Some(c));
+                                    .is_none_or(|c| &idx.column_name == c);
                                 !(match_type && match_col) // Keep if NOT matching removal criteria
                             });
                             if entry.index_files.len() < old_len {

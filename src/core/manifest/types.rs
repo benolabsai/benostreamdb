@@ -11,16 +11,85 @@ pub type SegmentId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct IndexFile {
+    /// Format version of the serialized index structure (e.g., 1 for legacy, 2 for tightened/Puffin)
+    #[serde(default = "default_index_format_version")]
+    pub format_version: u32,
+
+    /// Unique identifier for this index instance
+    pub index_id: String,
+
+    /// High-level index category: "vector", "lexical", "scalar", "composite", "bloom"
+    pub index_category: String,
+
+    /// Concrete algorithm implementation: "hnsw_turboquant8", "hnsw_f32", "bm25_v1", "roaring_bitmap_v1"
+    pub algorithm: String,
+
+    /// Target column name within the Parquet schema
+    pub column_name: String,
+
+    // -----------------------------------------------------------------------
+    // Strict Lineage Bindings (Data Integrity Guards)
+    // -----------------------------------------------------------------------
+    /// Exact Iceberg Snapshot ID active when this index was constructed
+    pub source_snapshot_id: i64,
+
+    /// Cryptographic SHA-256 hash of the target Parquet data file
+    pub source_data_checksum: String,
+
+    /// Exact record count of the target Parquet data file
+    /// Enforces a strict 1-to-1 bijection between index point IDs and Parquet row offsets
+    pub source_record_count: i64,
+
+    /// Cryptographic SHA-256 hash of the index artifact itself (detects storage corruption / bitrot)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index_checksum: Option<String>,
+
+    // -----------------------------------------------------------------------
+    // Physical Storage Location & Puffin Bundle Offsets
+    // -----------------------------------------------------------------------
+    /// Physical URI or relative storage path of the index artifact (or Puffin bundle)
     pub file_path: String,
-    pub index_type: String, // e.g. "scalar", "vector", "bloom"
-    pub column_name: Option<String>,
-    /// BenoStream Extension: Puffin blob details if this is a Puffin file
-    #[serde(default)]
+
+    /// Puffin blob type if packed into an Iceberg Puffin container
+    /// e.g., "org.apache.iceberg.vector.hnsw-tq8", "org.apache.iceberg.lexical.bm25"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob_type: Option<String>,
-    #[serde(default)]
-    pub offset: Option<i64>,
-    #[serde(default)]
-    pub length: Option<i64>,
+
+    /// Byte offset within the container file where the index payload begins
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_offset: Option<i64>,
+
+    /// Length in bytes of the index payload
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_length: Option<i64>,
+
+    /// Compression algorithm applied to the index blob ("zstd", "lz4", "none")
+    #[serde(default = "default_index_compression")]
+    pub compression: String,
+}
+
+fn default_index_format_version() -> u32 {
+    2
+}
+fn default_index_compression() -> String {
+    "zstd".to_string()
+}
+
+impl IndexFile {
+    /// Whether this index belongs to the lexical (full-text) family.
+    ///
+    /// The canonical category is `"lexical"`. Legacy manifests written before
+    /// the rename used `"inverted"`, and some code
+    /// paths historically used `"bm25"`. All three denote the same family
+    /// (inverted postings / BM25) and must be treated equivalently so that
+    /// legacy tables keep working and new tables are recognized by every
+    /// consumer.
+    pub fn is_lexical(&self) -> bool {
+        matches!(
+            self.index_category.as_str(),
+            "lexical" | "inverted" | "bm25"
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -467,6 +536,15 @@ pub enum IndexAlgorithm {
         #[serde(default = "default_dst_column")]
         dst_column: String,
     },
+    /// A rebuildable inverted index over selected JSON paths in a `Utf8`
+    /// column. Each configured path (e.g. `$.user.id`) is extracted per row and
+    /// indexed as `(path, value) -> row_ids`, so equality/containment filters
+    /// on those paths avoid a full scan.
+    JsonPath {
+        /// JSON paths to index, e.g. `["$.user.id", "$.level"]`.
+        #[serde(default)]
+        paths: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for IndexAlgorithm {
@@ -481,6 +559,7 @@ impl std::fmt::Display for IndexAlgorithm {
             IndexAlgorithm::Bitmap => write!(f, "bitmap"),
             IndexAlgorithm::CompositeBitmap { .. } => write!(f, "composite_bitmap"),
             IndexAlgorithm::CsrGraph { .. } => write!(f, "csr_graph"),
+            IndexAlgorithm::JsonPath { .. } => write!(f, "json_path"),
         }
     }
 }

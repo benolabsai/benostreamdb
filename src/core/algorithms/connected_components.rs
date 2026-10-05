@@ -181,3 +181,108 @@ pub async fn compute_connected_components(
 
     Ok(state_cur)
 }
+
+use crate::core::index::csr_graph::MultiSegmentCsrGraph;
+
+/// CSR-backed Weakly Connected Components using Disjoint Set Union (Union-Find).
+/// Runs in almost linear O(V + E * alpha(V)) time directly over memory-mapped CSR files.
+pub fn connected_components_csr(
+    forward: &MultiSegmentCsrGraph,
+    reverse: Option<&MultiSegmentCsrGraph>,
+) -> (Vec<u64>, Vec<u64>) {
+    // 1. Gather all unique node IDs across all CSR segments
+    let mut node_to_idx: ahash::AHashMap<u64, usize> = ahash::AHashMap::new();
+    let mut idx_to_node: Vec<u64> = Vec::new();
+
+    let all_graphs: Vec<&MultiSegmentCsrGraph> = match reverse {
+        Some(rev) => vec![forward, rev],
+        None => vec![forward],
+    };
+
+    for g in &all_graphs {
+        for seg in &g.segments {
+            let dict = seg.dict();
+            for &node_id in dict {
+                if let std::collections::hash_map::Entry::Vacant(e) = node_to_idx.entry(node_id) {
+                    e.insert(idx_to_node.len());
+                    idx_to_node.push(node_id);
+                }
+            }
+        }
+    }
+
+    let n = idx_to_node.len();
+    if n == 0 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut rank: Vec<u8> = vec![0; n];
+
+    fn find(mut i: usize, parent: &mut [usize]) -> usize {
+        let mut root = i;
+        while root != parent[root] {
+            root = parent[root];
+        }
+        while i != root {
+            let nxt = parent[i];
+            parent[i] = root;
+            i = nxt;
+        }
+        root
+    }
+
+    fn union(i: usize, j: usize, parent: &mut [usize], rank: &mut [u8]) {
+        let root_i = find(i, parent);
+        let root_j = find(j, parent);
+        if root_i != root_j {
+            if rank[root_i] < rank[root_j] {
+                parent[root_i] = root_j;
+            } else if rank[root_i] > rank[root_j] {
+                parent[root_j] = root_i;
+            } else {
+                parent[root_j] = root_i;
+                rank[root_i] += 1;
+            }
+        }
+    }
+
+    // 2. Union endpoints for every edge in each segment
+    for g in &all_graphs {
+        for seg in &g.segments {
+            let dict = seg.dict();
+            for d in 0..seg.num_nodes {
+                let u = dict[d];
+                let u_idx = match node_to_idx.get(&u) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                for e in seg.get_neighbors_raw(d) {
+                    let v = dict[e.dst_id as usize];
+                    if let Some(&v_idx) = node_to_idx.get(&v) {
+                        union(u_idx, v_idx, &mut parent, &mut rank);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Compute canonical component id (minimum original node id in component)
+    let mut comp_min = idx_to_node.clone();
+    for i in 0..n {
+        let root = find(i, &mut parent);
+        if idx_to_node[i] < comp_min[root] {
+            comp_min[root] = idx_to_node[i];
+        }
+    }
+
+    // 4. Build output vectors
+    let mut nodes = Vec::with_capacity(n);
+    let mut components = Vec::with_capacity(n);
+    for i in 0..n {
+        nodes.push(idx_to_node[i]);
+        components.push(comp_min[find(i, &mut parent)]);
+    }
+
+    (nodes, components)
+}

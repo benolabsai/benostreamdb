@@ -53,8 +53,15 @@ async fn build_edge_table(uri: &str) -> anyhow::Result<Table> {
     table.commit_async().await?;
     table.wait_for_background_tasks_async().await?;
 
-    // The index build commits a follow-up manifest version in a background task.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // The index build commits a follow-up manifest version in a background
+    // task. Poll for it rather than sleeping a fixed interval, which is flaky
+    // under parallel test load.
+    for _ in 0..100 {
+        if table.load_graph_index("source").await?.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
     drop(table);
 
     // Re-open so index registration is inferred from the physical files.
@@ -200,6 +207,11 @@ async fn regional_drift_is_mode_invariant() -> anyhow::Result<()> {
 #[tokio::test]
 async fn udafs_are_mode_invariant() -> anyhow::Result<()> {
     use benostreamdb::core::sql::session::BenoStreamSession;
+    // Surface the graph-loading debug logs if a mode diverges.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("benostreamdb=debug")
+        .with_test_writer()
+        .try_init();
     let dir = tempdir()?;
     let path = dir.path().to_str().unwrap().to_string();
     let uri = format!("file://{}", path);

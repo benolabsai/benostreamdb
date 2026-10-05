@@ -35,6 +35,25 @@ use datafusion::physical_plan::ExecutionPlan;
 use crate::core::sql::physical_plan::BenoStreamExec;
 use crate::core::table::Table;
 
+/// Effective DataFusion `target_partitions` for a query.
+///
+/// Scales to the CPU budget visible to the process (respects cgroup limits via
+/// `std::thread::available_parallelism`) rather than hard-coding a value, so a
+/// container gets the parallelism it is actually allowed. `BSDB_TARGET_PARTITIONS`
+/// overrides for tuning.
+pub fn effective_target_partitions() -> usize {
+    if let Ok(n) = std::env::var("BSDB_TARGET_PARTITIONS") {
+        if let Ok(n) = n.parse::<usize>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4)
+}
+
 /// A range bound on a single column, used for OR-over-ranges pruning.
 #[derive(Debug, Clone)]
 struct RangeBound {
@@ -438,8 +457,12 @@ impl TableProvider for BenoStreamTableProvider {
             }
         }
 
-        // Determine parallelism
-        let target_partitions = self.table.get_max_parallel_readers().unwrap_or(4);
+        // Determine parallelism: an explicit override wins, else scale to the
+        // effective CPU budget (respects cgroup limits).
+        let target_partitions = self
+            .table
+            .get_max_parallel_readers()
+            .unwrap_or_else(effective_target_partitions);
 
         let mut partitions = vec![Vec::new(); target_partitions];
         for (i, segment) in segments.into_iter().enumerate() {

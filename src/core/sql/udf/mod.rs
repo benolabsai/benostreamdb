@@ -10,6 +10,7 @@
 
 pub mod aggregate;
 pub mod distance;
+pub mod json;
 pub mod sparse;
 pub mod text;
 pub mod transform;
@@ -50,6 +51,33 @@ pub use text::{Bm25ScoreUDF, TfIdfUDF};
 // -- Re-exports from sparse --
 
 pub use sparse::{sparsevec_dims, sparsevec_nnz, SparseToVectorUDF, VectorToSparseUDF};
+
+// -- Re-exports from json --
+
+pub use json::{
+    JsonContainsUDF, JsonExistsUDF, JsonExtractPathUDF, JsonPathExistsUDF, JsonPathQueryUDF,
+    JsonTypeofUDF,
+};
+
+/// Returns all PostgreSQL `json` scalar UDFs for registration with DataFusion.
+///
+/// JSON is stored as text (not a decomposed binary representation), so these
+/// use `json_*` names. `json_extract_path` / `json_extract_path_text` take a
+/// variadic path; `json_contains` tests recursive containment (`@>`);
+/// `json_exists` tests a top-level key/element; `json_typeof` names the type;
+/// `json_path_exists` / `json_path_query` evaluate a jsonpath subset
+/// (`$.a.b[0]`, `[*]`).
+pub fn all_json_udfs() -> Vec<ScalarUDF> {
+    vec![
+        ScalarUDF::new_from_impl(JsonExtractPathUDF::new()),
+        ScalarUDF::new_from_impl(JsonExtractPathUDF::text()),
+        ScalarUDF::new_from_impl(JsonContainsUDF::new()),
+        ScalarUDF::new_from_impl(JsonExistsUDF::new()),
+        ScalarUDF::new_from_impl(JsonTypeofUDF::new()),
+        ScalarUDF::new_from_impl(JsonPathExistsUDF::new()),
+        ScalarUDF::new_from_impl(JsonPathQueryUDF::new()),
+    ]
+}
 
 /// Returns all vector scalar UDFs for registration with DataFusion
 pub fn all_vector_udfs() -> Vec<ScalarUDF> {

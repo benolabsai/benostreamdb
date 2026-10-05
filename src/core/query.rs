@@ -588,7 +588,9 @@ pub async fn execute_vector_search_with_config(
                     .with_parquet_path(entry.file_path.clone())
                     .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
                     .with_delete_files(entry.delete_files.clone())
-                    .with_index_files(entry.index_files.clone());
+                    .with_index_files(entry.index_files.clone())
+                    .with_record_count(entry.record_count as u64)
+                    .with_file_checksum(entry.file_checksum.clone());
 
                 let reader = HybridReader::new(config, store.clone(), &base_uri);
 
@@ -740,7 +742,9 @@ pub async fn execute_vector_search_raw_with_config(
                     .with_parquet_path(entry.file_path.clone())
                     .with_data_store(data_store_clone.clone().unwrap_or(store.clone()))
                     .with_delete_files(entry.delete_files.clone())
-                    .with_index_files(entry.index_files.clone());
+                    .with_index_files(entry.index_files.clone())
+                    .with_record_count(entry.record_count as u64)
+                    .with_file_checksum(entry.file_checksum.clone());
                 let reader =
                     crate::core::reader::HybridReader::new(config, store.clone(), &base_uri);
                 let results = reader

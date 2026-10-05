@@ -72,41 +72,33 @@ async fn drop_index_removes_files_for_tiered_manifest() -> anyhow::Result<()> {
     table.wait_for_background_tasks_async().await?;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    // The CSR artifacts must exist on disk before we drop the index.
-    let csr_suffixes = [
-        ".graph_v2.csr.offsets",
-        ".graph_v2.csr.edges",
-        ".graph_v2.csr.dict",
-    ];
-    let find_csr = |suffix: &str| -> Option<std::path::PathBuf> {
+    // The CSR artifacts are packed into a Puffin compound bundle, which must
+    // exist on disk before we drop the index.
+    let find_puffin = || -> Option<std::path::PathBuf> {
         std::fs::read_dir(&path)
             .ok()?
             .flatten()
             .map(|e| e.path())
             .find(|p| {
                 p.file_name()
-                    .map(|n| n.to_string_lossy().ends_with(suffix))
+                    .map(|n| n.to_string_lossy().ends_with(".puffin"))
                     .unwrap_or(false)
             })
     };
-    for suffix in csr_suffixes {
-        assert!(
-            find_csr(suffix).is_some(),
-            "expected a `{suffix}` file on disk before drop_index"
-        );
-    }
+    assert!(
+        find_puffin().is_some(),
+        "expected a `.puffin` bundle on disk before drop_index"
+    );
 
     // Drop the index. With the tiered-manifest bug this was a no-op: the files
     // stayed on disk forever.
     table.drop_index("source".to_string()).await?;
 
-    for suffix in csr_suffixes {
-        assert!(
-            find_csr(suffix).is_none(),
-            "drop_index left `{suffix}` orphaned on disk — it did not resolve the \
-             tiered manifest list"
-        );
-    }
+    assert!(
+        find_puffin().is_none(),
+        "drop_index left the `.puffin` bundle orphaned on disk — it did not \
+         resolve the tiered manifest list"
+    );
 
     Ok(())
 }

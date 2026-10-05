@@ -15,7 +15,7 @@
 /// Attribution: Underlying HNSW graph logic relies on the vendored `hnsw_rs` library (MIT/Apache 2.0).
 /// Copyright Jean-Pierre Both and hnsw_rs contributors. Vendored and patched to support exact pre-filtering.
 use crate::core::cache::CacheExt;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing;
@@ -26,14 +26,12 @@ use super::turboquant::TurboQuantEncoder;
 use super::{Quantizer, QuantizerImpl, VectorMetric, VectorValue};
 use crate::core::index::hnsw_rs::prelude::*;
 use crate::core::manifest::IndexAlgorithm;
-use crate::core::puffin::PuffinReader;
 use arrow::array::{Array, ArrayRef};
 use arrow::record_batch::RecordBatch;
 use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, ObjectStore};
+use object_store::ObjectStore;
 use parquet::file::reader::FileReader;
 use rayon::prelude::*;
-use std::io::Cursor;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DistL1;
@@ -1383,144 +1381,6 @@ impl HnswIvfIndex {
         }
     }
 
-    pub async fn load_puffin_async(store: Arc<dyn ObjectStore>, path: &str) -> Result<Arc<Self>> {
-        let path_obj = Path::from(path);
-        let bytes = store.get(&path_obj).await?.bytes().await?;
-        let mut reader = PuffinReader::new(Cursor::new(bytes))?;
-
-        let mut centroids: Vec<Vec<f32>> = Vec::new();
-        let mut cluster_graphs = HashMap::new();
-        let mut dim = 0;
-        let mut metric = VectorMetric::L2;
-        let mut _quantizer: Option<crate::core::index::QuantizerImpl> = None;
-
-        // Temporary storage for building clusters
-        let mut graphs_graph: HashMap<usize, Vec<u8>> = HashMap::new();
-        let mut graphs_mapping: HashMap<usize, Vec<u8>> = HashMap::new();
-
-        let blobs = reader.footer().blobs.clone();
-        for (i, blob) in blobs.iter().enumerate() {
-            match blob.r#type.as_str() {
-                "hnsw-ivf-centroids" => {
-                    let data = reader.read_blob(i)?;
-                    // Decode centroids from parquet or raw? For now let's assume it's the centroids parquet bytes
-                    // BUT: We could just store them as raw F32 blobs for speed.
-                    // Let's stick to the current Parquet centroids for now to reuse logic.
-                    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-                    let builder =
-                        ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(data))?;
-                    let reader = builder.build()?;
-                    let batches: Vec<RecordBatch> = reader
-                        .map(|r| r.map_err(anyhow::Error::from))
-                        .collect::<Result<Vec<_>>>()?;
-                    let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-                    centroids = Self::extract_centroids_from_batch(&batch)?;
-                    if !centroids.is_empty() {
-                        dim = centroids[0].len();
-                    }
-
-                    if let Some(m_str) = blob.properties.get("vector-metric") {
-                        metric = m_str.parse::<VectorMetric>().unwrap_or(VectorMetric::L2);
-                    }
-                }
-                "hnsw-cluster-graph" => {
-                    if let Some(cid_str) = blob.properties.get("cluster-id") {
-                        if let Ok(cid) = cid_str.parse::<usize>() {
-                            graphs_graph.insert(cid, reader.read_blob(i)?);
-                        }
-                    }
-                }
-                "hnsw-cluster-mapping" => {
-                    if let Some(cid_str) = blob.properties.get("cluster-id") {
-                        if let Ok(cid) = cid_str.parse::<usize>() {
-                            graphs_mapping.insert(cid, reader.read_blob(i)?);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Assemble clusters
-        for (cid, graph_bytes) in graphs_graph {
-            let mapping_bytes = graphs_mapping
-                .remove(&cid)
-                .context("Missing cluster mapping")?;
-
-            let hnsw = match metric {
-                VectorMetric::L2 => HnswGraph::L2Arrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistL2,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-                VectorMetric::Cosine => HnswGraph::CosineArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistCosine,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-                VectorMetric::InnerProduct => HnswGraph::DotArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistDot,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-                VectorMetric::L1 => HnswGraph::L1Arrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistL1,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-                VectorMetric::Hamming => HnswGraph::HammingArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistHamming,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-                VectorMetric::Jaccard => HnswGraph::JaccardArrow(
-                    crate::core::index::hnsw_rs::arrow_hnsw::ArrowHnsw::load_from_bytes(
-                        &graph_bytes,
-                        DistJaccard,
-                    )
-                    .map_err(|e| anyhow::anyhow!("ArrowHnsw load failed: {}", e))?,
-                ),
-            };
-
-            use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-            let map_builder =
-                ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(mapping_bytes))?;
-            let map_reader = map_builder.build()?;
-            let batches: Vec<RecordBatch> = map_reader
-                .map(|r| r.map_err(anyhow::Error::from))
-                .collect::<Result<Vec<_>>>()?;
-            let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches)?;
-            let row_id_mapping = Self::extract_row_id_mapping_from_col(batch.column(0));
-
-            cluster_graphs.insert(cid, (hnsw, row_id_mapping));
-        }
-
-        let index = HnswIvfIndex {
-            centroids,
-            metric,
-            cluster_graphs,
-            _n_lists: 0, // Not strictly used for search
-            dim,
-            quantizer: None,
-            _compute_context: crate::core::index::gpu::ComputeContext::auto_detect(),
-        };
-
-        let index_arc = Arc::new(index);
-        // HNSW_IVF_CACHE.insert(path.to_string(), index_arc.clone()).await;
-
-        Ok(index_arc)
-    }
-
     pub async fn load_async(
         store: Arc<dyn ObjectStore>,
         base_path: &str,
@@ -1809,6 +1669,65 @@ impl HnswIvfIndex {
             .await;
 
         Ok(index_arc)
+    }
+
+    /// Load an HNSW-IVF index packed inside a Puffin compound bundle.
+    ///
+    /// The bundle's blobs are materialized into a temporary directory (using
+    /// each blob's `filename` property) and then loaded through the standard
+    /// multi-file loader. `use_mmap` is forced off because the temporary
+    /// directory is dropped once the index has copied its bytes into memory.
+    pub async fn load_from_puffin(
+        store: Arc<dyn ObjectStore>,
+        puffin_path: &str,
+        cache_key: &str,
+        _use_mmap: bool,
+        column_name: &str,
+    ) -> Result<Arc<Self>> {
+        use crate::core::cache::HNSW_IVF_CACHE;
+
+        let cache_key_str = cache_key.to_string();
+        if let Some(cached) = HNSW_IVF_CACHE
+            .get_with_metrics(&cache_key_str, "hnsw_ivf")
+            .await
+        {
+            return Ok(cached);
+        }
+
+        let (temp_dir, written) =
+            crate::core::puffin::materialize_puffin_blobs(&store, puffin_path).await?;
+
+        // A Puffin bundle holds one vector index per (column, algorithm). Only
+        // derive the loader base path from the centroids blob belonging to the
+        // requested column — otherwise a second vector column in the same
+        // segment would be loaded instead (the blob order is not stable).
+        let marker = format!(".{column_name}.");
+        let base_path = written
+            .iter()
+            .find_map(|(_, name)| {
+                if name.contains(&marker) {
+                    name.strip_suffix(".centroids.parquet").map(str::to_string)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Puffin bundle '{}' has no centroids blob for column '{}'",
+                    puffin_path,
+                    column_name
+                )
+            })?;
+
+        let local_store: Arc<dyn ObjectStore> = Arc::new(
+            object_store::local::LocalFileSystem::new_with_prefix(temp_dir.path())?,
+        );
+
+        // Force non-mmap: the temp dir is dropped after this call.
+        let index =
+            Self::load_async_with_cache_key(local_store, &base_path, cache_key, false).await?;
+        drop(temp_dir);
+        Ok(index)
     }
 
     pub fn load(base_path: &str) -> Result<Self> {

@@ -110,16 +110,16 @@ impl Table {
                 let has_scalar_indexes = entry
                     .index_files
                     .iter()
-                    .any(|f| f.index_type == "scalar" || f.index_type == "inverted");
+                    .any(|f| f.index_category == "scalar" || f.is_lexical());
                 let has_vector_indexes = entry
                     .index_files
                     .iter()
-                    .any(|f| f.index_type == "vector" || f.index_type == "hnsw");
+                    .any(|f| f.index_category == "vector" || f.index_category == "hnsw");
 
                 let indexed_columns = entry
                     .index_files
                     .iter()
-                    .filter_map(|f| f.column_name.clone())
+                    .map(|f| f.column_name.clone())
                     .collect();
 
                 // Ensure absolute path if possible.
@@ -170,16 +170,16 @@ impl Table {
             let has_scalar_indexes = entry
                 .index_files
                 .iter()
-                .any(|f| f.index_type == "scalar" || f.index_type == "inverted");
+                .any(|f| f.index_category == "scalar" || f.is_lexical());
             let has_vector_indexes = entry
                 .index_files
                 .iter()
-                .any(|f| f.index_type == "vector" || f.index_type == "hnsw");
+                .any(|f| f.index_category == "vector" || f.index_category == "hnsw");
 
             let indexed_columns = entry
                 .index_files
                 .iter()
-                .filter_map(|f| f.column_name.clone())
+                .map(|f| f.column_name.clone())
                 .collect();
 
             let file_path = if entry.file_path.contains("://") {
@@ -704,10 +704,11 @@ impl Table {
 
             for entry in &all_entries {
                 for idx in &entry.index_files {
-                    if let Some(col) = &idx.column_name {
-                        if idx.index_type == "scalar" || idx.index_type == "inverted" {
+                    let col = &idx.column_name;
+                    {
+                        if idx.index_category == "scalar" || idx.is_lexical() {
                             scalar_idx.insert(col.clone());
-                        } else if idx.index_type == "vector" || idx.index_type == "hnsw" {
+                        } else if idx.index_category == "vector" || idx.index_category == "hnsw" {
                             vector_idx.insert(col.clone());
                         }
                     }
@@ -745,10 +746,11 @@ impl Table {
 
         for entry in &all_entries {
             for idx in &entry.index_files {
-                if let Some(col) = &idx.column_name {
-                    if idx.index_type == "scalar" || idx.index_type == "inverted" {
+                let col = &idx.column_name;
+                {
+                    if idx.index_category == "scalar" || idx.is_lexical() {
                         scalar_idx.insert(col.clone());
-                    } else if idx.index_type == "vector" || idx.index_type == "hnsw" {
+                    } else if idx.index_category == "vector" || idx.index_category == "hnsw" {
                         vector_idx.insert(col.clone());
                     }
                 }

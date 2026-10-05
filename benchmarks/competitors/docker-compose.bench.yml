@@ -40,11 +40,25 @@ x-bench-env: &bench-env
   EF_SEARCH: "${EF_SEARCH:-200}"
   ENGINE: "${ENGINE:-faiss}"
   DEVICE: "${DEVICE:-cpu}"
+  WORKLOAD: "${WORKLOAD:-vector}"
+  ALGORITHM: "${ALGORITHM:-pagerank}"
+  GRAPH_EDGES: "${GRAPH_EDGES:-}"
+  SQL: "${SQL:-}"
+  PARQUET: "${PARQUET:-}"
   PGVECTOR_DSN: "postgresql://bench:bench@pgvector:5432/bench"
   ES_URL: "http://opensearch:9200"
   NEO4J_URI: "bolt://neo4j:7687"
   NEO4J_USER: "neo4j"
   NEO4J_PASSWORD: "benchpass"
+  CLICKHOUSE_HOST: "clickhouse"
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USER: "default"
+  CLICKHOUSE_PASSWORD: ""
+  # Cap the RAPIDS (cuDF/cuGraph) device pool so it leaves headroom for the
+  # desktop compositor (Wayland holds ~1.3 GB on the 5070 Ti); without this the
+  # pool grows into the whole card and cuGraph fails with a misleading
+  # "cudaErrorMemoryAllocation: out of memory".
+  RMM_POOL_SIZE: "12GB"
 
 networks:
   bench: {}
@@ -99,6 +113,22 @@ services:
       retries: 60
     <<: *envelope
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_USER: "default"
+      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    <<: *envelope
+
   # --- Runner (competitors AND BenoStreamDB) under the SAME envelope -------- #
   bench:
     build:
@@ -112,22 +142,6 @@ services:
       - ./results:/results
       - ./data:/opt/bench/data
       - ../../dist:/wheels:ro
-    command: >
-      sh -lc '
-        if [ "$$ENGINE" = "benostreamdb" ]; then
-          pip install /wheels/*.whl && \
-          python /opt/bench/ann_benchmarks.py
-            --dataset "$$DATASET" --limit "$$LIMIT" --queries "$$QUERIES"
-            --k "$$K" --m "$$M" --ef-construction "$$EF_CONSTRUCTION"
-            --ef-search "$$EF_SEARCH" --cores "$$BENCH_CPUS"
-            --out "/results/benostreamdb_$${DATASET}_$${DEVICE}.json";
-        else
-          python /opt/bench/run_competitor.py
-            --engine "$$ENGINE" --dataset "$$DATASET" --limit "$$LIMIT"
-            --queries "$$QUERIES" --k "$$K" --m "$$M"
-            --ef-construction "$$EF_CONSTRUCTION" --ef-search "$$EF_SEARCH"
-            --device "$$DEVICE"
-            --cores "$$BENCH_CPUS" --ram-gb "$${BENCH_RAM_GB:-16}"
-            --out "/results/$${ENGINE}_$${DATASET}_$${DEVICE}.json";
-        fi'
+    # The runner logic lives in the image's CMD (`/opt/bench/run_bench.sh`);
+    # an inline compose `command:` was mangled by YAML folding.
     <<: *envelope

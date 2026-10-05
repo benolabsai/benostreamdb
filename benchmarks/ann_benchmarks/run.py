@@ -39,7 +39,9 @@ Datasets (from http://ann-benchmarks.com):
     nytimes-256-angular, lastfm-64-dot
 """
 import argparse
+import json
 import os
+import platform
 import shutil
 import time
 import urllib.request
@@ -108,6 +110,39 @@ def dir_size_bytes(path: str) -> int:
     return total
 
 
+def _cpu_model() -> str:
+    try:
+        with open("/proc/cpuinfo", encoding="utf-8") as f:
+            for line in f:
+                if line.lower().startswith("model name"):
+                    return line.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return platform.processor()
+
+
+def _total_ram_gb():
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page = os.sysconf("SC_PAGE_SIZE")
+        return round(pages * page / 1024**3, 1)
+    except Exception:
+        return None
+
+
+def _env() -> dict:
+    """Container-visible hardware profile, matching the competitor runner."""
+    return {
+        "cpu_model": _cpu_model(),
+        "cores": os.cpu_count(),
+        "ram_gb": _total_ram_gb(),
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "containerized": os.path.exists("/.dockerenv"),
+        "gpus": [],
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="sift-128-euclidean")
@@ -121,7 +156,8 @@ def main() -> None:
     ap.add_argument("--metric", default=None, help="distance metric (default: from the dataset)")
     ap.add_argument("--cores", type=int, default=0, help="constrain the engine to N cores (0 = leave default)")
     ap.add_argument("--ram-gb", type=float, default=0.0, help="constrain the engine to N GB RAM (0 = leave default)")
-    ap.add_argument("--out", default=None, help="markdown output path")
+    ap.add_argument("--out", default=None, help="output path (.json emits JSON + a .md sibling)")
+    ap.add_argument("--device", default="cpu", help="device tag (cpu/gpu)")
     args = ap.parse_args()
 
     if args.cores > 0 or args.ram_gb > 0:
@@ -152,13 +188,6 @@ def main() -> None:
     if os.path.exists(db_path):
         shutil.rmtree(db_path)
 
-    df = pd.DataFrame(
-        {
-            "id": np.arange(n, dtype=np.int64),
-            "embedding": [row.tolist() for row in train],
-        }
-    )
-
     t0 = time.time()
     table = bsdb.Table(db_path)
     table.add_index(
@@ -170,7 +199,20 @@ def main() -> None:
             "metric": metric,
         },
     )
-    table.write(df)
+    # Write in chunks. The engine's ingest RAM back-pressure counts *process*
+    # RSS, so holding the whole 1M-row frame in the caller would push RSS over
+    # the limit and deadlock the write (the caller cannot free the frame until
+    # the write returns). Chunking keeps the caller-side footprint bounded.
+    chunk = 100_000
+    for start in range(0, n, chunk):
+        end = min(start + chunk, n)
+        df = pd.DataFrame(
+            {
+                "id": np.arange(start, end, dtype=np.int64),
+                "embedding": [row.tolist() for row in train[start:end]],
+            }
+        )
+        table.write(df)
     table.commit()
     # The vector index is built as a background task after the commit. Wait for
     # it (and count that in build time) or every query silently falls back to a
@@ -179,13 +221,23 @@ def main() -> None:
     build_s = time.time() - t0
     index_bytes = dir_size_bytes(db_path)
 
+    # Secondary indexes are packed into Puffin compound bundles (`.puffin`),
+    # so count those; the loose-sidecar names are kept for older tables.
     n_index_files = sum(
         1
         for _root, _dirs, files in os.walk(db_path)
         for fn in files
         if any(
             s in fn
-            for s in (".hnsw", ".centroid", ".tq8", ".cluster", ".mapping", ".pq")
+            for s in (
+                ".puffin",
+                ".hnsw",
+                ".centroid",
+                ".tq8",
+                ".cluster",
+                ".mapping",
+                ".pq",
+            )
         )
     )
     if n_index_files == 0:
@@ -214,15 +266,18 @@ def main() -> None:
     latencies = []
     hits = 0.0
     for i in range(q):
+        query_list = test[i].tolist()
         vf = {
             "column": "embedding",
-            "query": test[i].tolist(),
+            "query": query_list,
             "k": k,
             "ef_search": args.ef_search,
         }
-        t1 = time.time()
-        res = table.to_arrow(vector_filter=vf)
-        latencies.append(time.time() - t1)
+        t1 = time.perf_counter()
+        # Project only `id`: the harness uses nothing else, and fetching the
+        # embedding column would read the whole (multi-hundred-MB) row group.
+        res = table.to_arrow(vector_filter=vf, columns=["id"])
+        latencies.append(time.perf_counter() - t1)
         got = set(res.column("id").to_pylist()) if "id" in res.column_names else set()
         truth = set(neighbors[i][:k].tolist())
         hits += len(got & truth) / k
@@ -236,9 +291,10 @@ def main() -> None:
     # Pure index latency (no Parquet I/O) — the comparable ANN-Benchmarks number.
     pure_latencies = []
     for i in range(q):
-        t1 = time.time()
-        _ = table.vector_search_scored("embedding", test[i].tolist(), k, metric)
-        pure_latencies.append(time.time() - t1)
+        query_list = test[i].tolist()
+        t1 = time.perf_counter()
+        _ = table._inner.vector_search_scored("embedding", query_list, k, metric, args.ef_search)
+        pure_latencies.append(time.perf_counter() - t1)
     pure_qps = q / sum(pure_latencies) if sum(pure_latencies) > 0 else 0.0
     pure_p50 = float(np.percentile(pure_latencies, 50) * 1000)
     pure_p99 = float(np.percentile(pure_latencies, 99) * 1000)
@@ -250,8 +306,46 @@ def main() -> None:
         flush=True,
     )
 
+    record = {
+        "engine": "benostreamdb",
+        "dataset": args.dataset,
+        "workload": "vector_ann",
+        "device": args.device,
+        "n": int(n),
+        "dim": int(dim),
+        "index": {
+            "type": args.index,
+            "m": args.m,
+            "ef_construction": args.ef_construction,
+            "ef_search": args.ef_search,
+            "metric": metric,
+        },
+        "queries": q,
+        "k": k,
+        "build_s": round(build_s, 3),
+        "index_mb": round(index_bytes / 1e6, 2),
+        "recall_at_k": round(recall, 4),
+        "qps": round(qps, 1),
+        "p50_ms": round(p50, 3),
+        "p99_ms": round(p99, 3),
+        "pure_index_qps": round(pure_qps, 1),
+        "pure_p50_ms": round(pure_p50, 3),
+        "pure_p99_ms": round(pure_p99, 3),
+        "env": _env(),
+    }
+
     if args.out:
-        with open(args.out, "w", encoding="utf-8") as f:
+        # The competitor runner writes JSON to `--out` and markdown alongside it;
+        # match that so the shared rollup can parse every engine uniformly.
+        if args.out.endswith(".json"):
+            json_path, md_path = args.out, args.out[:-5] + ".md"
+        elif args.out.endswith(".md"):
+            json_path, md_path = args.out[:-3] + ".json", args.out
+        else:
+            json_path, md_path = args.out + ".json", args.out + ".md"
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2)
+        with open(md_path, "w", encoding="utf-8") as f:
             f.write(f"# ANN-Benchmarks: {args.dataset}\n\n")
             f.write("| Metric | Value |\n|---|---|\n")
             f.write(f"| Dataset | {args.dataset} |\n")
@@ -272,7 +366,10 @@ def main() -> None:
             f.write(f"| Index size | {index_bytes / 1e6:.1f} MB |\n")
             f.write(f"| p50 latency | {p50:.2f} ms |\n")
             f.write(f"| p99 latency | {p99:.2f} ms |\n")
-        print(f"wrote {args.out}", flush=True)
+            f.write(f"| Pure Index QPS | {pure_qps:.1f} |\n")
+            f.write(f"| Pure Index p50 latency | {pure_p50:.2f} ms |\n")
+            f.write(f"| Pure Index p99 latency | {pure_p99:.2f} ms |\n")
+        print(f"wrote {json_path} and {md_path}", flush=True)
 
 
 if __name__ == "__main__":

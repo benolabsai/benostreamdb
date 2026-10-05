@@ -146,19 +146,23 @@ impl AuthConfig {
         let claims: Value =
             serde_json::from_slice(&payload_bytes).map_err(|_| "bad JWT payload".to_string())?;
         self.check_claims(&claims)?;
-        
+
         let subject = claims
             .get("sub")
             .and_then(|v| v.as_str())
             .unwrap_or("jwt")
             .to_string();
-            
+
         let roles = claims
             .get("roles")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
-            
+
         Ok(AuthClaims { subject, roles })
     }
 
@@ -294,23 +298,24 @@ mod tests {
             .unwrap()
             .as_secs()
             + 3600;
-            
+
         // Test JWT with roles
         let token_with_roles = hs256_token(
-            secret, 
-            &format!(r#"{{"sub":"charlie","exp":{},"roles":["admin","data_engineer"]}}"#, future)
+            secret,
+            &format!(
+                r#"{{"sub":"charlie","exp":{},"roles":["admin","data_engineer"]}}"#,
+                future
+            ),
         );
         let claims = cfg.verify(&token_with_roles).unwrap();
         assert_eq!(claims.subject, "charlie");
         assert_eq!(claims.roles.len(), 2);
         assert!(claims.roles.contains(&"admin".to_string()));
         assert!(claims.roles.contains(&"data_engineer".to_string()));
-        
+
         // Test JWT without roles gracefully falls back to empty roles
-        let token_without_roles = hs256_token(
-            secret, 
-            &format!(r#"{{"sub":"david","exp":{}}}"#, future)
-        );
+        let token_without_roles =
+            hs256_token(secret, &format!(r#"{{"sub":"david","exp":{}}}"#, future));
         let claims = cfg.verify(&token_without_roles).unwrap();
         assert_eq!(claims.subject, "david");
         assert!(claims.roles.is_empty());

@@ -433,7 +433,7 @@ impl Table {
         Ok(false)
     }
 
-    async fn import_iceberg_snapshot(
+    pub(crate) async fn import_iceberg_snapshot(
         &self,
         snapshot_id: i64,
         meta: &crate::core::iceberg::IcebergTableMetadata,

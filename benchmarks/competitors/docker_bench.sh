@@ -32,9 +32,18 @@ K=10
 M=16
 EFC=200
 EFS=200
-CPU_ENGINES="faiss hnswlib lancedb duckdb pgvector elasticsearch benostreamdb"
+CPU_ENGINES="faiss hnswlib lancedb pgvector opensearch benostreamdb"
 GPU_ENGINES="faiss benostreamdb"
-UP_ENGINES="pgvector opensearch neo4j"
+UP_ENGINES="pgvector opensearch neo4j clickhouse"
+# Workload families. `vector` is the default; `graph` and `sql` reuse the same
+# runner image and envelope but dispatch to the graph/SQL adapters.
+WORKLOAD=vector
+GRAPH_ENGINES="networkx neo4j cugraph benostreamdb"
+SQL_ENGINES="duckdb datafusion clickhouse benostreamdb"
+ALGORITHM=pagerank
+GRAPH_NODES=10000
+GRAPH_EDGES_COUNT=50000
+SQL_ROWS=500000
 DO_CPU=1
 DO_GPU=0
 BUILD_WHEEL=0
@@ -54,6 +63,13 @@ while [[ $# -gt 0 ]]; do
     --engines) CPU_ENGINES="$2"; shift 2 ;;
     --gpu-engines) GPU_ENGINES="$2"; shift 2 ;;
     --up-engines) UP_ENGINES="$2"; shift 2 ;;
+    --workload) WORKLOAD="$2"; shift 2 ;;
+    --graph-engines) GRAPH_ENGINES="$2"; shift 2 ;;
+    --sql-engines) SQL_ENGINES="$2"; shift 2 ;;
+    --algorithm) ALGORITHM="$2"; shift 2 ;;
+    --graph-nodes) GRAPH_NODES="$2"; shift 2 ;;
+    --graph-edges-count) GRAPH_EDGES_COUNT="$2"; shift 2 ;;
+    --sql-rows) SQL_ROWS="$2"; shift 2 ;;
     --gpu) DO_CPU=0; DO_GPU=1; shift ;;
     --both) DO_CPU=1; DO_GPU=1; shift ;;
     --build-wheel) BUILD_WHEEL=1; shift ;;
@@ -71,8 +87,14 @@ export BENCH_CPUS="$CPUS"
 export BENCH_MEM="$MEM"
 export BENCH_RAM_GB="${MEM%g}"
 export DATASET LIMIT QUERIES K M EF_CONSTRUCTION="$EFC" EF_SEARCH="$EFS"
+export WORKLOAD ALGORITHM
+export GRAPH_EDGES="${GRAPH_EDGES:-}" SQL="${SQL:-}" PARQUET="${PARQUET:-}"
 
 mkdir -p "$HERE/results" "$HERE/data"
+
+# Only results written during this run belong in the rollup; older JSON from
+# previous datasets/devices would otherwise be double-counted.
+RUN_START="$(date +%s)"
 
 # --- Hardware profile ------------------------------------------------------- #
 profile="$HERE/results/hardware_profile.txt"
@@ -94,8 +116,10 @@ profile="$HERE/results/hardware_profile.txt"
 echo "wrote $profile"
 
 if [[ "$BUILD_WHEEL" == "1" ]]; then
-  echo "building abi3 wheel ..."
-  ( cd "$REPO" && maturin build --release -o dist )
+  # Build a manylinux_2_28 wheel so it loads on the slim runner image (whose
+  # glibc is older than a bleeding-edge host's). Requires `maturin[zig]`.
+  echo "building abi3 manylinux_2_28 wheel ..."
+  ( cd "$REPO" && maturin build --release --zig --compatibility manylinux_2_28 -o dist )
 fi
 
 # --- Server engines under the shared envelope ------------------------------- #
@@ -132,8 +156,60 @@ run_pass() {
   done
 }
 
-[[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
-[[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"
+# --- Workload dispatch ------------------------------------------------------ #
+if [[ "$WORKLOAD" == "graph" ]]; then
+  # A synthetic edge list, mounted into the runner at /opt/bench/data.
+  "$REPO/.venv/bin/python" - "$HERE/data/graph_edges.txt" "$GRAPH_NODES" "$GRAPH_EDGES_COUNT" <<'PY'
+import random, sys
+path, nodes, edges = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+random.seed(42)
+with open(path, "w", encoding="utf-8") as f:
+    for _ in range(edges):
+        f.write(f"{random.randrange(nodes)}\t{random.randrange(nodes)}\n")
+print(f"wrote {path} ({nodes} nodes, {edges} edges)")
+PY
+  export GRAPH_EDGES="/opt/bench/data/graph_edges.txt"
+  # cuGraph needs the GPU runner; the other graph engines run fine there too.
+  if [[ " $GRAPH_ENGINES " == *" cugraph "* ]]; then
+    COMPOSE+=(-f "$HERE/docker-compose.bench.gpu.yml")
+    # Build the base runner first: `bench-gpu` is `FROM bsdb-bench-runner:latest`,
+    # so a stale base image would ship an old harness into the GPU image.
+    docker compose "${COMPOSE[@]}" --profile run build bench bench-gpu
+    export DEVICE=gpu
+    echo ""
+    echo "############ gpu pass (service=bench-gpu, cpus=$CPUS mem=$MEM) ############"
+    for engine in $GRAPH_ENGINES; do
+      echo "=== $engine [gpu] ==="
+      ENGINE="$engine" docker compose "${COMPOSE[@]}" --profile run run --rm bench-gpu \
+        || echo "  (engine $engine did not complete)"
+    done
+  else
+    run_pass cpu bench "$GRAPH_ENGINES"
+  fi
+elif [[ "$WORKLOAD" == "sql" ]]; then
+  # A synthetic Parquet table, mounted into the runner at /opt/bench/data.
+  "$REPO/.venv/bin/python" - "$HERE/data/clickbench.parquet" "$SQL_ROWS" <<'PY'
+import sys
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+path, n = sys.argv[1], int(sys.argv[2])
+rng = np.random.default_rng(42)
+t = pa.table({
+    "id": pa.array(np.arange(n, dtype=np.int64)),
+    "value": pa.array(rng.random(n).astype(np.float64)),
+    "category": pa.array(rng.integers(0, 100, n).astype(np.int64)),
+})
+pq.write_table(t, path)
+print(f"wrote {path} ({n} rows)")
+PY
+  export PARQUET="/opt/bench/data/clickbench.parquet"
+  export SQL="SELECT category, count(*) AS n, avg(value) AS avg_value FROM t GROUP BY category ORDER BY n DESC LIMIT 10"
+  run_pass cpu bench "$SQL_ENGINES"
+else
+  [[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
+  [[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"
+fi
 
 # --- Rollup ----------------------------------------------------------------- #
 rollup="$HERE/results/rollup.md"
@@ -144,10 +220,13 @@ rollup="$HERE/results/rollup.md"
   echo ""
   echo "| Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
   echo "|---|---|---|---|---|---|---|---|---|"
-  "$REPO/.venv/bin/python" - "$HERE/results" <<'PY'
+  "$REPO/.venv/bin/python" - "$HERE/results" "$RUN_START" <<'PY'
 import glob, json, os, sys
 rows = []
+run_start = int(sys.argv[2])
 for path in sorted(glob.glob(os.path.join(sys.argv[1], "*_*.json"))):
+    if os.path.getmtime(path) < run_start:
+        continue
     try:
         r = json.load(open(path))
     except Exception:
@@ -155,10 +234,16 @@ for path in sorted(glob.glob(os.path.join(sys.argv[1], "*_*.json"))):
     if r.get("available") is False:
         rows.append(f"| {r.get('engine')} | - | - | unavailable: {r.get('error','')} | - | - | - | - | - |")
         continue
+    # Compare like-for-like: the competitor adapters return ids only (no payload
+    # fetch), so use BenoStreamDB's pure-index number when the harness reports it
+    # rather than its full search+row-fetch number.
+    qps = r.get("pure_index_qps", r.get("qps", "-"))
+    p50 = r.get("pure_p50_ms", r.get("p50_ms", "-"))
+    p99 = r.get("pure_p99_ms", r.get("p99_ms", "-"))
     rows.append("| {e} | {dev} | {d} | {rec} | {qps} | {p50} | {p99} | {b} | {sz} |".format(
         e=r.get("engine"), dev=r.get("device", "-"), d=r.get("dataset", "-"),
-        rec=r.get("recall_at_k", "-"), qps=r.get("qps", "-"),
-        p50=r.get("p50_ms", "-"), p99=r.get("p99_ms", "-"),
+        rec=r.get("recall_at_k", "-"), qps=qps,
+        p50=p50, p99=p99,
         b=r.get("build_s", "-"), sz=r.get("index_mb", "-")))
 print("\n".join(rows) if rows else "| (no results) | | | | | | | | |")
 PY

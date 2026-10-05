@@ -148,6 +148,14 @@ impl Table {
     ) -> Result<()> {
         if let Some(max_gb) = self.max_ingest_ram_gb {
             let max_bytes = (max_gb * 1_000_000_000.0) as usize;
+            // The caller may hold memory outside the engine (e.g. a Python
+            // DataFrame). Count only the engine's own footprint against the
+            // budget, otherwise a large caller-side frame blocks the write
+            // forever (the caller cannot free it until the write returns).
+            let caller_reserved = self
+                .caller_reserved_bytes
+                .load(std::sync::atomic::Ordering::Relaxed) as usize;
+            let engine_rss = || current_rss_bytes().saturating_sub(caller_reserved);
             let mut logged = false;
             let mut paused: Option<std::time::Instant> = None;
             // Back-pressure on the ingest RAM high-water mark. Wait on a
@@ -156,11 +164,12 @@ impl Table {
             // re-check RSS if nothing fires. The previous implementation slept a
             // flat 500 ms per iteration, which both wasted time when memory was
             // freed promptly and delayed resumption when it was not.
-            while max_bytes > 0 && current_rss_bytes() >= max_bytes {
+            while max_bytes > 0 && engine_rss() >= max_bytes {
                 if !logged {
                     tracing::warn!(
-                        "RSS ({:.2} GB) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion until background tasks reclaim memory...",
-                        current_rss_bytes() as f64 / 1_000_000_000.0,
+                        "Engine RSS ({:.2} GB, excluding {:.2} GB caller-reserved) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion until background tasks reclaim memory...",
+                        engine_rss() as f64 / 1_000_000_000.0,
+                        caller_reserved as f64 / 1_000_000_000.0,
                         max_gb
                     );
                     logged = true;

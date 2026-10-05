@@ -38,6 +38,7 @@ pub struct BenoStreamSession {
 use datafusion::prelude::{SessionConfig, SessionContext};
 // use datafusion::execution::context::SessionState; // Unused
 use crate::core::sql::optimizer::IndexJoinOptimizerRule;
+use crate::core::sql::udf;
 use crate::core::sql::vector_udf;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -51,6 +52,9 @@ impl BenoStreamSession {
         let mut config = SessionConfig::new();
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
         config = config.with_information_schema(true);
+        // Scale query parallelism to the effective CPU budget (respects cgroup
+        // limits) instead of leaving DataFusion's default or hard-coding it.
+        config = config.with_target_partitions(crate::core::sql::effective_target_partitions());
 
         // Session creation is on the request path for the Python/FFI bindings
         // (`PySession::new`), so a failure here must degrade rather than panic.
@@ -101,6 +105,11 @@ impl BenoStreamSession {
 
         // Add Vector Scalar Functions (Additive registration)
         for udf in vector_udf::all_vector_udfs() {
+            ctx.register_udf(udf);
+        }
+
+        // Add JSON path scalar functions (json_get/json_extract/json_exists/json_contains)
+        for udf in udf::all_json_udfs() {
             ctx.register_udf(udf);
         }
 

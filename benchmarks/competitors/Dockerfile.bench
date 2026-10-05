@@ -10,16 +10,25 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
+# hnswlib has no manylinux wheel for every Python and builds from source, so a
+# C++11 compiler is required.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Core numerics + ANN-Benchmarks I/O.
 RUN pip install numpy h5py pandas pyarrow
 
 # Competitor clients. faiss-cpu/hnswlib/lancedb/duckdb are embedded;
-# psycopg/opensearch-py/neo4j are clients for the compose services.
-RUN pip install faiss-cpu hnswlib lancedb duckdb "psycopg[binary]" opensearch-py neo4j
+# psycopg/opensearch-py/neo4j/clickhouse-connect are clients for the compose
+# services.
+RUN pip install faiss-cpu hnswlib lancedb duckdb "psycopg[binary]" opensearch-py neo4j clickhouse-connect networkx scipy
 
 WORKDIR /opt/bench
 COPY benchmarks/competitors/run_competitor.py /opt/bench/run_competitor.py
 COPY benchmarks/ann_benchmarks/run.py /opt/bench/ann_benchmarks.py
+COPY benchmarks/competitors/run_bench.sh /opt/bench/run_bench.sh
+RUN chmod +x /opt/bench/run_bench.sh
 
 # BenoStreamDB itself: install the abi3 wheel if one is mounted at /wheels.
 # abi3 wheels built for >=3.10 load on 3.12, so the host `maturin build`
@@ -27,4 +36,4 @@ COPY benchmarks/ann_benchmarks/run.py /opt/bench/ann_benchmarks.py
 RUN mkdir -p /wheels
 
 ENTRYPOINT ["/bin/sh", "-lc"]
-CMD ["python /opt/bench/run_competitor.py --help"]
+CMD ["/opt/bench/run_bench.sh"]

@@ -108,6 +108,11 @@ impl Accumulator for PreferentialAttachmentAccumulator {
             return Ok(());
         }
         self.base.merge_edge_state(states, Some(2), Some(3))?;
+        // An empty input partition emits default scalar args; adopting them
+        // would make the result depend on merge order.
+        if !GraphAccumulatorBase::state_has_edges(states) {
+            return Ok(());
+        }
         if states.len() <= 4 {
             return Ok(());
         }
@@ -172,32 +177,35 @@ impl Accumulator for PreferentialAttachmentAccumulator {
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
-        if !self.base.is_empty() {
-            let mut deg1 = 0;
-            let mut deg2 = 0;
+        // Preferential attachment is defined on the *undirected* degree, so
+        // count both endpoints of every edge. Both branches must use the same
+        // definition or the result would depend on whether the accumulator
+        // retained edge rows.
+        let mut deg1 = 0;
+        let mut deg2 = 0;
 
+        if !self.base.is_empty() {
             for (_, u, v) in self.base.edges() {
-                if u == self.node1 {
+                if u == self.node1 || v == self.node1 {
                     deg1 += 1;
                 }
-                if v == self.node1 {
-                    deg1 += 1;
-                }
-                if u == self.node2 {
-                    deg2 += 1;
-                }
-                if v == self.node2 {
+                if u == self.node2 || v == self.node2 {
                     deg2 += 1;
                 }
             }
-
-            Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
         } else {
             let graph = self.base.resolve_graph(&[self.node1, self.node2], 1)?;
-            let deg1 = graph.get_degree(self.node1);
-            let deg2 = graph.get_degree(self.node2);
-            Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
+            for (u, v) in graph.all_edges() {
+                if u == self.node1 || v == self.node1 {
+                    deg1 += 1;
+                }
+                if u == self.node2 || v == self.node2 {
+                    deg2 += 1;
+                }
+            }
         }
+
+        Ok(ScalarValue::Float64(Some((deg1 * deg2) as f64)))
     }
 
     fn size(&self) -> usize {

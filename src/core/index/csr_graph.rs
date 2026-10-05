@@ -15,13 +15,32 @@ pub struct CsrEdge {
 unsafe impl Zeroable for CsrEdge {}
 unsafe impl Pod for CsrEdge {}
 
+/// Backing storage for a CSR array: either a memory-mapped file (loose sidecar
+/// layout) or an owned byte buffer (Puffin compound-bundle layout, where the
+/// blob is read into memory).
+#[derive(Clone)]
+enum GraphBytes {
+    Mmap(Arc<Mmap>),
+    Owned(Arc<Vec<u8>>),
+}
+
+impl GraphBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            GraphBytes::Mmap(m) => m.as_ref(),
+            GraphBytes::Owned(v) => v.as_slice(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct MmapCsrGraph {
-    /// Mmap of the offsets array (u64 array of size num_nodes + 1)
-    offsets_mmap: Arc<Mmap>,
-    /// Mmap of the edges array (CsrEdge array)
-    edges_mmap: Arc<Mmap>,
-    /// Mmap of the dictionary mapping dense_id to original_id (u64 array)
-    dict_mmap: Arc<Mmap>,
+    /// Offsets array (u64 array of size num_nodes + 1)
+    offsets: GraphBytes,
+    /// Edges array (CsrEdge array)
+    edges: GraphBytes,
+    /// Dictionary mapping dense_id to original_id (u64 array)
+    dict: GraphBytes,
     /// Number of nodes
     pub num_nodes: usize,
     /// Number of edges
@@ -53,35 +72,70 @@ impl MmapCsrGraph {
         let num_nodes = offsets_mmap.len() / std::mem::size_of::<u64>() - 1;
         let num_edges = edges_mmap.len() / std::mem::size_of::<CsrEdge>();
         Self {
-            offsets_mmap,
-            edges_mmap,
-            dict_mmap,
+            offsets: GraphBytes::Mmap(offsets_mmap),
+            edges: GraphBytes::Mmap(edges_mmap),
+            dict: GraphBytes::Mmap(dict_mmap),
             num_nodes,
             num_edges,
         }
     }
 
+    /// Build a CSR graph from owned byte buffers (Puffin blob payloads).
+    pub fn from_bytes(offsets: Vec<u8>, edges: Vec<u8>, dict: Vec<u8>) -> Self {
+        let num_nodes = offsets.len() / std::mem::size_of::<u64>() - 1;
+        let num_edges = edges.len() / std::mem::size_of::<CsrEdge>();
+        Self {
+            offsets: GraphBytes::Owned(Arc::new(offsets)),
+            edges: GraphBytes::Owned(Arc::new(edges)),
+            dict: GraphBytes::Owned(Arc::new(dict)),
+            num_nodes,
+            num_edges,
+        }
+    }
+
+    /// Total resident bytes of the three CSR arrays (offsets + edges + dict).
+    ///
+    /// Used as the cache weigher so the graph cache respects the global
+    /// `BSDB_CACHE_GB` budget.
+    pub fn size_in_bytes(&self) -> usize {
+        self.offsets.as_slice().len() + self.edges.as_slice().len() + self.dict.as_slice().len()
+    }
+
     /// Binary search dictionary for dense ID
     pub fn to_dense(&self, original_id: u64) -> Option<usize> {
-        let dict = bytemuck::cast_slice::<u8, u64>(&self.dict_mmap);
+        let dict = bytemuck::cast_slice::<u8, u64>(self.dict.as_slice());
         dict.binary_search(&original_id).ok()
     }
 
     /// Lookup original ID by dense ID
     pub fn to_original(&self, dense_id: usize) -> u64 {
-        let dict = bytemuck::cast_slice::<u8, u64>(&self.dict_mmap);
+        let dict = bytemuck::cast_slice::<u8, u64>(self.dict.as_slice());
         dict[dense_id]
+    }
+
+    /// Slice of the dictionary mapping dense_id to original_id
+    pub fn dict(&self) -> &[u64] {
+        bytemuck::cast_slice::<u8, u64>(self.dict.as_slice())
     }
 
     pub fn get_neighbors_raw(&self, dense_node_id: usize) -> &[CsrEdge] {
         if dense_node_id >= self.num_nodes {
             return &[];
         }
-        let offsets = bytemuck::cast_slice::<u8, u64>(&self.offsets_mmap);
+        let offsets = bytemuck::cast_slice::<u8, u64>(self.offsets.as_slice());
+        if dense_node_id + 1 >= offsets.len() {
+            return &[];
+        }
         let start = offsets[dense_node_id] as usize;
         let end = offsets[dense_node_id + 1] as usize;
 
-        let edges = bytemuck::cast_slice::<u8, CsrEdge>(&self.edges_mmap);
+        let edges = bytemuck::cast_slice::<u8, CsrEdge>(self.edges.as_slice());
+        let len = edges.len();
+        let start = start.min(len);
+        let end = end.min(len);
+        if start >= end {
+            return &[];
+        }
         &edges[start..end]
     }
 
@@ -207,13 +261,33 @@ impl GraphView for MmapCsrGraph {
             if dense_node >= self.num_nodes {
                 return 0;
             }
-            let offsets = bytemuck::cast_slice::<u8, u64>(&self.offsets_mmap);
+            let offsets = bytemuck::cast_slice::<u8, u64>(self.offsets.as_slice());
             let start = offsets[dense_node] as usize;
             let end = offsets[dense_node + 1] as usize;
             end - start
         } else {
             0
         }
+    }
+
+    /// Nodes with at least one outgoing edge, matching [`SimpleGraph`]'s
+    /// source-only semantics so global algorithms see the same node set in
+    /// every mode.
+    ///
+    /// [`SimpleGraph`]: crate::core::sql::graph_udf::graph_view::SimpleGraph
+    fn all_nodes(&self) -> Vec<u64> {
+        let mut nodes = Vec::new();
+        for dense in 0..self.num_nodes {
+            if !self.get_neighbors_raw(dense).is_empty() {
+                nodes.push(self.to_original(dense));
+            }
+        }
+        nodes.sort_unstable();
+        nodes
+    }
+
+    fn num_edges(&self) -> usize {
+        self.num_edges
     }
 }
 
@@ -244,5 +318,20 @@ impl GraphView for MultiSegmentCsrGraph {
 
     fn get_degree(&self, node: u64) -> usize {
         self.segments.iter().map(|seg| seg.get_degree(node)).sum()
+    }
+
+    fn all_nodes(&self) -> Vec<u64> {
+        let mut nodes: Vec<u64> = self
+            .segments
+            .iter()
+            .flat_map(|seg| seg.all_nodes())
+            .collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        nodes
+    }
+
+    fn num_edges(&self) -> usize {
+        self.segments.iter().map(|seg| seg.num_edges()).sum()
     }
 }

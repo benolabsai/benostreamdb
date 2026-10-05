@@ -49,6 +49,23 @@ async fn memory_reclaimed_notification_wakes_blocked_writer() {
 }
 
 #[tokio::test]
+async fn caller_reserved_bytes_round_trip() {
+    // The ingest back-pressure compares process RSS against the budget. A caller
+    // holding a large frame (e.g. a Python DataFrame) would otherwise block the
+    // write forever, so the caller declares its footprint and the engine
+    // back-pressures on its own memory only.
+    let dir = tempdir().unwrap();
+    let uri = format!("file://{}", dir.path().to_str().unwrap());
+    let table = Table::new_async(uri).await.expect("table");
+
+    assert_eq!(table.caller_reserved_bytes(), 0);
+    table.set_caller_reserved_bytes(4 * 1024 * 1024 * 1024);
+    assert_eq!(table.caller_reserved_bytes(), 4 * 1024 * 1024 * 1024);
+    table.set_caller_reserved_bytes(0);
+    assert_eq!(table.caller_reserved_bytes(), 0);
+}
+
+#[tokio::test]
 async fn test_table_lifecycle() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().to_str().unwrap().to_string();

@@ -230,6 +230,12 @@ impl Accumulator for PersonalizedPageRankAccumulator {
             return Ok(());
         }
         self.base.merge_edge_state(states, Some(2), Some(3))?;
+        // An empty input partition emits default scalar args (damping=0.85,
+        // iterations=30, directed=false); adopting them would clobber the real
+        // arguments and make the result depend on merge order.
+        if !GraphAccumulatorBase::state_has_edges(states) {
+            return Ok(());
+        }
         if states.len() <= 4 {
             return Ok(());
         }

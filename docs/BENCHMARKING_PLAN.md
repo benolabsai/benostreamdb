@@ -416,9 +416,9 @@ for HNSW/IVF/PQ/TurboQuant.
 | 2 | Resource-envelope `--cores` / `--ram-gb` | done |
 | 3 | Score-only fast path | done |
 | 4 | Fix vector-index-never-built (float64) + harness wait/verify | done |
-| 5 | `benchmarks/competitors/` Tier-1 adapters (FAISS, hnswlib, pgvector, LanceDB) | pending |
-| 6 | Lexical/hybrid harnesses (BEIR, Elasticsearch/OpenSearch, Tantivy) | pending |
-| 7 | Graph harnesses (LDBC, Neo4j GDS, NetworkX, cuGraph) | pending |
-| 8 | SQL harnesses (ClickBench, TPC-H, DuckDB, Trino, ClickHouse) | pending |
-| 9 | Production workload harness (concurrent, maintenance, recovery, throttling, filters, skew) | pending |
-| 10 | Scheduled CI benchmark jobs + results site | pending |
+| 5 | `benchmarks/competitors/` Tier-1 adapters (FAISS, hnswlib, pgvector, LanceDB) | done |
+| 6 | Lexical/hybrid harnesses (BEIR, Elasticsearch/OpenSearch, Tantivy) | done |
+| 7 | Graph harnesses (LDBC, Neo4j GDS, NetworkX, cuGraph, BenoStreamDB) | done (`benchmarks/graph/run.py`) |
+| 8 | SQL harnesses (ClickBench, DuckDB, DataFusion, ClickHouse, BenoStreamDB) | done (`benchmarks/sql/run.py`) |
+| 9 | Production workload harness (concurrent, maintenance, recovery, throttling, filters, skew, concurrency correctness, soak) | done |
+| 10 | Scheduled CI benchmark jobs + results site | done (`.github/workflows/benchmarks.yml`) |

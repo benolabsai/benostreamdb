@@ -6,17 +6,15 @@
 #     --profile run run --rm bench-gpu
 #
 # docker_bench.sh --gpu (or --both) does this automatically and tags results
-# with device=gpu. Only GPU-capable engines run here (faiss, benostreamdb;
-# add cugraph once installed).
+# with device=gpu. Only GPU-capable engines run here (faiss, benostreamdb,
+# cugraph).
 services:
   bench:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # `gpus: all` (Compose v2.30+) is equivalent to `docker run --gpus all`.
+    # The older `deploy.resources.reservations.devices` form left cuGraph/cuDF
+    # unable to initialise a CUDA context on Blackwell (sm_120), surfacing as a
+    # misleading "cudaErrorMemoryAllocation: out of memory".
+    gpus: all
 
   bench-gpu:
     extends:
@@ -26,10 +24,4 @@ services:
     build:
       context: ../..
       dockerfile: benchmarks/competitors/Dockerfile.bench.gpu
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    gpus: all

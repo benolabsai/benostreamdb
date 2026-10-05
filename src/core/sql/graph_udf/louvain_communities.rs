@@ -155,6 +155,11 @@ impl Accumulator for LouvainAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.base.merge_edge_state(states, Some(2), Some(3))?;
+        // An empty input partition emits default scalar args; adopting them
+        // would make the result depend on merge order.
+        if !GraphAccumulatorBase::state_has_edges(states) {
+            return Ok(());
+        }
         if states.len() > 4 {
             let weights_list = states[4]
                 .as_any()
