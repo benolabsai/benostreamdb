@@ -1,0 +1,1 @@
+SEL <-> ECT id FROM t PARTITIONED BY (<-> '[1, B FROM t PAR2,3]' OR>>>DER LIMAT 5

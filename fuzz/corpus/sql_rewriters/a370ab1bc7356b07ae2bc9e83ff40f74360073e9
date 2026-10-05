@@ -1,0 +1,1 @@
+SELECT id FROM t SPARTITIONED BY (dayELECT id[1,) 
