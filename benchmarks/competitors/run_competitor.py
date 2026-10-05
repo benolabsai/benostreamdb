@@ -1068,11 +1068,27 @@ def _sql_clickhouse(args) -> dict:
     sql = args.sql
     if args.parquet:
         # Materialise the Parquet into a table named `t` so the shared SQL
-        # (which references `t`) works across every SQL engine.
+        # (which references `t`) works across every SQL engine. Load via the
+        # client (not `file()`) so ClickHouse needs no data volume — its
+        # entrypoint chowns any mounted dir, which would break the host.
+        import pyarrow.parquet as pq
+
+        tbl = pq.read_table(args.parquet)
         client.command("DROP TABLE IF EXISTS t")
         client.command(
-            f"CREATE TABLE t ENGINE = MergeTree ORDER BY tuple() "
-            f"AS SELECT * FROM file('{args.parquet}', 'Parquet')"
+            "CREATE TABLE t (id Int64, value Float64, category Int64) "
+            "ENGINE = MergeTree ORDER BY tuple()"
+        )
+        client.insert(
+            "t",
+            list(
+                zip(
+                    tbl.column("id").to_pylist(),
+                    tbl.column("value").to_pylist(),
+                    tbl.column("category").to_pylist(),
+                )
+            ),
+            column_names=["id", "value", "category"],
         )
     if not sql:
         if not args.parquet:
@@ -1093,6 +1109,82 @@ def _sql_clickhouse(args) -> dict:
         "sql": sql,
         "seconds": round(time.time() - t0, 3),
         "rows": len(res.result_rows),
+    }
+
+
+def _sql_trino(args) -> dict:
+    if not importlib.util.find_spec("trino"):
+        return {
+            "engine": "trino",
+            "workload": "sql",
+            "available": False,
+            "error": "pip install trino",
+        }
+    from trino.dbapi import connect
+
+    host = getattr(args, "host", None) or os.environ.get("TRINO_HOST", "localhost")
+    port = int(getattr(args, "port", None) or os.environ.get("TRINO_PORT", "8080"))
+    user = getattr(args, "user", None) or os.environ.get("TRINO_USER", "bench")
+    catalog = getattr(args, "catalog", None) or os.environ.get("TRINO_CATALOG", "memory")
+    schema = getattr(args, "schema", None) or os.environ.get("TRINO_SCHEMA", "default")
+
+    try:
+        conn = connect(host=host, port=port, user=user, catalog=catalog, schema=schema)
+    except Exception as e:
+        return {
+            "engine": "trino",
+            "workload": "sql",
+            "available": False,
+            "error": f"connection error: {e}",
+        }
+
+    cur = conn.cursor()
+    ingest_s = None
+    if args.parquet:
+        # Load the shared Parquet into the memory connector as table `t` so the
+        # shared SQL runs unchanged. The memory connector needs no metastore,
+        # which keeps the Trino benchmark self-contained. Bulk-insert in batches
+        # (a single 100k-row VALUES list is rejected by the parser).
+        import pyarrow.parquet as pq
+
+        t_ingest = time.time()
+        tbl = pq.read_table(args.parquet)
+        cur.execute("DROP TABLE IF EXISTS t")
+        cur.execute("CREATE TABLE t (id bigint, value double, category bigint)")
+        ids = tbl.column("id").to_pylist()
+        vals = tbl.column("value").to_pylist()
+        cats = tbl.column("category").to_pylist()
+        batch = 5000
+        for start in range(0, len(ids), batch):
+            end = min(start + batch, len(ids))
+            values = ",".join(
+                f"({ids[i]},{vals[i]},{cats[i]})" for i in range(start, end)
+            )
+            cur.execute(f"INSERT INTO t VALUES {values}")
+        ingest_s = round(time.time() - t_ingest, 3)
+
+    sql = args.sql
+    if not sql:
+        if not args.parquet:
+            return {
+                "engine": "trino",
+                "workload": "sql",
+                "available": False,
+                "error": "provide --sql or --parquet",
+            }
+        sql = "SELECT count(*) AS n FROM t"
+
+    t0 = time.time()
+    cur.execute(sql)
+    rows = cur.fetchall()
+    return {
+        "engine": "trino",
+        "workload": "sql",
+        "available": True,
+        "sql": sql,
+        "ingest_seconds": ingest_s,
+        "seconds": round(time.time() - t0, 3),
+        "rows": len(rows),
     }
 
 
@@ -1138,6 +1230,8 @@ def run_sql(args) -> dict:
         return _sql_datafusion(args)
     if engine == "clickhouse":
         return _sql_clickhouse(args)
+    if engine == "trino":
+        return _sql_trino(args)
     if engine in ("benostreamdb", "bsdb"):
         return _sql_benostreamdb(args)
     return {
@@ -1267,7 +1361,7 @@ def main() -> None:
     apply_envelope(args.cores, args.ram_gb, args.engine, args.device)
 
     try:
-        if args.workload == "sql" or args.engine in ("duckdb", "datafusion", "clickhouse") or (args.engine in ("benostreamdb", "bsdb") and (args.sql or (args.parquet and not args.dataset))):
+        if args.workload == "sql" or args.engine in ("duckdb", "datafusion", "clickhouse", "trino") or (args.engine in ("benostreamdb", "bsdb") and (args.sql or (args.parquet and not args.dataset))):
             emit(run_sql(args), args.out)
             return
         if args.workload == "graph" or args.engine in ("networkx", "neo4j", "cugraph") or (args.engine in ("benostreamdb", "bsdb") and args.graph_edges):

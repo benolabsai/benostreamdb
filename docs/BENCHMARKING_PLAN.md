@@ -176,9 +176,13 @@ runner; each engine is an adapter accepting the same `--cores`, `--ram-gb`,
 arguments and emitting the JSON schema of §6. Implemented so far:
 
 - **Vector:** `faiss`, `hnswlib` (embedded); `pgvector` (`--dsn`), `lancedb`
-  (`--path`), `elasticsearch`/`opensearch` (`--host`).
-- **Graph:** `networkx` (reference), `neo4j` GDS (`--uri`).
-- **SQL:** `duckdb` (`--sql` / `--parquet`).
+  (`--path`), `opensearch` (`--host`).
+- **Graph:** `networkx` (reference), `neo4j` GDS (`--uri`), `cugraph` (GPU),
+  `benostreamdb`.
+- **SQL:** `duckdb`, `datafusion` (embedded); `clickhouse`, `trino` (server);
+  `benostreamdb`.
+- **Storage / table format:** Iceberg round-trip (Spark/Trino) + Delta Lake —
+  `benchmarks/iceberg_roundtrip/run.py`.
 
 Adapters report `{"available": false, "error": ...}` when the client library or
 server is missing, so a partial environment still produces a clear report. See
@@ -422,3 +426,5 @@ for HNSW/IVF/PQ/TurboQuant.
 | 8 | SQL harnesses (ClickBench, DuckDB, DataFusion, ClickHouse, BenoStreamDB) | done (`benchmarks/sql/run.py`) |
 | 9 | Production workload harness (concurrent, maintenance, recovery, throttling, filters, skew, concurrency correctness, soak) | done |
 | 10 | Scheduled CI benchmark jobs + results site | done (`.github/workflows/benchmarks.yml`) |
+| 11 | Trino SQL competitor (`_sql_trino` + `trino` compose service) | done |
+| 12 | Iceberg round-trip (Spark/Trino) + Delta Lake (`benchmarks/iceberg_roundtrip/run.py`) | done |

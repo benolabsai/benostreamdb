@@ -146,21 +146,29 @@ Adding an engine = subclass `VectorAdapter` (implement `build`/`search`/
 `index_bytes`), add a branch in `run_graph`, or add a `run_sql` family; then
 register it in `vector_adapters()` / the `main()` dispatch.
 
-## Still to add
+## Coverage
 
-- **Trino (SQL)** — a Trino competitor adapter (the connector exists, but the
-  benchmark runner has no Trino client yet).
-- **Spark/Trino Iceberg round-trips** — read a BenoStreamDB-written Iceberg
-  table back through Spark/Trino and vice versa, to prove format compatibility.
+Every Tier-1 engine in the plan is implemented:
 
-Each must run under the same envelope and emit the same schema.
+- **Vector:** FAISS, hnswlib, pgvector, LanceDB, OpenSearch.
+- **Lexical/hybrid:** Tantivy, OpenSearch (BEIR suite in `benchmarks/beir/`).
+- **Graph:** NetworkX, Neo4j GDS, cuGraph (`cugraph-cu13`, `renumber=True` +
+  managed memory, verified against NetworkX), BenoStreamDB.
+- **SQL:** DuckDB, DataFusion, ClickHouse, **Trino**, BenoStreamDB.
+- **Storage / table format:** Iceberg round-trip (Spark/Trino) + Delta Lake —
+  see [`../iceberg_roundtrip/run.py`](../iceberg_roundtrip/run.py).
 
-**Already covered** (not "to add"):
+### Trino (SQL)
 
-- **cuGraph** (GPU graph) — `cugraph-cu13` in the GPU runner, `renumber=True` +
-  managed memory, verified against NetworkX.
-- **ClickHouse** (SQL) — `_sql_clickhouse` materialises the Parquet into a
-  `MergeTree` table and runs the shared SQL.
-- **Tantivy** (BM25/hybrid) — the `tantivy` adapter lives in `run_competitor.py`,
-  and the BEIR lexical/hybrid suite (`benchmarks/beir/`) benchmarks BM25 vs
-  Tantivy vs Hybrid RRF.
+`_sql_trino` connects to the `trino` compose service (memory connector) and
+bulk-loads the shared Parquet into table `t`, so the shared SQL runs unchanged.
+The memory connector needs no metastore, which keeps the benchmark
+self-contained. Config: [`trino/etc/`](trino/etc/).
+
+### Iceberg / Delta round-trip
+
+[`../iceberg_roundtrip/run.py`](../iceberg_roundtrip/run.py) writes a table with
+BenoStreamDB (Iceberg) and reads it back through Spark or Trino (Iceberg), or
+compares against Delta Lake. The Trino path needs the table in a location
+mounted into both the runner and Trino (e.g. `/data/iceberg_warehouse`); the
+Spark path reads the table URI directly.

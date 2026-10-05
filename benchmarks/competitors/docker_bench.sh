@@ -34,12 +34,12 @@ EFC=200
 EFS=200
 CPU_ENGINES="faiss hnswlib lancedb pgvector opensearch benostreamdb"
 GPU_ENGINES="faiss benostreamdb"
-UP_ENGINES="pgvector opensearch neo4j clickhouse"
+UP_ENGINES="pgvector opensearch neo4j clickhouse trino"
 # Workload families. `vector` is the default; `graph` and `sql` reuse the same
 # runner image and envelope but dispatch to the graph/SQL adapters.
 WORKLOAD=vector
 GRAPH_ENGINES="networkx neo4j cugraph benostreamdb"
-SQL_ENGINES="duckdb datafusion clickhouse benostreamdb"
+SQL_ENGINES="duckdb datafusion clickhouse trino benostreamdb"
 ALGORITHM=pagerank
 GRAPH_NODES=10000
 GRAPH_EDGES_COUNT=50000
@@ -188,7 +188,11 @@ PY
   fi
 elif [[ "$WORKLOAD" == "sql" ]]; then
   # A synthetic Parquet table, mounted into the runner at /opt/bench/data.
-  "$REPO/.venv/bin/python" - "$HERE/data/clickbench.parquet" "$SQL_ROWS" <<'PY'
+  # Written into its own directory (`sql_t/`) so Trino's Hive connector can
+  # register the directory as an external table without picking up the other
+  # files in the shared data dir.
+  mkdir -p "$HERE/data/sql_t"
+  "$REPO/.venv/bin/python" - "$HERE/data/sql_t/data.parquet" "$SQL_ROWS" <<'PY'
 import sys
 import numpy as np
 import pyarrow as pa
@@ -203,7 +207,7 @@ t = pa.table({
 pq.write_table(t, path)
 print(f"wrote {path} ({n} rows)")
 PY
-  export PARQUET="/opt/bench/data/clickbench.parquet"
+  export PARQUET="/opt/bench/data/sql_t/data.parquet"
   export SQL="SELECT category, count(*) AS n, avg(value) AS avg_value FROM t GROUP BY category ORDER BY n DESC LIMIT 10"
   run_pass cpu bench "$SQL_ENGINES"
 else

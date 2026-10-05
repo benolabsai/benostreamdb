@@ -125,7 +125,15 @@ for java_version in "17" "21"; do
     # For Trino, the main JAR is in target/ but the ZIP contains all deps.
     # The artifact version tracks the core engine version (`${revision}`).
     cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.jar" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"
-    cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.zip" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
+    # Flatten the plugin ZIP. Trino's plugin loader only scans JARs *directly*
+    # in the plugin dir (it does not recurse), but the `trino-plugin` packaging
+    # nests them under `trino-benostream-<version>/`, which fails with
+    # "No service providers of type io.trino.spi.Plugin in the classpath".
+    flat_zip="$(pwd)/connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.zip"
+    tmp_zip="$(mktemp -d)"
+    unzip -q "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.zip" -d "$tmp_zip"
+    ( cd "$tmp_zip/trino-benostream-${CORE_VERSION}" && zip -q -r "$flat_zip" . )
+    rm -rf "$tmp_zip"
 done
 
 echo "Build complete. Artifacts are in connector-artifacts/"

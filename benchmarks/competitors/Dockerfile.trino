@@ -1,0 +1,25 @@
+# Trino with the BenoStreamDB connector plugin, so Trino can query
+# BenoStreamDB Iceberg tables directly (the strongest interop comparison).
+#
+# The connector delegates IO/indexing to the native Rust engine via JNI, so the
+# plugin ZIP and `libbenostreamdb.so` must both be present. The native lib is
+# built for the host glibc; if the Trino base image's glibc is older, rebuild
+# the lib in a manylinux container (see `docker_bench.sh --build-wheel`).
+FROM trinodb/trino:468
+
+USER root
+RUN mkdir -p /usr/lib/trino/plugin/benostream /usr/lib/trino/lib
+COPY connector-artifacts/trino-benostream-java-17.zip /tmp/benostream.zip
+# `unzip` is not in the Trino image; `jar` (JDK) is. The ZIP nests the JARs in
+# a `trino-benostream-<version>/` dir, which Trino's plugin loader does not
+# scan, so flatten it.
+RUN cd /tmp \
+    && jar xf benostream.zip \
+    && mv trino-benostream-*/* /usr/lib/trino/plugin/benostream/ \
+    && rm -rf trino-benostream-* benostream.zip
+# The native lib must be built for the Trino image's glibc. `target/` is
+# excluded from the build context, so stage it in `connector-artifacts/`; build
+# it with `maturin build --zig --compatibility manylinux_2_28` (or copy the
+# `.so` out of the manylinux wheel) if the host glibc is newer than the image's.
+COPY connector-artifacts/libbenostreamdb.so /usr/lib/trino/lib/libbenostreamdb.so
+USER trino

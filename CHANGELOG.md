@@ -332,6 +332,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `maturin --zig --compatibility manylinux_2_28`, so the wheel loads on the
   slim runner image regardless of the host's (newer) glibc. The release
   pipeline already ships manylinux wheels via `maturin-action`.
+- **Trino SQL competitor.** `_sql_trino` connects to a `trino` compose service
+  (Hive connector, file metastore) and registers the shared Parquet as an
+  external table `t`, so the shared SQL runs unchanged. Config in
+  `benchmarks/competitors/trino/etc/`.
+- **Iceberg / Delta round-trip harness.** `benchmarks/iceberg_roundtrip/run.py`
+  writes a table with BenoStreamDB (Iceberg) and reads it back through Spark or
+  Trino (Iceberg), or compares against Delta Lake — the Tier-2 table-format
+  interop baseline.
 
 ## [0.11.1] - 2026-09-29
 
