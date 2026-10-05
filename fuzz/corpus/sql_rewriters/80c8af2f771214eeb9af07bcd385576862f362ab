@@ -1,0 +1,2 @@
+SELSELECTWHERE v <-> &[1,2,3]' OE v <-> '[1,2,3]' ORDER LIMIU 5
+R BY v <-> %[2,3]' LIMIT 5
