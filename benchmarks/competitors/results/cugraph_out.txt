@@ -1,0 +1,11 @@
+edges (50000, 2) int64
+/usr/local/lib/python3.12/site-packages/cugraph/link_analysis/pagerank.py:206: UserWarning: Pagerank expects the 'store_transposed' flag to be set to 'True' for optimal performance during the graph creation
+  warnings.warn(warning_msg, UserWarning)
+pagerank rows 10000
+   vertex  pagerank
+0     958  0.000273
+1    2324  0.000222
+2    4076  0.000244
+3    4421  0.000334
+4    5663  0.000284
+rc=0

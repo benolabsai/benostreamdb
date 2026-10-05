@@ -165,6 +165,20 @@ bulk-loads the shared Parquet into table `t`, so the shared SQL runs unchanged.
 The memory connector needs no metastore, which keeps the benchmark
 self-contained. Config: [`trino/etc/`](trino/etc/).
 
+The same `trino` service also exposes the **BenoStreamDB connector** as the
+`benostreamdb` catalog, so Trino can query BenoStreamDB Iceberg tables directly
+(the strongest interop comparison):
+
+```sql
+SELECT count(*) FROM benostreamdb.default.events;
+```
+
+The connector is built by [`build_trino_connector.sh`](build_trino_connector.sh)
+and installed by [`Dockerfile.trino`](Dockerfile.trino). It requires a JDK ≥ 23
+to compile against the Trino 468 SPI, a manylinux-built `libbenostreamdb.so` on
+`java.library.path`, and `libstdc++` in the image (for Arrow's JNI lib). See
+[`../../trino-benostreamdb/README.md`](../../trino-benostreamdb/README.md).
+
 ### Iceberg / Delta round-trip
 
 [`../iceberg_roundtrip/run.py`](../iceberg_roundtrip/run.py) writes a table with

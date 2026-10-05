@@ -5,17 +5,29 @@
 # plugin ZIP and `libbenostreamdb.so` must both be present. The native lib is
 # built for the host glibc; if the Trino base image's glibc is older, rebuild
 # the lib in a manylinux container (see `docker_bench.sh --build-wheel`).
+
+# Stage 1: fetch the C++ runtime. Apache Arrow's `arrow-c-data` JNI library
+# (used to import the engine's Arrow C Data Interface batches) links
+# `libstdc++.so.6`, but the Trino image is a stripped RHEL UBI with no package
+# manager and no C++ runtime. Pull it from a UBI base that has `microdnf`.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.5 AS libs
+RUN microdnf install -y libstdc++ && microdnf clean all
+
 FROM trinodb/trino:468
 
 USER root
+# Arrow's JNI lib needs libstdc++ at runtime.
+COPY --from=libs /usr/lib64/libstdc++.so.6* /usr/lib64/
 RUN mkdir -p /usr/lib/trino/plugin/benostream /usr/lib/trino/lib
 COPY connector-artifacts/trino-benostream-java-17.zip /tmp/benostream.zip
-# `unzip` is not in the Trino image; `jar` (JDK) is. The ZIP nests the JARs in
-# a `trino-benostream-<version>/` dir, which Trino's plugin loader does not
-# scan, so flatten it.
+# `unzip`/`find` are not in the minimal Trino image; `jar` (JDK) and `sh` are.
+# Trino's plugin loader only scans JARs *directly* in the plugin dir (it does
+# not recurse), so flatten the archive. `build-connectors.sh` already emits a
+# flat ZIP, but the raw `trino-plugin` packaging nests JARs under
+# `trino-benostream-<version>/`; the glob loop below handles either layout.
 RUN cd /tmp \
     && jar xf benostream.zip \
-    && mv trino-benostream-*/* /usr/lib/trino/plugin/benostream/ \
+    && for f in *.jar trino-benostream-*/*.jar; do if [ -f "$f" ]; then mv "$f" /usr/lib/trino/plugin/benostream/; fi; done \
     && rm -rf trino-benostream-* benostream.zip
 # The native lib must be built for the Trino image's glibc. `target/` is
 # excluded from the build context, so stage it in `connector-artifacts/`; build

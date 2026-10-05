@@ -1,0 +1,14 @@
+# Hardware profile
+date: 2026-10-05T07:06:42-04:00
+envelope_cpus: 8
+envelope_mem: 16g
+cpu_model: AMD Ryzen 9 5900XT 16-Core Processor
+host_cores: 32
+host_ram_gb: 121.4
+docker_server: 29.8.0
+compose: 5.5.1
+dataset: sift-128-euclidean limit: 20000 queries: 500
+hnsw: m=16 ef_construction=200 ef_search=200
+gpus:
+  name, memory.total [MiB], driver_version
+  NVIDIA GeForce RTX 5070 Ti, 16303 MiB, 595.91.07

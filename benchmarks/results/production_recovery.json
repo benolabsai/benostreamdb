@@ -1,0 +1,112 @@
+[
+  {
+    "atomicity_preserved": true,
+    "boundary": "wal_append",
+    "idempotent_wal": true,
+    "recovery_ms": 1.82,
+    "recovery_state": "Clean Rollback",
+    "status": "PASS",
+    "visible_rows": 1000,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "wal_flush",
+    "idempotent_wal": true,
+    "recovery_ms": 1.42,
+    "recovery_state": "WAL Replayed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "wal_truncate",
+    "idempotent_wal": true,
+    "recovery_ms": 3.66,
+    "recovery_state": "WAL Replayed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "data_upload",
+    "idempotent_wal": true,
+    "recovery_ms": 1.41,
+    "recovery_state": "WAL Replayed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "index_upload",
+    "idempotent_wal": true,
+    "recovery_ms": 3.32,
+    "recovery_state": "Committed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "manifest_commit",
+    "idempotent_wal": true,
+    "recovery_ms": 1.32,
+    "recovery_state": "WAL Replayed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "manifest_visible",
+    "idempotent_wal": true,
+    "recovery_ms": 3.47,
+    "recovery_state": "WAL Replayed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "compaction_start",
+    "idempotent_wal": true,
+    "recovery_ms": 3.3,
+    "recovery_state": "Committed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "compaction_manifest_swap",
+    "idempotent_wal": true,
+    "recovery_ms": 3.23,
+    "recovery_state": "Committed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "vacuum_start",
+    "idempotent_wal": true,
+    "recovery_ms": 3.54,
+    "recovery_state": "Committed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  },
+  {
+    "atomicity_preserved": true,
+    "boundary": "vacuum_delete",
+    "idempotent_wal": true,
+    "recovery_ms": 3.29,
+    "recovery_state": "Committed",
+    "status": "PASS",
+    "visible_rows": 1500,
+    "zero_data_loss": true
+  }
+]
