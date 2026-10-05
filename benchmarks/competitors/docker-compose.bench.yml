@@ -145,12 +145,20 @@ services:
       context: ../..
       dockerfile: benchmarks/competitors/Dockerfile.trino
     image: bsdb-trino:latest
+    # The runner writes the shared data dir as root, so the connector's write
+    # path (CTAS/INSERT/MERGE) needs root here too; otherwise the `trino` user
+    # gets EACCES on the root-owned warehouse. Read-only queries are unaffected.
+    user: "0:0"
     environment:
       TRINO_HOST: "trino"
       TRINO_PORT: "8080"
     volumes:
       - ./trino/etc:/etc/trino
-      - ./data:/data
+      # Mount at the SAME path the runner uses (`/opt/bench/data`): the Iceberg
+      # metadata/manifest store absolute `file:///opt/bench/data/...` locations,
+      # so a different mount point makes the connector resolve to missing files
+      # and silently return 0 rows.
+      - ./data:/opt/bench/data
     networks: [bench]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info || exit 1"]

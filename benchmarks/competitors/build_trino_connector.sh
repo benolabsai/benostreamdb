@@ -29,9 +29,14 @@ if [[ "$BUILD_WHEEL" == "1" ]]; then
 fi
 
 # 1. Plugin ZIP.
+# The connector targets the Trino 468 SPI, which is Java 23 bytecode, so it must
+# be compiled with a JDK >= 23 (the emitted bytecode still targets 17/21):
+#   JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 \
+#     mvn -f trino-benostreamdb/pom.xml clean package -DskipTests
+# `build-connectors.sh` does this and flattens the ZIP for you.
 if [[ ! -f "$ART/trino-benostream-java-17.zip" ]]; then
   echo "error: $ART/trino-benostream-java-17.zip not found." >&2
-  echo "Build it with: (cd trino-benostreamdb && mvn clean package -DskipTests)" >&2
+  echo "Build it with: (cd trino-benostreamdb && JAVA_HOME=<jdk23+> mvn clean package -DskipTests)" >&2
   exit 1
 fi
 

@@ -1,0 +1,101 @@
+{
+  "engine": "benostreamdb",
+  "competitor": "duckdb",
+  "workload": "pathological_filters_differential_oracle",
+  "host": "x86_64 (Linux)",
+  "rows": 200000,
+  "session_overhead_ms": 0.6,
+  "cases": [
+    {
+      "name": "F1 (Ultra-Selective 0.01%)",
+      "description": "Point lookup exercising metadata min/max pruning and dictionary filters",
+      "sql": "SELECT \"WatchID\", \"UserID\", \"RegionID\" FROM t WHERE \"UserID\" = 42",
+      "selectivity_pct": 0.0,
+      "bsdb_rows": 7,
+      "duckdb_rows": 7,
+      "bsdb_total_p50_ms": 7.6,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 7.0,
+      "duckdb_p50_ms": 1.69,
+      "oracle_pass": true
+    },
+    {
+      "name": "F2 (Moderate Filter 5%)",
+      "description": "Categorical filter selecting ~5% of row groups",
+      "sql": "SELECT \"WatchID\", \"AdvEngineID\", \"ResolutionWidth\" FROM t WHERE \"AdvEngineID\" = 3",
+      "selectivity_pct": 4.98,
+      "bsdb_rows": 9954,
+      "duckdb_rows": 9954,
+      "bsdb_total_p50_ms": 7.99,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 7.39,
+      "duckdb_p50_ms": 1.68,
+      "oracle_pass": true
+    },
+    {
+      "name": "F3 (Pathological Low-Selectivity 99.5%)",
+      "description": "Pathological filter that prunes almost nothing; tests pushdown evaluation overhead",
+      "sql": "SELECT count(*) AS cnt, sum(\"ResolutionWidth\") AS total_res FROM t WHERE \"AdvEngineID\" >= 0",
+      "selectivity_pct": 100.0,
+      "bsdb_rows": 1,
+      "duckdb_rows": 1,
+      "bsdb_total_p50_ms": 6.46,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 5.86,
+      "duckdb_p50_ms": 0.91,
+      "oracle_pass": true
+    },
+    {
+      "name": "F4 (High-Cardinality IN List 50 items)",
+      "description": "High-cardinality IN list filter spanning many values",
+      "sql": "SELECT count(*) AS cnt FROM t WHERE \"RegionID\" IN (1, 5, 12, 19, 23, 27, 31, 39, 44, 51, 60, 67, 72, 85, 91, 99, 102, 115, 120, 131, 142, 150, 155, 161, 170, 178, 185, 192, 199, 201, 205, 210, 215, 220, 225, 230, 235, 240, 245, 250, 255, 260, 265, 270, 275, 280, 285, 290, 295, 300)",
+      "selectivity_pct": 15.82,
+      "bsdb_rows": 1,
+      "duckdb_rows": 1,
+      "bsdb_total_p50_ms": 2.93,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 2.33,
+      "duckdb_p50_ms": 1.47,
+      "oracle_pass": true
+    },
+    {
+      "name": "F5 (Compound Negation & Range)",
+      "description": "Compound NOT IN, inequality, and numeric inequality range filters",
+      "sql": "SELECT count(*) AS cnt FROM t WHERE \"RegionID\" NOT IN (1, 2, 3, 4, 5) AND \"AdvEngineID\" <> 0 AND \"ResolutionWidth\" > 1920",
+      "selectivity_pct": 8.33,
+      "bsdb_rows": 1,
+      "duckdb_rows": 1,
+      "bsdb_total_p50_ms": 7.1,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 6.5,
+      "duckdb_p50_ms": 1.15,
+      "oracle_pass": true
+    },
+    {
+      "name": "F6 (Prefix String Filter)",
+      "description": "String prefix pattern pushdown",
+      "sql": "SELECT count(*) AS cnt FROM t WHERE \"MobilePhoneModel\" LIKE 'iPhone%'",
+      "selectivity_pct": 16.7,
+      "bsdb_rows": 1,
+      "duckdb_rows": 1,
+      "bsdb_total_p50_ms": 4.76,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 4.16,
+      "duckdb_p50_ms": 0.89,
+      "oracle_pass": true
+    },
+    {
+      "name": "F7 (Unanchored Substring Filter)",
+      "description": "Arbitrary unanchored substring search across text column",
+      "sql": "SELECT count(*) AS cnt FROM t WHERE \"SearchPhrase\" LIKE '%vector%'",
+      "selectivity_pct": 14.32,
+      "bsdb_rows": 1,
+      "duckdb_rows": 1,
+      "bsdb_total_p50_ms": 5.18,
+      "session_overhead_ms": 0.6,
+      "pure_compute_p50_ms": 4.58,
+      "duckdb_p50_ms": 0.83,
+      "oracle_pass": true
+    }
+  ]
+}

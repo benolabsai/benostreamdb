@@ -1,0 +1,7 @@
+/usr/local/lib/python3.12/site-packages/cugraph/link_analysis/pagerank.py:206: UserWarning: Pagerank expects the 'store_transposed' flag to be set to 'True' for optimal performance during the graph creation
+  warnings.warn(warning_msg, UserWarning)
+max abs diff: 2.5506851614854166e-06
+corr: 0.9999804829232959
+cugraph top5: [617, 8750, 3046, 3153, 5249]
+networkx top5: [617, 8750, 3046, 3153, 5249]
+rc=0

@@ -1,0 +1,19 @@
+WARNING: pip index is currently an experimental command. It may be removed/changed in a future release without prior warning.
+ERROR: No matching distribution found for faiss-gpu-cu13
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+WARNING: pip index is currently an experimental command. It may be removed/changed in a future release without prior warning.
+faiss-gpu-cu12 (1.14.1.post1)
+Available versions: 1.14.1.post1, 1.14.1, 1.14.0, 1.13.2, 1.13.1, 1.13.0, 1.12.0, 1.11.0, 1.10.0, 1.9.0.post1, 1.9.0.0, 1.8.0.2
+  INSTALLED: 1.14.1.post1
+  LATEST:    1.14.1.post1
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+WARNING: pip index is currently an experimental command. It may be removed/changed in a future release without prior warning.
+faiss-cpu (1.15.1)
+Available versions: 1.15.1, 1.15.0, 1.14.3, 1.14.2, 1.13.2, 1.13.1, 1.13.0, 1.12.0, 1.11.0.post1, 1.11.0, 1.10.0, 1.9.0.post1, 1.9.0, 1.8.0.post1, 1.8.0
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
