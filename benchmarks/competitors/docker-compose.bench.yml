@@ -54,6 +54,11 @@ x-bench-env: &bench-env
   CLICKHOUSE_PORT: "8123"
   CLICKHOUSE_USER: "default"
   CLICKHOUSE_PASSWORD: ""
+  TRINO_HOST: "trino"
+  TRINO_PORT: "8080"
+  TRINO_USER: "bench"
+  TRINO_CATALOG: "memory"
+  TRINO_SCHEMA: "default"
   # Cap the RAPIDS (cuDF/cuGraph) device pool so it leaves headroom for the
   # desktop compositor (Wayland holds ~1.3 GB on the 5070 Ti); without this the
   # pool grows into the whole card and cuGraph fails with a misleading
@@ -119,11 +124,36 @@ services:
       CLICKHOUSE_USER: "default"
       CLICKHOUSE_PASSWORD: ""
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    # No data volume: the runner loads the shared Parquet into a `MergeTree`
+    # table via the client, so ClickHouse never touches the host data dir (its
+    # entrypoint chowns any mounted dir, which would break the host).
     ulimits:
       nofile: { soft: 262144, hard: 262144 }
     networks: [bench]
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    <<: *envelope
+
+  # Trino (distributed SQL). Uses the Hive connector with a file-based
+  # metastore over the shared Parquet directory, so the runner can register the
+  # benchmark table `t` as an external table and run the shared SQL unchanged.
+  trino:
+    build:
+      context: ../..
+      dockerfile: benchmarks/competitors/Dockerfile.trino
+    image: bsdb-trino:latest
+    environment:
+      TRINO_HOST: "trino"
+      TRINO_PORT: "8080"
+    volumes:
+      - ./trino/etc:/etc/trino
+      - ./data:/data
+    networks: [bench]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 60

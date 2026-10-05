@@ -22,11 +22,12 @@ RUN pip install numpy h5py pandas pyarrow
 # Competitor clients. faiss-cpu/hnswlib/lancedb/duckdb are embedded;
 # psycopg/opensearch-py/neo4j/clickhouse-connect are clients for the compose
 # services.
-RUN pip install faiss-cpu hnswlib lancedb duckdb "psycopg[binary]" opensearch-py neo4j clickhouse-connect networkx scipy
+RUN pip install faiss-cpu hnswlib lancedb duckdb datafusion "psycopg[binary]" opensearch-py neo4j clickhouse-connect trino deltalake networkx scipy
 
 WORKDIR /opt/bench
 COPY benchmarks/competitors/run_competitor.py /opt/bench/run_competitor.py
 COPY benchmarks/ann_benchmarks/run.py /opt/bench/ann_benchmarks.py
+COPY benchmarks/iceberg_roundtrip/run.py /opt/bench/iceberg_roundtrip.py
 COPY benchmarks/competitors/run_bench.sh /opt/bench/run_bench.sh
 RUN chmod +x /opt/bench/run_bench.sh
 
