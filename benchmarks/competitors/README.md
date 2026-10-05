@@ -148,10 +148,19 @@ register it in `vector_adapters()` / the `main()` dispatch.
 
 ## Still to add
 
-cuGraph (GPU graph, competitor-only), Trino/ClickHouse (SQL), and Spark/Trino
-Iceberg round-trips. Each must run under the same envelope and emit the same
-schema.
+- **Trino (SQL)** — a Trino competitor adapter (the connector exists, but the
+  benchmark runner has no Trino client yet).
+- **Spark/Trino Iceberg round-trips** — read a BenoStreamDB-written Iceberg
+  table back through Spark/Trino and vice versa, to prove format compatibility.
 
-Tantivy (BM25/hybrid) is **already covered**: the `tantivy` adapter lives in
-`run_competitor.py`, and the BEIR lexical/hybrid suite
-(`benchmarks/beir/`) benchmarks BM25 vs Tantivy vs Hybrid RRF.
+Each must run under the same envelope and emit the same schema.
+
+**Already covered** (not "to add"):
+
+- **cuGraph** (GPU graph) — `cugraph-cu13` in the GPU runner, `renumber=True` +
+  managed memory, verified against NetworkX.
+- **ClickHouse** (SQL) — `_sql_clickhouse` materialises the Parquet into a
+  `MergeTree` table and runs the shared SQL.
+- **Tantivy** (BM25/hybrid) — the `tantivy` adapter lives in `run_competitor.py`,
+  and the BEIR lexical/hybrid suite (`benchmarks/beir/`) benchmarks BM25 vs
+  Tantivy vs Hybrid RRF.
