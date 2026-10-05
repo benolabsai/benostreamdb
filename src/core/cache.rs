@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
+use crate::core::index::csr_graph::MmapCsrGraph;
 use crate::core::index::hnsw_ivf::HnswIvfIndex;
 use crate::core::index::hnsw_rs::dist::DistL2;
 use crate::core::index::hnsw_rs::hnsw::Hnsw;
@@ -79,9 +80,18 @@ impl DiskCache {
             let hash = format!("{:x}", hasher.finalize());
             let cache_path = cache_dir.join(&hash);
 
-            if tokio::fs::metadata(&cache_path).await.is_ok() {
-                if let Ok(b) = tokio::fs::read(&cache_path).await {
-                    return Ok(bytes::Bytes::from(b));
+            let expected_size: Option<u64> = self
+                .store
+                .head(&object_store::path::Path::from(path))
+                .await
+                .map(|m| m.size)
+                .ok();
+
+            if let Ok(meta) = tokio::fs::metadata(&cache_path).await {
+                if expected_size.is_none() || expected_size == Some(meta.len()) {
+                    if let Ok(b) = tokio::fs::read(&cache_path).await {
+                        return Ok(bytes::Bytes::from(b));
+                    }
                 }
             }
 
@@ -131,7 +141,19 @@ impl DiskCache {
         let hash = format!("{:x}", hasher.finalize());
         let cache_path = cache_dir.join(&hash);
 
-        if tokio::fs::metadata(&cache_path).await.is_err() {
+        let expected_size: Option<u64> = self
+            .store
+            .head(&object_store::path::Path::from(path))
+            .await
+            .map(|m| m.size)
+            .ok();
+
+        let needs_fetch = match tokio::fs::metadata(&cache_path).await {
+            Ok(meta) => expected_size.is_some() && expected_size != Some(meta.len()),
+            Err(_) => true,
+        };
+
+        if needs_fetch {
             let b = self
                 .store
                 .get(&object_store::path::Path::from(path))
@@ -292,6 +314,37 @@ pub static HNSW_IVF_CACHE: Lazy<Cache<String, Arc<HnswIvfIndex>>> = Lazy::new(||
         })
         .max_capacity(max_kb)
         .time_to_idle(Duration::from_secs(60 * 15)) // 15 mins idle
+        .build()
+});
+
+/// Cache for CSR graph indexes loaded from Puffin compound bundles.
+///
+/// The loose-sidecar path mmap'd the three CSR files directly; the Puffin path
+/// reads the blobs into owned bytes, so caching the decoded graph avoids
+/// re-reading and re-copying the bundle on every `load_graph_index` call.
+/// Budgeted from `BSDB_CACHE_GB` (25% of the global cache, like the inverted
+/// index cache).
+pub static CSR_GRAPH_CACHE: Lazy<Cache<String, Arc<MmapCsrGraph>>> = Lazy::new(|| {
+    let cache_gb: u64 = std::env::var("BSDB_CACHE_GB")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse()
+        .unwrap_or(1);
+
+    // Allocate 25% of the global cache to CSR graphs.
+    let limit_bytes = cache_gb * 1024 * 1024 * 1024 / 4;
+    let max_kb = limit_bytes / 1024;
+
+    tracing::info!(
+        "Initializing CSR Graph Cache with {} MB limit",
+        limit_bytes / (1024 * 1024)
+    );
+
+    Cache::builder()
+        .weigher(|_key, value: &Arc<MmapCsrGraph>| -> u32 {
+            (value.size_in_bytes() / 1024).min(u32::MAX as usize) as u32
+        })
+        .max_capacity(max_kb)
+        .time_to_idle(Duration::from_secs(60 * 15))
         .build()
 });
 

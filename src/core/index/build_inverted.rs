@@ -515,6 +515,44 @@ impl crate::core::segment::HybridSegmentWriter {
                     }
                 }
 
+                // JSON-path index: a separate overlay over selected paths in
+                // this Utf8 column, so equality/containment filters on those
+                // paths avoid a full scan.
+                let json_paths = config.and_then(|c| {
+                    c.algorithms.iter().find_map(|a| {
+                        if let crate::core::manifest::IndexAlgorithm::JsonPath { paths } = a {
+                            Some(paths.clone())
+                        } else {
+                            None
+                        }
+                    })
+                });
+                if let Some(paths) = json_paths {
+                    if !paths.is_empty() {
+                        let jp_filename =
+                            format!("{}.{}.jsonpath.parquet", self.config.segment_id, col_name);
+                        let jp_path = local_staging_dir.join(&jp_filename);
+                        crate::core::index::json_path::build_json_path_index(
+                            col_array,
+                            &paths,
+                            row_offset,
+                            &jp_path,
+                        )?;
+                        let mut files = self.generated_files.lock();
+                        files.push(
+                            jp_path
+                                .to_str()
+                                .context("Invalid UTF-8 in path")?
+                                .to_string(),
+                        );
+                        tracing::info!(
+                            "  Built JSON-path index for column '{}' ({} paths)",
+                            col_name,
+                            paths.len()
+                        );
+                    }
+                }
+
                 tracing::info!(
                     "  Buffered tokens for {} rows in column '{}'",
                     array.len(),

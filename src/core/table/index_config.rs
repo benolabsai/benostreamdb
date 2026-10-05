@@ -244,48 +244,106 @@ impl Table {
     }
 
     /// Remove all indexing strategies from a column.
-    /// This is an atomic operation that commits a new manifest version.
+    /// This is an atomic operation that commits a new manifest version,
+    /// removes index metadata from all segment entries, invalidates query caches,
+    /// and deletes physical sidecar files.
     pub async fn drop_index(&self, column: String) -> Result<()> {
         let _maintenance_guard = self.maintenance_lock.write().await;
         // Collect all file paths associated with this index from the current manifest.
-        // NOTE: entries live in the tiered manifest list, not inline in
-        // `Manifest.entries` (which is empty for tiered manifests), so we must
-        // resolve them through `load_all_entries` — otherwise `drop_index` would
-        // silently leave every index file orphaned on disk.
         let manifest = self.manifest().await?;
         let manager =
             crate::core::manifest::ManifestManager::new(self.store.clone(), "", &self.uri);
         let entries = manager.load_all_entries(&manifest).await?;
         let mut paths_to_delete = Vec::new();
+        let mut updated_entries = Vec::new();
+        let mut any_removed = false;
 
-        for entry in &entries {
+        for mut entry in entries {
+            let mut remaining_indexes = Vec::new();
             for idx in &entry.index_files {
-                if idx.column_name.as_deref() == Some(column.as_str()) {
-                    match idx.index_type.as_str() {
-                        // The CSR is a triple (offsets, edges, dict) — omitting
-                        // the `.dict` sidecar left it orphaned on every drop.
-                        "graph_v2" => {
-                            paths_to_delete.push(format!("{}.graph_v2.csr.offsets", idx.file_path));
-                            paths_to_delete.push(format!("{}.graph_v2.csr.edges", idx.file_path));
-                            paths_to_delete.push(format!("{}.graph_v2.csr.dict", idx.file_path));
+                if idx.column_name == column.as_str() {
+                    any_removed = true;
+                    if !idx.file_path.ends_with(".puffin") {
+                        match idx.index_category.as_str() {
+                            // The CSR is a triple (offsets, edges, dict)
+                            "graph_v2" => {
+                                paths_to_delete
+                                    .push(format!("{}.graph_v2.csr.offsets", idx.file_path));
+                                paths_to_delete
+                                    .push(format!("{}.graph_v2.csr.edges", idx.file_path));
+                                paths_to_delete
+                                    .push(format!("{}.graph_v2.csr.dict", idx.file_path));
+                            }
+                            "vector" => {
+                                // Base and auxiliary paths for vector indexes
+                                paths_to_delete.push(format!("{}.hnsw.graph", idx.file_path));
+                                paths_to_delete.push(format!("{}.hnsw.pq", idx.file_path));
+                                paths_to_delete
+                                    .push(format!("{}.centroids.parquet", idx.file_path));
+                                paths_to_delete.push(format!("{}.mapping.parquet", idx.file_path));
+                                for c in 0..128 {
+                                    paths_to_delete.push(format!(
+                                        "{}.cluster_{}.hnsw.graph",
+                                        idx.file_path, c
+                                    ));
+                                    paths_to_delete
+                                        .push(format!("{}.cluster_{}.hnsw.data", idx.file_path, c));
+                                }
+                            }
+                            "lexical" => {
+                                paths_to_delete.push(idx.file_path.clone());
+                                if let Some(base) = idx.file_path.strip_suffix(".inv.parquet") {
+                                    paths_to_delete.push(format!("{}.doclen.parquet", base));
+                                }
+                            }
+                            _ => {
+                                paths_to_delete.push(idx.file_path.clone());
+                            }
                         }
-                        "vector" => {
-                            // Base paths for vector indexes
-                            paths_to_delete.push(format!("{}.hnsw.graph", idx.file_path));
-                            paths_to_delete.push(format!("{}.hnsw.pq", idx.file_path));
-                        }
-                        _ => {
-                            paths_to_delete.push(idx.file_path.clone());
-                        }
+                    }
+                } else {
+                    remaining_indexes.push(idx.clone());
+                }
+            }
+
+            // Check if any puffin files can now be deleted (if no other column uses them)
+            for idx in &entry.index_files {
+                if idx.column_name == column.as_str() && idx.file_path.ends_with(".puffin") {
+                    let still_used = remaining_indexes
+                        .iter()
+                        .any(|rem| rem.file_path == idx.file_path);
+                    if !still_used {
+                        paths_to_delete.push(idx.file_path.clone());
                     }
                 }
             }
+
+            entry.index_files = remaining_indexes;
+            updated_entries.push(entry);
+        }
+
+        // Commit updated segment entries removing the index from manifest entries
+        if any_removed {
+            manager.commit_imported_entries(updated_entries).await?;
         }
 
         // Commit the manifest update dropping the index from the schema
         let mut updates = HashMap::new();
         updates.insert(column.clone(), vec![]);
         self.set_index_columns(updates).await?;
+
+        // Invalidate in-memory caches
+        for path in &paths_to_delete {
+            let key = format!("{}/{}", self.uri, path);
+            crate::core::cache::INVERTED_INDEX_CACHE
+                .invalidate(&key)
+                .await;
+            crate::core::cache::HNSW_IVF_CACHE.invalidate(&key).await;
+            crate::core::cache::INDEX_CACHE.invalidate(&key).await;
+            crate::core::cache::ANALYZER_META_CACHE
+                .invalidate(&key)
+                .await;
+        }
 
         // Best-effort cleanup of index files
         for path in paths_to_delete {
@@ -488,9 +546,9 @@ impl Table {
                     };
 
                     let mut cols_to_index = index_columns.clone();
-                    for col in target_cols {
-                        if !cols_to_index.contains(&col) {
-                            cols_to_index.push(col);
+                    for col in &target_cols {
+                        if !cols_to_index.contains(col) {
+                            cols_to_index.push(col.clone());
                         }
                     }
 
@@ -498,6 +556,7 @@ impl Table {
                         .with_parquet_path(current_entry.file_path.clone())
                         .with_data_store(data_store)
                         .with_index_all(index_all)
+                        .with_file_checksum(current_entry.file_checksum.clone())
                         .with_columns_to_index(cols_to_index);
 
                     let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
@@ -540,7 +599,14 @@ impl Table {
                         index_files = ?updated_entry.index_files,
                         "Backfill index manifest updated"
                     );
-                    current_entry.index_files = updated_entry.index_files;
+                    let mut merged_index_files: Vec<crate::core::manifest::IndexFile> =
+                        current_entry
+                            .index_files
+                            .into_iter()
+                            .filter(|idx| !target_cols.contains(&idx.column_name))
+                            .collect();
+                    merged_index_files.extend(updated_entry.index_files);
+                    current_entry.index_files = merged_index_files;
 
                     Ok(current_entry)
                 }
@@ -598,12 +664,13 @@ impl Table {
         let mut index_configs = self.indexing.index_configs.read().clone();
 
         let mut rebuilt = 0usize;
+        let mut updated_entries: Vec<crate::core::manifest::ManifestEntry> = Vec::new();
         for entry in entries {
-            // Only segments that already carry an inverted index on `column`.
+            // Only segments that already carry a lexical (inverted) index on `column`.
             let inv = entry
                 .index_files
                 .iter()
-                .find(|f| f.index_type == "inverted" && f.column_name.as_deref() == Some(column));
+                .find(|f| f.is_lexical() && f.column_name == column);
             let Some(inv) = inv else { continue };
 
             // Preserve the analyzer the existing index was built with so the
@@ -647,6 +714,7 @@ impl Table {
             let config = SegmentConfig::new(&full_base_uri, &segment_id)
                 .with_parquet_path(rel_parquet_path)
                 .with_data_store(data_store.clone())
+                .with_file_checksum(entry.file_checksum.clone())
                 .with_columns_to_index(vec![column.to_string()]);
 
             let reader = HybridReader::new(config.clone(), store.clone(), &table_uri);
@@ -680,8 +748,22 @@ impl Table {
             }
             writer.finish_indexing().await?;
 
-            // The sidecar path is unchanged, so the manifest needs no update —
-            // but any cached copy of the old file must be dropped.
+            // The Puffin bundle is rewritten in place, but its blob offsets
+            // change, so the manifest entry must be updated with the new index
+            // metadata (the old offsets would point at stale bytes).
+            let updated = writer.to_manifest_entry();
+            let mut merged: Vec<crate::core::manifest::IndexFile> = entry
+                .index_files
+                .iter()
+                .filter(|f| !(f.is_lexical() && f.column_name == column))
+                .cloned()
+                .collect();
+            merged.extend(updated.index_files);
+            let mut new_entry = entry.clone();
+            new_entry.index_files = merged;
+            updated_entries.push(new_entry);
+
+            // Any cached copy of the old bundle must be dropped.
             let inv_path = if rel_parent.is_empty() {
                 inv.file_path.clone()
             } else {
@@ -701,11 +783,15 @@ impl Table {
             );
         }
 
+        if !updated_entries.is_empty() {
+            manager.commit_imported_entries(updated_entries).await?;
+        }
+
         Ok(rebuilt)
     }
 
     /// Physical index types required for `target_columns` (or every configured
-    /// column when `target_columns` is empty), as `(column, index_type)` pairs.
+    /// column when `target_columns` is empty), as `(column, index_category)` pairs.
     ///
     /// Used by [`Self::backfill_indexes_async`] to skip segments that already
     /// carry the required indexes.
@@ -759,7 +845,8 @@ impl Table {
 
         for entry in &entries {
             for index_file in &entry.index_files {
-                if let Some(col_name) = &index_file.column_name {
+                let col_name = &index_file.column_name;
+                {
                     // Skip composite index virtual columns (they are managed via CompositeBitmap)
                     if col_name.contains(',') {
                         continue;
@@ -771,7 +858,7 @@ impl Table {
 
                     let algorithms = inferred_specs.entry(col_name.clone()).or_default();
 
-                    let alg = match index_file.index_type.as_str() {
+                    let alg = match index_file.index_category.as_str() {
                         "vector" | "hnsw" => Some(IndexAlgorithm::Hnsw {
                             metric: "l2".to_string(),
                             complexity: 16,
@@ -779,7 +866,7 @@ impl Table {
                             build_device: None,
                             search_device: None,
                         }),
-                        "inverted" => Some(IndexAlgorithm::Bm25 {
+                        "lexical" | "inverted" | "bm25" => Some(IndexAlgorithm::Bm25 {
                             k1: 1.5,
                             b: 0.75,
                             tokenizer: "default".to_string(),
@@ -807,9 +894,9 @@ impl Table {
     }
 }
 
-/// Physical `index_type` string a configured algorithm produces in the manifest.
+/// Physical `index_category` string a configured algorithm produces in the manifest.
 ///
-/// Mirrors the values written by the segment writer (`"vector"`, `"inverted"`,
+/// Mirrors the values written by the segment writer (`"vector"`, `"lexical"`,
 /// `"scalar"`, `"graph_v2"`, `"bloom"`) so backfill can tell whether a segment
 /// already carries the index a column needs.
 fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
@@ -818,12 +905,27 @@ fn physical_index_type(alg: &IndexAlgorithm) -> &'static str {
         | IndexAlgorithm::HnswPq { .. }
         | IndexAlgorithm::HnswTq4 { .. }
         | IndexAlgorithm::HnswTq8 { .. } => "vector",
-        IndexAlgorithm::Bm25 { .. } => "inverted",
+        IndexAlgorithm::Bm25 { .. } => "lexical",
         IndexAlgorithm::Bloom { .. } => "bloom",
         IndexAlgorithm::Bitmap | IndexAlgorithm::CompositeBitmap { .. } => "scalar",
         // The `graph_v2` suffix is the on-disk graph format version.
         IndexAlgorithm::CsrGraph { .. } => "graph_v2",
+        IndexAlgorithm::JsonPath { .. } => "json_path",
     }
+}
+
+/// Whether two `index_category` strings denote the same index family.
+///
+/// The lexical family was renamed from `"inverted"` to `"lexical"`; legacy
+/// manifests still carry `"inverted"` (and some paths used
+/// `"bm25"`). Treating them as equivalent keeps backfill idempotent across the
+/// rename instead of rebuilding every legacy segment.
+fn category_matches(actual: &str, expected: &str) -> bool {
+    if actual == expected {
+        return true;
+    }
+    let lexical = |s: &str| matches!(s, "lexical" | "inverted" | "bm25");
+    lexical(actual) && lexical(expected)
 }
 
 /// Whether a manifest entry already carries an index of `ty` on `col`.
@@ -831,7 +933,7 @@ fn entry_has_index(entry: &crate::core::manifest::ManifestEntry, col: &str, ty: 
     entry
         .index_files
         .iter()
-        .any(|f| f.column_name.as_deref() == Some(col) && f.index_type == ty)
+        .any(|f| f.column_name == col && category_matches(&f.index_category, ty))
 }
 
 /// Convert a manifest `file_path` (which may be an absolute URI, e.g. after a
@@ -889,11 +991,13 @@ async fn read_inverted_analyzer(
         .bytes()
         .await
         .ok()?;
-    let builder =
-        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(bytes).ok()?;
-    for kv in builder.metadata().file_metadata().key_value_metadata()? {
-        if kv.key == "analyzer" {
-            return kv.value.clone();
+
+    // The analyzer is recorded in the Puffin blob's properties.
+    let reader =
+        crate::core::puffin::PuffinReader::new(std::io::Cursor::new(bytes.to_vec())).ok()?;
+    for blob in &reader.footer().blobs {
+        if blob.r#type == crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25 {
+            return blob.properties.get("analyzer").cloned();
         }
     }
     None
@@ -924,7 +1028,7 @@ mod backfill_tests {
                 b: 0.75,
                 tokenizer: "default".to_string(),
             }),
-            "inverted"
+            "lexical"
         );
     }
 
@@ -934,14 +1038,14 @@ mod backfill_tests {
             index_files: vec![
                 IndexFile {
                     file_path: "seg.title.inv.parquet".to_string(),
-                    index_type: "inverted".to_string(),
-                    column_name: Some("title".to_string()),
+                    index_category: "inverted".to_string(),
+                    column_name: "title".to_string(),
                     ..Default::default()
                 },
                 IndexFile {
                     file_path: "seg.embedding.tq8.centroids.parquet".to_string(),
-                    index_type: "vector".to_string(),
-                    column_name: Some("embedding".to_string()),
+                    index_category: "vector".to_string(),
+                    column_name: "embedding".to_string(),
                     ..Default::default()
                 },
             ],
@@ -949,6 +1053,11 @@ mod backfill_tests {
         };
         assert!(entry_has_index(&entry, "title", "inverted"));
         assert!(entry_has_index(&entry, "embedding", "vector"));
+        // The lexical family is aliased: a legacy `inverted` entry satisfies a
+        // `lexical` requirement (and vice versa), so the rename does not force a
+        // rebuild of every legacy segment.
+        assert!(entry_has_index(&entry, "title", "lexical"));
+        assert!(entry_has_index(&entry, "title", "bm25"));
         // Wrong column, wrong type, or an unknown column must not match — an
         // over-eager match would silently skip a needed rebuild.
         assert!(!entry_has_index(&entry, "title", "vector"));
@@ -964,14 +1073,14 @@ mod backfill_tests {
             index_files: vec![
                 IndexFile {
                     file_path: "seg.title.inv.parquet".to_string(),
-                    index_type: "inverted".to_string(),
-                    column_name: Some("title".to_string()),
+                    index_category: "inverted".to_string(),
+                    column_name: "title".to_string(),
                     ..Default::default()
                 },
                 IndexFile {
                     file_path: "seg.embedding.tq8.centroids.parquet".to_string(),
-                    index_type: "vector".to_string(),
-                    column_name: Some("embedding".to_string()),
+                    index_category: "vector".to_string(),
+                    column_name: "embedding".to_string(),
                     ..Default::default()
                 },
             ],

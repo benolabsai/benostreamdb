@@ -76,8 +76,8 @@ async fn test_index_lifecycle_add_drop_readd() -> anyhow::Result<()> {
         entry
             .index_files
             .iter()
-            .any(|idx| idx.index_type == "inverted" && idx.column_name.as_deref() == Some("text")),
-        "Should have an inverted index for 'text'"
+            .any(|idx| idx.is_lexical() && idx.column_name == "text"),
+        "Should have a lexical (inverted) index for 'text'"
     );
 
     // Verify search works via pushdown

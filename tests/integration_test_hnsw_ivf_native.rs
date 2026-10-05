@@ -268,14 +268,15 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
     }
 
     // Build a SegmentConfig that mirrors what the production path produces:
-    // blob_type is set, file_path points to the base (no extension), index_type = "vector".
+    // blob_type is set, file_path points to the base (no extension), index_category = "vector".
     let index_file = IndexFile {
         file_path: format!("{}.embedding.tq8", seg_id),
-        index_type: "vector".to_string(),
-        column_name: Some("embedding".to_string()),
+        index_category: "vector".to_string(),
+        column_name: "embedding".to_string(),
         blob_type: Some("hnsw_tq8".to_string()), // ← this is what triggered the bug
-        offset: None,
-        length: None,
+        blob_offset: None,
+        blob_length: None,
+        ..Default::default()
     };
 
     let mut config = benostreamdb::SegmentConfig::new("", seg_id);

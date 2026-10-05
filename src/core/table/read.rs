@@ -223,7 +223,8 @@ impl Table {
                     .with_parquet_path(entry.file_path.clone())
                     .with_index_files(entry.index_files.clone())
                     .with_delete_files(entry.delete_files.clone())
-                    .with_record_count(entry.record_count as u64);
+                    .with_record_count(entry.record_count as u64)
+                    .with_file_checksum(entry.file_checksum.clone());
 
                 let reader = HybridReader::new(config, self.store.clone(), &base_uri);
 
@@ -238,11 +239,11 @@ impl Table {
                         .index_files
                         .iter()
                         .find(|f| {
-                            matches!(f.index_type.as_str(), "inverted" | "bitmap" | "bm25")
-                                && f.column_name.as_deref() == Some(sub_f.column.as_str())
+                            (f.is_lexical() || f.index_category == "bitmap")
+                                && f.column_name == sub_f.column.as_str()
                         })
-                        .map(|f| match f.index_type.as_str() {
-                            "inverted" => "Inverted Index (Parquet)",
+                        .map(|f| match f.index_category.as_str() {
+                            "lexical" | "inverted" => "Inverted Index (Parquet)",
                             "bm25" => "BM25 Inverted Index",
                             "bitmap" => "Bitmap Index (.idx)",
                             _ => "Full Scan",
@@ -325,16 +326,17 @@ impl Table {
                 if let Some(f) = pruned_entries
                     .iter()
                     .flat_map(|(e, _)| e.index_files.iter())
-                    .find(|f| {
-                        f.index_type == "vector"
-                            && f.column_name.as_deref() == Some(vs.column.as_str())
-                    })
+                    .find(|f| f.index_category == "vector" && f.column_name == vs.column.as_str())
                 {
-                    access_mode = match f.blob_type.as_deref() {
-                        Some("hnsw_tq8") => "HNSW-TQ8 Cluster Index",
-                        Some("hnsw_tq4") => "HNSW-TQ4 Cluster Index",
-                        Some("hnsw_pq") => "HNSW-PQ Cluster Index",
-                        Some("hnsw_ivf") => "HNSW-IVF Cluster Index",
+                    // `algorithm` is the concrete quantization id ("tq8",
+                    // "tq4", "pq", "hnsw"); `blob_type` is the Puffin blob type
+                    // (e.g. "org.apache.iceberg.vector.hnsw-tq8"). Match on the
+                    // algorithm so the report is independent of the storage
+                    // container.
+                    access_mode = match f.algorithm.as_str() {
+                        "tq8" | "hnsw_tq8" => "HNSW-TQ8 Cluster Index",
+                        "tq4" | "hnsw_tq4" => "HNSW-TQ4 Cluster Index",
+                        "pq" | "hnsw_pq" => "HNSW-PQ Cluster Index",
                         _ => "HNSW-IVF Cluster Index",
                     };
                     break;
@@ -1041,6 +1043,22 @@ impl Table {
             }
         }
 
+        // JSON-path overlay: answer `json_*` predicates from the index when the
+        // segment carries one. The result is a superset of the true matches;
+        // the filter is re-applied below.
+        if !index_used {
+            let json_preds = expr.json_path_predicates();
+            if !json_preds.is_empty() {
+                if let Ok(Some(indexed_batches)) = reader
+                    .query_json_path_first(&json_preds, read_schema.clone())
+                    .await
+                {
+                    batches = indexed_batches;
+                    index_used = true;
+                }
+            }
+        }
+
         if !index_used {
             // Point Selection Optimization: Check Bloom Filters before scanning
             for filter in &and_filters {
@@ -1293,7 +1311,8 @@ impl Table {
             let config = SegmentConfig::new(&self.uri, segment_id)
                 .with_parquet_path(entry.file_path.clone())
                 .with_index_files(entry.index_files.clone())
-                .with_record_count(entry.record_count as u64);
+                .with_record_count(entry.record_count as u64)
+                .with_file_checksum(entry.file_checksum.clone());
 
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             let matches = reader
@@ -1353,7 +1372,8 @@ impl Table {
             let config = SegmentConfig::new(&self.uri, segment_id)
                 .with_parquet_path(entry.file_path.clone())
                 .with_index_files(entry.index_files.clone())
-                .with_record_count(entry.record_count as u64);
+                .with_record_count(entry.record_count as u64)
+                .with_file_checksum(entry.file_checksum.clone());
 
             let reader = HybridReader::new(config, self.store.clone(), &self.uri);
             let matches = reader

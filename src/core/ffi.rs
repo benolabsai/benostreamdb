@@ -496,7 +496,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIn
     _class: JClass,
     table_uri: JString,
     column: JString,
-    index_type: JString,
+    index_category: JString,
 ) -> jboolean {
     let uri: String = env
         .get_string(&table_uri)
@@ -507,7 +507,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIn
         .map(|s| s.into())
         .unwrap_or_default();
     let idx_type: String = env
-        .get_string(&index_type)
+        .get_string(&index_category)
         .map(|s| s.into())
         .unwrap_or_default();
 
@@ -577,7 +577,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropI
     _class: JClass,
     table_uri: JString,
     column: JString,
-    index_type: JString,
+    index_category: JString,
 ) -> jboolean {
     let uri: String = env
         .get_string(&table_uri)
@@ -588,7 +588,7 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropI
         .map(|s| s.into())
         .unwrap_or_default();
     let idx_type: String = env
-        .get_string(&index_type)
+        .get_string(&index_category)
         .map(|s| s.into())
         .unwrap_or_default();
 
@@ -1139,8 +1139,12 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_appendB
         }
     };
     let rows = batch.num_rows();
+    // The JVM caller holds this batch while the engine buffers its own copy;
+    // declare it so the ingest back-pressure ignores the caller's footprint.
+    let caller_bytes = batch.get_array_memory_size() as u64;
     let res = RUNTIME.block_on(async {
         let table = Table::new_async(uri).await?;
+        table.set_caller_reserved_bytes(caller_bytes);
         table.write_async(vec![batch]).await?;
         table.commit_async().await?;
         Ok::<(), anyhow::Error>(())
@@ -1185,8 +1189,12 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_mergeRo
             return 0;
         }
     };
+    // The JVM caller holds this batch while the engine buffers its own copy;
+    // declare it so the ingest back-pressure ignores the caller's footprint.
+    let caller_bytes = batch.get_array_memory_size() as u64;
     let res = RUNTIME.block_on(async {
         let table = Table::new_async(uri).await?;
+        table.set_caller_reserved_bytes(caller_bytes);
         // `Table::merge` drives its own runtime via `block_on`, so run it on a
         // blocking thread rather than inside the async context.
         tokio::task::spawn_blocking(move || {

@@ -63,6 +63,7 @@ pub struct HybridSegmentWriter {
     pub(crate) vector_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) graph_data: parking_lot::Mutex<HashMap<String, String>>,
     pub(crate) file_checksum: parking_lot::Mutex<Option<String>>,
+    pub(crate) puffin_index_entries: parking_lot::Mutex<Vec<crate::core::manifest::IndexFile>>,
 }
 
 impl HybridSegmentWriter {
@@ -80,6 +81,7 @@ impl HybridSegmentWriter {
             vector_data: parking_lot::Mutex::new(HashMap::new()),
             graph_data: parking_lot::Mutex::new(HashMap::new()),
             file_checksum: parking_lot::Mutex::new(None),
+            puffin_index_entries: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -128,113 +130,23 @@ impl HybridSegmentWriter {
         let record_count = self.get_record_count() as i64;
         let files = self.get_generated_files();
 
-        let mut index_files = Vec::new();
         let mut parquet_file = String::new();
         let mut total_size = 0;
 
+        // All secondary indexes are packed into the Puffin compound bundle;
+        // the PuffinIndexWriter produces the IndexFile entries at bundle-finalize
+        // time and stores them in puffin_index_entries.
+        let index_files = self.puffin_index_entries.lock().clone();
+
+        // Walk the generated files list to find the main Parquet data file and
+        // its on-disk size; everything else is a Puffin artifact or temp file
+        // and does not need a manifest entry.
         for f in &files {
             let filename = f.split('/').next_back().unwrap_or(f).to_string();
-
-            if filename.ends_with(".inv.parquet") {
-                // Inverted Index
-                let col = filename.split('.').nth(1).map(|c| c.to_string());
-                index_files.push(crate::core::manifest::IndexFile {
-                    file_path: filename.clone(),
-                    index_type: "inverted".to_string(),
-                    column_name: col,
-                    blob_type: None,
-                    offset: None,
-                    length: None,
-                });
-            } else if filename.ends_with(".centroids.parquet")
-                || filename.ends_with(".mapping.parquet")
-            {
-                // HNSW-IVF Auxiliary Parquet Files
-            } else if filename.contains(".doclen.parquet") {
-                // BM25 doc-length sidecar (per-row token counts); not a search index
-            } else if filename.ends_with(".parquet") {
-                // Main Data File
+            if filename.ends_with(".parquet") {
                 parquet_file = filename.clone();
                 if let Ok(meta) = std::fs::metadata(f) {
                     total_size = meta.len() as i64;
-                }
-            } else if filename.contains(".idx") {
-                // Scalar Bitmap Index
-                let col = filename.split('.').nth(1).and_then(|c| {
-                    if c == "idx" {
-                        None
-                    } else {
-                        Some(c.to_string())
-                    }
-                });
-                index_files.push(crate::core::manifest::IndexFile {
-                    file_path: filename.clone(),
-                    index_type: "scalar".to_string(),
-                    column_name: col,
-                    blob_type: None,
-                    offset: None,
-                    length: None,
-                });
-            } else if filename.ends_with(".graph_v2.csr.offsets")
-                || filename.ends_with(".graph_v2.csr.edges")
-            {
-                let parts: Vec<&str> = filename.split('.').collect();
-                if parts.len() >= 4 {
-                    let col = parts[1].to_string();
-                    let manifest_path_raw = format!("{}.{}", parts[0], parts[1]);
-                    let new_index_file = crate::core::manifest::IndexFile {
-                        file_path: manifest_path_raw.clone(),
-                        index_type: "graph_v2".to_string(),
-                        column_name: Some(col),
-                        blob_type: Some("csr_graph".to_string()),
-                        offset: None,
-                        length: None,
-                    };
-                    if !index_files.iter().any(|f| {
-                        f.file_path == new_index_file.file_path
-                            && f.index_type == new_index_file.index_type
-                            && f.column_name == new_index_file.column_name
-                    }) {
-                        index_files.push(new_index_file);
-                    }
-                }
-            } else if filename.ends_with(".hnsw.graph") {
-                // Vector Index
-                let parts: Vec<&str> = filename.split('.').collect();
-                if parts.len() >= 3 {
-                    let col = parts[1].to_string();
-                    let base_parts = &parts[..parts.len() - 2];
-
-                    // Strip .cluster_X part to find the algo metadata
-                    let mut base_path = base_parts.join(".");
-                    if let Some(c_idx) = base_path.find(".cluster_") {
-                        base_path = base_path[..c_idx].to_string();
-                    }
-
-                    let algo_name = self.index_metadata.lock().get(&base_path).cloned();
-
-                    // The manifest file_path should be the unique base for THIS variant
-                    let mut manifest_path_raw = base_parts.join(".");
-                    if let Some(c_idx) = manifest_path_raw.find(".cluster_") {
-                        manifest_path_raw = manifest_path_raw[..c_idx].to_string();
-                    }
-
-                    let new_index_file = crate::core::manifest::IndexFile {
-                        file_path: manifest_path_raw,
-                        index_type: "vector".to_string(),
-                        column_name: Some(col),
-                        blob_type: algo_name,
-                        offset: None,
-                        length: None,
-                    };
-
-                    if !index_files.iter().any(|f| {
-                        f.file_path == new_index_file.file_path
-                            && f.index_type == new_index_file.index_type
-                            && f.column_name == new_index_file.column_name
-                    }) {
-                        index_files.push(new_index_file);
-                    }
                 }
             }
         }
@@ -497,16 +409,38 @@ impl HybridSegmentWriter {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("No store configured for finishing indexes"))?;
 
-        // Determine the directory prefix from the existing parquet path
-        let parent_prefix = if let Some(p) = &self.config.parquet_path {
+        // Determine the directory prefix from the existing parquet path or base_path
+        let parent_prefix_buf = if let Some(p) = &self.config.parquet_path {
             if let Some(pos) = p.rfind('/') {
-                &p[..pos + 1]
+                p[..pos + 1].to_string()
             } else {
-                ""
+                "".to_string()
             }
+        } else if !self.config.base_path.is_empty() {
+            let base = self
+                .config
+                .base_path
+                .strip_prefix("file://")
+                .unwrap_or(&self.config.base_path)
+                .trim_end_matches('/');
+            format!("{}/", base)
         } else {
-            ""
+            "".to_string()
         };
+        let parent_prefix = parent_prefix_buf.as_str();
+
+        let puffin_filename = format!("{}.puffin", self.config.segment_id);
+        let puffin_path_str = format!("{}{}", parent_prefix, puffin_filename);
+        let mut puffin_writer = crate::core::puffin::PuffinIndexWriter::new_in_memory(
+            puffin_path_str.clone(),
+            self.config.active_snapshot_id.unwrap_or(0),
+            self.file_checksum
+                .lock()
+                .clone()
+                .or_else(|| self.config.file_checksum.clone())
+                .unwrap_or_default(),
+            self.get_record_count() as i64,
+        )?;
 
         // 1. Process Inverted Index Buffers - Drain the buffer into a local variable
         let inverted_data = {
@@ -561,9 +495,6 @@ impl HybridSegmentWriter {
                     ],
                 )?;
 
-                let doclen_filename =
-                    format!("{}.{}.doclen.parquet", self.config.segment_id, col_name);
-                let doclen_path_str = format!("{}{}", parent_prefix, doclen_filename);
                 let mut doclen_buffer = Vec::new();
                 {
                     let props = parquet::file::properties::WriterProperties::builder().build();
@@ -572,19 +503,19 @@ impl HybridSegmentWriter {
                     writer.write(&doclen_batch)?;
                     writer.close()?;
                 }
-                store
-                    .put(
-                        &object_store::path::Path::from(doclen_path_str.clone()),
-                        doclen_buffer.into(),
-                    )
-                    .await?;
-                let mut files = self.generated_files.lock();
-                files.push(doclen_path_str.clone());
+                puffin_writer.add_index_blob(
+                    "lexical",
+                    "doclen",
+                    &col_name,
+                    crate::core::puffin::PUFFIN_BLOB_LEXICAL_DOCLEN,
+                    &doclen_buffer,
+                    vec![],
+                    HashMap::new(),
+                )?;
                 tracing::info!(
-                    "  BM25 doc-length sidecar written for column '{}' (analyzer: {}): {}",
+                    "  BM25 doc-length packed into Puffin bundle for column '{}' (analyzer: {})",
                     col_name,
-                    analyzer,
-                    doclen_path_str
+                    analyzer
                 );
             }
 
@@ -669,10 +600,6 @@ impl HybridSegmentWriter {
 
             let inv_batch =
                 RecordBatch::try_new(inv_schema.clone(), vec![key_array, list_array, pos_array])?;
-            let filename = format!("{}.{}.inv.parquet", self.config.segment_id, col_name);
-            let full_path_str = format!("{}{}", parent_prefix, filename);
-            let target_path = object_store::path::Path::from(full_path_str.clone());
-
             // Write to memory buffer then to store. String-indexed columns embed
             // the analyzer name in key/value metadata so readers re-tokenize
             // queries identically.
@@ -692,14 +619,23 @@ impl HybridSegmentWriter {
                 writer.close()?;
             }
 
-            store.put(&target_path, buffer.into()).await?;
-
-            {
-                let mut files = self.generated_files.lock();
-                files.push(full_path_str.clone());
+            let mut props = HashMap::new();
+            if let Some(ref a) = analyzer_name {
+                props.insert("analyzer".to_string(), a.clone());
             }
-
-            tracing::info!("  Inverted Index written to storage: {}", full_path_str);
+            puffin_writer.add_index_blob(
+                "lexical",
+                "inverted",
+                &col_name,
+                crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25,
+                &buffer,
+                vec![],
+                props,
+            )?;
+            tracing::info!(
+                "  Inverted Index packed into Puffin bundle for column '{}'",
+                col_name
+            );
         }
 
         // 2. Process Vector Index Buffers (Out of Core)
@@ -780,9 +716,46 @@ impl HybridSegmentWriter {
                     );
                 }
 
-                {
-                    let mut files = self.generated_files.lock();
-                    files.extend(saved_files);
+                // Pack vector index artifacts into the Puffin bundle.
+                for local_file in &saved_files {
+                    let file_name = std::path::Path::new(local_file)
+                        .file_name()
+                        .context("saved index file has no file name")?
+                        .to_string_lossy()
+                        .to_string();
+                    let data = std::fs::read(local_file)?;
+
+                    let blob_type = if file_name.ends_with(".hnsw.graph") {
+                        match algo_id {
+                            "tq8" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8,
+                            "tq4" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ4,
+                            "pq" => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_PQ,
+                            _ => crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW,
+                        }
+                    } else if file_name.contains(".centroids.parquet") {
+                        crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS
+                    } else if file_name.contains(".mapping.parquet") {
+                        crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_MAPPING
+                    } else if file_name.contains(".cluster_") && file_name.ends_with(".hnsw.graph")
+                    {
+                        crate::core::puffin::PUFFIN_BLOB_HNSW_CLUSTER_GRAPH
+                    } else {
+                        continue;
+                    };
+
+                    let mut props = HashMap::new();
+                    props.insert("filename".to_string(), file_name.clone());
+                    puffin_writer.add_index_blob(
+                        "vector",
+                        algo_id,
+                        &col_name,
+                        blob_type,
+                        &data,
+                        vec![],
+                        props,
+                    )?;
+                    // Clean up the local temp file after packing.
+                    let _ = std::fs::remove_file(local_file);
                 }
             }
 
@@ -817,24 +790,38 @@ impl HybridSegmentWriter {
             )
             .map_err(|e| anyhow::anyhow!("Graph build failed: {}", e))?;
 
-            // Upload to ObjectStore
+            // Pack graph index artifacts into the Puffin bundle.
             for local_file in &saved_files {
                 let file_name = std::path::Path::new(local_file)
                     .file_name()
                     .context("saved index file has no file name")?
                     .to_string_lossy()
                     .to_string();
+                let data = std::fs::read(local_file)?;
 
-                let target_path = format!("{}{}", parent_prefix, file_name);
-                let target_obj_path = object_store::path::Path::from(target_path.clone());
+                let blob_type = if file_name.ends_with(".csr.offsets") {
+                    crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_OFFSETS
+                } else if file_name.ends_with(".csr.edges") {
+                    crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_EDGES
+                } else if file_name.ends_with(".csr.dict") {
+                    crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_DICT
+                } else {
+                    continue;
+                };
 
-                let buffer = std::fs::read(local_file)?;
-                store.put(&target_obj_path, buffer.into()).await?;
-
-                {
-                    let mut files = self.generated_files.lock();
-                    files.push(target_path);
-                }
+                let mut props = HashMap::new();
+                props.insert("filename".to_string(), file_name.clone());
+                puffin_writer.add_index_blob(
+                    "graph_v2",
+                    "csr_graph",
+                    &col_name,
+                    blob_type,
+                    &data,
+                    vec![],
+                    props,
+                )?;
+                // Clean up the local temp file after packing.
+                let _ = std::fs::remove_file(local_file);
             }
 
             {
@@ -848,6 +835,87 @@ impl HybridSegmentWriter {
             // Cleanup
             let _ = std::fs::remove_file(&tmp_path);
         }
+
+        // 4. Pack loose scalar inverted-index files (Int32/Int64/Float/Date/
+        // Bool) into the Puffin bundle. These arms of `build_inverted_index`
+        // serialize directly to a staging file rather than the in-memory
+        // `inverted_data` map, so they are collected here and removed from the
+        // upload list.
+        let loose_inv: Vec<String> = {
+            let files = self.generated_files.lock();
+            files
+                .iter()
+                .filter(|f| f.ends_with(".inv.parquet"))
+                .cloned()
+                .collect()
+        };
+        for path in loose_inv {
+            let data = std::fs::read(&path)?;
+            let filename = path.split('/').next_back().unwrap_or(&path);
+            let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
+            puffin_writer.add_index_blob(
+                "lexical",
+                "inverted",
+                &col_name,
+                crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25,
+                &data,
+                vec![],
+                HashMap::new(),
+            )?;
+            let _ = std::fs::remove_file(&path);
+            let mut files = self.generated_files.lock();
+            files.retain(|f| f != &path);
+        }
+
+        // 4b. Pack JSON-path overlay files (`<segment>.<col>.jsonpath.parquet`)
+        // into the Puffin bundle so they get a manifest `IndexFile` entry with
+        // category `json_path`. Without this the file is uploaded but never
+        // registered, and the reader cannot find it.
+        let loose_jsonpath: Vec<String> = {
+            let files = self.generated_files.lock();
+            files
+                .iter()
+                .filter(|f| f.ends_with(".jsonpath.parquet"))
+                .cloned()
+                .collect()
+        };
+        for path in loose_jsonpath {
+            let data = std::fs::read(&path)?;
+            let filename = path.split('/').next_back().unwrap_or(&path);
+            let col_name = filename.split('.').nth(1).unwrap_or("unknown").to_string();
+            puffin_writer.add_index_blob(
+                "json_path",
+                "json_path",
+                &col_name,
+                crate::core::puffin::PUFFIN_BLOB_JSON_PATH,
+                &data,
+                vec![],
+                HashMap::new(),
+            )?;
+            let _ = std::fs::remove_file(&path);
+            let mut files = self.generated_files.lock();
+            files.retain(|f| f != &path);
+        }
+
+        let (puffin_bytes, puffin_entries) = puffin_writer.finish_to_bytes()?;
+        store
+            .put(
+                &object_store::path::Path::from(puffin_path_str.clone()),
+                puffin_bytes.into(),
+            )
+            .await?;
+        {
+            let mut files = self.generated_files.lock();
+            files.push(puffin_path_str.clone());
+        }
+        {
+            let mut entries = self.puffin_index_entries.lock();
+            *entries = puffin_entries;
+        }
+        tracing::info!(
+            "  Puffin compound index bundle written to storage: {}",
+            puffin_path_str
+        );
 
         Ok(())
     }
@@ -1267,20 +1335,31 @@ mod tests {
             "Parquet file should exist"
         );
 
-        // Inverted Index for id column (replaces old .idx format)
+        // All secondary indexes are packed into a single Puffin compound bundle.
+        let puffin_path = format!("{}.puffin", base);
         assert!(
-            std::path::Path::new(&format!("{}.id.inv.parquet", base)).exists(),
-            "Inverted index for id should exist"
+            std::path::Path::new(&puffin_path).exists(),
+            "Puffin compound index bundle should exist"
         );
-
-        // Vector Index (embedding) - HNSW-IVF saves centroids and cluster graphs
+        let bytes = std::fs::read(&puffin_path)?;
+        let reader = crate::core::puffin::PuffinReader::new(std::io::Cursor::new(bytes))?;
+        let types: Vec<&str> = reader
+            .footer()
+            .blobs
+            .iter()
+            .map(|b| b.r#type.as_str())
+            .collect();
         assert!(
-            std::path::Path::new(&format!("{}.embedding.tq8.centroids.parquet", base)).exists(),
-            "Vector index centroids should exist"
+            types.contains(&crate::core::puffin::PUFFIN_BLOB_LEXICAL_BM25),
+            "Puffin bundle should contain the lexical (inverted) index for `id` (has {types:?})"
         );
         assert!(
-            std::path::Path::new(&format!("{}.embedding.tq8.cluster_0.hnsw.graph", base)).exists(),
-            "Vector index graph should exist"
+            types.contains(&crate::core::puffin::PUFFIN_BLOB_HNSW_IVF_CENTROIDS),
+            "Puffin bundle should contain the vector centroids (has {types:?})"
+        );
+        assert!(
+            types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8),
+            "Puffin bundle should contain the vector HNSW graph (has {types:?})"
         );
 
         Ok(())

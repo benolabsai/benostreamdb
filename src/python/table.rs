@@ -190,6 +190,85 @@ impl PyTable {
         })
     }
 
+    /// Mount an external, read-only Iceberg table with a detached overlay index
+    /// catalog.
+    ///
+    /// The upstream table is never modified: data is read from the upstream
+    /// location while all overlay indexes and the `detached_catalog.json` sidecar
+    /// are written into `overlay_storage_uri`.
+    ///
+    /// Args:
+    ///     table_uri: Upstream Iceberg table location or metadata file URI.
+    ///     overlay_storage_uri: Writable prefix for overlay indexes.
+    ///
+    /// Example:
+    ///     table = bsdb.Table.mount_external_iceberg(
+    ///         "s3://enterprise-data/warehouse/",
+    ///         "s3://ai-team-overlays/indexes/",
+    ///     )
+    #[staticmethod]
+    #[pyo3(signature = (table_uri, overlay_storage_uri))]
+    fn mount_external_iceberg(table_uri: &str, overlay_storage_uri: &str) -> PyResult<Self> {
+        let mut table = TOKIO_RUNTIME
+            .block_on(Table::mount_external_iceberg(
+                table_uri.to_string(),
+                overlay_storage_uri.to_string(),
+            ))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        table.rt = Some(TOKIO_RUNTIME.clone());
+        Ok(PyTable {
+            table,
+            device: None,
+        })
+    }
+
+    /// Synchronize this detached overlay with the upstream Iceberg table.
+    ///
+    /// Returns True when a new upstream snapshot was imported, False when the
+    /// overlay was already current.
+    fn sync_detached_overlay(&self, py: Python<'_>) -> PyResult<bool> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.sync_detached_overlay_async()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Start a background worker that periodically syncs the detached overlay
+    /// with the upstream Iceberg table.
+    #[pyo3(signature = (interval_seconds=60))]
+    fn start_detached_sync_worker(&self, py: Python<'_>, interval_seconds: u64) -> PyResult<()> {
+        py.allow_threads(|| {
+            self.table
+                .start_detached_sync_worker(std::time::Duration::from_secs(interval_seconds));
+        });
+        Ok(())
+    }
+
+    /// Return the detached overlay catalog metadata as a dict, or None when this
+    /// table is not a detached overlay.
+    fn detached_catalog(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let catalog = py
+            .allow_threads(|| TOKIO_RUNTIME.block_on(self.table.detached_catalog()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        match catalog {
+            Some(c) => {
+                let dict = PyDict::new(py);
+                dict.set_item("format_version", c.format_version)?;
+                dict.set_item("upstream_table_uri", c.upstream_table_uri)?;
+                dict.set_item("upstream_metadata_uri", c.upstream_metadata_uri)?;
+                dict.set_item("overlay_storage_uri", c.overlay_storage_uri)?;
+                dict.set_item("upstream_snapshot_id", c.upstream_snapshot_id)?;
+                dict.set_item("upstream_schema_id", c.upstream_schema_id)?;
+                dict.set_item("last_synced_at_ms", c.last_synced_at_ms)?;
+                dict.set_item(
+                    "last_synced_manifest_version",
+                    c.last_synced_manifest_version,
+                )?;
+                Ok(Some(dict.into()))
+            }
+            None => Ok(None),
+        }
+    }
+
     /// Override parallel readers for vector search (disables auto-detection)
     ///
     /// By default, parallelism is AUTO-DETECTED based on:
@@ -401,6 +480,11 @@ impl PyTable {
     fn drop_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
         py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.drop_index(column)))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Alias for `drop_index`: remove all indexing strategies from a column cleanly.
+    fn remove_index(&mut self, py: Python<'_>, column: String) -> PyResult<()> {
+        self.drop_index(py, column)
     }
 
     /// Set default device for all future indexes in this table
@@ -734,6 +818,16 @@ impl PyTable {
                 batches.push(batch);
             }
 
+            // Account for the caller's frame: the batches are held by the caller
+            // while the engine buffers its own copy. Declaring the footprint lets
+            // the ingest back-pressure ignore the caller's memory instead of
+            // deadlocking on it.
+            let caller_bytes: u64 = batches
+                .iter()
+                .map(|b| b.get_array_memory_size() as u64)
+                .sum();
+            self.table.set_caller_reserved_bytes(caller_bytes);
+
             // Call core Table API, releasing the GIL
             py.allow_threads(move || {
                 if let Some(c) = rust_context {
@@ -821,7 +915,7 @@ impl PyTable {
     ///
     /// Returns:
     ///     PyArrow Table with columns `segment_id`, `row_id`, `score`
-    #[pyo3(signature = (column, query, k, metric=None))]
+    #[pyo3(signature = (column, query, k, metric=None, ef_search=None))]
     fn vector_search_scored(
         &self,
         py: Python<'_>,
@@ -829,6 +923,7 @@ impl PyTable {
         query: Vec<f32>,
         k: usize,
         metric: Option<String>,
+        ef_search: Option<usize>,
     ) -> PyResult<Py<PyAny>> {
         use crate::core::index::{VectorMetric, VectorValue};
         use crate::core::planner::VectorSearchParams;
@@ -838,8 +933,12 @@ impl PyTable {
             None => VectorMetric::L2,
         };
 
-        let params =
+        let mut params =
             VectorSearchParams::new(&column, VectorValue::Float32(query), k).with_metric(metric);
+
+        if let Some(ef) = ef_search {
+            params = params.with_ef_search(ef);
+        }
 
         let results = py
             .allow_threads(|| {
@@ -1014,6 +1113,16 @@ impl PyTable {
             None
         };
 
+        // Account for the caller's frame (the Arrow table and the pandas frame it
+        // came from are held by the caller while the engine buffers its own
+        // copy). Declaring the footprint lets the ingest back-pressure ignore the
+        // caller's memory instead of deadlocking on it.
+        let caller_bytes: u64 = batches
+            .iter()
+            .map(|b| b.get_array_memory_size() as u64)
+            .sum();
+        self.table.set_caller_reserved_bytes(caller_bytes);
+
         // Call core Table API, releasing the GIL
         py.allow_threads(move || {
             if let Some(c) = rust_context {
@@ -1022,6 +1131,14 @@ impl PyTable {
             self.table.write(batches)
         })
         .map_err(|e: anyhow::Error| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Declare how many bytes the caller is holding outside the engine (e.g. a
+    /// large DataFrame). The ingest RAM back-pressure subtracts this from
+    /// process RSS so the engine blocks on its own memory, not the caller's.
+    /// Pass `0` to clear.
+    fn set_caller_reserved_bytes(&self, bytes: u64) {
+        self.table.set_caller_reserved_bytes(bytes);
     }
 
     /// Commit buffered writes to disk (automatically flushes first, then finalizes metadata)
@@ -1147,22 +1264,21 @@ impl PyTable {
 
     /// Run Compaction to generate Manifest and optimize files
     #[pyo3(signature = (min_file_size_bytes=None))]
-    fn rewrite_data_files(&self, min_file_size_bytes: Option<i64>) -> PyResult<()> {
+    fn rewrite_data_files(&self, py: Python<'_>, min_file_size_bytes: Option<i64>) -> PyResult<()> {
         let mut options = CompactionOptions::default();
         if let Some(min_size) = min_file_size_bytes {
             options.min_file_size_bytes = min_size;
             options.target_file_size_bytes = min_size * 2;
         }
 
-        self.table
-            .rewrite_data_files(Some(options))
+        py.allow_threads(|| self.table.rewrite_data_files(Some(options)))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((e.to_string(),)))
     }
 
     /// Legacy alias for rewrite_data_files
     #[pyo3(signature = (min_file_size_bytes=None))]
-    fn compact(&self, min_file_size_bytes: Option<i64>) -> PyResult<()> {
-        self.rewrite_data_files(min_file_size_bytes)
+    fn compact(&self, py: Python<'_>, min_file_size_bytes: Option<i64>) -> PyResult<()> {
+        self.rewrite_data_files(py, min_file_size_bytes)
     }
 
     /// Replace the table's sort order
@@ -1506,6 +1622,59 @@ impl PyTable {
         let rt = self.table.runtime();
         let src_col = src_column.to_string();
         let dst_col = dst_column.to_string();
+
+        // Fast path: if a CSR index exists on src_column or dst_column, run zero-copy CSR Union-Find
+        let maybe_csr = rt.block_on(async {
+            let fwd = self.table.load_graph_index(&src_col).await.ok().flatten();
+            let rev = self.table.load_graph_index(&dst_col).await.ok().flatten();
+            if fwd.is_some() || rev.is_some() {
+                Some((fwd, rev))
+            } else {
+                None
+            }
+        });
+
+        if let Some((fwd_opt, rev_opt)) = maybe_csr {
+            let (forward, reverse) = match (fwd_opt, rev_opt) {
+                (Some(fwd), rev) => (fwd, rev),
+                (None, Some(rev)) => (rev, None),
+                (None, None) => unreachable!(),
+            };
+
+            // Memory guard: each node takes ~24 bytes in the CSR Union-Find.
+            // If the graph exceeds 50 million nodes (~1.2 GB state) or memory is constrained,
+            // fall through to the disk-spilling Parquet pipeline.
+            const MAX_IN_MEMORY_CC_NODES: usize = 50_000_000;
+            let est_nodes: usize = forward.segments.iter().map(|s| s.num_nodes).sum();
+            if est_nodes <= MAX_IN_MEMORY_CC_NODES {
+                let (nodes, components) =
+                    crate::core::algorithms::connected_components::connected_components_csr(
+                        &forward,
+                        reverse.as_ref(),
+                    );
+
+                use arrow::array::{ArrayRef, UInt64Array};
+                use arrow::datatypes::{DataType, Field, Schema};
+                use arrow::record_batch::RecordBatch;
+                use std::sync::Arc;
+
+                let schema = Arc::new(Schema::new(vec![
+                    Field::new("node", DataType::UInt64, false),
+                    Field::new("component", DataType::UInt64, false),
+                ]));
+                let batch = RecordBatch::try_new(
+                    schema.clone(),
+                    vec![
+                        Arc::new(UInt64Array::from(nodes)) as ArrayRef,
+                        Arc::new(UInt64Array::from(components)) as ArrayRef,
+                    ],
+                )
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+                return crate::python::helpers::arrow_batches_to_pyarrow(py, vec![batch], schema);
+            }
+        }
+
         let result_df = rt
             .block_on(async {
                 use datafusion::prelude::SessionContext;
@@ -3041,7 +3210,11 @@ impl PyTable {
                 .build()
                 .map(std::sync::Arc::new)
                 .unwrap_or_else(|_| std::sync::Arc::new(RuntimeEnv::default()));
-            let mut ctx = SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+            // Scale query parallelism to the effective CPU budget (respects
+            // cgroup limits) rather than hard-coding it.
+            let session_config = SessionConfig::new()
+                .with_target_partitions(crate::core::sql::effective_target_partitions());
+            let mut ctx = SessionContext::new_with_config_rt(session_config, runtime);
 
             // Register standard functions and aggregates
             datafusion_functions::register_all(&mut ctx).map_err(|e| e.to_string())?;

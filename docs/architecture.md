@@ -19,7 +19,7 @@ Authoritative Storage        Advisory Index Overlay
 BenoStreamDB attaches persistent, reconstructible sidecar index files *alongside* standard Parquet files:
 *   **100% Format Compatibility**: Standard data engines (Spark, Trino, DuckDB, Pandas) read the underlying Parquet and Iceberg tables directly at native speed.
 *   **O(log N) Accelerated Retrieval**: BenoStreamDB-aware query engines and REST search gateways leverage inverted bitmap and vector indexes for low-latency queries directly on object storage.
-*   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results.
+*   **The Overlay Invariant**: Indexes are derived state. If an index file is absent, corrupted, or stale, queries safely degrade to Parquet scanning without failing or returning incorrect results. See [ADR-001: Tightened Overlay Index Artifact Contract & Compound Puffin Bundles](architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md).
 
 ---
 

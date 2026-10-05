@@ -18,6 +18,11 @@ use std::sync::Arc;
 static FILTER_SESSION: once_cell::sync::Lazy<SessionContext> = once_cell::sync::Lazy::new(|| {
     let mut ctx = SessionContext::new();
     let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+    // The `json_*` UDFs must resolve here so a pushed-down `json_contains` /
+    // `json_exists` / `json_path_exists` predicate can be parsed and evaluated.
+    for udf in crate::core::sql::udf::all_json_udfs() {
+        ctx.register_udf(udf);
+    }
     ctx
 });
 
@@ -275,6 +280,11 @@ impl FilterExpr {
 
         let mut ctx = SessionContext::new();
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
+        // Register the `json_*` UDFs so a `json_contains` / `json_exists` /
+        // `json_path_exists` predicate can be parsed and pushed down.
+        for udf in crate::core::sql::udf::all_json_udfs() {
+            ctx.register_udf(udf);
+        }
         let table = datafusion::datasource::empty::EmptyTable::new(normalized_schema);
         ctx.register_table(TableReference::bare("t"), Arc::new(table))?;
         let df = ctx.sql(&sql).await?;
@@ -331,6 +341,11 @@ impl FilterExpr {
                             extract(&b.left, cols);
                             extract(&b.right, cols);
                         }
+                        datafusion::logical_expr::Expr::ScalarFunction(sf) => {
+                            for arg in &sf.args {
+                                extract(arg, cols);
+                            }
+                        }
                         datafusion::logical_expr::Expr::Not(e) => extract(e, cols),
                         datafusion::logical_expr::Expr::IsNotNull(e) => extract(e, cols),
                         datafusion::logical_expr::Expr::IsNull(e) => extract(e, cols),
@@ -384,6 +399,14 @@ impl FilterExpr {
             }
         }
     }
+
+    /// JSON-path predicates in the filter that can be answered from the
+    /// `json_path` overlay.
+    pub fn json_path_predicates(&self) -> Vec<JsonPathPredicate> {
+        match self {
+            FilterExpr::DataFusion(expr) => extract_json_path_predicates(expr),
+        }
+    }
 }
 
 /// Internal helper to recursively find column names in an Expr
@@ -395,6 +418,11 @@ fn find_column_names(expr: &Expr, cols: &mut std::collections::HashSet<String>) 
         Expr::BinaryExpr(b) => {
             find_column_names(&b.left, cols);
             find_column_names(&b.right, cols);
+        }
+        Expr::ScalarFunction(sf) => {
+            for arg in &sf.args {
+                find_column_names(arg, cols);
+            }
         }
         Expr::Not(e) => find_column_names(e, cols),
         Expr::IsNotNull(e) => find_column_names(e, cols),
@@ -641,6 +669,172 @@ fn extract_filters_from_expr(expr: &Expr, filters: &mut Vec<QueryFilter>) {
             }
         }
         _ => {} // Other expressions can't be easily converted to our QueryFilter leaf
+    }
+}
+
+/// A JSON-path predicate that can be answered from the `json_path` overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsonPathOp {
+    /// `json_path_exists(col, path)` — the path resolves.
+    PathExists,
+    /// `json_exists(col, key)` — a top-level key/element is present.
+    Exists,
+    /// `json_contains(col, candidate)` — `candidate` is contained.
+    Contains,
+    /// `json_extract_path_text(col, ...) = 'value'` — exact path equality.
+    Equals,
+}
+
+/// A predicate over a JSON column that maps to a `(path, value)` index lookup.
+#[derive(Debug, Clone)]
+pub struct JsonPathPredicate {
+    pub column: String,
+    /// Normalized path, e.g. `$.level` or `$` for the root.
+    pub path: String,
+    /// The scalar value to match, or `None` for existence predicates.
+    pub value: Option<String>,
+    pub op: JsonPathOp,
+}
+
+/// Extract JSON-path predicates from an AND-ed filter expression.
+///
+/// Only predicates whose index lookup is a *superset* of the true matches are
+/// returned, because the index result is re-filtered above the scan. The
+/// `json_path` overlay indexes presence markers and one level of array
+/// elements, so `json_path_exists`, `json_exists`, scalar `json_contains`, and
+/// `json_extract_path_text(...) = 'value'` are all safe.
+pub fn extract_json_path_predicates(expr: &Expr) -> Vec<JsonPathPredicate> {
+    let mut out = Vec::new();
+    collect_json_path_predicates(expr, &mut out);
+    out
+}
+
+fn collect_json_path_predicates(expr: &Expr, out: &mut Vec<JsonPathPredicate>) {
+    match expr {
+        Expr::BinaryExpr(b) if b.op == datafusion::logical_expr::Operator::And => {
+            collect_json_path_predicates(&b.left, out);
+            collect_json_path_predicates(&b.right, out);
+        }
+        Expr::ScalarFunction(sf) => {
+            if let Some(p) = json_predicate_from_udf(sf) {
+                out.push(p);
+            }
+        }
+        Expr::BinaryExpr(b) if b.op == datafusion::logical_expr::Operator::Eq => {
+            if let Some(p) = json_extract_eq_predicate(b) {
+                out.push(p);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Map a `json_*` UDF call to an indexable predicate, when the arguments are
+/// literals and the lookup is a superset of the true matches.
+fn json_predicate_from_udf(
+    sf: &datafusion::logical_expr::expr::ScalarFunction,
+) -> Option<JsonPathPredicate> {
+    let column = expr_column_name(sf.args.first()?)?;
+    match sf.func.name() {
+        "json_path_exists" => {
+            let path = literal_string(sf.args.get(1)?)?;
+            Some(JsonPathPredicate {
+                column,
+                path: crate::core::index::json_path::normalize_path(&path),
+                value: None,
+                op: JsonPathOp::PathExists,
+            })
+        }
+        "json_exists" => {
+            let key = literal_string(sf.args.get(1)?)?;
+            Some(JsonPathPredicate {
+                column,
+                path: format!("$.{}", key),
+                value: None,
+                op: JsonPathOp::Exists,
+            })
+        }
+        "json_contains" => {
+            let cand = literal_string(sf.args.get(1)?)?;
+            let v: Value = serde_json::from_str(&cand).ok()?;
+            match v {
+                Value::String(s) => Some(JsonPathPredicate {
+                    column,
+                    path: "$".to_string(),
+                    value: Some(s),
+                    op: JsonPathOp::Contains,
+                }),
+                Value::Number(_) | Value::Bool(_) => Some(JsonPathPredicate {
+                    column,
+                    path: "$".to_string(),
+                    value: Some(v.to_string()),
+                    op: JsonPathOp::Contains,
+                }),
+                // A single-key object with a scalar value maps to `$.key`.
+                // Multi-key / nested candidates are not a superset of the
+                // index, so they fall back to a full scan.
+                Value::Object(o) if o.len() == 1 => {
+                    let (k, val) = o.into_iter().next()?;
+                    let text = match val {
+                        Value::String(s) => s,
+                        Value::Number(_) | Value::Bool(_) => val.to_string(),
+                        _ => return None,
+                    };
+                    Some(JsonPathPredicate {
+                        column,
+                        path: format!("$.{}", k),
+                        value: Some(text),
+                        op: JsonPathOp::Contains,
+                    })
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `json_extract_path_text(col, 'a', 'b') = 'value'` → `($.a.b, value)`.
+fn json_extract_eq_predicate(
+    b: &datafusion::logical_expr::BinaryExpr,
+) -> Option<JsonPathPredicate> {
+    let (func_expr, lit_expr) = match (&*b.left, &*b.right) {
+        (Expr::ScalarFunction(_), _) => (&b.left, &b.right),
+        (_, Expr::ScalarFunction(_)) => (&b.right, &b.left),
+        _ => return None,
+    };
+    let Expr::ScalarFunction(sf) = &**func_expr else {
+        return None;
+    };
+    if sf.func.name() != "json_extract_path_text" {
+        return None;
+    }
+    let column = expr_column_name(sf.args.first()?)?;
+    let value = literal_string(lit_expr)?;
+    let mut path = String::from("$");
+    for arg in sf.args.iter().skip(1) {
+        let seg = literal_string(arg)?;
+        path.push('.');
+        path.push_str(&seg);
+    }
+    Some(JsonPathPredicate {
+        column,
+        path,
+        value: Some(value),
+        op: JsonPathOp::Equals,
+    })
+}
+
+/// Extract a UTF-8 string literal, stripping casts.
+fn literal_string(expr: &Expr) -> Option<String> {
+    use datafusion::scalar::ScalarValue;
+    match expr {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _)
+        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => Some(s.clone()),
+        Expr::Cast(c) => literal_string(&c.expr),
+        Expr::TryCast(c) => literal_string(&c.expr),
+        _ => None,
     }
 }
 
@@ -1508,11 +1702,12 @@ impl QueryPlanner {
         // For MVP: We only look for scalar index on the filtered column.
 
         for idx in &entry.index_files {
-            if let Some(col) = &idx.column_name {
+            let col = &idx.column_name;
+            {
                 if col == &filter.column {
                     // Found an index for this column!
                     // Check type?
-                    if idx.index_type == "scalar" || idx.index_type == "unknown" {
+                    if idx.index_category == "scalar" || idx.index_category == "unknown" {
                         return Some(idx.clone());
                     }
                 }
@@ -1706,7 +1901,7 @@ mod tests {
 
         // First one should have index
         assert!(result[0].1.is_some());
-        assert_eq!(result[0].1.as_ref().unwrap().column_name.as_deref(), Some("age"));
+        assert_eq!(result[0].1.as_ref().unwrap().column_name.as_str(), Some("age"));
 
         // Second one should NOT have index
         assert!(result[1].1.is_none());

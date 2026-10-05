@@ -75,12 +75,12 @@ async fn manifest_round_trip_registers_data_and_index() -> anyhow::Result<()> {
     let all_index_files: Vec<String> = entries
         .iter()
         .flat_map(|e| e.index_files.iter())
-        .map(|f| format!("{}:{}:{:?}", f.index_type, f.file_path, f.column_name))
+        .map(|f| format!("{}:{}:{:?}", f.index_category, f.file_path, f.column_name))
         .collect();
     let has_id_index = entries
         .iter()
         .flat_map(|e| e.index_files.iter())
-        .any(|f| f.column_name.as_deref() == Some("id"));
+        .any(|f| f.column_name == "id");
     assert!(
         has_id_index,
         "an index on `id` must be registered in the manifest; got {all_index_files:?}"

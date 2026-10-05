@@ -54,8 +54,8 @@ single shared envelope applied to **every** participant — the server engines
 *and* the runner that executes each client (including BenoStreamDB):
 
 ```bash
-# CPU baseline (default engines: faiss hnswlib lancedb duckdb pgvector
-#                              elasticsearch benostreamdb)
+# CPU baseline (default engines: faiss hnswlib lancedb pgvector
+#                              opensearch benostreamdb)
 benchmarks/competitors/docker_bench.sh --cpus 8 --mem 16g \
     --dataset sift-128-euclidean --limit 20000 --queries 500
 
@@ -94,8 +94,18 @@ envelope) is written to `results/hardware_profile.txt`. GPUs appear only in the
 GPU pass; CPU runs report `"gpus": []`.
 
 **GPU-capable engines here:** FAISS (faiss-gpu), BenoStreamDB (wgpu/cuda), and
-cuGraph once installed. pgvector, LanceDB, OpenSearch, Neo4j (CPU GDS), and
+cuGraph (`cugraph-cu13`). pgvector, LanceDB, OpenSearch, Neo4j (CPU GDS), and
 DuckDB are CPU-only, so they are excluded from the GPU pass by default.
+
+> **GPU is slower on small datasets — by design.** On the 20k-vector SIFT run
+> the GPU pass is *slower* than CPU for both engines (faiss 6.7k vs 8.8k QPS;
+> BenoStreamDB 1.9k vs 1.9k QPS, with a slower build). Fixed PCIe transfer and
+> kernel-launch overheads dominate when the data is small, the harness measures
+> single-query latency (batch = 1, so there is no GPU parallelism to exploit),
+> and HNSW search is a sequential pointer-chasing walk rather than dense math.
+> BenoStreamDB's GPU path (`benostream-gpu-ann`) accelerates index
+> *construction*, not query. GPU wins at scale: millions of vectors, large
+> batch queries, and dense/flat or IVF-PQ search.
 
 ## Output
 
@@ -105,13 +115,12 @@ Each run prints a JSON record and, with `--out`, writes `<name>.json` +
 
 ## Server-backed engines
 
-pgvector, Elasticsearch/OpenSearch, LanceDB, and Neo4j take connection options
-(or env vars):
+pgvector, OpenSearch, LanceDB, and Neo4j take connection options (or env vars):
 
 | Engine | Option / env | Example |
 |---|---|---|
 | pgvector | `--dsn` / `PGVECTOR_DSN` | `postgresql://user:pass@localhost/bench` |
-| elasticsearch / opensearch | `--host` / `ES_URL` | `http://localhost:9200` |
+| opensearch | `--host` / `ES_URL` | `http://localhost:9200` |
 | lancedb | `--path` (default: temp dir) | `/data/lancedb_bench` |
 | neo4j | `--uri` / `--user` / `--password` (or `NEO4J_URI/USER/PASSWORD`) | `bolt://localhost:7687` |
 
@@ -125,7 +134,7 @@ DuckDB is embedded: pass `--sql "..."` or `--parquet path.parquet`.
 | hnswlib | vector | no | `pip install hnswlib` |
 | pgvector | vector | no | `pip install psycopg[binary]` + Postgres w/ pgvector |
 | LanceDB | vector | no | `pip install lancedb` (IVF_PQ) |
-| Elasticsearch / OpenSearch | vector | no | `pip install elasticsearch`; dense_vector HNSW kNN |
+| OpenSearch | vector | no | `pip install opensearch-py`; dense_vector HNSW kNN |
 | NetworkX | graph | yes | reference (single-threaded) baseline |
 | Neo4j | graph | no | `pip install neo4j` + GDS plugin (pagerank/wcc/dijkstra) |
 | DuckDB | sql | no | `pip install duckdb`; scan/aggregate + vss |
@@ -139,6 +148,10 @@ register it in `vector_adapters()` / the `main()` dispatch.
 
 ## Still to add
 
-Tantivy (BM25/hybrid), cuGraph (GPU graph), Trino/ClickHouse (SQL), and
-Spark/Trino Iceberg round-trips. Each must run under the same envelope and emit
-the same schema.
+cuGraph (GPU graph, competitor-only), Trino/ClickHouse (SQL), and Spark/Trino
+Iceberg round-trips. Each must run under the same envelope and emit the same
+schema.
+
+Tantivy (BM25/hybrid) is **already covered**: the `tantivy` adapter lives in
+`run_competitor.py`, and the BEIR lexical/hybrid suite
+(`benchmarks/beir/`) benchmarks BM25 vs Tantivy vs Hybrid RRF.

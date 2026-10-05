@@ -35,9 +35,9 @@ impl Default for Bm25Params {
 /// `df` is the document frequency of the term; `n_docs` the total number of
 /// documents in the segment.
 pub fn idf(df: usize, n_docs: usize) -> f32 {
-    let n = n_docs.max(1) as f32;
+    let n = n_docs.max(df).max(1) as f32;
     let f = df as f32;
-    ((n - f + 0.5) / (f + 0.5) + 1.0).ln()
+    ((n - f + 0.5).max(0.0) / (f + 0.5) + 1.0).ln().max(0.0)
 }
 
 /// Length normalization factor.

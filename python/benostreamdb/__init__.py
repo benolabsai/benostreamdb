@@ -3582,6 +3582,7 @@ class Table:
         query: List[float],
         k: int = 10,
         metric: Optional[str] = None,
+        ef_search: Optional[int] = None,
     ):
         """Vector search returning only ``(segment_id, row_id, score)``.
 
@@ -3592,7 +3593,7 @@ class Table:
         Returns a pandas DataFrame with columns ``segment_id``, ``row_id``,
         ``score``.
         """
-        res = self._inner.vector_search_scored(column, list(query), k, metric)
+        res = self._inner.vector_search_scored(column, list(query), k, metric, ef_search)
         return res.to_pandas()
 
     def vector_search(self, column: str, query: List[float], k: int = 10, filter: Optional[str] = None, columns: Optional[List[str]] = None, device: Optional[Any] = None, **kwargs):

@@ -84,7 +84,7 @@ async fn graph_csr_index_is_registered_as_v2_with_files_on_disk() -> anyhow::Res
     let all_index_files: Vec<_> = entries
         .iter()
         .flat_map(|e| e.index_files.iter())
-        .map(|f| format!("{}:{}", f.index_type, f.file_path))
+        .map(|f| format!("{}:{}", f.index_category, f.file_path))
         .collect();
     eprintln!("resolved index_files: {all_index_files:?}");
     let dir_files: Vec<_> = std::fs::read_dir(&path)?
@@ -96,7 +96,7 @@ async fn graph_csr_index_is_registered_as_v2_with_files_on_disk() -> anyhow::Res
     let graph_entries: Vec<_> = entries
         .iter()
         .flat_map(|e| e.index_files.iter())
-        .filter(|f| f.index_type == "graph_v2")
+        .filter(|f| f.index_category == "graph_v2")
         .collect();
 
     assert!(
@@ -107,22 +107,55 @@ async fn graph_csr_index_is_registered_as_v2_with_files_on_disk() -> anyhow::Res
     );
 
     for f in &graph_entries {
-        for suffix in [
-            ".graph_v2.csr.offsets",
-            ".graph_v2.csr.edges",
-            ".graph_v2.csr.dict",
-        ] {
-            let rel = format!("{}{}", f.file_path, suffix);
-            let full = if rel.starts_with('/') {
-                rel.clone()
+        if f.blob_offset.is_some() {
+            // Puffin compound bundle: the CSR triple lives as blobs inside the
+            // `.puffin` container, not as loose sidecar files.
+            let full = if f.file_path.starts_with('/') {
+                f.file_path.clone()
             } else {
-                format!("{}/{}", path, rel)
+                format!("{}/{}", path, f.file_path)
             };
             assert!(
                 std::path::Path::new(&full).exists(),
-                "reader expects `{full}` but it does not exist — writer/reader \
-                 path divergence for the graph CSR"
+                "reader expects Puffin bundle `{full}` but it does not exist"
             );
+            let bytes = std::fs::read(&full)?;
+            let reader =
+                benostreamdb::core::puffin::PuffinReader::new(std::io::Cursor::new(bytes))?;
+            let types: Vec<&str> = reader
+                .footer()
+                .blobs
+                .iter()
+                .map(|b| b.r#type.as_str())
+                .collect();
+            for expected in [
+                benostreamdb::core::puffin::PUFFIN_BLOB_GRAPH_CSR_OFFSETS,
+                benostreamdb::core::puffin::PUFFIN_BLOB_GRAPH_CSR_EDGES,
+                benostreamdb::core::puffin::PUFFIN_BLOB_GRAPH_CSR_DICT,
+            ] {
+                assert!(
+                    types.contains(&expected),
+                    "Puffin bundle `{full}` is missing blob `{expected}` (has {types:?})"
+                );
+            }
+        } else {
+            for suffix in [
+                ".graph_v2.csr.offsets",
+                ".graph_v2.csr.edges",
+                ".graph_v2.csr.dict",
+            ] {
+                let rel = format!("{}{}", f.file_path, suffix);
+                let full = if rel.starts_with('/') {
+                    rel.clone()
+                } else {
+                    format!("{}/{}", path, rel)
+                };
+                assert!(
+                    std::path::Path::new(&full).exists(),
+                    "reader expects `{full}` but it does not exist — writer/reader \
+                     path divergence for the graph CSR"
+                );
+            }
         }
     }
 

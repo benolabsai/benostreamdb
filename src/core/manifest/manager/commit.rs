@@ -1040,11 +1040,12 @@ mod tests {
             file_size_bytes: 100,
             index_files: vec![crate::core::manifest::IndexFile {
                 file_path: "file_a.hnsw".to_string(),
-                index_type: "hnsw".to_string(),
-                column_name: Some("vector".to_string()),
+                index_category: "hnsw".to_string(),
+                column_name: "vector".to_string(),
                 blob_type: None,
-                offset: None,
-                length: None,
+                blob_offset: None,
+                blob_length: None,
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1099,7 +1100,7 @@ mod tests {
             1,
             "local secondary index on file_a must be carried forward"
         );
-        assert_eq!(entry_a_synced.index_files[0].index_type, "hnsw");
+        assert_eq!(entry_a_synced.index_files[0].index_category, "hnsw");
 
         Ok(())
     }

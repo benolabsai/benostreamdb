@@ -24,7 +24,9 @@ pub mod builder;
 pub use builder::TableBuilder;
 pub mod catalog;
 pub mod coordinator;
+pub mod detached;
 pub use coordinator::{Lease, ObjectStoreCoordinator, WorkCoordinator, WorkUnit};
+pub use detached::DetachedOverlayCatalog;
 pub mod fluent;
 pub use fluent::TableQuery;
 pub mod graph;
@@ -119,6 +121,13 @@ pub struct Table {
     /// finished, or the ingest loop trimmed the heap), so writers blocked by
     /// `max_ingest_ram_gb` wake immediately instead of polling RSS on a timer.
     pub(crate) memory_reclaimed: Arc<tokio::sync::Notify>,
+    /// Bytes the *caller* is using outside the engine (e.g. a Python process
+    /// holding a large DataFrame before calling `write`). Subtracted from
+    /// process RSS in the ingest back-pressure check so the engine blocks on
+    /// its own memory, not the caller's — otherwise a caller holding a big
+    /// frame deadlocks the write (the caller cannot free the frame until the
+    /// write returns). Set via [`Table::set_caller_reserved_bytes`].
+    pub(crate) caller_reserved_bytes: Arc<std::sync::atomic::AtomicU64>,
     /// Iceberg table format version (1, 2, or 3). v3 enables row lineage
     /// (`_row_id` / `_last_updated_sequence_number`).
     pub(crate) format_version: Arc<std::sync::atomic::AtomicI32>,
@@ -227,6 +236,7 @@ impl Clone for Table {
             durability: self.durability,
             max_ingest_ram_gb: self.max_ingest_ram_gb,
             memory_reclaimed: self.memory_reclaimed.clone(),
+            caller_reserved_bytes: self.caller_reserved_bytes.clone(),
             format_version: self.format_version.clone(),
         }
     }
@@ -499,6 +509,26 @@ impl Table {
     /// its fallback poll interval.
     pub(crate) fn notify_memory_reclaimed(&self) {
         self.memory_reclaimed.notify_waiters();
+    }
+
+    /// Report how many bytes the caller is holding outside the engine.
+    ///
+    /// The ingest RAM back-pressure compares *process* RSS against
+    /// `max_ingest_ram_gb`. When the caller (e.g. a Python script) holds a large
+    /// frame, that memory is counted against the engine and the write blocks
+    /// forever — the caller cannot free the frame until the write returns. This
+    /// lets the caller declare its footprint so the engine back-pressures on its
+    /// own memory instead. Pass `0` to clear.
+    pub fn set_caller_reserved_bytes(&self, bytes: u64) {
+        self.caller_reserved_bytes
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Bytes the caller has declared as its own (see
+    /// [`Table::set_caller_reserved_bytes`]).
+    pub fn caller_reserved_bytes(&self) -> u64 {
+        self.caller_reserved_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Acquire a permit bounding concurrent segment index builds.

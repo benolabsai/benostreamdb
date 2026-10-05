@@ -10,7 +10,8 @@ test_*
 rag_db/
 news_db/
 demo/
-benchmarks/
+benchmarks/**/data/
+benchmarks/**/results/
 __pycache__/
 *.pyc
 !target/release/bsdb-search

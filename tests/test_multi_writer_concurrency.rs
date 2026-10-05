@@ -387,7 +387,7 @@ async fn randomized_mixed_workload_is_consistent() -> Result<()> {
             let ip = ObjPath::from(idx.file_path.as_str());
             // Index base paths may be a prefix (e.g. CSR triple); only assert
             // existence for the exact file when it is a concrete artifact.
-            if idx.index_type == "inverted" || idx.index_type == "scalar" {
+            if idx.is_lexical() || idx.index_category == "scalar" {
                 assert!(
                     store.head(&ip).await.is_ok(),
                     "manifest references a missing index file: {}",

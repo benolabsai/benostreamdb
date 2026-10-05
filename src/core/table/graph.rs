@@ -13,7 +13,7 @@ use ahash::AHashMap;
 use anyhow::{Context, Result};
 use arrow::array::{Array, Int32Array, Int64Array, UInt32Array, UInt64Array};
 
-use crate::core::cache::DiskCache;
+use crate::core::cache::{CacheExt, DiskCache};
 use crate::core::index::csr_graph::{MmapCsrGraph, MultiSegmentCsrGraph};
 use crate::core::manifest::ManifestManager;
 use crate::core::table::Table;
@@ -69,23 +69,78 @@ impl Table {
         let mut col_segments: HashMap<String, Vec<MmapCsrGraph>> = HashMap::new();
         let cache = DiskCache::new(self.store.clone());
 
+        // A Puffin compound bundle registers one `IndexFile` per blob (offsets,
+        // edges, dict), so the same logical CSR graph appears as several
+        // entries. Deduplicate by (file_path, column) so each graph is loaded
+        // exactly once — otherwise the segments would be concatenated and every
+        // neighbor would be reported N times.
+        let mut seen: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
+
         for entry in entries {
             for idx in &entry.index_files {
-                if idx.index_type == "graph_v2" {
-                    if let Some(col) = idx.column_name.as_deref() {
+                if idx.index_category == "graph_v2" {
+                    let col = idx.column_name.as_str();
+                    {
                         if columns.contains(&col) {
-                            let offsets_str = format!("{}.graph_v2.csr.offsets", idx.file_path);
-                            let edges_str = format!("{}.graph_v2.csr.edges", idx.file_path);
-                            let dict_str = format!("{}.graph_v2.csr.dict", idx.file_path);
+                            if !seen.insert((idx.file_path.clone(), col.to_string())) {
+                                continue;
+                            }
+                            if idx.blob_offset.is_some() {
+                                // Puffin compound bundle: read the CSR blobs into
+                                // memory and build the graph from owned bytes.
+                                match self.load_csr_from_puffin(idx).await {
+                                    Ok(graph) => {
+                                        tracing::debug!(
+                                            column = %col,
+                                            file = %idx.file_path,
+                                            num_nodes = graph.num_nodes,
+                                            num_edges = graph.num_edges,
+                                            "loaded CSR graph from Puffin bundle"
+                                        );
+                                        col_segments
+                                            .entry(col.to_string())
+                                            .or_default()
+                                            .push(graph);
+                                    }
+                                    Err(e) => {
+                                        // Do NOT swallow this: a failed load makes
+                                        // the caller fall back to a scan, which can
+                                        // silently change query results.
+                                        tracing::warn!(
+                                            column = %col,
+                                            file = %idx.file_path,
+                                            error = %e,
+                                            "failed to load CSR graph from Puffin bundle; \
+                                             falling back to a relational scan"
+                                        );
+                                    }
+                                }
+                            } else {
+                                let offsets_str = format!("{}.graph_v2.csr.offsets", idx.file_path);
+                                let edges_str = format!("{}.graph_v2.csr.edges", idx.file_path);
+                                let dict_str = format!("{}.graph_v2.csr.dict", idx.file_path);
 
-                            if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
-                                cache.get_mmap(&offsets_str).await,
-                                cache.get_mmap(&edges_str).await,
-                                cache.get_mmap(&dict_str).await,
-                            ) {
-                                col_segments.entry(col.to_string()).or_default().push(
-                                    MmapCsrGraph::from_mmaps(offsets_mmap, edges_mmap, dict_mmap),
-                                );
+                                if let (Ok(offsets_mmap), Ok(edges_mmap), Ok(dict_mmap)) = (
+                                    cache.get_mmap(&offsets_str).await,
+                                    cache.get_mmap(&edges_str).await,
+                                    cache.get_mmap(&dict_str).await,
+                                ) {
+                                    col_segments.entry(col.to_string()).or_default().push(
+                                        MmapCsrGraph::from_mmaps(
+                                            offsets_mmap,
+                                            edges_mmap,
+                                            dict_mmap,
+                                        ),
+                                    );
+                                } else {
+                                    tracing::warn!(
+                                        column = %col,
+                                        file = %idx.file_path,
+                                        "failed to mmap loose CSR sidecars; \
+                                         falling back to a relational scan"
+                                    );
+                                }
                             }
                         }
                     }
@@ -96,10 +151,115 @@ impl Table {
         let mut res = HashMap::new();
         for (col, segs) in col_segments {
             if !segs.is_empty() {
+                tracing::debug!(
+                    column = %col,
+                    segments = segs.len(),
+                    "resolved CSR graph segments"
+                );
                 res.insert(col, MultiSegmentCsrGraph::new(segs));
             }
         }
+        if res.is_empty() {
+            tracing::debug!(
+                requested = ?columns,
+                "no CSR graph index found for the requested column(s)"
+            );
+        }
         Ok(res)
+    }
+
+    /// Read a CSR graph packed inside a Puffin compound bundle into memory.
+    ///
+    /// The decoded graph is cached in [`crate::core::cache::CSR_GRAPH_CACHE`]
+    /// (budgeted from `BSDB_CACHE_GB`) so repeated `load_graph_index` calls do
+    /// not re-read and re-copy the bundle.
+    async fn load_csr_from_puffin(
+        &self,
+        idx: &crate::core::manifest::IndexFile,
+    ) -> Result<MmapCsrGraph> {
+        let cache_key = format!("{}:{}", idx.file_path, idx.blob_offset.unwrap_or(0));
+        if let Some(cached) = crate::core::cache::CSR_GRAPH_CACHE
+            .get_with_metrics(&cache_key, "csr_graph")
+            .await
+        {
+            tracing::debug!(
+                file = %idx.file_path,
+                column = %idx.column_name,
+                "CSR graph cache hit"
+            );
+            return Ok((*cached).clone());
+        }
+        tracing::debug!(
+            file = %idx.file_path,
+            column = %idx.column_name,
+            blob_offset = ?idx.blob_offset,
+            "CSR graph cache miss; reading Puffin bundle"
+        );
+
+        let bytes = self
+            .store
+            .get(&object_store::path::Path::from(idx.file_path.as_str()))
+            .await
+            .with_context(|| format!("Failed to read Puffin bundle '{}'", idx.file_path))?
+            .bytes()
+            .await?;
+        let mut reader =
+            crate::core::puffin::PuffinReader::new(std::io::Cursor::new(bytes.to_vec()))?;
+        let blobs = reader.footer().blobs.clone();
+        tracing::debug!(
+            file = %idx.file_path,
+            blob_types = ?blobs.iter().map(|b| b.r#type.as_str()).collect::<Vec<_>>(),
+            "Puffin bundle footer"
+        );
+
+        // A Puffin bundle holds one CSR triple per graph column (e.g. a forward
+        // `source` graph and a reverse `target` graph). Only read the blobs
+        // whose filename belongs to the requested column — otherwise the last
+        // triple of each type wins and the wrong adjacency is loaded (the blob
+        // order is not stable, so this was intermittent).
+        let marker = format!(".{}.graph_v2.csr.", idx.column_name);
+        let mut offsets = None;
+        let mut edges = None;
+        let mut dict = None;
+        for (i, blob) in blobs.iter().enumerate() {
+            let filename = blob
+                .properties
+                .get("filename")
+                .map(String::as_str)
+                .unwrap_or("");
+            if !filename.contains(&marker) {
+                continue;
+            }
+            match blob.r#type.as_str() {
+                crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_OFFSETS => {
+                    offsets = Some(reader.read_blob(i)?)
+                }
+                crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_EDGES => {
+                    edges = Some(reader.read_blob(i)?)
+                }
+                crate::core::puffin::PUFFIN_BLOB_GRAPH_CSR_DICT => {
+                    dict = Some(reader.read_blob(i)?)
+                }
+                _ => {}
+            }
+        }
+
+        let offsets = offsets.context("Puffin CSR bundle is missing the offsets blob")?;
+        let edges = edges.context("Puffin CSR bundle is missing the edges blob")?;
+        let dict = dict.context("Puffin CSR bundle is missing the dict blob")?;
+        let graph = MmapCsrGraph::from_bytes(offsets, edges, dict);
+        tracing::debug!(
+            file = %idx.file_path,
+            column = %idx.column_name,
+            num_nodes = graph.num_nodes,
+            num_edges = graph.num_edges,
+            bytes = graph.size_in_bytes(),
+            "decoded CSR graph from Puffin bundle"
+        );
+        crate::core::cache::CSR_GRAPH_CACHE
+            .insert(cache_key, std::sync::Arc::new(graph.clone()))
+            .await;
+        Ok(graph)
     }
 
     /// Load memory-mapped [`MultiSegmentCsrGraph`] for `graph_column` from the table's
@@ -701,6 +861,11 @@ impl Table {
                 let graph = self.load_graph_index("source").await?.ok_or_else(|| {
                     anyhow::anyhow!("out-of-core graph requires a CSR graph index on 'source'")
                 })?;
+                tracing::debug!(
+                    table = %self.uri,
+                    mode = "out_of_core",
+                    "resolved out-of-core graph backing from CSR index"
+                );
                 Ok(Box::new(graph))
             }
             GraphMode::Cached => {
@@ -708,6 +873,11 @@ impl Table {
                     anyhow::anyhow!("cached graph requires a CSR graph index on 'source'")
                 })?;
                 let cached = CachingGraph::new(graph, graph_memory_budget_bytes() as usize);
+                tracing::debug!(
+                    table = %self.uri,
+                    mode = "cached",
+                    "resolved cached graph backing from CSR index"
+                );
                 Ok(Box::new(cached))
             }
             GraphMode::Auto => unreachable!("Auto resolved above"),

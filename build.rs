@@ -23,6 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn get_git_version() -> String {
+    if let Ok(cargo_ver) = env::var("CARGO_PKG_VERSION") {
+        return cargo_ver;
+    }
+
     // Try to get the latest git tag
     if let Ok(output) = Command::new("git")
         .args(["describe", "--tags", "--abbrev=0"])
@@ -45,10 +49,10 @@ fn get_git_version() -> String {
     {
         if output.status.success() {
             let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            return format!("0.1.0-{}", hash);
+            return format!("0.12.0-{}", hash);
         }
     }
 
     // Final fallback to Cargo.toml version
-    "0.1.0".to_string()
+    "0.12.0".to_string()
 }

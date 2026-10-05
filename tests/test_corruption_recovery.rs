@@ -98,7 +98,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
         table.wait_for_background_tasks_async().await?;
     }
 
-    // 2. Corrupt the index files (in this case, .inv.parquet)
+    // 2. Corrupt the index bundle (all secondary indexes live in `.puffin`).
     let mut corrupted = false;
     let mut dirs_to_visit = vec![dir.path().to_path_buf()];
 
@@ -110,7 +110,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
                     dirs_to_visit.push(path);
                 } else if path.is_file() {
                     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if file_name.ends_with(".inv.parquet") {
+                    if file_name.ends_with(".puffin") {
                         let mut file = fs::OpenOptions::new().write(true).open(&path)?;
                         file.write_all(b"CORRUPTED_INDEX_GARBAGE_DATA")?;
                         corrupted = true;
@@ -119,7 +119,7 @@ async fn test_index_corruption_fallback() -> anyhow::Result<()> {
             }
         }
     }
-    assert!(corrupted, "Could not find index file to corrupt");
+    assert!(corrupted, "Could not find index bundle to corrupt");
 
     // 3. Reopen table and verify fallback behavior
     let table = Table::new_async(uri.clone()).await?;

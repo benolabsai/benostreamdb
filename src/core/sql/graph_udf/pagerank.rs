@@ -114,6 +114,11 @@ impl Accumulator for PageRankAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.base.merge_edge_state(states, Some(2), Some(3))?;
+        // An empty input partition emits default scalar args; adopting them
+        // would make the result depend on merge order.
+        if !GraphAccumulatorBase::state_has_edges(states) {
+            return Ok(());
+        }
         // For backwards compatibility or dynamic trailing args
         let damping_idx = states.len().saturating_sub(2).max(4);
         let iter_idx = states.len().saturating_sub(1).max(5);
@@ -188,34 +193,75 @@ impl Accumulator for PageRankAccumulator {
         nodes.sort_unstable();
         nodes.dedup();
 
-        let num_nodes = nodes.len() as f64;
-        let mut scores: HashMap<u64, f64> = nodes.iter().map(|&n| (n, 1.0 / num_nodes)).collect();
+        let n = nodes.len();
+        if n == 0 {
+            let struct_fields = Fields::from(vec![
+                Field::new("node", DataType::UInt64, false),
+                Field::new("score", DataType::Float64, false),
+            ]);
+            let struct_builder = StructBuilder::new(
+                struct_fields,
+                vec![
+                    Box::new(UInt64Builder::new()),
+                    Box::new(arrow::array::Float64Builder::new()),
+                ],
+            );
+            let mut list_builder = ListBuilder::new(struct_builder);
+            list_builder.append(true);
+            return Ok(ScalarValue::List(Arc::new(list_builder.finish())));
+        }
 
-        let mut neighbors: Vec<u64> = Vec::new();
-        for _ in 0..self.iterations {
-            let mut new_scores: HashMap<u64, f64> = nodes
+        let num_nodes = n as f64;
+
+        // Build contiguous index mapping
+        let node_to_idx: HashMap<u64, usize> = nodes
+            .iter()
+            .enumerate()
+            .map(|(idx, &node)| (node, idx))
+            .collect();
+
+        // Pre-extract adjacency as flat indices for zero-allocation traversal
+        let mut adj: Vec<Vec<usize>> = Vec::with_capacity(n);
+        let mut raw_neighbors = Vec::new();
+        for &u in &nodes {
+            raw_neighbors.clear();
+            graph.get_neighbors_into(u, &mut raw_neighbors);
+            let mapped_neighbors: Vec<usize> = raw_neighbors
                 .iter()
-                .map(|&n| (n, (1.0 - self.damping) / num_nodes))
+                .filter_map(|v| node_to_idx.get(v).copied())
                 .collect();
+            adj.push(mapped_neighbors);
+        }
 
-            for &u in &nodes {
-                let current_score = scores[&u];
-                neighbors.clear();
-                graph.get_neighbors_into(u, &mut neighbors);
+        let mut scores = vec![1.0 / num_nodes; n];
+        let mut new_scores = vec![0.0; n];
+        let base_score = (1.0 - self.damping) / num_nodes;
+
+        for _ in 0..self.iterations {
+            new_scores.fill(base_score);
+            let mut dangling_mass = 0.0;
+
+            for u_idx in 0..n {
+                let current_score = scores[u_idx];
+                let neighbors = &adj[u_idx];
                 if !neighbors.is_empty() {
                     let transfer = (self.damping * current_score) / (neighbors.len() as f64);
-                    for &v in &neighbors {
-                        *new_scores.entry(v).or_insert(0.0) += transfer;
+                    for &v_idx in neighbors {
+                        new_scores[v_idx] += transfer;
                     }
                 } else {
-                    // dangling node
-                    let transfer = (self.damping * current_score) / num_nodes;
-                    for &v in &nodes {
-                        *new_scores.entry(v).or_insert(0.0) += transfer;
-                    }
+                    dangling_mass += self.damping * current_score;
                 }
             }
-            scores = new_scores;
+
+            if dangling_mass > 0.0 {
+                let dangling_per_node = dangling_mass / num_nodes;
+                for s in new_scores.iter_mut() {
+                    *s += dangling_per_node;
+                }
+            }
+
+            std::mem::swap(&mut scores, &mut new_scores);
         }
 
         // Return a List of Structs {node: UInt64, score: Float64}
@@ -227,12 +273,10 @@ impl Accumulator for PageRankAccumulator {
         let mut node_builder = UInt64Builder::new();
         let mut score_builder = arrow::array::Float64Builder::new();
 
-        let mut sorted_nodes: Vec<_> = scores.keys().copied().collect();
-        sorted_nodes.sort_unstable();
-
-        for &node in &sorted_nodes {
-            node_builder.append_value(node);
-            score_builder.append_value(scores[&node]);
+        // `nodes` is already sorted and deduplicated
+        for i in 0..n {
+            node_builder.append_value(nodes[i]);
+            score_builder.append_value(scores[i]);
         }
 
         let mut struct_builder = StructBuilder::new(
@@ -244,7 +288,7 @@ impl Accumulator for PageRankAccumulator {
         // `nodes.len()`: `all_nodes()` returns only *source* nodes, but the
         // PageRank update also scores *sink* targets reached as `new_scores`
         // entries, so `scores` can hold more nodes than `nodes`.
-        for _ in 0..sorted_nodes.len() {
+        for _ in 0..n {
             struct_builder.append(true);
         }
 

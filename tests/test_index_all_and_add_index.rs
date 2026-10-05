@@ -58,6 +58,8 @@ fn hnsw_tq8() -> IndexAlgorithm {
     }
 }
 
+/// Count vector index artifacts. Indexes are packed into Puffin compound
+/// bundles, so a `.puffin` file containing a vector blob counts as one.
 fn count_vector_index_files(dir: &std::path::Path) -> usize {
     fn walk(p: &std::path::Path, n: &mut usize) {
         let Ok(rd) = std::fs::read_dir(p) else { return };
@@ -66,7 +68,24 @@ fn count_vector_index_files(dir: &std::path::Path) -> usize {
             if path.is_dir() {
                 walk(&path, n);
             } else if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                if name.contains(".tq8.") || name.contains(".hnsw.") || name.contains(".centroids.")
+                if name.ends_with(".puffin") {
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        if let Ok(reader) = benostreamdb::core::puffin::PuffinReader::new(
+                            std::io::Cursor::new(bytes),
+                        ) {
+                            if reader
+                                .footer()
+                                .blobs
+                                .iter()
+                                .any(|b| b.r#type.starts_with("org.apache.iceberg.vector"))
+                            {
+                                *n += 1;
+                            }
+                        }
+                    }
+                } else if name.contains(".tq8.")
+                    || name.contains(".hnsw.")
+                    || name.contains(".centroids.")
                 {
                     *n += 1;
                 }

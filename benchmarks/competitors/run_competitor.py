@@ -10,7 +10,7 @@ Workload families:
 
 * ``vector`` — ANN over an ANN-Benchmarks HDF5 dataset.
   Engines: ``faiss``, ``hnswlib`` (embedded), ``pgvector``, ``lancedb``,
-  ``elasticsearch`` (server-backed).
+  ``opensearch`` (server-backed).
 * ``graph``  — a graph algorithm over an edge list.
   Engines: ``networkx`` (reference), ``neo4j`` (GDS).
 * ``sql``    — an analytical query. Engines: ``duckdb``.
@@ -26,7 +26,7 @@ Usage:
     python benchmarks/competitors/run_competitor.py --engine pgvector \\
         --dsn "postgresql://user:pass@localhost/bench" --dataset glove-100-angular
 
-    python benchmarks/competitors/run_competitor.py --engine elasticsearch \\
+    python benchmarks/competitors/run_competitor.py --engine opensearch \\
         --host http://localhost:9200 --dataset sift-128-euclidean
 
     python benchmarks/competitors/run_competitor.py --engine networkx \\
@@ -70,13 +70,27 @@ DATASET_METRIC = {
 # --------------------------------------------------------------------------- #
 # Resource envelope
 # --------------------------------------------------------------------------- #
-def apply_envelope(cores: int, ram_gb: float) -> None:
+# Engines whose runtime reserves a large *virtual* address space (CUDA/RAPIDS
+# managed memory, wgpu). `RLIMIT_AS` limits virtual address space, not resident
+# memory, so applying the RAM envelope to these engines makes the `dlopen` of
+# their libraries fail with a misleading "cannot open shared object file"
+# (the `mmap` returns ENOMEM). The container cgroup
+# (`deploy.resources.limits.memory`) already enforces the physical RAM envelope,
+# so `RLIMIT_AS` is both redundant and wrong for GPU engines.
+_GPU_ENGINES = {"cugraph"}
+
+
+def apply_envelope(
+    cores: int, ram_gb: float, engine: str = "", device: str = "cpu"
+) -> None:
     """Best-effort process limits so the competitor matches BenoStreamDB.
 
     Threads: set the common BLAS/OMP env vars (must be set before numpy/faiss
     import to take effect; the runner sets them as early as possible). RAM: use
     ``RLIMIT_AS`` when ``ram_gb`` is given, so an over-budget run fails loudly
-    instead of silently using more memory than BenoStreamDB was given.
+    instead of silently using more memory than BenoStreamDB was given — except
+    for GPU engines, where virtual address space far exceeds physical RAM (see
+    ``_GPU_ENGINES``).
     """
     if cores > 0:
         for var in (
@@ -86,7 +100,7 @@ def apply_envelope(cores: int, ram_gb: float) -> None:
             "NUMEXPR_NUM_THREADS",
         ):
             os.environ[var] = str(cores)
-    if ram_gb > 0:
+    if ram_gb > 0 and engine not in _GPU_ENGINES and device != "gpu":
         try:
             import resource
 
@@ -235,10 +249,10 @@ class PgvectorAdapter(VectorAdapter):
         with cur.copy("COPY bsdb_bench (id, embedding) FROM STDIN") as copy:
             for i, row in enumerate(train):
                 copy.write_row((int(i), _vec_literal(row)))
+        # DDL cannot take bind parameters, so inline the (validated) integers.
         cur.execute(
             f"CREATE INDEX ON bsdb_bench USING hnsw (embedding {opclass}) "
-            f"WITH (m = %s, ef_construction = %s)",
-            (int(params["m"]), int(params["ef_construction"])),
+            f"WITH (m = {int(params['m'])}, ef_construction = {int(params['ef_construction'])})"
         )
         return conn
 
@@ -285,12 +299,19 @@ class LanceDbAdapter(VectorAdapter):
         )
         t = db.create_table("bench", data=tbl, mode="overwrite")
         metric = "cosine" if params.get("metric") == "cosine" else "l2"
-        dim = train.shape[1]
-        # IVF_PQ partitions/sub-vectors scale with the data; keep them sane.
+        # Use the HNSW family (scalar-quantized) with the same M/ef_construction
+        # as the other engines, so the comparison is HNSW-vs-HNSW rather than
+        # HNSW-vs-IVF_PQ. LanceDB has no plain-float HNSW; HnswSq is the closest.
+        # New unified API: the first positional arg is the vector column name.
+        from lancedb.index import HnswSq
+
         t.create_index(
-            metric=metric,
-            num_partitions=min(256, max(1, len(train) // 256)),
-            num_sub_vectors=min(16, max(1, dim // 8)),
+            "vector",
+            config=HnswSq(
+                distance_type=metric,
+                m=int(params["m"]),
+                ef_construction=int(params["ef_construction"]),
+            ),
         )
         return (t, uri)
 
@@ -298,7 +319,9 @@ class LanceDbAdapter(VectorAdapter):
         t, _uri = handle
         out = []
         for q in queries:
-            rows = t.search(q.tolist()).limit(int(k)).to_list()
+            # Project only `id`: the other engines return ids only, so fetching
+            # the vector payload here would make LanceDB do strictly more work.
+            rows = t.search(q.tolist()).select(["id"]).limit(int(k)).to_list()
             out.append([int(r["id"]) for r in rows])
         return np.array(out)
 
@@ -307,39 +330,62 @@ class LanceDbAdapter(VectorAdapter):
         return _dir_size(uri)
 
 
-class ElasticsearchAdapter(VectorAdapter):
-    """Elasticsearch or OpenSearch (dense_vector + HNSW kNN)."""
+def _opensearch_client(host: str):
+    """Return (client, helpers) for the OpenSearch server at `host`.
+
+    The compose stack runs OpenSearch, so we use the opensearch-py client; the
+    elasticsearch 8.x client hard-rejects non-Elasticsearch servers with
+    "UnsupportedProductError".
+    """
+    from opensearchpy import OpenSearch, helpers
+
+    return OpenSearch(host), helpers
+
+
+class OpenSearchAdapter(VectorAdapter):
+    """OpenSearch (dense_vector + HNSW kNN)."""
 
     def __init__(self) -> None:
-        super().__init__(name="elasticsearch", module="elasticsearch", server_side=True)
+        super().__init__(name="opensearch", module="opensearchpy", server_side=True)
 
     def build(self, train, params, ctx):
-        from elasticsearch import Elasticsearch, helpers
-
         host = ctx.get("host") or os.environ.get("ES_URL") or "http://localhost:9200"
-        es = Elasticsearch(host)
+        es, helpers = _opensearch_client(host)
         dim = train.shape[1]
         metric = params.get("metric", "l2")
-        similarity = {"l2": "l2_norm", "cosine": "cosine", "inner_product": "dot_product"}.get(
-            metric, "l2_norm"
-        )
+        # OpenSearch kNN space types differ from Elasticsearch's similarity names.
+        space_type = {
+            "l2": "l2",
+            "cosine": "cosinesimil",
+            "inner_product": "innerproduct",
+        }.get(metric, "l2")
         es.indices.delete(index="bsdb-bench", ignore_unavailable=True)
         es.indices.create(
             index="bsdb-bench",
-            mappings={
-                "properties": {
-                    "vector": {
-                        "type": "dense_vector",
-                        "dims": dim,
-                        "index": True,
-                        "similarity": similarity,
-                        "index_options": {
-                            "type": "hnsw",
-                            "m": int(params["m"]),
-                            "ef_construction": int(params["ef_construction"]),
-                        },
+            body={
+                "settings": {
+                    "index": {
+                        "knn": True,
+                        "knn.algo_param.ef_search": int(params.get("ef_search", 100)),
                     }
-                }
+                },
+                "mappings": {
+                    "properties": {
+                        "vector": {
+                            "type": "knn_vector",
+                            "dimension": dim,
+                            "method": {
+                                "name": "hnsw",
+                                "space_type": space_type,
+                                "engine": "lucene",
+                                "parameters": {
+                                    "m": int(params["m"]),
+                                    "ef_construction": int(params["ef_construction"]),
+                                },
+                            },
+                        }
+                    }
+                },
             },
         )
         actions = (
@@ -359,13 +405,8 @@ class ElasticsearchAdapter(VectorAdapter):
         out = []
         for q in queries:
             body = {
-                "knn": {
-                    "field": "vector",
-                    "query_vector": q.tolist(),
-                    "k": int(k),
-                    "num_candidates": max(int(k) * 10, int(ef_search)),
-                },
                 "size": int(k),
+                "query": {"knn": {"vector": {"vector": q.tolist(), "k": int(k)}}},
                 "_source": False,
             }
             res = es.search(index="bsdb-bench", body=body)
@@ -386,8 +427,7 @@ def vector_adapters() -> dict[str, VectorAdapter]:
         "hnswlib": HnswlibAdapter(),
         "pgvector": PgvectorAdapter(),
         "lancedb": LanceDbAdapter(),
-        "elasticsearch": ElasticsearchAdapter(),
-        "opensearch": ElasticsearchAdapter(),
+        "opensearch": OpenSearchAdapter(),
     }
 
 
@@ -425,7 +465,12 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
         neighbors = None  # ground truth invalid for a subset
     n, dim = train.shape
 
-    params = {"m": args.m, "ef_construction": args.ef_construction, "metric": metric}
+    params = {
+        "m": args.m,
+        "ef_construction": args.ef_construction,
+        "ef_search": args.ef_search,
+        "metric": metric,
+    }
     ctx = {
         "dsn": args.dsn,
         "host": args.host,
@@ -527,20 +572,23 @@ def _graph_neo4j(args, edges) -> dict:
     if proc is None:
         raise RuntimeError(f"unknown algorithm {args.algorithm}")
 
-    t0 = time.time()
+    # Load + project are setup, not query time. Time them separately so the
+    # reported `seconds` is the algorithm only (comparable to the other
+    # engines, which also exclude ingestion).
+    t_load = time.time()
     with driver.session() as session:
-        session.run(
-            "MATCH (n) DETACH DELETE n"
-        )
+        session.run("MATCH (n) DETACH DELETE n")
         session.run(
             "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
             "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
             rows=[(int(a), int(b)) for a, b in edges],
         )
         session.run("CALL gds.graph.drop('bench', false)").consume()
-        session.run(
-            "CALL gds.graph.project('bench', 'Node', 'E')"
-        ).consume()
+        session.run("CALL gds.graph.project('bench', 'Node', 'E')").consume()
+    load_s = time.time() - t_load
+
+    t0 = time.time()
+    with driver.session() as session:
         if args.algorithm == "shortest_path":
             res = session.run(
                 f"CALL {proc}('bench', {{sourceNode: $src}})",
@@ -555,8 +603,136 @@ def _graph_neo4j(args, edges) -> dict:
         "available": True,
         "algorithm": args.algorithm,
         "edges": len(edges),
+        "load_s": round(load_s, 3),
         "seconds": round(time.time() - t0, 3),
         "result_size": len(rows),
+    }
+
+
+def _graph_benostreamdb(args, edges) -> dict:
+    import benostreamdb as bsdb
+    import pyarrow as pa
+    import tempfile
+    import shutil
+
+    tmpdir = tempfile.mkdtemp(prefix="bsdb_graph_bench_")
+    try:
+        t_build_0 = time.time()
+        schema = pa.schema([
+            ("source", pa.uint64()),
+            ("target", pa.uint64()),
+        ])
+        table = bsdb.Table.create(tmpdir, schema)
+        table.add_index(
+            "source", {"type": "graph", "src_column": "source", "dst_column": "target"}
+        )
+        table.add_index(
+            "target", {"type": "graph", "src_column": "target", "dst_column": "source"}
+        )
+        arr_src = pa.array(edges[:, 0].astype(np.uint64), type=pa.uint64())
+        arr_dst = pa.array(edges[:, 1].astype(np.uint64), type=pa.uint64())
+        batch = pa.Table.from_arrays([arr_src, arr_dst], names=["source", "target"])
+        table.insert(batch)
+        table.commit()
+        table.wait_for_background_tasks()
+        build_s = round(time.time() - t_build_0, 3)
+
+        damping = float(getattr(args, "damping", 0.85))
+        iterations = int(getattr(args, "iterations", 30))
+
+        t0 = time.time()
+        if args.algorithm == "pagerank":
+            res = table.pagerank(damping=damping, iterations=iterations).to_pandas()
+            n_out = len(res)
+        elif args.algorithm == "connected_components":
+            res = table.connected_components().to_pandas()
+            n_out = int(res["component"].nunique()) if "component" in res.columns else len(res)
+        elif args.algorithm == "shortest_path":
+            target = getattr(args, "target", None)
+            if target is not None:
+                res = table.shortest_path(int(args.source), int(target))
+                n_out = len(res)
+            else:
+                res = table.graph_neighbors(int(args.source), hops=int(getattr(args, "hops", 2)))
+                n_out = len(res)
+        else:
+            raise RuntimeError(f"unknown algorithm {args.algorithm}")
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "engine": "benostreamdb",
+            "workload": "graph",
+            "available": True,
+            "algorithm": args.algorithm,
+            "edges": len(edges),
+            "build_seconds": build_s,
+            "seconds": elapsed,
+            "result_size": n_out,
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _graph_cugraph(args, edges) -> dict:
+    if not importlib.util.find_spec("cugraph") or not importlib.util.find_spec("cudf"):
+        return {
+            "engine": "cugraph",
+            "workload": "graph",
+            "available": False,
+            "error": "cugraph and cudf required (pip/conda install cugraph)",
+        }
+    # Configure RMM *before* importing cudf/cugraph. Managed (unified) memory lets
+    # the device pool spill to host RAM instead of OOMing — important on a
+    # workstation GPU where the desktop compositor (Wayland) holds VRAM.
+    try:
+        import rmm
+
+        rmm.reinitialize(managed_memory=True)
+    except Exception:
+        pass
+    import cugraph
+    import cudf
+
+    t_build_0 = time.time()
+    gdf = cudf.DataFrame({
+        "src": edges[:, 0],
+        "dst": edges[:, 1],
+    })
+    G = cugraph.Graph(directed=True)
+    # renumber=True maps vertex IDs to a contiguous [0, N-1] block. Without it a
+    # sparse/high ID space makes cuGraph allocate an array sized to the max ID,
+    # which OOMs immediately.
+    G.from_cudf_edgelist(gdf, source="src", destination="dst", renumber=True)
+    build_s = round(time.time() - t_build_0, 3)
+
+    damping = float(getattr(args, "damping", 0.85))
+    iterations = int(getattr(args, "iterations", 30))
+
+    t0 = time.time()
+    if args.algorithm == "pagerank":
+        res = cugraph.pagerank(G, alpha=damping, max_iter=iterations)
+        n_out = len(res)
+    elif args.algorithm == "connected_components":
+        res = cugraph.weakly_connected_components(G)
+        n_out = len(res)
+    elif args.algorithm == "shortest_path":
+        target = getattr(args, "target", None)
+        res = cugraph.bfs(G, start=int(args.source))
+        if target is not None:
+            res_target = res[res["vertex"] == int(target)]
+            n_out = len(res_target)
+        else:
+            n_out = len(res)
+    else:
+        raise RuntimeError(f"unknown algorithm {args.algorithm}")
+    return {
+        "engine": "cugraph",
+        "workload": "graph",
+        "available": True,
+        "algorithm": args.algorithm,
+        "edges": len(edges),
+        "build_seconds": build_s,
+        "seconds": round(time.time() - t0, 3),
+        "result_size": n_out,
     }
 
 
@@ -569,6 +745,10 @@ def run_graph(args) -> dict:
         }
     edges = np.loadtxt(args.graph_edges, dtype=np.int64, ndmin=2)
     engine = args.engine
+    if engine in ("benostreamdb", "bsdb"):
+        return _graph_benostreamdb(args, edges)
+    if engine == "cugraph":
+        return _graph_cugraph(args, edges)
     if engine == "neo4j":
         if not importlib.util.find_spec("neo4j"):
             return {
@@ -591,9 +771,200 @@ def run_graph(args) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Lexical workload
+# --------------------------------------------------------------------------- #
+def _lexical_tantivy(args, corpus, queries, qrels) -> dict:
+    import tantivy
+    import tempfile
+
+    schema_builder = tantivy.SchemaBuilder()
+    schema_builder.add_text_field("id", stored=True)
+    schema_builder.add_text_field("text", stored=True, tokenizer_name="en_stem")
+    schema = schema_builder.build()
+
+    t0 = time.time()
+    with tempfile.TemporaryDirectory() as index_dir:
+        index = tantivy.Index(schema, path=index_dir)
+        writer = index.writer(heap_size=1024_000_000)
+
+        for doc_id, text in corpus:
+            writer.add_document(tantivy.Document(
+                id=[doc_id],
+                text=[text],
+            ))
+        writer.commit()
+        build_s = time.time() - t0
+
+        index.reload()
+        searcher = index.searcher()
+
+        hits = 0.0
+        q = min(args.queries, len(queries))
+        latencies = []
+
+        import re
+        for q_id, q_text in queries[:q]:
+            # Sanitize to avoid tantivy syntax errors
+            safe_q = re.sub(r'[^\w\s]', ' ', q_text)
+            query = index.parse_query(safe_q, ["text"])
+
+            t1 = time.perf_counter()
+            results = searcher.search(query, args.k).hits
+            latencies.append(time.perf_counter() - t1)
+
+            got = {searcher.doc(doc_address)["id"][0] for score, doc_address in results}
+            truth = qrels.get(q_id, set())
+            if truth:
+                hits += len(got & truth) / min(args.k, len(truth))
+
+        recall = hits / q
+        total = sum(latencies) or 1e-9
+
+        return {
+            "engine": "tantivy",
+            "workload": "lexical",
+            "available": True,
+            "queries": q,
+            "build_s": round(build_s, 3),
+            "recall_at_k": round(recall, 4),
+            "qps": round(q / total, 1),
+            "p50_ms": round(float(np.percentile(latencies, 50) * 1000), 3),
+            "p99_ms": round(float(np.percentile(latencies, 99) * 1000), 3),
+        }
+
+def _lexical_opensearch(args, corpus, queries, qrels) -> dict:
+    from opensearchpy import OpenSearch, helpers
+    host = args.host or os.environ.get("ES_URL") or "http://localhost:9200"
+    es = OpenSearch(host)
+
+    # 1. Build index
+    es.indices.delete(index="bsdb-lexical", ignore_unavailable=True)
+    es.indices.create(
+        index="bsdb-lexical",
+        body={
+            "mappings": {
+                "properties": {
+                    "text": {"type": "text", "analyzer": "english"}
+                }
+            }
+        },
+    )
+    
+    t0 = time.time()
+    actions = (
+        {
+            "_index": "bsdb-lexical",
+            "_id": doc_id,
+            "_source": {"text": text},
+        }
+        for doc_id, text in corpus
+    )
+    helpers.bulk(es, actions)
+    es.indices.refresh(index="bsdb-lexical")
+    build_s = time.time() - t0
+
+    # 2. Search
+    hits = 0.0
+    q = min(args.queries, len(queries))
+    latencies = []
+    
+    import re
+    for q_id, q_text in queries[:q]:
+        safe_q = re.sub(r'[^\w\s]', ' ', q_text)
+        
+        t1 = time.perf_counter()
+        res = es.search(
+            index="bsdb-lexical",
+            body={
+                "query": {"match": {"text": safe_q}},
+                "size": args.k,
+                "_source": False,
+            }
+        )
+        latencies.append(time.perf_counter() - t1)
+        
+        got = {str(h["_id"]) for h in res["hits"]["hits"]}
+        truth = qrels.get(q_id, set())
+        if truth:
+            hits += len(got & truth) / min(args.k, len(truth))
+
+    recall = hits / q
+    total = sum(latencies) or 1e-9
+
+    return {
+        "engine": args.engine,
+        "workload": "lexical",
+        "available": True,
+        "queries": q,
+        "build_s": round(build_s, 3),
+        "recall_at_k": round(recall, 4),
+        "qps": round(q / total, 1),
+        "p50_ms": round(float(np.percentile(latencies, 50) * 1000), 3),
+        "p99_ms": round(float(np.percentile(latencies, 99) * 1000), 3),
+    }
+
+def run_lexical(args) -> dict:
+    if not args.beir_corpus:
+        return {
+            "workload": "lexical",
+            "available": False,
+            "error": "lexical engines require --beir-corpus",
+        }
+
+    engine = args.engine
+    if engine in ("tantivy", "opensearch"):
+        if engine == "tantivy" and not importlib.util.find_spec("tantivy"):
+            return {
+                "engine": "tantivy",
+                "workload": "lexical",
+                "available": False,
+                "error": "pip install tantivy",
+            }
+        elif engine == "opensearch" and not importlib.util.find_spec("opensearchpy"):
+            return {
+                "engine": engine,
+                "workload": "lexical",
+                "available": False,
+                "error": "pip install opensearch-py",
+            }
+
+        corpus = []
+        with open(args.beir_corpus, "r", encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                corpus.append((d["_id"], d.get("title", "") + " " + d.get("text", "")))
+
+        qrels = {}
+        with open(args.beir_qrels, "r", encoding="utf-8") as f:
+            next(f) # skip header
+            for line in f:
+                q_id, doc_id, score = line.strip().split('\t')
+                if int(score) > 0:
+                    qrels.setdefault(q_id, set()).add(doc_id)
+
+        queries = []
+        with open(args.beir_queries, "r", encoding="utf-8") as f:
+            for line in f:
+                d = json.loads(line)
+                if str(d["_id"]) in qrels:
+                    queries.append((str(d["_id"]), d["text"]))
+
+        if engine == "tantivy":
+            return _lexical_tantivy(args, corpus, queries, qrels)
+        else:
+            return _lexical_opensearch(args, corpus, queries, qrels)
+
+    return {
+        "engine": engine,
+        "workload": "lexical",
+        "available": False,
+        "error": f"unsupported lexical engine {engine}"
+    }
+
+# --------------------------------------------------------------------------- #
 # SQL workload
 # --------------------------------------------------------------------------- #
-def run_sql(args) -> dict:
+def _sql_duckdb(args) -> dict:
     if not importlib.util.find_spec("duckdb"):
         return {
             "engine": "duckdb",
@@ -617,6 +988,8 @@ def run_sql(args) -> dict:
             f"FROM read_parquet('{args.parquet}')"
         )
     con = duckdb.connect()
+    if args.parquet and "from t" in sql.lower() and "read_parquet" not in sql.lower():
+        con.execute(f"CREATE VIEW t AS SELECT * FROM read_parquet('{args.parquet}')")
     t0 = time.time()
     result = con.execute(sql).fetchall()
     return {
@@ -626,6 +999,152 @@ def run_sql(args) -> dict:
         "sql": sql,
         "seconds": round(time.time() - t0, 3),
         "rows": len(result),
+    }
+
+
+def _sql_datafusion(args) -> dict:
+    if not importlib.util.find_spec("datafusion"):
+        return {
+            "engine": "datafusion",
+            "workload": "sql",
+            "available": False,
+            "error": "pip install datafusion",
+        }
+    import datafusion
+
+    ctx = datafusion.SessionContext()
+    sql = args.sql
+    if not sql:
+        if not args.parquet:
+            return {
+                "engine": "datafusion",
+                "workload": "sql",
+                "available": False,
+                "error": "provide --sql or --parquet",
+            }
+        ctx.register_parquet("t", args.parquet)
+        sql = "SELECT count(*) AS n FROM t"
+    elif args.parquet:
+        ctx.register_parquet("t", args.parquet)
+
+    t0 = time.time()
+    df = ctx.sql(sql)
+    batches = df.collect()
+    total_rows = sum(b.num_rows for b in batches)
+    return {
+        "engine": "datafusion",
+        "workload": "sql",
+        "available": True,
+        "sql": sql,
+        "seconds": round(time.time() - t0, 3),
+        "rows": total_rows,
+    }
+
+
+def _sql_clickhouse(args) -> dict:
+    if not importlib.util.find_spec("clickhouse_connect"):
+        return {
+            "engine": "clickhouse",
+            "workload": "sql",
+            "available": False,
+            "error": "pip install clickhouse_connect",
+        }
+    import clickhouse_connect
+
+    host = getattr(args, "host", None) or os.environ.get("CLICKHOUSE_HOST", "localhost")
+    port = int(getattr(args, "port", None) or os.environ.get("CLICKHOUSE_PORT", "8123"))
+    user = getattr(args, "user", None) or os.environ.get("CLICKHOUSE_USER", "default")
+    password = getattr(args, "password", None) or os.environ.get("CLICKHOUSE_PASSWORD", "")
+    try:
+        client = clickhouse_connect.get_client(host=host, port=port, username=user, password=password)
+    except Exception as e:
+        return {
+            "engine": "clickhouse",
+            "workload": "sql",
+            "available": False,
+            "error": f"connection error: {e}",
+        }
+
+    sql = args.sql
+    if args.parquet:
+        # Materialise the Parquet into a table named `t` so the shared SQL
+        # (which references `t`) works across every SQL engine.
+        client.command("DROP TABLE IF EXISTS t")
+        client.command(
+            f"CREATE TABLE t ENGINE = MergeTree ORDER BY tuple() "
+            f"AS SELECT * FROM file('{args.parquet}', 'Parquet')"
+        )
+    if not sql:
+        if not args.parquet:
+            return {
+                "engine": "clickhouse",
+                "workload": "sql",
+                "available": False,
+                "error": "provide --sql or --parquet",
+            }
+        sql = "SELECT count(*) AS n FROM t"
+
+    t0 = time.time()
+    res = client.query(sql)
+    return {
+        "engine": "clickhouse",
+        "workload": "sql",
+        "available": True,
+        "sql": sql,
+        "seconds": round(time.time() - t0, 3),
+        "rows": len(res.result_rows),
+    }
+
+
+def _sql_benostreamdb(args) -> dict:
+    import benostreamdb as bsdb
+    import pyarrow.parquet as pq
+    import tempfile
+    import shutil
+
+    tmpdir = tempfile.mkdtemp(prefix="bsdb_sql_bench_")
+    try:
+        t_ingest_0 = time.time()
+        table = bsdb.Table(tmpdir)
+        if args.parquet:
+            pa_table = pq.read_table(args.parquet)
+            table.write(pa_table)
+            table.commit()
+            table.wait_for_background_tasks()
+        ingest_s = round(time.time() - t_ingest_0, 3)
+
+        sql = args.sql or "SELECT count(*) FROM t"
+        t0 = time.time()
+        res = table.sql(sql)
+        elapsed = round(time.time() - t0, 3)
+        return {
+            "engine": "benostreamdb",
+            "workload": "sql",
+            "available": True,
+            "sql": sql,
+            "ingest_seconds": ingest_s,
+            "seconds": elapsed,
+            "rows": len(res),
+        }
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def run_sql(args) -> dict:
+    engine = args.engine
+    if engine == "duckdb":
+        return _sql_duckdb(args)
+    if engine == "datafusion":
+        return _sql_datafusion(args)
+    if engine == "clickhouse":
+        return _sql_clickhouse(args)
+    if engine in ("benostreamdb", "bsdb"):
+        return _sql_benostreamdb(args)
+    return {
+        "engine": engine,
+        "workload": "sql",
+        "available": False,
+        "error": f"unknown sql engine '{engine}'",
     }
 
 
@@ -722,28 +1241,40 @@ def main() -> None:
     ap.add_argument("--ram-gb", type=float, default=0.0)
     # Server / path connection options.
     ap.add_argument("--dsn", default=None, help="pgvector connection string")
-    ap.add_argument("--host", default=None, help="Elasticsearch/OpenSearch URL")
+    ap.add_argument("--host", default=None, help="OpenSearch URL")
     ap.add_argument("--path", default=None, help="LanceDB directory")
     ap.add_argument("--uri", default=None, help="Neo4j bolt URI")
     ap.add_argument("--user", default=None)
     ap.add_argument("--password", default=None)
-    # Graph / SQL options.
+    # Graph / SQL / Lexical options.
+    ap.add_argument("--workload", default=None, choices=["vector", "graph", "sql", "lexical"])
     ap.add_argument("--graph-edges", default=None)
+    ap.add_argument("--beir-corpus", default=None)
+    ap.add_argument("--beir-queries", default=None)
+    ap.add_argument("--beir-qrels", default=None)
     ap.add_argument("--algorithm", default="pagerank")
     ap.add_argument("--source", type=int, default=0)
+    ap.add_argument("--target", type=int, default=None)
+    ap.add_argument("--hops", type=int, default=2)
+    ap.add_argument("--damping", type=float, default=0.85)
+    ap.add_argument("--iterations", type=int, default=30)
+    ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--sql", default=None)
     ap.add_argument("--parquet", default=None)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    apply_envelope(args.cores, args.ram_gb)
+    apply_envelope(args.cores, args.ram_gb, args.engine, args.device)
 
     try:
-        if args.engine == "duckdb":
+        if args.workload == "sql" or args.engine in ("duckdb", "datafusion", "clickhouse") or (args.engine in ("benostreamdb", "bsdb") and (args.sql or (args.parquet and not args.dataset))):
             emit(run_sql(args), args.out)
             return
-        if args.engine in ("networkx", "neo4j"):
+        if args.workload == "graph" or args.engine in ("networkx", "neo4j", "cugraph") or (args.engine in ("benostreamdb", "bsdb") and args.graph_edges):
             emit(run_graph(args), args.out)
+            return
+        if args.workload == "lexical" or args.engine == "tantivy" or (args.engine == "opensearch" and args.beir_corpus):
+            emit(run_lexical(args), args.out)
             return
 
         adapters = vector_adapters()

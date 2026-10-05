@@ -1020,11 +1020,21 @@ impl HybridReader {
 
         // --- FAST PATH: no filter, use HNSW-IVF index ---
         {
+            // A Puffin compound bundle registers one `IndexFile` per blob
+            // (centroids, graph, mapping), so the same logical vector index
+            // appears as several entries. Deduplicate by (file_path, algorithm)
+            // so each index is searched exactly once.
+            let mut seen = std::collections::HashSet::new();
             let vector_indices: Vec<_> = self
                 .config
                 .index_files
                 .iter()
-                .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+                .filter(|f| {
+                    f.index_category == "vector"
+                        && f.column_name == column
+                        && self.config.is_index_valid(f)
+                })
+                .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
                 .cloned()
                 .collect();
 
@@ -1050,8 +1060,8 @@ impl HybridReader {
                 let idx_path = self.resolve_object_path(column).to_string();
                 let idx_info = crate::core::manifest::IndexFile {
                     file_path: idx_path,
-                    index_type: "vector".to_string(),
-                    column_name: Some(column.to_string()),
+                    index_category: "vector".to_string(),
+                    column_name: column.to_string(),
                     ..Default::default()
                 };
                 match self
@@ -1131,11 +1141,19 @@ impl HybridReader {
         ef_search: Option<usize>,
         use_mmap: bool,
     ) -> Result<Vec<(usize, f32)>> {
+        // Deduplicate Puffin blob entries (centroids/graph/mapping) down to one
+        // per logical vector index.
+        let mut seen = std::collections::HashSet::new();
         let vector_indices: Vec<_> = self
             .config
             .index_files
             .iter()
-            .filter(|f| f.index_type == "vector" && f.column_name.as_deref() == Some(column))
+            .filter(|f| {
+                f.index_category == "vector"
+                    && f.column_name == column
+                    && self.config.is_index_valid(f)
+            })
+            .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
             .cloned()
             .collect();
         let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
@@ -1156,8 +1174,8 @@ impl HybridReader {
             let idx_path = self.resolve_object_path(column).to_string();
             let idx_info = crate::core::manifest::IndexFile {
                 file_path: idx_path,
-                index_type: "vector".to_string(),
-                column_name: Some(column.to_string()),
+                index_category: "vector".to_string(),
+                column_name: column.to_string(),
                 ..Default::default()
             };
             match self
@@ -1231,8 +1249,9 @@ impl HybridReader {
 
         let idx_info = self.config.index_files.iter()
             .find(|f| {
-                let match_type = f.index_type == "inverted" || f.index_type == "bm25";
-                let match_col = f.column_name.as_deref() == Some(column);
+                let match_type = (f.algorithm == "inverted" || f.algorithm == "bm25")
+                    || ((f.index_category == "inverted" || f.index_category == "bm25" || f.index_category == "lexical") && f.algorithm != "doclen");
+                let match_col = f.column_name == column && self.config.is_index_valid(f);
                 match_type && match_col
             })
             .ok_or_else(|| anyhow::anyhow!("No keyword/inverted index found for column '{}' in segment {} (Available: {:?})", column, self.config.segment_id, self.config.index_files))?;
@@ -1247,13 +1266,13 @@ impl HybridReader {
             dir_path = "".to_string();
         }
 
-        let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
-            inv_path_str.clone()
-        } else {
+        let full_inv_path_str = if !dir_path.is_empty() && !inv_path_str.contains('/') {
             format!("{}/{}", dir_path, inv_path_str)
+        } else {
+            inv_path_str.clone()
         };
 
-        let cache_key = if let Some(offset) = idx_info.offset {
+        let cache_key = if let Some(offset) = idx_info.blob_offset {
             format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
         } else {
             format!("{}/{}", self.root_uri, full_inv_path_str)
@@ -1267,13 +1286,20 @@ impl HybridReader {
         } else {
             // Cache Miss - Load from Disk
             let inv_path = Path::from(full_inv_path_str.as_str());
-            let inv_bytes = match self.store.get(&inv_path).await {
-                Ok(res) => {
-                    let b = res.bytes().await?;
-                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                    b.to_vec()
-                }
-                Err(e) => return Err(e.into()),
+            let inv_bytes = if let (Some(offset), Some(length)) =
+                (idx_info.blob_offset, idx_info.blob_length)
+            {
+                let b = self
+                    .store
+                    .get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64))
+                    .await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
+            } else {
+                let res = self.store.get(&inv_path).await?;
+                let b = res.bytes().await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
             };
 
             let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
@@ -1334,46 +1360,79 @@ impl HybridReader {
         }
 
         // 4. Doc-length sidecar (per-row token counts) written by finish_indexing.
-        // Missing file (pre-M2 inverted files) degrades to unnormalized scoring.
-        let doclen_path_str = full_inv_path_str
-            .strip_suffix(".inv.parquet")
-            .map(|p| format!("{}.doclen.parquet", p))
-            .unwrap_or_default();
+        // Check if recorded as companion blob (Puffin) or standalone loose sidecar.
+        let doclen_idx_info = self.config.index_files.iter().find(|f| {
+            f.column_name == column && f.algorithm == "doclen" && self.config.is_index_valid(f)
+        });
+
         let mut doc_lengths: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
-        if !doclen_path_str.is_empty() {
-            if let Ok(res) = self.store.get(&Path::from(doclen_path_str.as_str())).await {
-                if let Ok(doclen_bytes) = res.bytes().await {
-                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL
-                        .inc_by(doclen_bytes.len() as u64);
-                    let dl_builder =
-                        parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
-                            doclen_bytes,
-                        )
-                        .ok();
-                    if let Some(dl_builder) = dl_builder {
-                        if let Ok(dl_reader) = dl_builder.build() {
-                            for batch in dl_reader.filter_map(Result::ok) {
-                                if let (Some(row_ids), Some(counts)) = (
-                                    batch
-                                        .column(0)
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::UInt32Array>(),
-                                    batch
-                                        .column(1)
-                                        .as_any()
-                                        .downcast_ref::<arrow::array::UInt32Array>(),
-                                ) {
-                                    for i in 0..batch.num_rows() {
-                                        doc_lengths.insert(row_ids.value(i), counts.value(i));
-                                    }
-                                }
+
+        let doclen_bytes_opt: Option<bytes::Bytes> = if let Some(d_info) = doclen_idx_info {
+            let d_path_str = &d_info.file_path;
+            let full_d_path = if !dir_path.is_empty() && !d_path_str.contains('/') {
+                format!("{}/{}", dir_path, d_path_str)
+            } else {
+                d_path_str.clone()
+            };
+            if let (Some(offset), Some(length)) = (d_info.blob_offset, d_info.blob_length) {
+                self.store
+                    .get_range(
+                        &Path::from(full_d_path.as_str()),
+                        (offset as u64)..(offset as u64 + length as u64),
+                    )
+                    .await
+                    .ok()
+            } else {
+                match self.store.get(&Path::from(full_d_path.as_str())).await {
+                    Ok(res) => res.bytes().await.ok(),
+                    Err(_) => None,
+                }
+            }
+        } else {
+            let doclen_path_str = full_inv_path_str
+                .strip_suffix(".inv.parquet")
+                .map(|p| format!("{}.doclen.parquet", p))
+                .unwrap_or_default();
+            if !doclen_path_str.is_empty() {
+                if let Ok(res) = self.store.get(&Path::from(doclen_path_str.as_str())).await {
+                    res.bytes().await.ok()
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(doclen_bytes) = doclen_bytes_opt {
+            crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(doclen_bytes.len() as u64);
+            if let Ok(dl_builder) =
+                parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(doclen_bytes)
+            {
+                if let Ok(dl_reader) = dl_builder.build() {
+                    for batch in dl_reader.filter_map(Result::ok) {
+                        if let (Some(row_ids), Some(counts)) = (
+                            batch
+                                .column(0)
+                                .as_any()
+                                .downcast_ref::<arrow::array::UInt32Array>(),
+                            batch
+                                .column(1)
+                                .as_any()
+                                .downcast_ref::<arrow::array::UInt32Array>(),
+                        ) {
+                            for i in 0..batch.num_rows() {
+                                doc_lengths.insert(row_ids.value(i), counts.value(i));
                             }
                         }
                     }
                 }
             }
         }
-        let n_docs = self.config.record_count.unwrap_or(0) as usize;
+        let mut n_docs = self.config.record_count.unwrap_or(0) as usize;
+        if n_docs == 0 {
+            n_docs = doc_lengths.len();
+        }
         let avg_doc_len = if n_docs == 0 {
             0.0
         } else {
@@ -1498,8 +1557,12 @@ impl HybridReader {
             .index_files
             .iter()
             .find(|f| {
-                let match_type = f.index_type == "inverted" || f.index_type == "bm25";
-                let match_col = f.column_name.as_deref() == Some(column);
+                let match_type = (f.algorithm == "inverted" || f.algorithm == "bm25")
+                    || ((f.index_category == "inverted"
+                        || f.index_category == "bm25"
+                        || f.index_category == "lexical")
+                        && f.algorithm != "doclen");
+                let match_col = f.column_name == column && self.config.is_index_valid(f);
                 match_type && match_col
             })
             .ok_or_else(|| {
@@ -1519,13 +1582,13 @@ impl HybridReader {
             dir_path = "".to_string();
         }
 
-        let full_inv_path_str = if dir_path.is_empty() || inv_path_str.contains('/') {
-            inv_path_str.clone()
-        } else {
+        let full_inv_path_str = if !dir_path.is_empty() && !inv_path_str.contains('/') {
             format!("{}/{}", dir_path, inv_path_str)
+        } else {
+            inv_path_str.clone()
         };
 
-        let cache_key = if let Some(offset) = idx_info.offset {
+        let cache_key = if let Some(offset) = idx_info.blob_offset {
             format!("{}/{}:{}", self.root_uri, full_inv_path_str, offset)
         } else {
             format!("{}/{}", self.root_uri, full_inv_path_str)
@@ -1538,13 +1601,20 @@ impl HybridReader {
             cached.as_ref().clone()
         } else {
             let inv_path = Path::from(full_inv_path_str.as_str());
-            let inv_bytes = match self.store.get(&inv_path).await {
-                Ok(res) => {
-                    let b = res.bytes().await?;
-                    crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
-                    b.to_vec()
-                }
-                Err(e) => return Err(e.into()),
+            let inv_bytes = if let (Some(offset), Some(length)) =
+                (idx_info.blob_offset, idx_info.blob_length)
+            {
+                let b = self
+                    .store
+                    .get_range(&inv_path, (offset as u64)..(offset as u64 + length as u64))
+                    .await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
+            } else {
+                let res = self.store.get(&inv_path).await?;
+                let b = res.bytes().await?;
+                crate::telemetry::metrics::IO_BYTES_READ_TOTAL.inc_by(b.len() as u64);
+                b.to_vec()
             };
 
             let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
@@ -1857,8 +1927,19 @@ impl HybridReader {
         };
 
         // 2. Hot Row Cache (Fast Path)
-        // If file is < 500MB, we try to use the BLOCK_CACHE
-        if size < 500 * 1024 * 1024 {
+        //
+        // Reading the whole file into BLOCK_CACHE pays off when the file is
+        // small (a full read is cheap and the batch is reused across queries)
+        // or the requested rows are a large fraction of it. A sparse selection
+        // on a *large* file must use row selection instead — otherwise a
+        // kNN/BM25 query hydrating 10 of 100k rows reads a 100 MB+ Parquet file
+        // to return a handful of rows, the dominant cost of a gateway-style
+        // vector query. Note row selection still reads whole row groups, so for
+        // small files the cache is strictly better than re-reading per query.
+        const BLOCK_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+        let total_rows = meta.metadata().file_metadata().num_rows() as usize;
+        let sparse_selection = total_rows > 0 && (bitmap.len() as usize).saturating_mul(8) < total_rows;
+        if size < BLOCK_CACHE_MAX_BYTES || (size < 500 * 1024 * 1024 && !sparse_selection) {
             let mut cached_batch_opt = crate::core::cache::BLOCK_CACHE
                 .get_with_metrics(&cache_key, "block_cache")
                 .await;
@@ -2297,23 +2378,34 @@ impl HybridReader {
     ) -> Result<Vec<(usize, f32)>> {
         let idx_path_str = idx_info.file_path.clone();
 
-        let cache_key = if let Some(offset) = idx_info.offset {
+        let cache_key = if let Some(offset) = idx_info.blob_offset {
             format!("{}/{}:{}", self.root_uri, idx_path_str, offset)
         } else {
             format!("{}/{}", self.root_uri, idx_path_str)
         };
 
-        // Load HNSW-IVF index
-        // NOTE: blob_type records the *algorithm* (e.g. "hnsw_tq8"), not the storage format.
-        // The writer always uses the multi-file layout (.centroids.parquet, .cluster_N.hnsw.*),
-        // so we always load via load_async_with_cache_key regardless of blob_type.
-        let hnsw_ivf = HnswIvfIndex::load_async_with_cache_key(
-            self.store.clone(),
-            &idx_path_str,
-            &cache_key,
-            use_mmap,
-        )
-        .await?;
+        // Load HNSW-IVF index. When the manifest entry carries a Puffin blob
+        // offset, the index is packed inside a `.puffin` compound bundle and
+        // must be materialized before loading; otherwise it is a loose
+        // multi-file layout (.centroids.parquet, .cluster_N.hnsw.*).
+        let hnsw_ivf = if idx_info.blob_offset.is_some() {
+            HnswIvfIndex::load_from_puffin(
+                self.store.clone(),
+                &idx_path_str,
+                &cache_key,
+                use_mmap,
+                &idx_info.column_name,
+            )
+            .await?
+        } else {
+            HnswIvfIndex::load_async_with_cache_key(
+                self.store.clone(),
+                &idx_path_str,
+                &cache_key,
+                use_mmap,
+            )
+            .await?
+        };
 
         // Search with HNSW-IVF
         let query_clone = query.clone();

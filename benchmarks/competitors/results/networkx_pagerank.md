@@ -6,8 +6,8 @@
 | workload | graph |
 | available | True |
 | algorithm | pagerank |
-| nodes | 5 |
-| edges | 5 |
-| seconds | 0.324 |
-| result_size | 5 |
-| env | cpu=, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.43, python=3.14.4 |
+| nodes | 10000 |
+| edges | 49975 |
+| seconds | 0.098 |
+| result_size | 10000 |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=32, ram_gb=121.4, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.43, python=3.14.4, containerized=False, gpus=['NVIDIA GeForce RTX 5070 Ti, 16303 MiB'] |

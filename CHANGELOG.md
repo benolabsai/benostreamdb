@@ -3,22 +3,93 @@
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic
+Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0]
 
 ### Added
-- **BenoStreamDB Native DRIFT Search (Global & Regional)** — Ported Microsoft GraphRAG's DRIFT (Dynamic Reasoning and Inference with Flexible Traversal) algorithm onto native graph primitives. Exposes `Table.drift_search(...)` and `Table.regional_drift_search(...)` in Python, corresponding Rust core methods, and `drift_search` / `regional_drift` SQL UDAFs. Both support an adaptive `GraphMode` (`auto` / `in_memory` / `out_of_core` / `cached`) that dynamically selects between in-memory structures and mmap-backed CSRs depending on the available memory budget. Includes vector-based community search, early PPR convergence checks, score decay, and returns full search traces with PPR scores and community assignments.
-- **First-class graph traversal primitives in the core engine** — `src/core/table/graph.rs` exposes core Rust APIs (`load_graph_index`, `shortest_path`, `connecting_paths`, `graph_neighbors`, `subgraph_edges`) alongside robust Python result containers (`PathResult`, etc.) that directly integrate with `.to_pandas()` and `.to_arrow()`. All graph operations unify under a shared `GraphView` trait for memory-adaptive multi-modal execution.
-- **Graph RAG vector re-ranking & Neo4j-style global search** — `graph_rag_search(..., rerank_vector=True, rerank_k=N)` re-ranks local-mode candidate node sets using restricted vector searches. `graph_rag_search(mode="global")` now selects communities via vector search over community report embeddings (HNSW) and recursively descends the hierarchy to leaves, falling back to heuristics when embeddings are missing.
-- **New Python `Table` helpers** — `find_entities(...)` (full-text index with ILIKE fallback), and `lookup_entities(...)` (bulk id → name resolution).
+- **Search gateway (`contrib/benostreamdb-search`)** — a standalone,
+  embeddable HTTP service exposing Elasticsearch/OpenSearch-compatible and
+  Qdrant-compatible REST APIs over BenoStreamDB tables. Covers document
+  get/delete, bulk ingest, phrase/multi-match search, custom sort, index
+  aliases, nested queries, `search_after` pagination, highlighting, regexp
+  queries, snapshots, payload indexing, `best_score` recommendation, and
+  prefetch RRF fusion. Position-aware inverted indexes back phrase search, and
+  sparse-vector + hybrid (BM25 + kNN) collections are supported.
+- **Stateless authentication & RBAC** — API-key and JWT authentication for the
+  search gateway, Qdrant, and Flight SQL (`src/core/auth.rs`), with role-based
+  access control.
+- **Arrow Flight SQL server (`server/flight_sql`)** — an optional Flight SQL
+  endpoint over the engine's DataFusion session, with DDL/DML executed inside
+  `GetFlightInfo` (ADBC cancels the follow-up `DoGet` for DML) and catalog /
+  warehouse startup configuration.
+- **OTLP telemetry export** — `src/telemetry/otlp.rs` adds OpenTelemetry
+  protocol metrics export.
+- **dbt adapter standalone PyPI distribution** — `dbt-benostreamdb` ships as a
+  standalone package with its own `pyproject.toml`.
+- **PostgreSQL `json` path functions** — `json_extract_path` /
+  `json_extract_path_text` (variadic path), `json_contains` (recursive `@>`),
+  `json_exists`, `json_typeof`, and `json_path_exists` / `json_path_query`
+  (jsonpath subset: `$.a.b[0]`, `[*]` wildcards). JSON is stored as a `Utf8`
+  string column, so the functions use PostgreSQL's `json_*` names (not
+  `jsonb_*`, which implies a decomposed binary representation). DataFusion 52
+  ships no JSON module, so these are registered as scalar UDFs in
+  `src/core/sql/udf/json.rs`.
+- **JSON-path inverted index overlay** — `IndexAlgorithm::JsonPath { paths }`
+  builds a `(path, value) -> row_ids` Parquet overlay for selected JSON paths in
+  a `Utf8` column (`src/core/index/json_path.rs`), packed into the segment's
+  Puffin bundle under the `json_path` category. The planner rewrites
+  `json_contains`, `json_exists`, `json_path_exists`, and
+  `json_extract_path_text(...) = 'value'` predicates into index lookups
+  (`HybridReader::query_json_path_first`), falling back to a full scan for
+  unindexed paths. The index records a presence marker and one level of array
+  elements so every lookup is a *superset* of the true matches — the filter is
+  re-applied above the scan, preserving the Overlay Invariant. Verified by a
+  differential oracle against a full scan (`tests/test_json_path_index.rs`).
+- **Detached Overlay Catalog** —
+  `Table.mount_external_iceberg(table_uri, overlay_storage_uri)` mounts an
+  external, read-only Apache Iceberg table and writes its derived overlay
+  indexes into a separate writable prefix, without any write access to the
+  upstream lake or catalog. A persisted `detached_catalog.json` sidecar pins the
+  upstream snapshot ID, and `Table.sync_detached_overlay()` /
+  `Table.start_detached_sync_worker(interval)` incrementally reconcile
+  out-of-band upstream appends and compaction. Correctness is preserved by the
+  checksum lineage contract: stale indexes are rejected in favour of a Parquet
+  scan. Implemented in `src/core/table/detached.rs` with Python bindings and
+  integration tests.
+- **BenoStreamDB Native DRIFT Search (Global & Regional)** — Ported Microsoft
+  GraphRAG's DRIFT (Dynamic Reasoning and Inference with Flexible Traversal)
+  algorithm onto native graph primitives. Exposes `Table.drift_search(...)` and
+  `Table.regional_drift_search(...)` in Python, corresponding Rust core methods,
+  and `drift_search` / `regional_drift` SQL UDAFs. Both support an adaptive
+  `GraphMode` (`auto` / `in_memory` / `out_of_core` / `cached`) that dynamically
+  selects between in-memory structures and mmap-backed CSRs depending on the
+  available memory budget. Includes vector-based community search, early PPR
+  convergence checks, score decay, and returns full search traces with PPR
+  scores and community assignments.
+- **First-class graph traversal primitives in the core engine** —
+  `src/core/table/graph.rs` exposes core Rust APIs (`load_graph_index`,
+  `shortest_path`, `connecting_paths`, `graph_neighbors`, `subgraph_edges`)
+  alongside robust Python result containers (`PathResult`, etc.) that directly
+  integrate with `.to_pandas()` and `.to_arrow()`. All graph operations unify
+  under a shared `GraphView` trait for memory-adaptive multi-modal execution.
+- **Graph RAG vector re-ranking & Neo4j-style global search** —
+  `graph_rag_search(..., rerank_vector=True, rerank_k=N)` re-ranks local-mode
+  candidate node sets using restricted vector searches.
+  `graph_rag_search(mode="global")` now selects communities via vector search
+  over community report embeddings (HNSW) and recursively descends the hierarchy
+  to leaves, falling back to heuristics when embeddings are missing.
+- **New Python `Table` helpers** — `find_entities(...)` (full-text index with
+  ILIKE fallback), and `lookup_entities(...)` (bulk id → name resolution).
 - **`commit_synced_snapshot`** — commits an externally synchronized Iceberg
   snapshot with full reconciliation against the current manifest (retries on
   conflict, preserves delete files).
 - **`docs/architecture_review_response.md`** — evaluation and remediation plan
   for the concurrency review (H1–H3) and the repository restructuring.
 - **Full SQL DDL / maintenance surface over the core `Table` API** — a new
-  interception layer (`src/core/sql/catalog_ddl.rs`) parses with `GenericDialect`
+  interception layer (`src/core/sql/catalog_ddl.rs`) parses with
+  `GenericDialect`
   and dispatches to the core `Table` API before DataFusion planning (mirroring
   `merge_into`), wired into `session.sql_to_df` / `is_ddl` / `get_schema`.
   Reachable from Rust, Python, and the Flight SQL gateway:
@@ -48,12 +119,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SQL language guide (all statements, UDFs, and pgvector syntax) in
   `server/flight_sql/README.md`.
 - **`Table::reindex_inverted_column`** — a *targeted* reindex that rebuilds only
-  a column's `.inv.parquet` (and `.doclen.parquet`) sidecar in place, upgrading
-  legacy 2-column (position-less) inverted indexes to the 3-column
-  position-aware format without touching the segment's other indexes (notably
-  the HNSW vector indexes). The analyzer recorded in the existing footer is
-  preserved, so query semantics are unchanged — only the O(1) term-frequency
-  path is enabled. Driven by the new `reindex_inverted` binary.
+  a column's lexical index blob in place, upgrading legacy 2-column
+  (position-less) inverted indexes to the 3-column position-aware format without
+  touching the segment's other indexes (notably the HNSW vector indexes). The
+  analyzer recorded in the existing blob is preserved, so query semantics are
+  unchanged — only the O(1) term-frequency path is enabled. Driven by the new
+  `reindex_inverted` binary.
 - **`relocate_table` binary** — rewrites a moved table's absolute paths to its
   new location across all three places Iceberg stores them: the table metadata
   JSON (`location`, `snapshots[].manifest-list`, `metadata-log`), the
@@ -76,6 +147,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the Qdrant target needs it), so the other targets build independently.
 
 ### Changed
+- **Puffin compound bundles are the index storage format.** Every secondary
+  index — lexical (BM25 + doc-length), scalar inverted
+  (Int32/Int64/Float/Date/Bool), vector (HNSW-IVF centroids/graph/mapping), and
+  graph (CSR offsets/edges/dict) — is packed into a single `{segment}.puffin`
+  container per segment, reducing object counts by 75%+. Readers load vector
+  indexes via `HnswIvfIndex::load_from_puffin`, graph indexes via
+  `MmapCsrGraph::from_bytes`, and lexical/scalar indexes via byte-range reads.
+- **Query parallelism scales to the CPU budget.** DataFusion `target_partitions`
+  and the SQL scan partition count now derive from
+  `effective_target_partitions()` (the process-visible CPU count, respecting
+  cgroup limits) instead of a hard-coded `4` / the framework default.
+  `BSDB_TARGET_PARTITIONS` overrides for tuning.
 - **Community detection now defaults to Leiden** — `communities`,
   `update_communities`, `graph_rag_search(community_algorithm=...)`,
   `summarize_communities(algorithm=...)`, and the Rust `communities_csr*`
@@ -91,8 +174,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-integration READMEs (`dbt-benostreamdb`, `spark-benostreamdb`,
     `trino-benostreamdb`).
   - The root Cargo workspace now contains only the core engine,
-    `benostream-gpu-ann`, `server/flight_sql`, and `contrib/benostreamdb-search`.
-  - CI trimmed to test the core engine and the Tier-2 integrations (Trino, Spark,
+    `benostream-gpu-ann`, `server/flight_sql`, and
+    `contrib/benostreamdb-search`.
+  - CI trimmed to test the core engine and the Tier-2 integrations (Trino,
+    Spark,
     dbt).
 - README documents three deployment modes (embedded core, optional Arrow Flight
   SQL server, future distributed) and clarifies that Flight SQL is
@@ -110,6 +195,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Catalog` trait** gains `create_namespace` and `drop_table` (default no-ops;
   implemented for REST, JDBC, Glue, Hive, and Unity).
 
+### Security
+- **SQL injection fix (A03)** — the DDL/maintenance interception layer no longer
+  interpolates untrusted identifiers into SQL; statements are parsed and
+  dispatched through the core `Table` API.
+- **SSRF guard (A10)** — `BSDB_SSRF_GUARD` blocks requests to link-local,
+  private, and non-public endpoints, including Azure/GCP metadata endpoints and
+  IP-literal hosts.
+- **Dependency-advisory tracking plan (A06)** — documented in
+  `docs/DEPENDENCY_RISK.md`.
+- **Stateless API-key + JWT auth** — the search gateway, Qdrant, and Flight SQL
+  reject unauthenticated requests by default (see `src/core/auth.rs`).
+
 ### Fixed
 - **H1 — write/WAL atomicity**: `write_buffer` and `pending_wal_tx_ids` unified
   into a single `pending_writes: Arc<RwLock<Vec<PendingWrite>>>` so a batch and
@@ -118,7 +215,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **H2 — `truncate_async()` race**: added a table-wide `maintenance_lock`
   (`tokio::sync::RwLock`); writes take a read lock while `truncate`,
   `rewrite_data_files`/compaction, `vacuum`, `delete`, `add_index`/`drop_index`,
-  `update_schema`, `rollback_to_snapshot`, and `remove_orphan_files` take a write
+  `update_schema`, `rollback_to_snapshot`, and `remove_orphan_files` take a
+  write
   lock, preventing concurrent writes from being silently discarded.
 - **H3 — destructive truncate error suppression**: `truncate_async()` no longer
   substitutes an empty manifest on load failure; the error is propagated.
@@ -140,12 +238,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read.
 - **Lock robustness**: an unparseable lock payload is now treated as expired
   (with a warning) instead of being silently ignored.
+- **Graph UDAFs are mode-invariant again**: DataFusion fans an aggregate out
+  over `target_partitions` input partitions, and every empty partition emits a
+  partial state whose scalar arguments are the accumulator defaults. The graph
+  UDAFs adopted those defaults unconditionally in `merge_batch`, so a late
+  empty partial could clobber the real arguments (e.g. `directed=true` reset to
+  `false`, or `node2=3` reset to `0`) and the result depended on the
+  non-deterministic merge order. `GraphAccumulatorBase::state_has_edges` now
+  lets each UDAF skip scalar-argument adoption for empty partials.
+- **`SubgraphView`/`CachingGraph`/`MmapCsrGraph` report `all_nodes`/`num_edges`**:
+  the CSR-backed graph views previously fell back to the trait defaults
+  (empty/zero), so global algorithms (`triangle_count`, `degree_centrality`,
+  `pagerank`, `connected_components`, …) returned different answers in
+  `out_of_core`/`cached`/`auto` than in `in_memory`. They now mirror
+  `SimpleGraph`'s source-node semantics.
+- **`CachingGraph::get_neighbors_into` caches only the appended slice**: it
+  previously cached the caller's whole append buffer, so a reused scratch
+  buffer could poison later cache hits.
+- **`graph_preferential_attachment` uses one degree definition**: the
+  retained-edges and resolved-graph branches now both count undirected degree.
+- **Sparse row hydration no longer reads the whole Parquet file**:
+  `fetch_rows_with_distances` read the entire file (up to 500 MB) into
+  `BLOCK_CACHE` to return a handful of rows. A kNN/BM25 query hydrating 10 of
+  100k rows now uses Parquet row selection instead, so it reads only the needed
+  rows. This is the dominant cost of a gateway-style vector query (the search
+  gateway's kNN path hydrates the top-k payloads). Small files (< 64 MB) are
+  still cached whole: row selection reads whole row groups anyway, so caching a
+  small file is strictly cheaper than re-reading it per query (this restores the
+  ~10x kNN throughput regression the sparse-only guard introduced on small
+  tables).
+- **Ingest RAM back-pressure no longer deadlocks on caller-held memory**:
+  `write_with_durability_async` compared *process* RSS against
+  `max_ingest_ram_gb`, so a caller holding a large frame (e.g. a 1M-row Python
+  DataFrame) pushed RSS over the limit and the write blocked forever — the
+  caller cannot free the frame until the write returns. `Table` now has a
+  `caller_reserved_bytes` accounting, set automatically by the Python `write`
+  bindings from the incoming frame and by the JNI `appendBatch`/`mergeRows`
+  from the Arrow batch, that is subtracted from RSS so the engine
+  back-pressures on its own memory only. The ANN harness also writes in chunks.
 
 ### Tests
 - `tests/test_h1_h2_concurrency_regression.rs` — H1/H2/H3 regression coverage
   (truncate-vs-write race, `PendingWrite` atomicity under parallel writers, safe
   error bubbling).
-- Orphan-cleanup-preserves-delete-files, `commit_synced_snapshot` reconciliation,
+- Orphan-cleanup-preserves-delete-files, `commit_synced_snapshot`
+  reconciliation,
   and vacuum fail-closed tests.
 - `tests/test_catalog_ddl.rs` — 28 tests covering every statement group, error
   cases, idempotency, whitespace robustness, and the `SET`/`SHOW` allowlist.
@@ -156,39 +293,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   differential workload over the wire (INSERT/DELETE/OPTIMIZE/VACUUM/index/PK),
   asserting the visible id set matches an independent model after every step.
 
+### Benchmarks
+- **Docker competitor matrix runs end-to-end.** The shared-envelope runner
+  (`benchmarks/competitors/docker_bench.sh`) now builds and runs every
+  participant — FAISS, hnswlib, LanceDB, pgvector, OpenSearch, and
+  BenoStreamDB — under one `--cpus`/`--memory` profile. Fixes: `.dockerignore`
+  no longer excludes the harness; the runner image installs `build-essential`
+  (hnswlib builds from source) and `opensearch-py`; the runner logic moved to
+  `run_bench.sh` (YAML folding mangled the inline compose `command:`);
+  pgvector's `CREATE INDEX` inlines its integers (DDL cannot take bind
+  parameters); the OpenSearch adapter uses `knn_vector` mappings and the
+  `query.knn` search shape; and the rollup only includes results written during
+  the current run. The BenoStreamDB harness now emits the same JSON record as
+  the competitors (previously it wrote markdown into a `.json` path, so the
+  rollup silently dropped our engine), so BenoStreamDB appears in the rollup
+  with its index size.
+- **Like-for-like vector comparison.** The competitor adapters return ids only
+  (no payload fetch), so the rollup now reports BenoStreamDB's *pure-index*
+  number rather than its full search+row-fetch number, and LanceDB projects
+  only `id` in its search. Previously the rollup compared BenoStreamDB's
+  full-search QPS against the competitors' search-only QPS.
+- **cuGraph on Blackwell.** The `cugraph-cu12` wheels have no sm_120 kernels;
+  the GPU runner now installs `cugraph-cu13`, and the adapter sets
+  `renumber=True` and `rmm.reinitialize(managed_memory=True)`. Verified against
+  NetworkX (max abs diff 2.6e-06, identical top-5). `networkx` now pulls in
+  `scipy`.
+- **cuGraph now runs through the normal compose path.** The harness applied
+  `RLIMIT_AS` (the RAM envelope) to every engine, but CUDA/RAPIDS managed memory
+  reserves far more *virtual* address space than physical RAM, so the `dlopen`
+  of `libcugraph.so` failed with a misleading "cannot open shared object file".
+  `apply_envelope` now skips `RLIMIT_AS` for GPU engines (`cugraph`, or any
+  `--device gpu` run); the container cgroup
+  (`deploy.resources.limits.memory`) already enforces the physical RAM envelope.
+  The `docker run` workaround in `docker_bench.sh` is removed, and the GPU pass
+  now builds the base runner image before the GPU image (the GPU image is
+  `FROM bsdb-bench-runner:latest`, so a stale base shipped an old harness).
+- **Matrix wheels are manylinux.** `--build-wheel` now builds with
+  `maturin --zig --compatibility manylinux_2_28`, so the wheel loads on the
+  slim runner image regardless of the host's (newer) glibc. The release
+  pipeline already ships manylinux wheels via `maturin-action`.
+
 ## [0.11.1] - 2026-09-29
 
 ### Added
-- **GPU-Native Index Construction crate (`benostream-gpu-ann`) (A11 Complete)** —
-  A standalone, community-ready Rust library delivering high-performance GPU-native
-  approximate nearest neighbor (ANN) vector indexing. Designed from first principles
-  to target all three major GPU execution backends: NVIDIA CUDA (via `cudarc` and
+- **GPU-Native Index Construction crate (`benostream-gpu-ann`) (A11 Complete)**
+  —
+  A standalone, community-ready Rust library delivering high-performance
+  GPU-native
+  approximate nearest neighbor (ANN) vector indexing. Designed from first
+  principles
+  to target all three major GPU execution backends: NVIDIA CUDA (via `cudarc`
+  and
   dynamic NVRTC runtime compilation), Apple Silicon Metal (via `metal-rs`), and
-  cross-platform AMD/Intel/Vulkan GPUs (via `wgpu` and optimized WGSL compute shaders),
+  cross-platform AMD/Intel/Vulkan GPUs (via `wgpu` and optimized WGSL compute
+  shaders),
   with an automatic fallback to AVX2/NEON Rayon CPU SIMD.
-  - **Stage 1 (GPU IVF-Flat)**: Coarse Voronoi k-means partitioning with parallel GPU
-    centroid scans and flat cluster search, bypassing graph construction entirely.
-  - **Stage 2 (GPU-Accelerated HNSW)**: Solved the long-standing roadmap challenge
-    without forking `hnsw_rs`. Owns flat contiguous memory buffers natively in Rust
-    and offloads multi-layer candidate frontier distance evaluations to GPU shaders.
+  - **Stage 1 (GPU IVF-Flat)**: Coarse Voronoi k-means partitioning with
+    parallel GPU
+    centroid scans and flat cluster search, bypassing graph construction
+    entirely.
+  - **Stage 2 (GPU-Accelerated HNSW)**: Solved the long-standing roadmap
+    challenge
+    without forking `hnsw_rs`. Owns flat contiguous memory buffers natively in
+    Rust
+    and offloads multi-layer candidate frontier distance evaluations to GPU
+    shaders.
     Achieves **100% Recall@10** on active RTX 3090 hardware (`WGPU_Default`).
-  - **Stage 3 (GPU-Native CAGRA)**: Fixed-degree regular graph (`[N * graph_degree]`)
-    engineered specifically for GPU memory hierarchy and single-transaction coalesced
-    warp memory loads. Features GPU Voronoi clustering, GPU 2-hop neighbor refinement
-    (NN-Descent iterations), and anisotropic edge pruning. Achieves **96.75% Recall@10**.
-  - **Unified Public API**: Provides `VectorIndex`, `IndexBuilder`, and `Algorithm`
-    abstractions with 100% bidirectional CPU ↔ GPU interoperability. An index built
-    on CPU can be queried on GPU, and an index built on GPU can be queried on CPU.
-  - **Comprehensive Metric Parity**: Strict differential parity verified across all 6
-    distance metrics (L2, Cosine, InnerProduct, L1, Hamming, Jaccard) within $10^{-4}$
+  - **Stage 3 (GPU-Native CAGRA)**: Fixed-degree regular graph (`[N *
+    graph_degree]`)
+    engineered specifically for GPU memory hierarchy and single-transaction
+    coalesced
+    warp memory loads. Features GPU Voronoi clustering, GPU 2-hop neighbor
+    refinement
+    (NN-Descent iterations), and anisotropic edge pruning. Achieves **96.75%
+    Recall@10**.
+  - **Unified Public API**: Provides `VectorIndex`, `IndexBuilder`, and
+    `Algorithm`
+    abstractions with 100% bidirectional CPU ↔ GPU interoperability. An index
+    built
+    on CPU can be queried on GPU, and an index built on GPU can be queried on
+    CPU.
+  - **Comprehensive Metric Parity**: Strict differential parity verified across
+    all 6
+    distance metrics (L2, Cosine, InnerProduct, L1, Hamming, Jaccard) within
+    $10^{-4}$
     relative numerical tolerance and self-match rankings.
-  - **No-Panic Fuzz & Soak Hardening**: Includes a randomized adversarial fuzz suite
-    (`tests/test_fuzz_no_panic.rs`) verifying total ordering and graceful error handling
-    under non-finite/adversarial floats (NaN, Inf, zeroes, dimension mismatches, sparse
-    filters), alongside a sustained high-throughput soak harness (`tests/test_soak.rs`)
+  - **No-Panic Fuzz & Soak Hardening**: Includes a randomized adversarial fuzz
+    suite
+    (`tests/test_fuzz_no_panic.rs`) verifying total ordering and graceful error
+    handling
+    under non-finite/adversarial floats (NaN, Inf, zeroes, dimension mismatches,
+    sparse
+    filters), alongside a sustained high-throughput soak harness
+    (`tests/test_soak.rs`)
     verifying zero memory or VRAM handle leaks.
-  - **Product Integration**: Wired directly into root `Cargo.toml` with feature forwarding
-    (`cuda`, `wgpu`), with `ComputeContext::to_gpu_ann_context()` and `VectorMetric`
+  - **Product Integration**: Wired directly into root `Cargo.toml` with feature
+    forwarding
+    (`cuda`, `wgpu`), with `ComputeContext::to_gpu_ann_context()` and
+    `VectorMetric`
     bi-directional conversions.
 
 ## [0.11.0] - 2026-09-28
@@ -396,8 +598,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves the memory actually available to the process — cgroup v2
   `memory.max`, then cgroup v1 `memory.limit_in_bytes`, then host RAM, then a
   conservative 4 GiB fallback — and every memory limit is derived from it:
-  `BSDB_MAX_INGEST_RAM_GB` and `BSDB_INGEST_MEMORY_BUDGET_GB` default to 80% of it,
-  and `BSDB_INDEX_BUILD_CONCURRENCY` scales as one build per ~8 GiB (capped at the
+  `BSDB_MAX_INGEST_RAM_GB` and `BSDB_INGEST_MEMORY_BUDGET_GB` default to 80% of
+  it,
+  and `BSDB_INDEX_BUILD_CONCURRENCY` scales as one build per ~8 GiB (capped at
+  the
   CPU count, at least 1). The "off unless configured" semantics are gone: an
   unset or non-positive variable now means "use the derived default", never
   "disable the guard". `BSDB_MIN_FREE_DISK_GB` defaults to 1 GiB, and
@@ -436,7 +640,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BSDB_MIN_FREE_DISK_GB`, and the CPU/concurrency bounds) is now documented in
   one place: `RESOURCE_LIMITS.md`.
 - **No-panic gate enforced for the library.** The production `unwrap()`/
-  `expect()`/`panic!` count across both crates went **289 → 0** (247 core library
+  `expect()`/`panic!` count across both crates went **289 → 0** (247 core
+  library
   + 42 search library remediated). With the baseline at zero the staged
   `no-panic` cargo feature is now live: `scripts/no_panic_check.sh` runs the
   ratchet *and* `cargo clippy --features python,no-panic`, which turns the three
@@ -487,7 +692,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NO_PANIC_POLICY.md`.
 
 ### Fixed
-- **The `bsdb-search` server binary could not be built.** `benostreamdb-search`'s
+- **The `bsdb-search` server binary could not be built.**
+  `benostreamdb-search`'s
   `main.rs` installed `dhat::Alloc` as the global allocator while the
   `benostreamdb` library installs jemalloc on Linux, so linking failed with
   "the `#[global_allocator]` in this crate conflicts with global allocator in:
@@ -517,7 +723,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DataFusionError::Execution`. These run inside SQL `GROUP BY` for graph
   analytics, so a malformed state previously aborted the query with a panic.
 - **Panics removed from the manifest decode, reader filter, and segment paths.**
-  `ManifestValue::from_array` (Arrow type-invariant downcasts), the inverted-index
+  `ManifestValue::from_array` (Arrow type-invariant downcasts), the
+  inverted-index
   filter's key downcasts, and the segment writer's path handling no longer
   `unwrap()`; the filter's `NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()` sites
   became `NaiveDate::default()`.
@@ -532,7 +739,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structures (several GB at the demo's 1 GB flush size) — the Wikipedia load hit
   **105 GB RSS** and was OOM-killed, and before that thrashed so badly that
   per-chunk time exploded 43 min → 8.65 h. Builds now go through a shared
-  semaphore (`Table::index_build_gate`, default 2, `BSDB_INDEX_BUILD_CONCURRENCY`)
+  semaphore (`Table::index_build_gate`, default 2,
+  `BSDB_INDEX_BUILD_CONCURRENCY`)
   that back-pressures the writer; the bounded working set also removes the
   page-cache eviction that made the unbounded case slow, not just fatal.
 - **`add_index` re-indexed every prior segment on each call (O(n²) demo-load
@@ -542,7 +750,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and no per-segment build gate (the single permit gated the whole task, not the
   fan-out). The demo's chunked load calls `add_index` in every fresh process, so
   each chunk re-indexed all previously loaded data: per-chunk time grew
-  293s → 885s → 2071s and peak RSS climbed until the process was killed. Backfill
+  293s → 885s → 2071s and peak RSS climbed until the process was killed.
+  Backfill
   now skips segments that already carry the required `(column, index_type)` pair
   and bounds in-flight builds with `buffer_unordered(index_build_concurrency)`,
   taking the shared build gate per segment. `prepare_demo.py` also sets the
@@ -553,7 +762,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   preceded the kill — see `examples/web_ui/README.md`.
 - **Heap not returned to the OS at flush/build boundaries.** glibc keeps freed
   memory in per-thread arenas, so the HNSW/TQ builders' millions of small
-  allocations ratcheted RSS toward the sum of every arena's high-water mark. Both
+  allocations ratcheted RSS toward the sum of every arena's high-water mark.
+  Both
   the flush path and the end of each background index build now call
   `memory::trim_if_over_budget` (budget via `BSDB_INGEST_MEMORY_BUDGET_GB`,
   default 8 GiB) so freed arena pages are released before the next build starts.
@@ -587,7 +797,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **rustdoc: `VEC_TMP_MAGIC` linked to a private item**, breaking
   `cargo doc --features python,wgpu,java`. Now plain text.
 - **CUDA distance kernels launched with the wrong grid and no shared memory.**
-  `CudaBackend::compute_distance` used `LaunchConfig::for_num_elems`, which packs
+  `CudaBackend::compute_distance` used `LaunchConfig::for_num_elems`, which
+  packs
   rows into 1024-thread blocks and sets `shared_mem_bytes: 0`, but the kernels
   use one block per row with an `extern __shared__` reduction — an illegal
   memory access, not a wrong answer. Now launches `n_vectors` blocks of 256
@@ -620,7 +831,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it works on every backend; it pays off once the batch clears
   `GPU_DISPATCH_THRESHOLD`. Equivalence with the sparse CPU reference is covered
   by `sparse_dense_equivalence_tests`.
-- **GPU-accelerated packed-binary distance (CUDA + WGPU)**: `GpuBackend::compute_binary_distance`
+- **GPU-accelerated packed-binary distance (CUDA + WGPU)**:
+  `GpuBackend::compute_binary_distance`
   plus packed-u8 Hamming/Jaccard kernels for CUDA (`hamming_packed.cu`,
   `jaccard_packed.cu`) and WGPU (`wgpu_binary_kernel.wgsl`, covering AMD/Intel
   via Vulkan). New batched Python API `bsdb.hamming_distance_batch` /
@@ -628,18 +840,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Metal (`mps/hamming_packed.metal`, `mps/jaccard_packed.metal`) — verified by
   the new `metal` CI job on Apple Silicon. Cross-backend harness passes on an
   RTX 3090 (`["cpu", "cuda", "wgpu"]`) and on macOS CI (`["cpu", "mps"]`).
-- **Cross-backend GPU correctness harness**: `cross_backend_matches_cpu_all_metrics`
+- **Cross-backend GPU correctness harness**:
+  `cross_backend_matches_cpu_all_metrics`
   runs the same vectors through every *available* backend (CUDA, Metal, WGPU)
   and asserts agreement with the **CPU reference (the gold source)** within
   tolerance. Backends absent from the machine are skipped, so the same test runs
   everywhere. Verified on an RTX 3090 with `["cpu", "cuda", "wgpu"]` across
   L2/Cosine/IP/L1/Hamming/Jaccard.
 - **Native ingest orchestrator (A4)**: `Table::ingest_async` /
-  `table.ingest(paths, chunk_rows, parallelism, index_all, resume)` plans parquet
-  inputs into row-range work units, runs a bounded `buffer_unordered(parallelism)`
-  pool where each worker builds a *private* segment (data + indexes) concurrently,
-  and commits completed segments through the OCC manifest CAS. Completed units are
-  recorded in a `_ingest_state.json` sidecar so an interrupted load resumes at the
+  `table.ingest(paths, chunk_rows, parallelism, index_all, resume)` plans
+  parquet
+  inputs into row-range work units, runs a bounded
+  `buffer_unordered(parallelism)`
+  pool where each worker builds a *private* segment (data + indexes)
+  concurrently,
+  and commits completed segments through the OCC manifest CAS. Completed units
+  are
+  recorded in a `_ingest_state.json` sidecar so an interrupted load resumes at
+  the
   unit boundary. Returns a report (`units_total/skipped/committed`,
   `rows_ingested`, `segments`). `IngestOptions::compact_after` runs
   `rewrite_data_files` at the end so segment/manifest counts stay bounded.
@@ -658,7 +876,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `table.ingest(..., memory_budget_gb=…)`. Allocator evaluation recorded in
   `core::memory`: glibc + `malloc_trim` chosen; jemalloc deferred; mimalloc
   rejected (static-TLS under pyo3).
-- **Multi-machine ingest (A4)**: `WorkCoordinator` trait + `ObjectStoreCoordinator`
+- **Multi-machine ingest (A4)**: `WorkCoordinator` trait +
+  `ObjectStoreCoordinator`
   backend (`core::table::coordinator`) — lease-based work stealing over the
   object store, reusing `FileBasedLock` (CAS claim + heartbeat + expiry-steal).
   `Table::ingest_coordinated_async` claims units dynamically (build in parallel,
@@ -701,16 +920,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.9.0] - 2026-09-23
 
 ### Fixed
-- **Statistics pruning was inert — four independent faults, all fixed.** Per-column
+- **Statistics pruning was inert — four independent faults, all fixed.**
+  Per-column
   min/max never reached the planner, so only partition pruning did any work:
-  1. Parquet statistics were **disabled** (`EnabledStatistics::None`) → now `Chunk`.
+  1. Parquet statistics were **disabled** (`EnabledStatistics::None`) → now
+  `Chunk`.
   2. The Avro manifest writer hardcoded `lower_bounds` / `upper_bounds` /
      `null_value_counts` to `Null`, and the reader rebuilds `column_stats` from
      exactly those three → added `encode_iceberg_value` (mirror of the existing
      `decode_iceberg_value`) and `bounds_avro_values`.
-  3. The reader never unwrapped Avro's nullable-union wrapper: `parse_map_int_long`
+  3. The reader never unwrapped Avro's nullable-union wrapper:
+  `parse_map_int_long`
      / `parse_map_int_bytes` matched a bare `Array`, but a `["null", T]` field
-     decodes as `Union(1, Box(Array(..)))`, so every stats map silently parsed as
+     decodes as `Union(1, Box(Array(..)))`, so every stats map silently parsed
+     as
      `None` → `unwrap_nullable_union`.
   4. `BETWEEN` produced no `QueryFilter` at all (DataFusion does not lower it to
      `>= AND <=`) → added an `Expr::Between` arm.
@@ -737,7 +960,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   return it; Hive/JDBC set it directly), so the client must supply one. The
   code reconstructed it from the snapshot's `sequence-number`, which only
   matches the metadata version because `write.rs` happens to set those two
-  counters equal. The writer now captures the path `TableMetadata::save_to_store`
+  counters equal. The writer now captures the path
+  `TableMetadata::save_to_store`
   returns and sends an explicit `set-metadata-location` update; Glue prefers it,
   falls back to the old derivation with a warning, and warns rather than
   silently no-op'ing when neither is available.
@@ -748,7 +972,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index, for seed discovery, RRF fusion, and candidate reranking. Fetch rows
   only for the winners. (`Table::execute_vector_search_as_scored` and
   `HybridReader::vector_search_index_raw` already existed underneath.)
-- **`EXPLAIN` now says *why* segments were pruned**: `QueryPlanner::might_match_condition`
+- **`EXPLAIN` now says *why* segments were pruned**:
+  `QueryPlanner::might_match_condition`
   gained `classify_condition(entry, filter, emit_metrics)`, returning a
   `PruneReason` (partition below-min / above-max / not-in-IN-list, stats
   all-null / below-min / above-max / not-in-IN-list). `explain()` prints a
@@ -787,25 +1012,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   score straight from the index search using an explicit row count, and
   `fetch_results_by_id` short-circuits the same way. Removed a stray `println!`
   from the HNSW chunk-search hot path.
-- **Vector-search column projection was ignored**: `HybridReader::read_rows_by_id`
+- **Vector-search column projection was ignored**:
+  `HybridReader::read_rows_by_id`
   took a `columns` parameter but never used it (`_columns`), so a vector search
   projecting two columns still read *every* column of the row from Parquet. It
   now builds a projected schema and reads only what was asked for, falling back
   to the full schema when a requested name is unknown.
 
 ### Removed
-- Dead code: `src/core/planner/filter.rs` and `src/core/planner/vector_search.rs`.
+- Dead code: `src/core/planner/filter.rs` and
+  `src/core/planner/vector_search.rs`.
   Neither was declared as a module (`planner.rs` has no `mod filter;` /
   `mod vector_search;`) and nothing referenced them, so they were orphaned
   duplicates of the live `QueryFilter` / `VectorSearchParams` in `planner.rs`.
   Removing them is a no-op for behaviour.
 - **MVCC manifest commits (lock-free)**: the global `commit.lock` is gone from
   `update_schema` — schema/index-spec evolution is now pure optimistic
-  concurrency (`PutMode::Create` + rebase). `CommitMetadata::skip_missing_remove_paths`
+  concurrency (`PutMode::Create` + rebase).
+  `CommitMetadata::skip_missing_remove_paths`
   lets a writer rebase onto a newer snapshot when a candidate file was
   concurrently removed (compaction uses it, so racing compactions no longer
   abort). New `Table::snapshot_version()` exposes the monotonic snapshot id
-  (also on the Python `Table`). Metrics: `benostreamdb_manifest_commit_rebases_total`,
+  (also on the Python `Table`). Metrics:
+  `benostreamdb_manifest_commit_rebases_total`,
   `benostreamdb_manifest_commit_skipped_removals_total`.
 - **Cross-partition compaction**: `PartitionSpec::partition_batch` now applies
   the declared Iceberg transform (`identity`/`void`/`bucket`/`truncate`/`year`/
@@ -870,7 +1099,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an explicit user value; no-op on musl/macOS), and the demo load writes the
   nodes table in **fresh-process 10M-row chunks** so the allocator high-water
   mark resets per chunk — peak RSS ~25 GB regardless of dataset size.
-- **Embedding column type**: the demo pipeline wrote `LargeList` embeddings, which
+- **Embedding column type**: the demo pipeline wrote `LargeList` embeddings,
+  which
   the vector index silently ignores (it matches `List`/`FixedSizeList` only) —
   switched to `FixedSizeList`, so the HNSW index actually builds.
 - **Demo load OOM + data-loss hazards** (`prepare_demo.py`): stage `load` read
@@ -891,9 +1121,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Roadmap**: LangChain + LlamaIndex connector detail (Active Roadmap §9,
   Phase 12): vector stores, Graph-RAG retrievers wrapping
   `graph_rag_search`/`drift_search`, and an edge-table property-graph store.
-- **Wikipedia demo dataset pipeline** (`scripts/build_demo_dataset.py`): consumes
+- **Wikipedia demo dataset pipeline** (`scripts/build_demo_dataset.py`):
+  consumes
   the full dump parquets, resolves mixed curid/title edge endpoints to int64
-  curids (parallel, memory-bounded), prunes to the largest connected component and
+  curids (parallel, memory-bounded), prunes to the largest connected component
+  and
   a dense hub-centered subgraph **inside BenoStreamDB** (`connected_components`,
   `degree_centrality`, `subgraph`), and emits `data/demo_nodes.parquet` /
   `data/demo_edges.parquet` with integer node ids the CSR index requires.
@@ -901,22 +1133,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1024-d) for the UI's semantic entity resolution.
 
 ### Fixed
-- **Merge/upsert nested-runtime panic**: `Table::merge` no longer drives the synchronous
+- **Merge/upsert nested-runtime panic**: `Table::merge` no longer drives the
+  synchronous
   `MergePlanner` entry points inside a running tokio runtime (fixes
   `Cannot start a runtime from within a runtime` in `test_compound_pk.py`);
-  `runtime_block_on` additionally offloads to a dedicated thread when invoked from
+  `runtime_block_on` additionally offloads to a dedicated thread when invoked
+  from
   within a runtime context.
-- **Merge-path performance**: one reused current-thread runtime per `MergePlanner`
-  (was: a new runtime per async call), object-store client hoisted out of per-segment
+- **Merge-path performance**: one reused current-thread runtime per
+  `MergePlanner`
+  (was: a new runtime per async call), object-store client hoisted out of
+  per-segment
   loops, streams/bloom checks drained in a single runtime turn, and key matching
   changed from O(source × segment) linear scan to a hash index.
 - **Graph UDAFs were stubs**: implemented real BFS in `shortest_path` and
-  `graph_neighbors`, union-find in the `connected_components` UDAF, and neighborhood
-  Jaccard similarity in `jaccard_coefficient` (previously returned hardcoded values).
+  `graph_neighbors`, union-find in the `connected_components` UDAF, and
+  neighborhood
+  Jaccard similarity in `jaccard_coefficient` (previously returned hardcoded
+  values).
 - **Missing `connecting_paths` UDF**: implemented and registered
   `ConnectingPathsUDF` (pairwise BFS paths between seed nodes).
 - **Scalar-arg overwrite in multi-partition merges**: `hops`/`directed` in the
-  `subgraph`/`graph_neighbors`/`connecting_paths` accumulators are now optional so
+  `subgraph`/`graph_neighbors`/`connecting_paths` accumulators are now optional
+  so
   empty partitions no longer clobber captured values during `merge_batch`.
 - **Python graph API drift**: `subgraph`, `connecting_paths`, `shortest_path`,
   `graph_neighbors` wrappers now match the Rust bindings (CSR-index route when
@@ -927,7 +1166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `jinja2` to the `dev` extra so `test_dbt_macro_file_syntax` runs in CI.
 
 ### Performance
-- **Frontier-based out-of-core graph traversal**: new `core::algorithms::frontier`
+- **Frontier-based out-of-core graph traversal**: new
+  `core::algorithms::frontier`
   executes BFS (level-synchronous, one hash join per hop over a deduplicated
   symmetric adjacency, parquet-materialized visited/frontier state with early
   exit) inside DataFusion. The `subgraph()` and `graph_neighbors()` bindings now
@@ -935,18 +1175,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set plus a `HashMap` adjacency in RAM (tens of GB at 100M+ edge scale). The
   UDAFs remain available for raw SQL use.
 - **Connected components at scale**: rewrote `compute_connected_components` from
-  textbook per-hop label propagation (O(diameter) rounds, two full edge joins per
+  textbook per-hop label propagation (O(diameter) rounds, two full edge joins
+  per
   round) to **pointer jumping + edge contraction** with a single symmetric edge
   join per round and a cheap checksum convergence probe. Validated on the
   English-Wikipedia link graph (160.5M raw / 91.7M clean edges):
   `connected_components()` completes in **~137s** (was effectively intractable
   at this scale).
-- **Label propagation**: pre-materializes a symmetric edge set so each round does
-  one join instead of two; per-run unique temp directory; state-sized convergence.
+- **Label propagation**: pre-materializes a symmetric edge set so each round
+  does
+  one join instead of two; per-run unique temp directory; state-sized
+  convergence.
 
 ### Fixed
 - **Intermittent vector-index panic**: `ArrowHnsw::get_vector` casts an Arrow
-  binary value slice to `&[f32]`; when the IPC buffer landed on a misaligned byte
+  binary value slice to `&[f32]`; when the IPC buffer landed on a misaligned
+  byte
   offset, `bytemuck::cast_slice` panicked with
   `TargetAlignmentGreaterAndInputNotAligned` (debug-only, order-dependent). The
   binary buffer is now repacked into an aligned buffer once at load when needed,
@@ -964,30 +1208,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Graph RAG (CSR Graph + Shared Algorithms)**:
-  - Extracted shared graph algorithms into `src/core/algorithms/` (connected components, label propagation, topological sort).
-  - Added CSR graph index (`src/core/index/csr_graph.rs`) and builder (`build_graph.rs`); registered `IndexAlgorithm::CsrGraph` across manifest, index_config, segment, and Python helpers.
-  - Refactored graph UDFs (pagerank, personalized_pagerank, shortest_path, strongly_connected_components, connected_components, label_propagation, jaccard_coefficient) to use shared algorithms + CSR graph.
+  - Extracted shared graph algorithms into `src/core/algorithms/` (connected
+    components, label propagation, topological sort).
+  - Added CSR graph index (`src/core/index/csr_graph.rs`) and builder
+    (`build_graph.rs`); registered `IndexAlgorithm::CsrGraph` across manifest,
+    index_config, segment, and Python helpers.
+  - Refactored graph UDFs (pagerank, personalized_pagerank, shortest_path,
+    strongly_connected_components, connected_components, label_propagation,
+    jaccard_coefficient) to use shared algorithms + CSR graph.
   - Added `drift_search` UDF and Python GraphAPI + drift_search bindings.
 - **Vector Index Joins**:
-  - Reworked the index-join optimizer and physical plan; added a vector search sort-expression parser; updated HNSW-IVF, GPU, and HNSW paths.
+  - Reworked the index-join optimizer and physical plan; added a vector search
+    sort-expression parser; updated HNSW-IVF, GPU, and HNSW paths.
 - **Raw Vector Search API**:
-  - Added `execute_vector_search_raw_with_config` for raw vector search returning `ScoredResult` with segment and row IDs.
+  - Added `execute_vector_search_raw_with_config` for raw vector search
+    returning `ScoredResult` with segment and row IDs.
 - **PrimaryKeyFilter Row-Value IN-List Pushdown**:
-  - Added `PrimaryKeyFilter` type representing a set of candidate PK rows (row-value IN list).
-  - `from_expr` supports `Expr::InList`, equality, AND of disjoint columns, and OR (row-value IN lists).
-  - `from_batch` builds from a RecordBatch; `to_expr` converts back to a DataFusion Expr; `to_query_filter` yields a single-column IN-list QueryFilter for inverted-index pushdown.
-  - Reworked `check_primary_key_uniqueness_async` to push the whole batch as a single expression.
+  - Added `PrimaryKeyFilter` type representing a set of candidate PK rows
+    (row-value IN list).
+  - `from_expr` supports `Expr::InList`, equality, AND of disjoint columns, and
+    OR (row-value IN lists).
+  - `from_batch` builds from a RecordBatch; `to_expr` converts back to a
+    DataFusion Expr; `to_query_filter` yields a single-column IN-list
+    QueryFilter for inverted-index pushdown.
+  - Reworked `check_primary_key_uniqueness_async` to push the whole batch as a
+    single expression.
 - **Time32/Time64 Datatype Support**:
   - Safely ignore Time datatypes for in-memory vector indexing.
 
 ### Changed
-- Reworked compaction, reader (filter/scan), segment, manifest, query, and cache; renamed `MergeMode::MergeOnWrite` to `CopyOnWrite`.
-- Extended PyTable bindings and the Python package with graph and drift_search APIs.
+- Reworked compaction, reader (filter/scan), segment, manifest, query, and
+  cache; renamed `MergeMode::MergeOnWrite` to `CopyOnWrite`.
+- Extended PyTable bindings and the Python package with graph and drift_search
+  APIs.
 - DRY up release workflow, add deps, and document tech debt.
 
 ### Fixed
-- Fixed FFI `load_async_with_cache_key` call missing `use_mmap` argument (compile error with `java` feature).
-- Fixed clippy lints: `manual_map`, `needless_borrow`, `new_without_default`, `len_zero`, `needless_borrows_for_generic_args`.
+- Fixed FFI `load_async_with_cache_key` call missing `use_mmap` argument
+  (compile error with `java` feature).
+- Fixed clippy lints: `manual_map`, `needless_borrow`, `new_without_default`,
+  `len_zero`, `needless_borrows_for_generic_args`.
 
 ---
 
@@ -995,19 +1255,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Graph RAG & Graph Analytics**:
-  - Added a comprehensive suite of graph UDFs: pagerank, personalized_pagerank, shortest_path, strongly_connected_components, connected_components, label_propagation, jaccard_coefficient, degree_centrality, preferential_attachment, subgraph, louvain_communities, modularity, clustering_coefficient, adamic_adar, connecting_paths, neighbors, resource_allocation, to_graphviz, and topological_sort.
+  - Added a comprehensive suite of graph UDFs: pagerank, personalized_pagerank,
+    shortest_path, strongly_connected_components, connected_components,
+    label_propagation, jaccard_coefficient, degree_centrality,
+    preferential_attachment, subgraph, louvain_communities, modularity,
+    clustering_coefficient, adamic_adar, connecting_paths, neighbors,
+    resource_allocation, to_graphviz, and topological_sort.
   - Added a graph search handler to the `benostreamdb-search` gateway.
   - Added the Python Graph API and graph RAG pipeline bindings.
   - Added dbt graph macros and graph RAG edge-table documentation.
 - **Arrow IPC Vector Index & Micro-Batch Streaming Ingest Buffer**:
-  - Implemented the Arrow IPC vector index and a micro-batch streaming ingest buffer.
+  - Implemented the Arrow IPC vector index and a micro-batch streaming ingest
+    buffer.
   - Reworked HNSW-IVF index construction and search.
 - **Zero-Copy Arrow IPC vectorSearch FFI Bridge**:
   - Added a zero-copy Arrow IPC `vectorSearch` FFI bridge for Spark and Trino.
   - Added `vectorSearch` JNI bindings to the Java connectors.
 - **Python CLI for Background Services**:
-  - Added Python CLI commands for installing and uninstalling background services.
-  - Added a universal installer/uninstaller and a centralized configuration file for background services.
+  - Added Python CLI commands for installing and uninstalling background
+    services.
+  - Added a universal installer/uninstaller and a centralized configuration file
+    for background services.
   - Added native background service configurations for `benostream-search`.
 
 ### Changed
@@ -1019,7 +1287,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Various connector and CI/CD hotfixes.
 
 ### Build / CI
-- DRY up the CI pipeline to dynamically install `[dev]` extras directly from the built wheel.
+- DRY up the CI pipeline to dynamically install `[dev]` extras directly from the
+  built wheel.
 - Added networkx, cffi, and scikit-learn to CI test environments.
 - Upgraded `actions/checkout` from v4 to v5 for Node.js 24 support.
 - Added the Renovate workflow; removed Dependabot.
@@ -1030,26 +1299,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Multi-Vector Search & Reciprocal Rank Fusion (RRF)**:
-  - Coordinate multi-vector search queries across multiple vector columns (e.g., `title_vec` and `body_vec`) using reciprocal rank fusion ($1 / (k + \text{rank} + 1)$).
-  - DataFusion SQL physical plan optimization and optimizer pushdown for multi-vector expressions (`dist_l2(col1, ...) as dist1, dist_l2(col2, ...) as dist2`).
-  - Added programmatic and SQL end-to-end integration tests in `tests/test_multi_vector_search.rs`.
-- **Composite Scalar Roaring Bitmap Indexes (`IndexAlgorithm::CompositeBitmap`)**:
-  - Multi-column point and range query acceleration using combined composite inverted bitmap indexes.
-  - Virtual composite column naming and tokenization using exact `"identity"` tokenization to preserve multi-column key terms (`val1\0val2`).
-  - Fluent table API `table.add_composite_index(name, columns)` and filter rewriting.
+  - Coordinate multi-vector search queries across multiple vector columns (e.g.,
+    `title_vec` and `body_vec`) using reciprocal rank fusion ($1 / (k +
+    \text{rank} + 1)$).
+  - DataFusion SQL physical plan optimization and optimizer pushdown for
+    multi-vector expressions (`dist_l2(col1, ...) as dist1, dist_l2(col2, ...)
+    as dist2`).
+  - Added programmatic and SQL end-to-end integration tests in
+    `tests/test_multi_vector_search.rs`.
+- **Composite Scalar Roaring Bitmap Indexes
+  (`IndexAlgorithm::CompositeBitmap`)**:
+  - Multi-column point and range query acceleration using combined composite
+    inverted bitmap indexes.
+  - Virtual composite column naming and tokenization using exact `"identity"`
+    tokenization to preserve multi-column key terms (`val1\0val2`).
+  - Fluent table API `table.add_composite_index(name, columns)` and filter
+    rewriting.
   - Added end-to-end integration tests in `tests/test_composite_index.rs`.
-- **Apache Polaris & Lakekeeper Iceberg REST Catalog OAuth2 Client Credentials**:
-  - Implemented standard `/v1/oauth/tokens` client credentials grant flow for Iceberg REST catalogs.
-  - Added token caching with automatic expiry tracking and refresh within 60-second window.
-  - Injected `Authorization: Bearer <token>` across all REST catalog requests (`load_table`, `create_table`, `commit_table`).
+- **Apache Polaris & Lakekeeper Iceberg REST Catalog OAuth2 Client
+  Credentials**:
+  - Implemented standard `/v1/oauth/tokens` client credentials grant flow for
+    Iceberg REST catalogs.
+  - Added token caching with automatic expiry tracking and refresh within
+    60-second window.
+  - Injected `Authorization: Bearer <token>` across all REST catalog requests
+    (`load_table`, `create_table`, `commit_table`).
 - **Core Community TurboQuant™ (TQ4 / TQ8) Scalar Quantization**:
-  - Polar Quantization (PQ) and TurboQuant 4-bit / 8-bit quantized HNSW vector index algorithms integrated into open-source core engine.
+  - Polar Quantization (PQ) and TurboQuant 4-bit / 8-bit quantized HNSW vector
+    index algorithms integrated into open-source core engine.
 - **Production Hardening & Correctness Enhancements**:
-  - **Vector Metric Propagation**: Dynamic metric parsing (`VectorMetric::from_str`) and propagation from `IndexAlgorithm` (`L2`, `Cosine`, `InnerProduct`, `L1`, `Hamming`, `Jaccard`) through index construction and Puffin/Parquet serialization.
-  - **Global KNN Ordering**: Refactored `merge_and_rerank_vector_results` to guarantee monotonic ascending distance order across all returned batches without unordered `HashMap` bucketing.
-  - **Metric Parity Test Suite**: Added `tests/test_vector_metrics_parity.rs` establishing 100% nearest-neighbor accuracy against exact brute force ground truth across all 6 metrics.
-  - **Strict Query Execution Semantics**: Segment vector search failures now fail the query immediately with actionable diagnostics rather than silently omitting rows.
-  - **Zero-Warning Standard**: Eliminated diagnostic `println!` statements in favor of structured `tracing::debug!`, resolved all clippy compiler warnings with `#![deny(warnings)]`.
+  - **Vector Metric Propagation**: Dynamic metric parsing
+    (`VectorMetric::from_str`) and propagation from `IndexAlgorithm` (`L2`,
+    `Cosine`, `InnerProduct`, `L1`, `Hamming`, `Jaccard`) through index
+    construction and Puffin/Parquet serialization.
+  - **Global KNN Ordering**: Refactored `merge_and_rerank_vector_results` to
+    guarantee monotonic ascending distance order across all returned batches
+    without unordered `HashMap` bucketing.
+  - **Metric Parity Test Suite**: Added `tests/test_vector_metrics_parity.rs`
+    establishing 100% nearest-neighbor accuracy against exact brute force ground
+    truth across all 6 metrics.
+  - **Strict Query Execution Semantics**: Segment vector search failures now
+    fail the query immediately with actionable diagnostics rather than silently
+    omitting rows.
+  - **Zero-Warning Standard**: Eliminated diagnostic `println!` statements in
+    favor of structured `tracing::debug!`, resolved all clippy compiler warnings
+    with `#![deny(warnings)]`.
 
 ---
 
@@ -1057,39 +1351,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Multi-Protocol Gateway Ecosystem**:
-  - **`benostreamdb-search` Service (`bsdb-search` binary)**: Dual Elasticsearch 7.10 (Port 9200) and Qdrant (Port 6333) compatible REST APIs over BenoStreamDB tables.
-    - Elasticsearch 7.10 API: Full document CRUD (`POST /{index}/_doc`), hybrid search (`POST /{index}/_search` with BM25 + HNSW kNN + Reciprocal Rank Fusion), index management (`PUT /{index}`, `POST /{index}/_refresh`), and cluster health (`GET /_cluster/health`).
-    - Qdrant REST API: Collection management (`/collections/{name}`), point upsert/retrieval (`/collections/{name}/points`), and vector search (`/collections/{name}/points/search`).
+  - **`benostreamdb-search` Service (`bsdb-search` binary)**: Dual Elasticsearch
+    7.10 (Port 9200) and Qdrant (Port 6333) compatible REST APIs over
+    BenoStreamDB tables.
+    - Elasticsearch 7.10 API: Full document CRUD (`POST /{index}/_doc`), hybrid
+      search (`POST /{index}/_search` with BM25 + HNSW kNN + Reciprocal Rank
+      Fusion), index management (`PUT /{index}`, `POST /{index}/_refresh`), and
+      cluster health (`GET /_cluster/health`).
+    - Qdrant REST API: Collection management (`/collections/{name}`), point
+      upsert/retrieval (`/collections/{name}/points`), and vector search
+      (`/collections/{name}/points/search`).
     - Prometheus metrics exporter on `/metrics` (Port 9090).
-  - **`benostreamdb-flight` Gateway Service**: Native Arrow Flight SQL gRPC gateway (Port 50051) enabling zero-copy analytics for DuckDB, Polars, Apache Spark, and JDBC/ODBC BI tools via standard Flight SQL/ADBC.
+  - **`benostreamdb-flight` Gateway Service**: Native Arrow Flight SQL gRPC
+    gateway (Port 50051) enabling zero-copy analytics for DuckDB, Polars, Apache
+    Spark, and JDBC/ODBC BI tools via standard Flight SQL/ADBC.
 - **Multi-Flavor GPU Acceleration & Hardware Auto-Detection**:
-  - Optional GPU acceleration exposed across `benostreamdb-search` and `benostreamdb-flight` via `cuda`, `wgpu`, `rocm`, `intel`, and `all-gpu` feature flags.
-  - Runtime device selection via `BENOSEARCH_DEVICE=auto|cuda[:N]|rocm[:N]|intel[:N]|mps|cpu`.
-  - Active compute backend (`compute` block) exposed in `GET /` cluster info and `GET /_cluster/stats`.
-  - `docker/Dockerfile.gpu`: Multi-flavor GPU container image with CUDA 12 runtime, NVRTC JIT compilation, and Vulkan/Mesa drivers for AMD Radeon and Intel Arc.
-  - `docker/docker-compose.gpu.yml`: Compose GPU override with hardware reservations and device pass-through.
+  - Optional GPU acceleration exposed across `benostreamdb-search` and
+    `benostreamdb-flight` via `cuda`, `wgpu`, `rocm`, `intel`, and `all-gpu`
+    feature flags.
+  - Runtime device selection via
+    `BENOSEARCH_DEVICE=auto|cuda[:N]|rocm[:N]|intel[:N]|mps|cpu`.
+  - Active compute backend (`compute` block) exposed in `GET /` cluster info and
+    `GET /_cluster/stats`.
+  - `docker/Dockerfile.gpu`: Multi-flavor GPU container image with CUDA 12
+    runtime, NVRTC JIT compilation, and Vulkan/Mesa drivers for AMD Radeon and
+    Intel Arc.
+  - `docker/docker-compose.gpu.yml`: Compose GPU override with hardware
+    reservations and device pass-through.
 - **Iceberg Compaction Resilience & Index Recovery**:
-  - `Table::recover_indexes_async(&self)` / `recover_indexes(&self)`: Re-indexes data files that are missing overlay index sidecars, recovering fast vector (HNSW) and keyword (BM25) search after external Iceberg tools (Spark `rewriteDataFiles`, Trino `OPTIMIZE`, PyIceberg) compact table data files.
+  - `Table::recover_indexes_async(&self)` / `recover_indexes(&self)`: Re-indexes
+    data files that are missing overlay index sidecars, recovering fast vector
+    (HNSW) and keyword (BM25) search after external Iceberg tools (Spark
+    `rewriteDataFiles`, Trino `OPTIMIZE`, PyIceberg) compact table data files.
 - **Docker Container Infrastructure**:
-  - `benostreamdb/quickstart:latest`: Single all-in-one developer container running ES 7.10 (9200), Qdrant (6333), and Flight SQL (50051).
+  - `benostreamdb/quickstart:latest`: Single all-in-one developer container
+    running ES 7.10 (9200), Qdrant (6333), and Flight SQL (50051).
   - `benostreamdb/search:latest`: Standalone production search microservice.
-  - `benostreamdb/flight:latest`: Standalone production Arrow Flight SQL microservice.
-  - `docker/docker-compose.quickstart.yml`: Single-command full stack with RustFS (S3), Project Nessie catalog, and BenoStreamDB.
-  - `docker-compose.production.yml`: Production multi-container configuration with health checks and resource limits.
-- Okapi BM25 keyword scoring (tunable `k1`/`b`) with an English analyzer in the core engine; public `keyword_search_index` API.
-- Smart hybrid trigger fusing keyword (BM25) and vector (HNSW) results via reciprocal rank fusion (RRF, k=60).
-- Background segment index builds with `wait_for_background_tasks_async` for deterministic refresh semantics.
+  - `benostreamdb/flight:latest`: Standalone production Arrow Flight SQL
+    microservice.
+  - `docker/docker-compose.quickstart.yml`: Single-command full stack with
+    RustFS (S3), Project Nessie catalog, and BenoStreamDB.
+  - `docker-compose.production.yml`: Production multi-container configuration
+    with health checks and resource limits.
+- Okapi BM25 keyword scoring (tunable `k1`/`b`) with an English analyzer in the
+  core engine; public `keyword_search_index` API.
+- Smart hybrid trigger fusing keyword (BM25) and vector (HNSW) results via
+  reciprocal rank fusion (RRF, k=60).
+- Background segment index builds with `wait_for_background_tasks_async` for
+  deterministic refresh semantics.
 
 ## [0.5.3] - 2026-06-21
 
 ### Added
-- Unified catalog table loading logic (`load_from_catalog`) across Glue, Hive, Nessie, and REST catalog wrappers in python bindings.
-- Explicit commit-time flushing and background synchronization in integration tests (`test_turboquant_integration.py` and `test_wikipedia.py`).
+- Unified catalog table loading logic (`load_from_catalog`) across Glue, Hive,
+  Nessie, and REST catalog wrappers in python bindings.
+- Explicit commit-time flushing and background synchronization in integration
+  tests (`test_turboquant_integration.py` and `test_wikipedia.py`).
 
 ### Changed
-- Fixed remote path routing in `flush_async` to correctly construct relative remote paths for staged files instead of using local staging paths.
-- Upload data files synchronously relative to commit operation to avoid read-after-write race conditions in remote catalogs.
-- Fixed a missing file upload call in the background indexing task for vector indexes.
+- Fixed remote path routing in `flush_async` to correctly construct relative
+  remote paths for staged files instead of using local staging paths.
+- Upload data files synchronously relative to commit operation to avoid
+  read-after-write race conditions in remote catalogs.
+- Fixed a missing file upload call in the background indexing task for vector
+  indexes.
 
 ### Fixed
 - Clippy compiler warnings and errors in HNSW/PQ modules.
@@ -1121,16 +1446,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Query configuration API
 - Metrics instrumentation for observability
 - Release profiles (`release` and `release-lto`) in Cargo.toml
-- `WriteAheadLog::append_fire_and_forget` — non-blocking WAL append that hands off batches to the WAL worker without blocking on `fdatasync`, eliminating ~800 ms write latency per call
+- `WriteAheadLog::append_fire_and_forget` — non-blocking WAL append that hands
+  off batches to the WAL worker without blocking on `fdatasync`, eliminating
+  ~800 ms write latency per call
 
 ### Changed
 - CUDA is now an optional feature (no longer required for CI builds)
 - FFI bounds hardened with panic safety guarantees
 - Public APIs documented with rustdoc
-- **`Table(index_all=False)` is now the default** (previously `True`). Automatic HNSW/BM25 index building on commit is now opt-in. This eliminates a silent 15–18 s background build that previously fired on every `commit()` for any table containing a vector column. To restore the old behaviour: `Table(uri, index_all=True)` or `table.index_all = True`.
-- **`Table(autocommit=False)` is now the default** (previously `True`). Writes accumulate in an in-memory buffer and must be explicitly committed with `table.commit()`. This eliminates unexpected auto-flush overhead during ingestion loops.
-- `write_async` no longer auto-detects columns named `"embedding"` as implicit HNSW index targets. Only columns explicitly registered via `add_index()` or `set_index_columns()` are indexed.
-- `manifest_manager.load_latest_full` replaced with `load_latest` in the `flush_async` hot path, eliminating two unnecessary full manifest scans per commit.
+- **`Table(index_all=False)` is now the default** (previously `True`). Automatic
+  HNSW/BM25 index building on commit is now opt-in. This eliminates a silent
+  15–18 s background build that previously fired on every `commit()` for any
+  table containing a vector column. To restore the old behaviour: `Table(uri,
+  index_all=True)` or `table.index_all = True`.
+- **`Table(autocommit=False)` is now the default** (previously `True`). Writes
+  accumulate in an in-memory buffer and must be explicitly committed with
+  `table.commit()`. This eliminates unexpected auto-flush overhead during
+  ingestion loops.
+- `write_async` no longer auto-detects columns named `"embedding"` as implicit
+  HNSW index targets. Only columns explicitly registered via `add_index()` or
+  `set_index_columns()` are indexed.
+- `manifest_manager.load_latest_full` replaced with `load_latest` in the
+  `flush_async` hot path, eliminating two unnecessary full manifest scans per
+  commit.
 - Primary key uniqueness check upgraded from O(N²) to O(N) using `HashSet`.
 
 ### Fixed
@@ -1197,7 +1535,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.3.0] - 2026-04-14
 
 ### Added
-- **High-Density Storage Milestone**: TQ4 (4-bit) and TQ8 (8-bit) TurboQuant quantization
+- **High-Density Storage Milestone**: TQ4 (4-bit) and TQ8 (8-bit) TurboQuant
+  quantization
 - Global runtime support
 - Schema evolution infrastructure
 - Finalized indexing infrastructure
@@ -1249,7 +1588,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardware-agnostic compute dispatch with thread-local context management
 
 ### Changed
-- Extracted read, write, builder, schema, and fluent APIs from monolithic table module
+- Extracted read, write, builder, schema, and fluent APIs from monolithic table
+  module
 - Introduced `TableBuilder` to streamline initialization
 - Eliminated implicit tokio runtime creation
 
@@ -1332,7 +1672,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python extras hardware mapping (`all_gpu`, `intel_cpu`)
 
 ### Changed
-- Fully internalized `hnsw_rs` to `src/core/index/hnsw_rs` for crates.io compatibility
+- Fully internalized `hnsw_rs` to `src/core/index/hnsw_rs` for crates.io
+  compatibility
 - Resolved `unexpected_cfgs` warnings
 
 ---
