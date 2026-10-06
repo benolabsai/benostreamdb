@@ -1470,6 +1470,11 @@ fn list_subdirs(
                 .nth(prefix_depth)
                 .map(|p| p.as_ref().to_string());
             if let Some(name) = subdir {
+                // Skip hidden/placeholder entries such as the `.keep` marker that
+                // CREATE SCHEMA writes so empty namespaces persist on object stores.
+                if name.starts_with('.') {
+                    continue;
+                }
                 names.insert(name);
             }
         }
@@ -1899,6 +1904,40 @@ mod list_subdirs_tests {
 
         let (_, ver) = RUNTIME.block_on(manager.load_latest()).unwrap();
         assert_eq!(ver, 0, "dropped table must not be visible through the cache");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `.keep` placeholder written by CREATE SCHEMA must not surface as a
+    /// table in SHOW TABLES, while the namespace that contains it stays listed.
+    #[test]
+    fn hidden_keep_marker_is_not_listed() {
+        let dir = std::env::temp_dir().join(format!("bsdb_keep_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = create_object_store(dir.to_str().unwrap()).unwrap();
+
+        RUNTIME.block_on(async {
+            for path in ["default/.keep", "default/t1/metadata/a.json"] {
+                store
+                    .put(
+                        &object_store::path::Path::from(path),
+                        bytes::Bytes::from_static(b"x").into(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            list_subdirs(&store, ""),
+            vec!["default".to_string()],
+            "namespace holding only a .keep marker must still be listed"
+        );
+        assert_eq!(
+            list_subdirs(&store, "default"),
+            vec!["t1".to_string()],
+            "the .keep placeholder must not be listed as a table"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

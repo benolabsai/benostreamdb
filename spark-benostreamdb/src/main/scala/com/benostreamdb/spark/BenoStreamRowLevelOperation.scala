@@ -12,11 +12,14 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 /**
- * True merge-on-read row-level operations. The scan emits `_file`/`_pos`
- * (segment path + row offset) as required metadata; deletes/updates are
- * committed as position deletes via the engine (`commitPositionDeletes`), and
- * inserted/updated-new rows are appended via `appendBatch`. This mirrors
- * Iceberg's model without depending on Iceberg.
+ * Row-level operations (DELETE/UPDATE/MERGE) implemented over the engine's real
+ * primitives: predicate deletes (`deleteRows`) and appends (`appendBatch`).
+ *
+ * Spark's merge-on-read needs a row identifier; the engine has no position
+ * deletes, so we use the PRIMARY KEY columns as both `rowId` and the required
+ * metadata. The PK is a normal data column, so it resolves on the target
+ * relation and the scan already emits it. A delete/update therefore becomes a
+ * `deleteRows(pk = ...)`; inserted/updated-new rows are appended.
  */
 class BenoStreamRowLevelOperationBuilder(table: BenoStreamTable, info: RowLevelOperationInfo, gpuDevice: String)
     extends RowLevelOperationBuilder {
@@ -24,70 +27,91 @@ class BenoStreamRowLevelOperationBuilder(table: BenoStreamTable, info: RowLevelO
 }
 
 class BenoStreamRowLevelOperation(table: BenoStreamTable, info: RowLevelOperationInfo, gpuDevice: String)
-    extends RowLevelOperation {
+    extends SupportsDelta {
+
+  private val pkColumns: Seq[String] = BenoStreamRowLevelOperation.primaryKey(table)
+
   override def command(): RowLevelOperation.Command = info.command()
   override def description(): String = s"BenoStreamDB native ${info.command()} on ${table.tableUri}"
-  override def requiredMetadataAttributes(): Array[NamedReference] =
-    Array(Expressions.column("_file"), Expressions.column("_pos"))
-  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder =
-    new BenoStreamScanBuilder(table)
-  override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder =
-    new BenoStreamDeltaWriteBuilder(table.tableUri, table.structSchema, gpuDevice)
+  override def rowId(): Array[NamedReference] = pkColumns.map(Expressions.column).toArray
+  override def requiredMetadataAttributes(): Array[NamedReference] = pkColumns.map(Expressions.column).toArray
+  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = new BenoStreamScanBuilder(table)
+  override def newWriteBuilder(info: LogicalWriteInfo): DeltaWriteBuilder =
+    new BenoStreamDeltaWriteBuilder(table.tableUri, table.structSchema, pkColumns, gpuDevice)
 }
 
-class BenoStreamDeltaWriteBuilder(uri: String, dataSchema: StructType, gpuDevice: String) extends DeltaWriteBuilder {
-  override def build(): DeltaWrite = new BenoStreamDeltaWrite(uri, dataSchema, gpuDevice)
+object BenoStreamRowLevelOperation {
+  def primaryKey(table: BenoStreamTable): Seq[String] = {
+    val declared = Option(table.properties.get("primary_key"))
+      .map(_.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
+      .getOrElse(Seq.empty)
+    if (declared.nonEmpty) declared
+    else if (table.structSchema.nonEmpty) Seq(table.structSchema.fields.head.name)
+    else Seq.empty
+  }
 }
 
-class BenoStreamDeltaWrite(uri: String, dataSchema: StructType, gpuDevice: String) extends DeltaWrite {
-  override def toBatch(): DeltaBatchWrite = new BenoStreamDeltaBatchWrite(uri, dataSchema, gpuDevice)
+class BenoStreamDeltaWriteBuilder(uri: String, dataSchema: StructType, pkColumns: Seq[String], gpuDevice: String)
+    extends DeltaWriteBuilder {
+  override def build(): DeltaWrite = new BenoStreamDeltaWrite(uri, dataSchema, pkColumns, gpuDevice)
 }
 
-class BenoStreamDeltaBatchWrite(uri: String, dataSchema: StructType, gpuDevice: String) extends DeltaBatchWrite {
+class BenoStreamDeltaWrite(uri: String, dataSchema: StructType, pkColumns: Seq[String], gpuDevice: String)
+    extends DeltaWrite {
+  override def toBatch(): DeltaBatchWrite = new BenoStreamDeltaBatchWrite(uri, dataSchema, pkColumns, gpuDevice)
+}
+
+class BenoStreamDeltaBatchWrite(uri: String, dataSchema: StructType, pkColumns: Seq[String], gpuDevice: String)
+    extends DeltaBatchWrite {
   override def createBatchWriterFactory(info: PhysicalWriteInfo): DeltaWriterFactory =
-    new BenoStreamDeltaWriterFactory(uri, dataSchema, gpuDevice)
+    new BenoStreamDeltaWriterFactory(uri, dataSchema, pkColumns, gpuDevice)
   override def commit(messages: Array[WriterCommitMessage]): Unit = ()
   override def abort(messages: Array[WriterCommitMessage]): Unit = ()
 }
 
-class BenoStreamDeltaWriterFactory(uri: String, dataSchema: StructType, gpuDevice: String) extends DeltaWriterFactory {
+class BenoStreamDeltaWriterFactory(uri: String, dataSchema: StructType, pkColumns: Seq[String], gpuDevice: String)
+    extends DeltaWriterFactory {
   override def createWriter(partitionId: Int, taskId: Long): DeltaWriter[InternalRow] =
-    new BenoStreamDeltaWriter(uri, dataSchema, gpuDevice)
+    new BenoStreamDeltaWriter(uri, dataSchema, pkColumns, gpuDevice)
 }
 
-class BenoStreamDeltaWriter(uri: String, dataSchema: StructType, gpuDevice: String) extends DeltaWriter[InternalRow] {
+class BenoStreamDeltaWriter(uri: String, dataSchema: StructType, pkColumns: Seq[String], gpuDevice: String)
+    extends DeltaWriter[InternalRow] {
 
   private val bridge = BenoStreamJNIBridge.getInstance()
-  // file -> positions to delete
-  private val deletes = scala.collection.mutable.LinkedHashMap.empty[String, scala.collection.mutable.ArrayBuffer[Long]]
+  private val pkTypes = pkColumns.map(c => dataSchema(c).dataType)
+  private val deletePredicates = scala.collection.mutable.ArrayBuffer.empty[String]
   private val inserts = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
 
-  private def recordDelete(metadata: InternalRow): Unit = {
-    // metadata row = [_file: UTF8String, _pos: Long]
-    if (metadata == null || metadata.numFields < 2) return
-    val file = metadata.getUTF8String(0).toString
-    val pos = metadata.getLong(1)
-    deletes.getOrElseUpdate(file, scala.collection.mutable.ArrayBuffer.empty) += pos
+  private def quote(s: String): String = "\"" + s.replace("\"", "\"\"") + "\""
+  private def literal(v: Any, isString: Boolean): String =
+    if (v == null) "NULL" else if (isString) "'" + v.toString.replace("'", "''") + "'" else v.toString
+
+  // metadata/id row = PK columns in `pkColumns` order
+  private def recordDelete(row: InternalRow): Unit = {
+    if (row == null || row.numFields < pkColumns.length) return
+    val parts = (0 until pkColumns.length).map { i =>
+      if (row.isNullAt(i)) s"${quote(pkColumns(i))} IS NULL"
+      else s"${quote(pkColumns(i))} = ${literal(row.get(i, pkTypes(i)), BenoStreamSql.isStringType(pkTypes(i)))}"
+    }
+    deletePredicates += parts.mkString(" AND ")
   }
 
-  override def delete(metadata: InternalRow, id: InternalRow): Unit = recordDelete(metadata)
+  override def delete(metadata: InternalRow, id: InternalRow): Unit =
+    recordDelete(if (id != null && id.numFields >= pkColumns.length) id else metadata)
 
   override def update(metadata: InternalRow, id: InternalRow, row: InternalRow): Unit = {
-    recordDelete(metadata)
+    recordDelete(if (id != null && id.numFields >= pkColumns.length) id else metadata)
     inserts += row.copy()
   }
 
   override def insert(row: InternalRow): Unit = inserts += row.copy()
 
   override def commit(): WriterCommitMessage = {
-    if (deletes.nonEmpty) {
-      val jmap = new java.util.LinkedHashMap[String, java.util.List[Long]]()
-      deletes.foreach { case (f, ps) =>
-        val l = new java.util.ArrayList[Long](); ps.foreach(l.add); jmap.put(f, l)
-      }
-      val json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(jmap)
+    if (deletePredicates.nonEmpty) {
+      val predicate = deletePredicates.mkString(" OR ")
       com.benostreamdb.spark.gpu.GpuContextResolver.bindTaskGpuContext(gpuDevice)
-      if (!bridge.commitPositionDeletes(uri, json)) throw new RuntimeException(s"commitPositionDeletes failed for $uri")
+      if (!bridge.deleteRows(uri, predicate)) throw new RuntimeException(s"deleteRows failed for $uri")
     }
     if (inserts.nonEmpty) {
       val allocator = new RootAllocator()
@@ -106,6 +130,6 @@ class BenoStreamDeltaWriter(uri: String, dataSchema: StructType, gpuDevice: Stri
     BenoStreamCommitMessage
   }
 
-  override def abort(): Unit = { deletes.clear(); inserts.clear() }
-  override def close(): Unit = { deletes.clear(); inserts.clear() }
+  override def abort(): Unit = { deletePredicates.clear(); inserts.clear() }
+  override def close(): Unit = { deletePredicates.clear(); inserts.clear() }
 }

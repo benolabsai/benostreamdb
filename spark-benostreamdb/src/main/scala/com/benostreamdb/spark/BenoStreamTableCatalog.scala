@@ -3,6 +3,7 @@ package com.benostreamdb.spark
 import com.benostreamdb.spark.jni.BenoStreamJNIBridge
 import org.apache.spark.sql.catalyst.analysis.{NoSuchNamespaceException, NoSuchTableException, TableAlreadyExistsException}
 import org.apache.spark.sql.connector.catalog._
+import org.apache.spark.sql.connector.catalog.functions.UnboundFunction
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
@@ -16,13 +17,17 @@ import scala.collection.JavaConverters._
  * /`createTable`/`dropTable`) — no Iceberg catalog, so one Scala-2.13 artifact
  * serves Spark 4.0/4.1/4.2.
  *
+ * Also implements the DSv2 `FunctionCatalog` so the vector/hybrid functions
+ * resolve natively (`benostream.system.cosine_distance(...)` etc.) from SQL,
+ * DataFrames, and PySpark with zero session registration.
+ *
  * Configure like:
  * {{{
  *   spark.sql.catalog.benostream = com.benostreamdb.spark.BenoStreamCatalog
  *   spark.sql.catalog.benostream.warehouse = /path/to/warehouse   (or s3://bucket/prefix)
  * }}}
  */
-class BenoStreamCatalog extends TableCatalog with SupportsNamespaces {
+class BenoStreamCatalog extends TableCatalog with SupportsNamespaces with FunctionCatalog {
 
   private var catalogName: String = "benostream"
   private var warehouse: String = ""
@@ -104,4 +109,19 @@ class BenoStreamCatalog extends TableCatalog with SupportsNamespaces {
 
   override def dropNamespace(namespace: Array[String], cascade: Boolean): Boolean =
     throw new UnsupportedOperationException("dropNamespace is not supported by the BenoStreamDB catalog")
+
+  // ---- FunctionCatalog ----
+
+  override def listFunctions(namespace: Array[String]): Array[Identifier] =
+    if (namespace.length == 1 && namespace(0).equalsIgnoreCase("system"))
+      BenoStreamCatalogFunctions.names.map(n => Identifier.of(namespace, n)).toArray
+    else Array.empty[Identifier]
+
+  override def loadFunction(ident: Identifier): UnboundFunction = {
+    val fnName = ident.name().toLowerCase
+    if (!BenoStreamCatalogFunctions.names.contains(fnName)) {
+      throw new org.apache.spark.sql.catalyst.analysis.NoSuchFunctionException(ident)
+    }
+    BenoStreamCatalogFunctions.unbound(ident)
+  }
 }
