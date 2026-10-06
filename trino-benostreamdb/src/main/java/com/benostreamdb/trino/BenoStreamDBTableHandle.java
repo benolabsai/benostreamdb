@@ -3,6 +3,7 @@ package com.benostreamdb.trino;
 import io.trino.spi.connector.ConnectorTableHandle;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.Objects;
 import java.util.Optional;
 
 public class BenoStreamDBTableHandle implements ConnectorTableHandle {
@@ -37,5 +38,26 @@ public class BenoStreamDBTableHandle implements ConnectorTableHandle {
     @JsonProperty
     public Optional<String> getFilterString() {
         return filterString;
+    }
+
+    // Trino's planner relies on value equality for table handles (maps, sets,
+    // and cross-call comparisons), so implement it explicitly.
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        BenoStreamDBTableHandle that = (BenoStreamDBTableHandle) o;
+        return Objects.equals(schemaName, that.schemaName)
+                && Objects.equals(tableName, that.tableName)
+                && Objects.equals(filterString, that.filterString);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(schemaName, tableName, filterString);
     }
 }

@@ -105,3 +105,4 @@ bench_*.py
 
 # ── Private / commercial planning (not part of the public repo) ─────────────
 business_plan/
+target-jni/

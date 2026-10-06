@@ -44,13 +44,35 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
     }
 
     @Override
-    public ConnectorTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName) {
+    public void createSchema(ConnectorSession session, String schemaName, Map<String, Object> properties,
+            io.trino.spi.security.TrinoPrincipal owner) {
+        requireNative();
+        if (!BenoStreamDBJNIBridge.createSchema(warehouse, schemaName)) {
+            throw new RuntimeException("BenoStreamDB createSchema failed for " + schemaName);
+        }
+    }
+
+    @Override
+    public void dropTable(ConnectorSession session, ConnectorTableHandle tableHandle) {
+        requireNative();
+        BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) tableHandle;
+        String uri = BenoStreamDBTableUri.of(warehouse, handle.getSchemaName(), handle.getTableName());
+        if (!BenoStreamDBJNIBridge.dropTable(uri)) {
+            throw new RuntimeException("BenoStreamDB dropTable failed for " + uri);
+        }
+    }
+
+    @Override
+    public ConnectorTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName,
+            Optional<ConnectorTableVersion> startVersion, Optional<ConnectorTableVersion> endVersion) {
         // Verify the table exists so Trino reports "table not found" up front
         // instead of failing later during split generation.
         requireNative();
         String uri = BenoStreamDBTableUri.of(warehouse, tableName.getSchemaName(), tableName.getTableName());
         String json = BenoStreamDBJNIBridge.getTableSchema(uri);
-        if (json == null || json.isEmpty()) {
+        // Table::new succeeds for a non-existent path and returns an empty
+        // schema ("[]"), so treat an empty schema as "table not found".
+        if (json == null || json.isEmpty() || json.equals("[]")) {
             return null;
         }
         return new BenoStreamDBTableHandle(tableName.getSchemaName(), tableName.getTableName());
@@ -113,8 +135,8 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     @Override
     public Optional<ConnectorOutputMetadata> finishInsert(ConnectorSession session,
-            ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments,
-            Collection<ComputedStatistics> computedStatistics) {
+            ConnectorInsertTableHandle insertHandle, List<ConnectorTableHandle> sourceTableHandles,
+            Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics) {
         return Optional.empty();
     }
 
@@ -124,7 +146,8 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
 
     @Override
     public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session,
-            ConnectorTableMetadata tableMetadata, Optional<ConnectorTableLayout> layout, RetryMode retryMode) {
+            ConnectorTableMetadata tableMetadata, Optional<ConnectorTableLayout> layout, RetryMode retryMode,
+            boolean replace) {
         List<BenoStreamDBColumnHandle> cols = new ArrayList<>();
         for (ColumnMetadata col : tableMetadata.getColumns()) {
             cols.add(new BenoStreamDBColumnHandle(col.getName(), col.getType()));
@@ -150,10 +173,23 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
     public ColumnHandle getMergeRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle) {
         BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) tableHandle;
         List<ColumnMetadata> columns = resolveColumns(handle.getSchemaName(), handle.getTableName());
-        // The merge row id is exposed as the target's primary-key column, so the
-        // merge sink can delete matched rows by it.
-        String keyName = resolvePrimaryKeyColumn(handle.getSchemaName(), handle.getTableName(), columns);
-        return new BenoStreamDBColumnHandle(keyName, BigintType.BIGINT);
+        return mergeRowIdColumn(handle.getSchemaName(), handle.getTableName(), columns);
+    }
+
+    /**
+     * The hidden merge row-id column: not one of the data columns, sourced from
+     * the primary key (mirrors Iceberg's {@code $row_id}). It carries the key
+     * column's own type so non-numeric keys round-trip correctly.
+     */
+    private BenoStreamDBColumnHandle mergeRowIdColumn(String schemaName, String tableName,
+            List<ColumnMetadata> columns) {
+        String keyName = resolvePrimaryKeyColumn(schemaName, tableName, columns);
+        Type keyType = columns.stream()
+                .filter(c -> c.getName().equals(keyName))
+                .map(ColumnMetadata::getType)
+                .findFirst()
+                .orElse(BigintType.BIGINT);
+        return BenoStreamDBColumnHandle.rowId(keyName, keyType);
     }
 
     /** The first primary-key column, or the first column when no PK is declared. */
@@ -178,22 +214,49 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
         return columns.isEmpty() ? "_row_id" : columns.get(0).getName();
     }
 
+    /**
+     * Trino requires this to enable MERGE; the default throws
+     * "This connector does not support modifying table rows". The merge sink
+     * reads full data columns per row, so use delete-then-insert (the row id is
+     * a separate hidden column, so the data columns are the complete new row).
+     */
+    @Override
+    public RowChangeParadigm getRowChangeParadigm(ConnectorSession session, ConnectorTableHandle tableHandle) {
+        return RowChangeParadigm.DELETE_ROW_AND_INSERT_ROW;
+    }
+
     @Override
     public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle,
             RetryMode retryMode) {
         BenoStreamDBTableHandle handle = (BenoStreamDBTableHandle) tableHandle;
+        List<ColumnMetadata> columns = resolveColumns(handle.getSchemaName(), handle.getTableName());
         List<BenoStreamDBColumnHandle> cols = new ArrayList<>();
-        for (ColumnMetadata col : resolveColumns(handle.getSchemaName(), handle.getTableName())) {
+        for (ColumnMetadata col : columns) {
             cols.add(new BenoStreamDBColumnHandle(col.getName(), col.getType()));
         }
         BenoStreamDBInsertTableHandle insert = new BenoStreamDBInsertTableHandle(
                 handle.getSchemaName(), handle.getTableName(), cols);
-        return new BenoStreamDBMergeTableHandle(handle, insert);
+        BenoStreamDBColumnHandle rowId = mergeRowIdColumn(handle.getSchemaName(), handle.getTableName(), columns);
+        return new BenoStreamDBMergeTableHandle(handle, insert, rowId);
+    }
+
+    /**
+     * Trino 468 calls this overload for MERGE and passes the per-update-case
+     * column assignments. The default delegates to the 3-arg form, but overriding
+     * it here (like the Iceberg connector) is required for the planner to emit
+     * the post-update row in the insert slot rather than the pre-update target
+     * row. We accept and ignore the assignments (the native engine upserts by key).
+     */
+    @Override
+    public ConnectorMergeTableHandle beginMerge(ConnectorSession session, ConnectorTableHandle tableHandle,
+            Map<Integer, Collection<ColumnHandle>> updateCaseColumns, RetryMode retryMode) {
+        return beginMerge(session, tableHandle, retryMode);
     }
 
     @Override
     public void finishMerge(ConnectorSession session, ConnectorMergeTableHandle mergeHandle,
-            Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics) {
+            List<ConnectorTableHandle> sourceTableHandles, Collection<Slice> fragments,
+            Collection<ComputedStatistics> computedStatistics) {
         // The merge sink already applied the appends and deletes.
     }
 
@@ -252,9 +315,14 @@ public class BenoStreamDBMetadata implements ConnectorMetadata {
                 handle.getTableName(),
                 Optional.of(filterStr));
 
-        return Optional.of(new ConstraintApplicationResult<>(
+        // Trino 468's ConstraintApplicationResult carries a remaining
+        // ConnectorExpression in addition to the remaining TupleDomain. The
+        // public constructor wraps it in `Optional.of(...)`, so it must be
+        // non-null; `Constant.TRUE` means "no residual expression".
+        return Optional.of(new ConstraintApplicationResult<ConnectorTableHandle>(
                 newHandle,
                 summary,
+                io.trino.spi.expression.Constant.TRUE,
                 false));
     }
 

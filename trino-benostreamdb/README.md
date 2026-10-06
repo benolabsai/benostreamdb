@@ -6,18 +6,24 @@ The BenoStreamDB Trino connector enables distributed SQL analytics and vector se
 
 ## Requirements
 
-- Trino 435+
-- Java 17+ (or Java 21)
+- Trino 468 (the connector is compiled against the Trino 468 SPI)
+- A JDK **23+** to *compile* (the 468 SPI is Java 23 bytecode). The emitted
+  bytecode still targets 17/21 and runs on the Trino image's Java 23.
 - BenoStreamDB core native library (`libbenostreamdb.so`) on `java.library.path`
+- `libstdc++.so.6` in the Trino image (Apache Arrow's `arrow-c-data` JNI lib
+  needs it; the stock Trino image is a stripped RHEL UBI without a C++ runtime)
 
 ## Building
 
 ```bash
 cd trino-benostreamdb
-mvn clean install -DskipTests
+# JAVA_HOME must point at a JDK >= 23 (e.g. /usr/lib/jvm/java-25-openjdk-amd64)
+JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 mvn clean package -DskipTests
 ```
 
-This generates the plugin ZIP archive in `target/`.
+This generates the plugin ZIP archive in `target/`. The top-level
+[`build-connectors.sh`](../build-connectors.sh) builds it with the right JDK and
+flattens the ZIP for you.
 
 ## Installation & Configuration
 
@@ -31,11 +37,16 @@ This generates the plugin ZIP archive in `target/`.
    Sample catalog configurations are provided in [`etc/catalog/`](etc/catalog/):
    ```properties
    connector.name=benostreamdb
-   benostream.base-uri=s3://my-bucket/
+   benostream.warehouse=s3://my-bucket/
    benostream.s3.endpoint=http://rustfs:9000
    benostream.s3.access-key=${TRINO_S3_ACCESS_KEY}
    benostream.s3.secret-key=${TRINO_S3_SECRET_KEY}
    ```
+
+   > **Config-key note.** The connector factory reads `benostream.warehouse`
+   > (default `s3://default`); the older `benostream.base-uri` key is ignored.
+   > Schemas are subdirectories of the warehouse, so
+   > `benostreamdb.default.events` resolves to `<warehouse>/default/events`.
 
 3. **Local Docker Environment**:
    The [`etc/`](etc/) directory contains the complete Trino configuration (`config.properties`, `jvm.config`, `node.properties`, `catalog/`) for containerized testing.
@@ -61,38 +72,102 @@ it extends `trinodb/trino`, flattens the plugin ZIP into
 nested `trino-benostream-<version>/` directory), and installs the native lib to
 `/usr/lib/trino/lib` (added to `java.library.path` in `jvm.config`).
 
-## Packaging status (not yet production-worthy)
+## Packaging status
 
-Running the connector in the stock `trinodb/trino` image surfaced two packaging
-defects that must be fixed before this is production-ready:
+Running the connector in the stock `trinodb/trino:468` image surfaced a series of
+packaging defects. All are now fixed:
 
-1. **The plugin ZIP is not flat.** The `trino-plugin` Maven packaging emits the
+1. **SPI version mismatch.** The connector was compiled against Trino SPI 435
+   while the image runs 468. Trino 468 changed several `ConnectorMetadata`
+   signatures (`getTableHandle` gained two `Optional<ConnectorTableVersion>`
+   args; `beginCreateTable`/`finishInsert`/`finishMerge` gained args), so the
+   old overrides were dead code and Trino reported
+   `ConnectorMetadata getTableHandle() is not implemented`.
+   **Fix:** target SPI 468 and update the overrides. The 468 SPI is Java 23
+   bytecode, so the build now uses a JDK ≥ 23 (see `build-connectors.sh`).
+
+2. **The plugin ZIP is not flat.** The `trino-plugin` Maven packaging emits the
    JARs under a `trino-benostream-<version>/` base directory. Trino's plugin
    loader only scans JARs *directly* in the plugin dir (it does not recurse), so
    the nested layout fails with
    `No service providers of type io.trino.spi.Plugin in the classpath`.
-   **Fix:** flatten the ZIP at build time (see `build-connectors.sh`) or set the
-   assembly to `includeBaseDirectory=false`.
+   **Fix:** `build-connectors.sh` flattens the ZIP, and `Dockerfile.trino`
+   flattens either layout at image-build time.
 
-2. **The native lib is built for the host glibc, not the target.** The connector
-   loads `libbenostreamdb.so` via JNI, but:
-   - a host `cargo build` links against the host glibc (e.g. 2.43) and fails in
-     the Trino image (glibc 2.34) with `version 'GLIBC_2.4x' not found`;
-   - a `zig`-linked build still fails with `undefined symbol: __isoc23_sscanf`,
-     because the C dependencies (`tikv-jemalloc-sys`, `aws-lc-sys`) are compiled
-     against the host's glibc headers;
-   - the Python wheel's `.so` is a Python extension and fails with
-     `undefined symbol: PyExc_RuntimeError` when loaded as a JNI lib.
+3. **The native lib was built for the host glibc, not the target.** A host
+   `cargo build` links against the host glibc (e.g. 2.43) and fails in the Trino
+   image (glibc 2.34) with `version 'GLIBC_2.4x' not found`; a `zig`-linked
+   build still fails with `undefined symbol: __isoc23_sscanf`; and the Python
+   wheel's `.so` is a Python extension that fails with
+   `undefined symbol: PyExc_RuntimeError` when loaded as a JNI lib.
+   **Fix:** build the cdylib in a `manylinux_2_28` container and stage that
+   `.so` (see `build_trino_connector.sh`). The `arrow/pyarrow` feature is gated
+   behind the `python` feature so the JNI build does not link libpython.
 
-   **Fix:** build the cdylib in a `manylinux_2_28` container (glibc 2.28 headers)
-   and ship that `.so` alongside the plugin. `build-connectors.sh` should do
-   this instead of a host `cargo build`.
+4. **The transaction handle was not serializable.** Trino ships the
+   `ConnectorTransactionHandle` to workers inside the serialized
+   `TaskUpdateRequest`; the empty handle class failed with
+   `No serializer found for class ...BenoStreamDBTransactionHandle`.
+   **Fix:** make it an enum (`BenoStreamDBTransactionHandle.INSTANCE`).
 
-Until both are fixed, the connector can be exercised in the benchmark compose
-stack via the workarounds in
-[`benchmarks/competitors/Dockerfile.trino`](../benchmarks/competitors/Dockerfile.trino)
-(flatten the ZIP, stage a manylinux-built `.so`), but the shipped artifacts are
-not yet correct.
+5. **Arrow's JNI lib needs `libstdc++.so.6`.** `arrow-c-data`'s JNI library is
+   extracted from the JAR and loaded at query time; the stripped RHEL UBI Trino
+   image has no C++ runtime, so it failed with
+   `libstdc++.so.6: cannot open shared object file`.
+   **Fix:** `Dockerfile.trino` copies `libstdc++` from a UBI stage.
+
+6. **Arrow 14's `MemoryUtil` needs deep reflection.** On Java 23 it fails with
+   `Could not initialize class org.apache.arrow.memory.util.MemoryUtil`.
+   **Fix:** `jvm.config` opens `java.base/java.nio` (and friends) to the
+   unnamed module.
+
+## Verified surface area
+
+Exercised end-to-end through Trino 468 against a BenoStreamDB Iceberg table
+(23/23 checks pass):
+
+| Area | Statements |
+|---|---|
+| Metadata | `SHOW SCHEMAS`, `SHOW TABLES`, `SHOW COLUMNS`, `DESCRIBE`, `SHOW CREATE TABLE`, `information_schema.tables` |
+| Read | `SELECT *`, `count(*)`, `ORDER BY`, `GROUP BY`, aggregates |
+| Predicate pushdown | `=`, `<`, `IN`, `BETWEEN` (translated to engine index queries) |
+| Plan | `EXPLAIN` |
+| Write | `CREATE TABLE AS SELECT`, `INSERT … VALUES`, `INSERT … SELECT`, `DELETE` |
+| DDL | `CREATE SCHEMA`, `DROP TABLE` |
+| Row-level | `MERGE` — `UPDATE`, `DELETE`, `INSERT`, multi-clause and conditional forms |
+
+### MERGE support
+
+The connector implements Trino's full MERGE surface (the grammar is Trino's, not
+Iceberg's): `WHEN MATCHED THEN UPDATE`, `WHEN MATCHED THEN DELETE`,
+`WHEN NOT MATCHED THEN INSERT`, multiple `WHEN` clauses, and `AND` conditions.
+It uses the `DELETE_ROW_AND_INSERT_ROW` paradigm with a hidden `_bsdb_row_id`
+column (sourced from the primary key), the SPI `MergePage` helper, and
+delete-before-insert so an `UPDATE` reuses the same key.
+
+Verified end-to-end (values checked, not just statement success):
+
+| Case | Result |
+|---|---|
+| `WHEN MATCHED THEN UPDATE SET value = s.value` | new value written |
+| `WHEN MATCHED THEN DELETE` | row removed |
+| `WHEN NOT MATCHED THEN INSERT (id, value) VALUES (…)` | row inserted with the source values |
+| multi-clause (`UPDATE` + `INSERT`) | both applied |
+| `WHEN MATCHED AND t.value < 5 THEN UPDATE` | skipped when the condition is false |
+
+The hidden row-id column carries the primary key's own type, so numeric,
+`VARCHAR`, and boolean keys all work (the delete predicate is quoted for
+strings).
+
+> **Implementation note.** Trino's planner compares `ColumnHandle`s across
+> separate `getColumnHandles()` calls (e.g. `mergeCaseSetColumns.indexOf(...)` in
+> `QueryPlanner.planMerge`), so every connector handle type implements
+> `equals`/`hashCode`. Without it the planner silently falls back to the
+> pre-update target row for `UPDATE` and to `NULL` for `INSERT`.
+
+> **`DROP TABLE` note.** `SHOW TABLES` derives its listing from the objects
+> actually present, so a dropped table disappears immediately even though a
+> local filesystem keeps the now-empty directory behind.
 
 ## Querying
 

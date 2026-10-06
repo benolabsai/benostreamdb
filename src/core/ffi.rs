@@ -22,6 +22,25 @@ use tokio::runtime::Runtime;
 static RUNTIME: LazyLock<Runtime> =
     LazyLock::new(|| Runtime::new().expect("Failed to create Tokio runtime for the JNI bridge"));
 
+/// Initialize the native tracing subscriber when the JVM loads the library, so
+/// `tracing::error!` from the JNI entry points reaches the Trino logs instead of
+/// being silently dropped. Without this, a native failure surfaces only as a
+/// generic `... failed` message on the Java side.
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(
+    _vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
+    jni::sys::JNI_VERSION_1_8
+}
+
 pub struct BenoStreamSession {
     reader: Option<HybridReader>, // Used if no filter
     path: String,
@@ -1434,18 +1453,30 @@ fn list_subdirs(
     store: &std::sync::Arc<dyn object_store::ObjectStore>,
     prefix: &str,
 ) -> Vec<String> {
-    let path = object_store::path::Path::from(prefix);
-    let res = RUNTIME.block_on(async { store.list_with_delimiter(Some(&path)).await });
-    match res {
-        Ok(list) => {
-            let mut names: Vec<String> = list
-                .common_prefixes
-                .iter()
-                .filter_map(|p| p.filename().map(|s| s.to_string()))
-                .collect();
-            names.sort();
-            names
+    // Derive sub-directory names from the objects actually present rather than
+    // from `list_with_delimiter`'s common prefixes. A local filesystem keeps
+    // empty directories after a DROP TABLE deletes every object, so the common
+    // prefixes would make a dropped table keep appearing in SHOW TABLES.
+    let prefix_path = object_store::path::Path::from(prefix);
+    let prefix_depth = prefix_path.parts().count();
+    let res = RUNTIME.block_on(async {
+        let mut stream = store.list(Some(&prefix_path));
+        let mut names = std::collections::BTreeSet::new();
+        while let Some(item) = stream.next().await {
+            let meta = item?;
+            let subdir = meta
+                .location
+                .parts()
+                .nth(prefix_depth)
+                .map(|p| p.as_ref().to_string());
+            if let Some(name) = subdir {
+                names.insert(name);
+            }
         }
+        Ok::<_, object_store::Error>(names)
+    });
+    match res {
+        Ok(names) => names.into_iter().collect(),
         Err(e) => {
             tracing::error!("FFI(Trino): list_subdirs({}) failed: {}", prefix, e);
             Vec::new()
@@ -1508,6 +1539,84 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listTab
     }
 }
 
+/// Trino: create a schema (a top-level directory under the warehouse).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createSchema(
+    mut env: JNIEnv,
+    _class: JClass,
+    warehouse: JString,
+    schema: JString,
+) -> jboolean {
+    let wh: String = env
+        .get_string(&warehouse)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let sch: String = env
+        .get_string(&schema)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if wh.is_empty() || sch.is_empty() {
+        return 0;
+    }
+    let res = (|| -> anyhow::Result<()> {
+        let store = create_object_store(&wh)?;
+        // Object stores have no real directories; a placeholder object makes the
+        // schema appear as a common prefix in `list_with_delimiter`.
+        let path = object_store::path::Path::from(format!("{sch}/.keep"));
+        RUNTIME.block_on(async { store.put(&path, bytes::Bytes::new().into()).await })?;
+        Ok(())
+    })();
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): createSchema failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Trino: drop a table by deleting every object under its URI.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_dropTable(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    if uri.is_empty() {
+        return 0;
+    }
+    let res = (|| -> anyhow::Result<()> {
+        let store = create_object_store(&uri)?;
+        let prefix = object_store::path::Path::from("");
+        RUNTIME.block_on(async {
+            let mut stream = store.list(Some(&prefix));
+            while let Some(item) = stream.next().await {
+                let meta = item?;
+                store.delete(&meta.location).await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })?;
+        // Invalidate the manifest caches immediately: otherwise a subsequent
+        // `getTableSchema`/`getTableHandle` still sees the deleted manifest
+        // through `LATEST_VERSION_CACHE`/`MANIFEST_CACHE` (short TTLs), so a
+        // `CREATE TABLE` right after `DROP TABLE` reports "already exists".
+        let manager = crate::core::manifest::ManifestManager::new(store, "", &uri);
+        RUNTIME.block_on(manager.invalidate_caches());
+        Ok(())
+    })();
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Trino): dropTable failed: {}", e);
+            0
+        }
+    }
+}
+
 /// Spark: render the engine's Prometheus metrics as text.
 ///
 /// The connector registers this with Spark's metrics system so the host's
@@ -1532,5 +1641,265 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_gatherM
     match env.new_string(crate::core::telemetry::render_metrics()) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spark: JNI mirrors of the Trino data/metadata surface.
+//
+// The Spark connector is native-backed (like the Trino connector) instead of
+// wrapping Iceberg's Java `SparkTable`, so it needs the same JNI entry points
+// under the `com.benostreamdb.spark.jni.BenoStreamJNIBridge` class name. JNI
+// resolves a native method to a symbol derived from its *declaring class*, so
+// these thin wrappers forward to the shared Trino implementations (identical
+// bodies, no duplication).
+// ---------------------------------------------------------------------------
+
+/// Spark: free a partition-reader session handle (the per-file `BenoStreamSession`).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamPartitionReader_closeSession(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if handle != 0 {
+        unsafe {
+            drop(Box::from_raw(handle as *mut BenoStreamSession));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_getTableSchema(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+) -> jstring {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_getTableSchema(env, class, table_uri)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_appendBatch(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_appendBatch(
+        env,
+        class,
+        table_uri,
+        in_array_ptr,
+        in_schema_ptr,
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_mergeRows(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+    key_columns: JString,
+    in_array_ptr: jlong,
+    in_schema_ptr: jlong,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_mergeRows(
+        env,
+        class,
+        table_uri,
+        key_columns,
+        in_array_ptr,
+        in_schema_ptr,
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_deleteRows(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+    filter: JString,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_deleteRows(env, class, table_uri, filter)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_getPrimaryKey(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+) -> jstring {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_getPrimaryKey(env, class, table_uri)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_createTable(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+    schema_json: JString,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createTable(env, class, table_uri, schema_json)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_openQuery(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+    sql: JString,
+) -> jlong {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_openQuery(env, class, table_uri, sql)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_readQueryBatch(
+    env: JNIEnv,
+    class: JClass,
+    handle: jlong,
+    out_array_ptr: jlong,
+    out_schema_ptr: jlong,
+) -> jlong {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_readQueryBatch(
+        env,
+        class,
+        handle,
+        out_array_ptr,
+        out_schema_ptr,
+    )
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_closeQuery(
+    env: JNIEnv,
+    class: JClass,
+    handle: jlong,
+) {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_closeQuery(env, class, handle)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listSchemas(
+    env: JNIEnv,
+    class: JClass,
+    warehouse: JString,
+) -> jstring {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listSchemas(env, class, warehouse)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listTables(
+    env: JNIEnv,
+    class: JClass,
+    warehouse: JString,
+    schema: JString,
+) -> jstring {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_listTables(env, class, warehouse, schema)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_createSchema(
+    env: JNIEnv,
+    class: JClass,
+    warehouse: JString,
+    schema: JString,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createSchema(env, class, warehouse, schema)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropTable(
+    env: JNIEnv,
+    class: JClass,
+    table_uri: JString,
+) -> jboolean {
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_dropTable(env, class, table_uri)
+}
+
+#[cfg(test)]
+mod list_subdirs_tests {
+    use super::*;
+
+    /// A dropped table must disappear from `SHOW TABLES` even though a local
+    /// filesystem keeps the (now empty) directory behind.
+    #[test]
+    fn dropped_table_is_not_listed() {
+        let dir = std::env::temp_dir().join(format!("bsdb_list_subdirs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = create_object_store(dir.to_str().unwrap()).unwrap();
+
+        RUNTIME.block_on(async {
+            for path in ["default/t1/metadata/a.json", "default/t2/metadata/b.json"] {
+                store
+                    .put(
+                        &object_store::path::Path::from(path),
+                        bytes::Bytes::from_static(b"x").into(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        assert_eq!(
+            list_subdirs(&store, "default"),
+            vec!["t1".to_string(), "t2".to_string()]
+        );
+
+        // Drop t1: delete every object, leaving the empty directory behind.
+        RUNTIME.block_on(async {
+            let mut stream = store.list(Some(&object_store::path::Path::from("default/t1")));
+            while let Some(item) = stream.next().await {
+                store.delete(&item.unwrap().location).await.unwrap();
+            }
+        });
+        assert_eq!(
+            list_subdirs(&store, "default"),
+            vec!["t2".to_string()],
+            "a dropped table must not be listed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `DROP TABLE` must invalidate the manifest caches, otherwise a
+    /// `CREATE TABLE` immediately after reports "already exists".
+    #[test]
+    fn drop_invalidates_manifest_cache() {
+        let dir = std::env::temp_dir().join(format!("bsdb_drop_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let uri = dir.to_str().unwrap().to_string();
+        let store = create_object_store(&uri).unwrap();
+
+        // Write a manifest (v1) so the table "exists".
+        let bytes = serde_json::to_vec(&crate::core::manifest::Manifest::default()).unwrap();
+        RUNTIME.block_on(async {
+            store
+                .put(
+                    &object_store::path::Path::from("_manifest/v1.json"),
+                    bytes.into(),
+                )
+                .await
+                .unwrap();
+        });
+
+        let manager = crate::core::manifest::ManifestManager::new(store.clone(), "", &uri);
+        let (_, ver) = RUNTIME.block_on(manager.load_latest()).unwrap();
+        assert_eq!(ver, 1, "table should be visible before the drop");
+
+        // Delete every object (as dropTable does) and invalidate the caches.
+        RUNTIME.block_on(async {
+            let mut stream = store.list(Some(&object_store::path::Path::from("")));
+            while let Some(item) = stream.next().await {
+                store.delete(&item.unwrap().location).await.unwrap();
+            }
+        });
+        RUNTIME.block_on(manager.invalidate_caches());
+
+        let (_, ver) = RUNTIME.block_on(manager.load_latest()).unwrap();
+        assert_eq!(ver, 0, "dropped table must not be visible through the cache");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

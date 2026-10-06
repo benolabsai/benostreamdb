@@ -34,7 +34,16 @@
             <properties>
                 <spark.version>4.1.2</spark.version>
                 <spark.major.version>4</spark.major.version>
-                <iceberg.spark.version>4.1_2.13</iceberg.spark.version> 
+                <iceberg.spark.version>4.1_2.13</iceberg.spark.version>
+                <iceberg.version>1.11.0</iceberg.version>
+            </properties>
+        </profile>
+        <profile>
+            <id>spark-4.2</id>
+            <properties>
+                <spark.version>4.2.0</spark.version>
+                <spark.major.version>4</spark.major.version>
+                <iceberg.spark.version>4.2_2.13</iceberg.spark.version>
                 <iceberg.version>1.11.0</iceberg.version>
             </properties>
         </profile>

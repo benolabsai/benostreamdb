@@ -78,6 +78,22 @@ build_with_java() {
 JAVA_17_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
 JAVA_21_HOME="$(pwd)/${JDK_21_DIR}"
 
+# Trino 468's SPI is compiled for Java 23 (class file version 67), so the
+# connector must be *compiled* with a JDK >= 23 even though the emitted
+# bytecode still targets 17/21 (and runs on the Trino image's Java 23). A JDK 21
+# compiler cannot read the SPI and fails with "class file has wrong version
+# 67.0, should be 65.0". Prefer a system JDK 23+.
+JAVA_TRINO_HOME=""
+for cand in /usr/lib/jvm/java-25-openjdk-amd64 /usr/lib/jvm/java-24-openjdk-amd64 /usr/lib/jvm/java-23-openjdk-amd64; do
+    if [ -x "$cand/bin/javac" ]; then JAVA_TRINO_HOME="$cand"; break; fi
+done
+if [ -z "$JAVA_TRINO_HOME" ]; then
+    echo "ERROR: the Trino connector targets Trino 468, whose SPI requires JDK >= 23 to compile." >&2
+    echo "       Install a JDK 23+ (e.g. /usr/lib/jvm/java-25-openjdk-amd64) and re-run." >&2
+    exit 1
+fi
+echo "Trino connector will be compiled with: $JAVA_TRINO_HOME"
+
 # Create output directory
 mkdir -p connector-artifacts
 
@@ -116,12 +132,14 @@ done
 
 # --- Trino Connector Matrix ---
 echo "--- Building Trino Connectors ---"
-prepare_resources "trino-benostreamdb"
+# NOTE: unlike Spark, the Trino connector does NOT bundle the native lib in the
+# plugin JAR. Trino loads it from `java.library.path` (see Dockerfile.trino),
+# and a host-built lib bundled in the JAR would shadow the manylinux one.
+rm -f trino-benostreamdb/src/main/resources/libbenostreamdb.so
 for java_version in "17" "21"; do
-    java_home_var="JAVA_${java_version}_HOME"
-    java_home="${!java_home_var}"
-    
-    build_with_java "$java_home" "java-$java_version" "" "trino-benostreamdb"
+    # Compile with the JDK 23+ toolchain (see JAVA_TRINO_HOME above); the
+    # `java-<version>` profile still controls the emitted bytecode target.
+    build_with_java "$JAVA_TRINO_HOME" "java-$java_version" "" "trino-benostreamdb"
     # For Trino, the main JAR is in target/ but the ZIP contains all deps.
     # The artifact version tracks the core engine version (`${revision}`).
     cp "trino-benostreamdb/target/trino-benostream-${CORE_VERSION}.jar" "connector-artifacts/trino-benostream-java-${java_version}${ARTIFACT_SUFFIX}.jar"

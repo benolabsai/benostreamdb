@@ -111,6 +111,21 @@ impl ManifestManager {
         key
     }
 
+    /// Invalidate the manifest caches for this table.
+    ///
+    /// Called after `DROP TABLE` deletes every object: without this, a
+    /// subsequent `getTableSchema`/`getTableHandle` would still see the deleted
+    /// manifest through `LATEST_VERSION_CACHE`/`MANIFEST_CACHE` (they have short
+    /// TTLs, but a dropped table would look like it still exists until they
+    /// expire). Mirrors the invalidation `commit()` performs.
+    pub async fn invalidate_caches(&self) {
+        let dir_key = self.get_dir_cache_key();
+        crate::core::cache::LATEST_VERSION_CACHE
+            .invalidate(&dir_key)
+            .await;
+        crate::core::cache::MANIFEST_CACHE.invalidate_all();
+    }
+
     /// Check if any manifests exist in the directory
     pub async fn exists(&self) -> Result<bool> {
         let mut stream = self.store.list(Some(&self.manifest_dir));

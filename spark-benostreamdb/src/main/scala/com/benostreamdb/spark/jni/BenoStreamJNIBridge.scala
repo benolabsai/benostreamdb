@@ -17,6 +17,21 @@ class BenoStreamJNIBridge private () {
   @native def regionalDriftSearch(table: String, query: String, seedsJson: String, topK: Int, hops: Int, nDepth: Int, kFollowups: Int, mode: String, outArrayPtr: Long, outSchemaPtr: Long): Int
   @native def gatherMetrics(): String
 
+  // --- Native data/metadata surface (mirrors the Trino connector; no Iceberg Java) ---
+  @native def getTableSchema(tableUri: String): String
+  @native def getPrimaryKey(tableUri: String): String
+  @native def createTable(tableUri: String, schemaJson: String): Boolean
+  @native def appendBatch(tableUri: String, inArrayPtr: Long, inSchemaPtr: Long): Boolean
+  @native def mergeRows(tableUri: String, keyColumns: String, inArrayPtr: Long, inSchemaPtr: Long): Boolean
+  @native def deleteRows(tableUri: String, filter: String): Boolean
+  @native def openQuery(tableUri: String, sql: String): Long
+  @native def readQueryBatch(handle: Long, outArrayPtr: Long, outSchemaPtr: Long): Long
+  @native def closeQuery(handle: Long): Unit
+  @native def listSchemas(warehouse: String): String
+  @native def listTables(warehouse: String, schema: String): String
+  @native def createSchema(warehouse: String, schema: String): Boolean
+  @native def dropTable(tableUri: String): Boolean
+
   def runRegionalDriftSearch(
       table: String,
       query: String,

@@ -205,14 +205,16 @@ public final class BenoStreamDBArrowConverter {
         } else if (type instanceof RealType) {
             ((Float4Vector) vector).setSafe(out, Float.intBitsToFloat((int) type.getLong(block, pos)));
         } else if (type instanceof DoubleType) {
-            ((Float8Vector) vector).setSafe(out, Double.longBitsToDouble(type.getLong(block, pos)));
+            // DoubleType does not support getLong (AbstractType throws); read the
+            // double directly.
+            ((Float8Vector) vector).setSafe(out, type.getDouble(block, pos));
         } else if (type instanceof BooleanType) {
             ((BitVector) vector).setSafe(out, type.getBoolean(block, pos) ? 1 : 0);
         } else if (type instanceof DateType) {
             ((DateDayVector) vector).setSafe(out, (int) type.getLong(block, pos));
         } else if (type instanceof VarcharType) {
-            int len = block.getSliceLength(pos);
-            ((VarCharVector) vector).setSafe(out, block.getSlice(pos, 0, len).getBytes());
+            // Trino 468 moved slice access off `Block`; read it through the type.
+            ((VarCharVector) vector).setSafe(out, ((VarcharType) type).getSlice(block, pos).getBytes());
         } else {
             throw new UnsupportedOperationException("Unsupported Trino type: " + type);
         }

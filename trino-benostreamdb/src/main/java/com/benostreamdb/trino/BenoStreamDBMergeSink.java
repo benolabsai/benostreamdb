@@ -4,8 +4,14 @@ import io.airlift.slice.Slice;
 import io.trino.spi.Page;
 import io.trino.spi.block.Block;
 import io.trino.spi.connector.ConnectorMergeSink;
+import io.trino.spi.connector.MergePage;
 import io.trino.spi.type.BigintType;
+import io.trino.spi.type.BooleanType;
+import io.trino.spi.type.DoubleType;
 import io.trino.spi.type.IntegerType;
+import io.trino.spi.type.RealType;
+import io.trino.spi.type.Type;
+import io.trino.spi.type.VarcharType;
 import org.apache.arrow.c.ArrowArray;
 import org.apache.arrow.c.ArrowSchema;
 import org.apache.arrow.c.Data;
@@ -22,9 +28,11 @@ import java.util.concurrent.CompletableFuture;
  * Applies MERGE row-level operations produced by Trino.
  *
  * <p>Trino sends each merged row as a page laid out as
- * {@code [rowId, operation, ...dataColumns]}. Insert/update-insert rows are
- * appended; delete/update-delete rows are removed by the merge row id, which the
- * connector exposes as the target's key column (see
+ * {@code [dataColumns..., operation, case, rowId]}. The SPI {@link MergePage}
+ * helper splits it into an insertions page (data columns) and a deletions page
+ * (data columns + row id). Insert/update-insert rows are appended; delete and
+ * update-delete rows are removed by the merge row id, which the connector
+ * exposes as the target's primary key (see
  * {@link BenoStreamDBMetadata#getMergeRowIdColumnHandle}).</p>
  */
 public class BenoStreamDBMergeSink implements ConnectorMergeSink {
@@ -33,7 +41,8 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
     private final String gpuDevice;
     private final BufferAllocator allocator = new RootAllocator();
     private final List<Page> insertPages = new ArrayList<>();
-    private final List<Long> deleteRowIds = new ArrayList<>();
+    /** Fully-formed delete predicates ({@code key = literal}) for the row ids. */
+    private final List<String> deletePredicates = new ArrayList<>();
 
     public BenoStreamDBMergeSink(BenoStreamDBMergeTableHandle handle, String warehouse, String gpuDevice) {
         this.handle = handle;
@@ -43,41 +52,46 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
 
     @Override
     public void storeMergedRows(Page page) {
-        int positions = page.getPositionCount();
-        Block rowIdBlock = page.getBlock(0);
-        Block opBlock = page.getBlock(1);
-        for (int p = 0; p < positions; p++) {
-            long rowId = BigintType.BIGINT.getLong(rowIdBlock, p);
-            int operation = (int) IntegerType.INTEGER.getLong(opBlock, p);
-            switch (operation) {
-                case INSERT_OPERATION_NUMBER:
-                case UPDATE_INSERT_OPERATION_NUMBER:
-                    insertPages.add(extractDataPage(page, p));
-                    break;
-                case DELETE_OPERATION_NUMBER:
-                case UPDATE_DELETE_OPERATION_NUMBER:
-                    deleteRowIds.add(rowId);
-                    break;
-                default:
-                    throw new IllegalArgumentException("Unknown MERGE operation number: " + operation);
-            }
-        }
-    }
+        // Trino 468 lays the merge page out as
+        // [dataColumns..., operation (TINYINT), case (INTEGER), rowId]. The SPI
+        // helper MergePage parses it into separate insertions/deletions pages, so
+        // the connector does not hard-code column positions (this is exactly what
+        // the reference Iceberg connector does).
+        int dataColumnCount = handle.getInsertHandle().getColumns().size();
+        MergePage mergePage = MergePage.createDeleteAndInsertPages(page, dataColumnCount);
 
-    /** A single-row page containing only the data columns (rowId/operation dropped). */
-    private Page extractDataPage(Page page, int position) {
-        int dataColumns = page.getChannelCount() - 2;
-        Block[] blocks = new Block[dataColumns];
-        for (int i = 0; i < dataColumns; i++) {
-            blocks[i] = page.getBlock(i + 2).getRegion(position, 1);
-        }
-        return new Page(blocks);
+        // The insertions page carries just the data columns, ready to append.
+        mergePage.getInsertionsPage().ifPresent(insertPages::add);
+
+        mergePage.getDeletionsPage().ifPresent(deletions -> {
+            // The deletions page is [dataColumns..., rowId]; the merge row id
+            // (the target's key column) is the last channel. Its type follows the
+            // primary key, so non-numeric keys are quoted correctly.
+            BenoStreamDBColumnHandle rowIdColumn = handle.getRowIdColumn();
+            Type rowIdType = rowIdColumn.getColumnType();
+            String keyColumn = rowIdColumn.getRowIdSourceColumn();
+            Block rowIdBlock = deletions.getBlock(deletions.getChannelCount() - 1);
+            for (int p = 0; p < deletions.getPositionCount(); p++) {
+                if (!rowIdBlock.isNull(p)) {
+                    deletePredicates.add(keyColumn + " = " + sqlLiteral(rowIdType, rowIdBlock, p));
+                }
+            }
+        });
     }
 
     @Override
     public CompletableFuture<Collection<Slice>> finish() {
         BenoStreamDBInsertTableHandle insert = handle.getInsertHandle();
         String tableUri = BenoStreamDBTableUri.of(warehouse, insert.getSchemaName(), insert.getTableName());
+
+        // DELETE before INSERT: the merge row id is the target's key column, so
+        // an UPDATE (delete-old + insert-new) reuses the same key. Inserting
+        // first would let the delete reap the freshly inserted row.
+        for (String predicate : deletePredicates) {
+            if (!BenoStreamDBJNIBridge.deleteRows(tableUri, predicate)) {
+                throw new RuntimeException("BenoStreamDB deleteRows failed for " + tableUri + " (" + predicate + ")");
+            }
+        }
 
         if (!insertPages.isEmpty()) {
             try (VectorSchemaRoot root =
@@ -94,24 +108,36 @@ public class BenoStreamDBMergeSink implements ConnectorMergeSink {
             }
         }
 
-        if (!deleteRowIds.isEmpty()) {
-            // The merge row id is the target's key column (see getMergeRowIdColumnHandle).
-            String keyColumn = insert.getColumns().get(0).getColumnName();
-            for (long rowId : deleteRowIds) {
-                if (!BenoStreamDBJNIBridge.deleteRows(tableUri, keyColumn + " = " + rowId)) {
-                    throw new RuntimeException("BenoStreamDB deleteRows failed for " + tableUri);
-                }
-            }
-        }
-
         insertPages.clear();
-        deleteRowIds.clear();
+        deletePredicates.clear();
         return CompletableFuture.completedFuture(List.of());
     }
 
     @Override
     public void abort() {
         insertPages.clear();
-        deleteRowIds.clear();
+        deletePredicates.clear();
+    }
+
+    /** Render a block value as a SQL literal for the engine's filter parser. */
+    private static String sqlLiteral(Type type, Block block, int position) {
+        if (type instanceof VarcharType) {
+            String value = ((VarcharType) type).getSlice(block, position).toStringUtf8();
+            return "'" + value.replace("'", "''") + "'";
+        }
+        if (type instanceof BigintType || type instanceof IntegerType) {
+            return Long.toString(type.getLong(block, position));
+        }
+        if (type instanceof DoubleType) {
+            return Double.toString(type.getDouble(block, position));
+        }
+        if (type instanceof RealType) {
+            return Float.toString(Float.intBitsToFloat((int) type.getLong(block, position)));
+        }
+        if (type instanceof BooleanType) {
+            return Boolean.toString(type.getBoolean(block, position));
+        }
+        throw new UnsupportedOperationException(
+                "MERGE row id of type " + type + " is not supported; use a numeric, string, or boolean primary key");
     }
 }

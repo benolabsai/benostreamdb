@@ -40,6 +40,38 @@ public class TrinoConnectorTest {
         assertEquals("Should have exactly one factory", 1, count);
     }
 
+    // ---- Handle equality (required by Trino's planner) ----
+
+    @Test
+    public void testColumnHandleValueEquality() {
+        // Trino's MERGE planner compares ColumnHandles across separate
+        // getColumnHandles() calls via List.indexOf (QueryPlanner.planMerge), so
+        // value equality is mandatory. Two independently constructed handles for
+        // the same column must be equal and share a hashCode.
+        BenoStreamDBColumnHandle a = new BenoStreamDBColumnHandle("id", IntegerType.INTEGER);
+        BenoStreamDBColumnHandle b = new BenoStreamDBColumnHandle("id", IntegerType.INTEGER);
+        assertEquals(a, b);
+        assertEquals(a.hashCode(), b.hashCode());
+        assertNotEquals(a, new BenoStreamDBColumnHandle("value", IntegerType.INTEGER));
+        assertNotEquals(a, new BenoStreamDBColumnHandle("id", VarcharType.VARCHAR));
+
+        // The hidden row-id handle must also compare by value.
+        assertEquals(BenoStreamDBColumnHandle.rowId("id"), BenoStreamDBColumnHandle.rowId("id"));
+        assertNotEquals(BenoStreamDBColumnHandle.rowId("id"), BenoStreamDBColumnHandle.rowId("other"));
+    }
+
+    @Test
+    public void testTableHandleValueEquality() {
+        assertEquals(new BenoStreamDBTableHandle("s", "t"), new BenoStreamDBTableHandle("s", "t"));
+        assertNotEquals(new BenoStreamDBTableHandle("s", "t"), new BenoStreamDBTableHandle("s", "u"));
+    }
+
+    @Test
+    public void testSplitValueEquality() {
+        assertEquals(new BenoStreamDBSplit("uri", "SELECT 1"), new BenoStreamDBSplit("uri", "SELECT 1"));
+        assertNotEquals(new BenoStreamDBSplit("uri", "SELECT 1"), new BenoStreamDBSplit("uri", "SELECT 2"));
+    }
+
     // ---- ConnectorFactory Tests ----
 
     @Test
@@ -186,10 +218,11 @@ public class TrinoConnectorTest {
     }
 
     @Test
-    public void testSplitGetInfo() {
+    public void testSplitGetSplitInfo() {
         BenoStreamDBSplit split = new BenoStreamDBSplit("s3://bucket/table", "SELECT * FROM t");
-        Object info = split.getInfo();
-        assertSame("Info should return the split itself", split, info);
+        // Trino 468 replaced ConnectorSplit.getInfo() with getSplitInfo().
+        var info = split.getSplitInfo();
+        assertNotNull("Split info should not be null", info);
     }
 
     // ---- SplitManager Tests ----
@@ -303,7 +336,7 @@ public class TrinoConnectorTest {
                         new io.trino.spi.connector.ColumnMetadata("name", VarcharType.VARCHAR)));
 
         var handle = metadata.beginCreateTable(null, tableMetadata, java.util.Optional.empty(),
-                io.trino.spi.connector.RetryMode.NO_RETRIES);
+                io.trino.spi.connector.RetryMode.NO_RETRIES, false);
         assertTrue("Should be BenoStreamDBOutputTableHandle",
                 handle instanceof BenoStreamDBOutputTableHandle);
 

@@ -1,46 +1,51 @@
 package com.benostreamdb.spark
 
+import com.benostreamdb.spark.jni.BenoStreamJNIBridge
 import org.apache.spark.sql.connector.catalog.{Table, TableProvider}
 import org.apache.spark.sql.connector.expressions.Transform
+import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import org.apache.iceberg.spark.source.IcebergSource
-import java.util.Map
 
-import org.apache.spark.sql.sources.DataSourceRegister
+import java.util.{Map => JMap}
 
 /**
- * The entry point for the BenoStreamDB Spark Connector.
- * This wraps the official Iceberg source but injects our custom Table implementation
- * to intercept MERGE INTO and other operations.
+ * Entry point for `spark.read/write.format("benostream")`. Native: resolves the
+ * table via the engine's JNI metadata (no Iceberg `IcebergSource`).
  */
 class DefaultSource extends TableProvider with DataSourceRegister {
 
   override def shortName(): String = "benostream"
 
-  // We delegate basic metadata/table resolution to the official IcebergSource
-  private lazy val icebergSource = new IcebergSource()
+  private def uriOf(m: JMap[String, String]): String = {
+    val u = Option(m.get("path")).orElse(Option(m.get("location"))).getOrElse("")
+    u.stripSuffix("/")
+  }
 
   override def inferSchema(options: CaseInsensitiveStringMap): StructType = {
-    // Delegate to Iceberg to read the schema from the manifest
-    icebergSource.inferSchema(options)
+    val json = BenoStreamJNIBridge.getInstance().getTableSchema(uriOf(options.asCaseSensitiveMap()))
+    if (json == null || json.isEmpty || json == "[]") new StructType()
+    else BenoStreamArrowUtils.schemaJsonToStructType(json)
   }
 
   override def getTable(
       schema: StructType,
       partitioning: Array[Transform],
-      properties: Map[String, String]
+      properties: JMap[String, String]
   ): Table = {
-    // Get the underlying Iceberg Table
-    val icebergTable = icebergSource.getTable(schema, partitioning, properties)
-    
-    val gpuDevice = properties.getOrDefault("benostream.gpu_device", "auto")
-    
-    // Wrap it in our BenoStreamTable to intercept operations
-    new BenoStreamTable(icebergTable, schema, properties, gpuDevice)
+    val uri = uriOf(properties)
+    val resolved =
+      if (schema != null && schema.fields.nonEmpty) schema
+      else {
+        val json = BenoStreamJNIBridge.getInstance().getTableSchema(uri)
+        if (json == null || json.isEmpty || json == "[]") new StructType()
+        else BenoStreamArrowUtils.schemaJsonToStructType(json)
+      }
+    val gpu = Option(properties.get("benostream.gpu_device"))
+      .orElse(Option(properties.get("gpu_device")))
+      .getOrElse("auto")
+    new BenoStreamTable(uri, resolved, properties, gpu)
   }
 
-  override def supportsExternalMetadata(): Boolean = {
-    true
-  }
+  override def supportsExternalMetadata(): Boolean = true
 }

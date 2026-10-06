@@ -102,7 +102,10 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
             BenoStreamDBColumnHandle col = (BenoStreamDBColumnHandle) columns.get(i);
             BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(i);
 
-            FieldVector vector = root.getVector(col.getColumnName());
+            // The hidden merge row-id column is synthesized from the primary-key
+            // vector (it is not a physical column in the query result).
+            String sourceColumn = col.isRowId() ? col.getRowIdSourceColumn() : col.getColumnName();
+            FieldVector vector = root.getVector(sourceColumn);
 
             for (int r = 0; r < rowCount; r++) {
                 if (vector == null || vector.isNull(r)) {

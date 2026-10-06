@@ -276,6 +276,48 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   bindings from the incoming frame and by the JNI `appendBatch`/`mergeRows`
   from the Arrow batch, that is subtracted from RSS so the engine
   back-pressures on its own memory only. The ANN harness also writes in chunks.
+- **Trino connector packaging**: the connector now runs in the stock
+  `trinodb/trino:468` image. Fixed the SPI-version mismatch (compiled against
+  Trino 468, updating the changed `ConnectorMetadata` signatures), the nested
+  plugin ZIP (flattened), the host-glibc native lib (manylinux_2_28 build, with
+  `arrow/pyarrow` gated behind the `python` feature so the JNI build does not
+  link libpython), the non-serializable transaction handle (now an enum), the
+  missing `libstdc++` (copied from a UBI stage for Arrow's JNI lib), and Arrow
+  14's `MemoryUtil` reflection on Java 23 (`--add-opens` in `jvm.config`).
+- **Trino connector surface area**: exercised the full connector through Trino
+  468 (23/23 checks). Fixed a `NullPointerException` in `applyFilter` for
+  single-value equality predicates (Trino 468's `ConstraintApplicationResult`
+  rejects a null `ConnectorExpression`; now passes `Constant.TRUE`). Added a
+  hidden `_bsdb_row_id` column (the Iceberg `$row_id` pattern) so the merge row
+  id is not one of the data columns, switched the merge sink to the SPI
+  `MergePage` helper, ordered merge deletes before inserts, and overrode the
+  4-arg `beginMerge`. Implemented `CREATE SCHEMA` and `DROP TABLE` (native
+  `createSchema`/`dropTable` over the object store). Verified: metadata
+  (`SHOW`/`DESCRIBE`/`SHOW CREATE TABLE`/`information_schema`), reads,
+  predicate pushdown (`=`/`<`/`IN`/`BETWEEN`), aggregates, `EXPLAIN`, `CTAS`,
+  `INSERT … VALUES`/`SELECT`, `DELETE`, `MERGE`, `CREATE SCHEMA`, `DROP TABLE`.
+- **Trino `MERGE` is fully supported** (all Trino clauses: `WHEN MATCHED THEN
+  UPDATE`/`DELETE`, `WHEN NOT MATCHED THEN INSERT`, multi-clause and `AND`
+  conditions). The `UPDATE` branch was previously a silent no-op: Trino's
+  planner compares `ColumnHandle`s across separate `getColumnHandles()` calls
+  (`QueryPlanner.planMerge` does `mergeCaseSetColumns.indexOf(dataColumnHandle)`),
+  and the connector's handles had no `equals`/`hashCode`, so the lookup always
+  missed and the planner fell back to the pre-update target row (and to `NULL`
+  for `INSERT`). Every connector handle type now implements value equality.
+  Verified end-to-end with value assertions: `UPDATE` writes the new value,
+  `DELETE` removes the row, `INSERT` writes the source values, and a conditional
+  clause is correctly skipped. The hidden row-id column now carries the primary
+  key's own type (numeric, `VARCHAR`, or boolean), and the delete predicate is
+  quoted for strings, so non-numeric keys work too.
+- **Trino `DROP TABLE` now removes the table from `SHOW TABLES`**: the native
+  `list_subdirs` derives names from the objects actually present instead of
+  `list_with_delimiter`'s common prefixes, so a local filesystem's leftover empty
+  directory no longer makes a dropped table reappear. `dropTable` also
+  invalidates the manifest caches (`ManifestManager::invalidate_caches`) so a
+  `CREATE TABLE` immediately after a `DROP TABLE` no longer reports "already
+  exists" (the `LATEST_VERSION_CACHE`/`MANIFEST_CACHE` entries have short TTLs
+  but were not cleared on drop). Covered by Rust unit tests
+  (`core::ffi::list_subdirs_tests`).
 
 ### Tests
 - `tests/test_h1_h2_concurrency_regression.rs` — H1/H2/H3 regression coverage
