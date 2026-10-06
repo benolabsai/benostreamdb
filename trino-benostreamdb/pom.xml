@@ -22,7 +22,7 @@
         <!-- Overridden by build-connectors.sh / the release workflow from the
              core engine's Cargo.toml (single source of truth). -->
         <revision>0.12.0</revision>
-        <trino.version>435</trino.version>
+        <trino.version>468</trino.version>
         <java.release>17</java.release>
         <skipTests>false</skipTests>
     </properties>

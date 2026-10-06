@@ -6,6 +6,7 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Collections;
+import java.util.Objects;
 
 /**
  * A single scan of a BenoStreamDB table.
@@ -36,11 +37,6 @@ public class BenoStreamDBSplit implements ConnectorSplit {
         return Collections.emptyList();
     }
 
-    @Override
-    public Object getInfo() {
-        return this;
-    }
-
     @JsonProperty
     public String getTableUri() {
         return tableUri;
@@ -49,5 +45,23 @@ public class BenoStreamDBSplit implements ConnectorSplit {
     @JsonProperty
     public String getSql() {
         return sql;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        BenoStreamDBSplit that = (BenoStreamDBSplit) o;
+        return Objects.equals(tableUri, that.tableUri)
+                && Objects.equals(sql, that.sql);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(tableUri, sql);
     }
 }

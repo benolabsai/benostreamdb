@@ -1,47 +1,49 @@
 package com.benostreamdb.spark
 
-import org.apache.spark.sql.connector.catalog.{SupportsRead, SupportsRowLevelOperations, Table, TableCapability}
+import com.benostreamdb.spark.jni.BenoStreamJNIBridge
+import org.apache.spark.sql.connector.catalog.{SupportsRead, SupportsRowLevelOperations, SupportsWrite, Table, TableCapability}
 import org.apache.spark.sql.connector.read.ScanBuilder
-import org.apache.spark.sql.connector.write.{LogicalWriteInfo, RowLevelOperationBuilder, WriteBuilder}
-import org.apache.spark.sql.connector.write.RowLevelOperationInfo
+import org.apache.spark.sql.connector.write.{LogicalWriteInfo, RowLevelOperationBuilder, RowLevelOperationInfo, WriteBuilder}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import java.util.{Set => JSet}
+
+import java.util.{Map => JMap, Set => JSet}
 import scala.collection.JavaConverters._
 
 /**
- * BenoStreamTable wraps the official Iceberg SparkTable.
- * It intercepts operations where BenoStreamDB's indexes can be used (like MERGE),
- * and delegates everything else back to Iceberg.
+ * A native BenoStreamDB table. Talks to the Rust engine directly through JNI
+ * (schema, scans, writes, deletes) exactly like the Trino connector — no
+ * `iceberg-spark-runtime` dependency, so a single Scala-2.13 build serves Spark
+ * 4.0/4.1/4.2 and a Scala-2.12 build serves 3.5.x.
+ *
+ * Row-level operations:
+ *  - DELETE is served here via [[SupportsDelete]] (predicate -> engine deleteRows).
+ *  - UPDATE / MERGE run through the engine's native SQL (pass-through), not
+ *    Spark's merge-on-read framework, because the engine has no physical row-id
+ *    (_file/_pos) to satisfy Spark's DeltaWriter identity contract.
  */
 class BenoStreamTable(
-    val delegate: Table,
-    val tableSchema: StructType,
-    override val properties: java.util.Map[String, String],
+    val tableUri: String,
+    val structSchema: StructType,
+    override val properties: JMap[String, String],
     val gpuDevice: String
-) extends Table with SupportsRead with SupportsRowLevelOperations {
+) extends Table with SupportsRead with SupportsWrite with SupportsRowLevelOperations {
 
-  override def name(): String = delegate.name()
+  override def name(): String = tableUri
 
-  override def schema(): StructType = delegate.schema()
+  override def schema(): StructType = structSchema
 
-  override def capabilities(): JSet[TableCapability] = {
-    // We add our row-level operation capabilities on top of the delegate's capabilities
-    val caps = new java.util.HashSet[TableCapability](delegate.capabilities())
-    caps.add(TableCapability.BATCH_READ)
-    caps.add(TableCapability.BATCH_WRITE)
-    caps.add(TableCapability.ACCEPT_ANY_SCHEMA)
-    caps
-  }
+  override def capabilities(): JSet[TableCapability] = Set(
+    TableCapability.BATCH_READ,
+    TableCapability.BATCH_WRITE
+  ).asJava
 
-  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
-    new BenoStreamScanBuilder(this, options)
-  }
+  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder =
+    new BenoStreamScanBuilder(this)
 
-  override def newRowLevelOperationBuilder(info: RowLevelOperationInfo): RowLevelOperationBuilder = {
-    // This is where the magic happens!
-    // When Spark executes MERGE INTO, UPDATE, or DELETE, it calls this method.
-    // We return our custom builder that enforces Merge-on-Read and uses our indexes.
-    new BenoStreamMergeBuilder(this, info, gpuDevice)
-  }
+  override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder =
+    new BenoStreamWriteBuilder(this, info, gpuDevice)
+
+  override def newRowLevelOperationBuilder(info: RowLevelOperationInfo): RowLevelOperationBuilder =
+    new BenoStreamRowLevelOperationBuilder(this, info, gpuDevice)
 }

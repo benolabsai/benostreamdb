@@ -58,7 +58,7 @@ default = []
 # NO_PANIC_POLICY.md). Off during Phase 1 remediation; CI enables it once the
 # `scripts/no_panic_check.sh` baseline reaches the documented invariant set.
 no-panic = []
-python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "wgpu", "pollster", "cuda"]
+python = ["dep:pyo3", "pyo3/extension-module", "dep:numpy", "dep:pythonize", "arrow/pyarrow", "wgpu", "pollster", "cuda"]
 java = ["dep:jni"]
 proptest = []
 observability = ["dep:metrics-exporter-prometheus"]
@@ -74,7 +74,11 @@ metrics-exporter-prometheus = ["dep:metrics-exporter-prometheus"]
 benostream-gpu-ann = { version = "0.1.0", path = "benostream-gpu-ann", default-features = false }
 libc = "0.2"
 # core columnar memory format
-arrow = { version = "57.2.0", features = ["ffi", "pyarrow", "ipc"] }
+# `pyarrow` (which pulls pyo3 → libpython) is only needed for the Python
+# bindings, so it is enabled by the `python` feature. The JNI connector build
+# (`--features java`) must not link libpython, or it cannot load in a Trino
+# container that has no Python.
+arrow = { version = "57.2.0", features = ["ffi", "ipc"] }
 lazy_static = "1.4"
 arrow-array = "57.2.0"
 arrow-schema = "57.2.0"

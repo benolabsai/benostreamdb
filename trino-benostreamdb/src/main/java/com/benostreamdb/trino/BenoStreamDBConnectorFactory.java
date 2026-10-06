@@ -58,10 +58,17 @@ public class BenoStreamDBConnectorFactory implements ConnectorFactory {
         @Override
         public ConnectorTransactionHandle beginTransaction(IsolationLevel isolationLevel, boolean readOnly,
                 boolean autoCommit) {
-            return new BenoStreamDBTransactionHandle();
+            return BenoStreamDBTransactionHandle.INSTANCE;
         }
     }
 
-    public static class BenoStreamDBTransactionHandle implements ConnectorTransactionHandle {
+    /**
+     * The transaction handle is shipped to workers inside the serialized
+     * {@code TaskUpdateRequest}, so it must be JSON-serializable. An enum is the
+     * idiomatic Trino choice: Jackson serializes it by name, and there is no
+     * state to carry.
+     */
+    public enum BenoStreamDBTransactionHandle implements ConnectorTransactionHandle {
+        INSTANCE
     }
 }

@@ -35,6 +35,11 @@ public class BenoStreamDBJNIBridge {
 
     public static native String listTables(String warehouse, String schema);
 
+    // DDL: create a schema (a directory under the warehouse) / drop a table.
+    public static native boolean createSchema(String warehouse, String schema);
+
+    public static native boolean dropTable(String tableUri);
+
     // SQL query pushdown: run a query through the engine's session (full index
     // and vector-search pushdown) and stream the result batches.
     public static native long openQuery(String tableUri, String sql);
