@@ -9,6 +9,30 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.12.0]
 
 ### Added
+- **Native Spark connector (v0.12.0)** — the Spark DataSource V2 connector is
+  now fully native: catalog/DDL (`BenoStreamCatalog` via JNI
+  `listSchemas`/`listTables`/`createTable`/`dropTable`), reads (engine SQL via
+  `openQuery` + Arrow C Data Interface with filter/projection pushdown), writes
+  (`appendBatch`), and **row-level operations** — `DELETE` / `UPDATE` / full
+  `MERGE` matrix through `SupportsDelta` using primary-key row identity
+  (matched deletes become engine predicate deletes; inserts/updated rows are
+  appended as Arrow batches). Verified on Spark 3.5.9 and 4.2.0 with
+  whole-stage codegen enabled. Spark 4.x builds carry **no
+  `iceberg-spark-runtime` dependency**; the 3.5 profile links it `provided`
+  only for `CALL` support (Spark 3.5 lacks the native DSv2 procedure API). One
+  Scala 2.12 artifact serves Spark 3.5.x and one Scala 2.13 artifact serves
+  Spark 4.0/4.1/4.2 (`DeltaWriter`/`SupportsDelta` APIs are identical). On
+  Spark 4.x, `BenoStreamProcedureCatalog` extends the native catalog so tables,
+  namespaces, and `system.*` procedures share a single catalog.
+- **Spark catalog functions (`FunctionCatalog`)** —
+  `benostream.system.cosine_distance` / `l2_distance` / `dot_product` /
+  `vector_distance` / `sparse_dot_product` / `hybrid_score` /
+  `reciprocal_rank_fusion` resolve natively from SQL, DataFrames, and PySpark
+  with zero session registration (works on Spark 3.4+ including 3.5 and 4.x).
+  `SHOW FUNCTIONS IN benostream.system` lists them; `BenoStreamFunctions.register`
+  remains for unqualified session names. pgvector operators are intentionally
+  not exposed in Spark SQL (grammar rejects them; use the function spelling,
+  which matches the Trino/DataFusion names).
 - **Search gateway (`contrib/benostreamdb-search`)** — a standalone,
   embeddable HTTP service exposing Elasticsearch/OpenSearch-compatible and
   Qdrant-compatible REST APIs over BenoStreamDB tables. Covers document
@@ -208,6 +232,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **`SHOW TABLES` listed the `.keep` namespace placeholder** — `list_subdirs`
+  (`src/core/ffi.rs`) now skips dot-prefixed entries, so the `CREATE SCHEMA`
+  `.keep` marker no longer surfaces as a table in Trino/Spark `SHOW TABLES`
+  (covered by `list_subdirs_tests::hidden_keep_marker_is_not_listed`).
 - **H1 — write/WAL atomicity**: `write_buffer` and `pending_wal_tx_ids` unified
   into a single `pending_writes: Arc<RwLock<Vec<PendingWrite>>>` so a batch and
   its WAL transaction id are always taken together at flush time, structurally

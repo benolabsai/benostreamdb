@@ -1,17 +1,17 @@
 # Apache Spark Connector
 
-The BenoStreamDB Spark connector provides universal vector search, secondary index pushdown, position delete writes (Merge-on-Read), and streaming capabilities for Apache Spark.
+The BenoStreamDB Spark connector is a **fully native** Apache Spark DataSource V2 connector: reads, writes, DDL, catalog metadata, and row-level operations (DELETE / UPDATE / MERGE) all execute inside the BenoStreamDB Rust engine via JNI and the Arrow C Data Interface. It provides universal vector search, secondary index pushdown, stored procedures, and streaming capabilities.
 
-The connector wraps the Apache Iceberg Spark Table SPI while intercepting read scans and row-level write operations to leverage BenoStreamDB's native Rust index engine via JNI.
+There is **no Iceberg runtime dependency** for Spark 4.x builds. (Spark 3.5 predates the native DSv2 `ProcedureCatalog`/`CALL` API, so the optional `spark-3.5` build links `iceberg-spark-runtime` in `provided` scope solely to expose stored procedures; tables, reads, writes, and row-level ops on 3.5 are native too.)
 
 ---
 
 ## Requirements
 
-* **Apache Spark**: 3.5.x, 4.0.x, or 4.1.x
-* **Java**: 17+
-* **Scala**: 2.12 (Spark 3.5) / 2.13 (Spark 4.x)
-* **BenoStreamDB Native Library**: `libbenostreamdb.so` (available on `java.library.path` or packaged in JAR)
+* **Apache Spark**: 3.5.x, 4.0.x, 4.1.x, or 4.2.x
+* **Java**: 17 (required for Spark 3.5; supported on 4.x)
+* **Scala**: 2.12 (Spark 3.5) / 2.13 (Spark 4.x) — one artifact per Scala binary covers every Spark minor in that line
+* **BenoStreamDB Native Library**: `libbenostreamdb.so` (bundled in the JAR resources, or on `java.library.path`)
 
 ---
 
@@ -25,26 +25,28 @@ cd spark-benostreamdb
 # Default (Spark 4.0)
 mvn clean package -Pspark-4.0
 
-# Spark 3.5
+# Spark 3.5 (Scala 2.12)
 mvn clean package -Pspark-3.5
 
 # Spark 4.1
 mvn clean package -Pspark-4.1
+
+# Spark 4.2
+mvn clean package -Pspark-4.2
 ```
 
 ---
 
 ## Configuration & Catalog Setup
 
-Configure SparkSession to use BenoStreamDB's procedure catalog:
+Configure SparkSession with the native catalog. On Spark 4.x use `BenoStreamProcedureCatalog` (the native table catalog **plus** `system.*` stored procedures); on Spark 3.5 use `BenoStreamCatalog` for tables/DDL:
 
 ```scala
 val spark = SparkSession.builder()
   .appName("BenoStreamSparkApp")
-  .config("spark.sql.catalog.spark_catalog", "org.apache.iceberg.spark.SparkCatalog")
-  .config("spark.sql.catalog.spark_catalog.type", "hadoop")
-  .config("spark.sql.catalog.spark_catalog.warehouse", "s3://my-lakehouse/warehouse")
+  // Spark 4.x: tables + namespaces + CALL in one catalog
   .config("spark.sql.catalog.benostream", "com.benostreamdb.spark.BenoStreamProcedureCatalog")
+  .config("spark.sql.catalog.benostream.warehouse", "s3://my-lakehouse/warehouse")
   .getOrCreate()
 
 // Register BenoStreamDB vector search and similarity UDFs
@@ -59,6 +61,21 @@ BenoStreamFunctions.register(spark)
 ### 1. Vector Search & Similarity Functions
 
 BenoStreamDB provides native SQL functions and DataFrame extensions for high-dimensional vector search.
+
+#### Catalog Functions (no registration required)
+
+The functions below are exposed through the Spark DSv2 `FunctionCatalog` and resolve with their fully-qualified names from Spark SQL, DataFrames, and PySpark on both Spark 3.5 and 4.x — no `register()` call needed:
+
+```sql
+SHOW FUNCTIONS IN benostream.system;
+
+SELECT id, title, benostream.system.cosine_distance(embedding, array(0.12, 0.45, -0.23)) AS dist
+FROM benostream.default.documents
+ORDER BY dist ASC
+LIMIT 10;
+```
+
+Registering the session-level aliases (`BenoStreamFunctions.register(spark)`, shown below) lets you use the unqualified names. Note that pgvector operators (`<->`) are intentionally **not** part of Spark SQL — Spark's grammar rejects them and they would be inconsistent with other catalogs in the same session; use these function names instead (identical to the Trino/DataFusion spellings).
 
 #### Spark SQL Functions
 
@@ -146,7 +163,7 @@ val activeUsers = spark.read
 
 ### 4. Index Lifecycle & Catalog Procedures
 
-Manage BenoStreamDB indexes directly through Spark SQL stored procedures under `benostream.system`:
+On Spark 4.x, manage BenoStreamDB indexes directly through native Spark stored procedures under `benostream.system` (the catalog above implements the DSv2 `ProcedureCatalog` API):
 
 ```sql
 -- Add an index to an Iceberg column
@@ -173,17 +190,31 @@ CALL benostream.system.set_primary_key('spark_catalog.default.users', 'id');
 
 ---
 
-### 5. Merge-on-Read & Position Delete Writes
+### 5. Row-Level Operations: DELETE / UPDATE / MERGE
 
-The connector implements `SupportsRowLevelOperations` (`BenoStreamMergeBuilder` and `BenoStreamPositionDeltaWrite`). When executing `MERGE INTO`, `UPDATE`, or `DELETE`, Spark uses BenoStreamDB's primary key indexes for accelerated candidate identification, writing Iceberg position delete files with zero table duplication.
+The connector implements `SupportsRowLevelOperations` natively (`BenoStreamRowLevelOperation` extends `SupportsDelta`). Row identity is the table's **primary key** columns (`rowId()` / `requiredMetadataAttributes()`), which are ordinary table columns — so Spark resolves them against the target relation without metadata-column plumbing.
+
+Execution maps directly onto the engine's primitives:
+
+* matched `DELETE` / `UPDATE` (old image) → predicate deletes via JNI (`deleteRows`)
+* `INSERT` / updated new rows → Arrow record batches appended via JNI (`appendBatch`)
+* plain `DELETE FROM ... WHERE ...` (no subquery) → pushed down as a single `deleteRows` predicate through `SupportsDelete`
 
 ```sql
-MERGE INTO spark_catalog.default.users target
+MERGE INTO benostream.default.users target
 USING new_updates source
 ON target.id = source.id
-WHEN MATCHED THEN UPDATE SET target.age = source.age
-WHEN NOT MATCHED THEN INSERT *;
+WHEN MATCHED AND source.age < 0 THEN DELETE
+WHEN MATCHED THEN UPDATE SET age = source.age
+WHEN NOT MATCHED THEN INSERT (id, age) VALUES (source.id, source.age);
+
+UPDATE benostream.default.users SET age = 31 WHERE id = 7;
+DELETE FROM benostream.default.users WHERE age < 0;
 ```
+
+The full MERGE matrix (UPDATE / DELETE / INSERT clauses, plus standalone UPDATE/DELETE) is verified end-to-end on Spark 3.5.9 and 4.2.0 with whole-stage codegen enabled. Declare the primary key with `CALL benostream.system.set_primary_key('db.tbl', 'id')` (or the `primary_key` table property); when unset, the first column is used.
+
+> Note: the engine does not currently honor Iceberg position-delete files (`commitPositionDeletes` is a placeholder), so deletes are applied as predicate removals at commit time rather than as delete-file overlays.
 
 ---
 

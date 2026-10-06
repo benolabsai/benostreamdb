@@ -1,8 +1,7 @@
 package com.benostreamdb.spark
 
-import org.apache.spark.sql.connector.catalog.{CatalogPlugin, Identifier, ProcedureCatalog}
+import org.apache.spark.sql.connector.catalog.{Identifier, ProcedureCatalog}
 import org.apache.spark.sql.connector.catalog.procedures.UnboundProcedure
-import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import com.benostreamdb.spark.procedures.{
   AddIndexProcedure,
   BuildIndexProcedure,
@@ -15,18 +14,16 @@ import com.benostreamdb.spark.procedures.{
 }
 
 /**
- * BenoStreamProcedureCatalog provides our custom Stored Procedures.
- * Users configure: spark.sql.catalog.benostream=com.benostreamdb.spark.BenoStreamProcedureCatalog
+ * The single BenoStreamDB catalog for Spark 4.x: native tables/namespaces
+ * (inherited from [[BenoStreamCatalog]], which resolves everything through the
+ * engine's JNI metadata surface) plus stored procedures under `system.*`.
+ *
+ * Spark 4.0 introduced the native DSv2 `ProcedureCatalog` API, so this build
+ * needs no Iceberg runtime at all.
+ *
+ * Configure: spark.sql.catalog.benostream=com.benostreamdb.spark.BenoStreamProcedureCatalog
  */
-class BenoStreamProcedureCatalog extends ProcedureCatalog with CatalogPlugin {
-
-  private var catalogName: String = "benostream"
-
-  override def initialize(name: String, options: CaseInsensitiveStringMap): Unit = {
-    this.catalogName = name
-  }
-
-  override def name(): String = catalogName
+class BenoStreamProcedureCatalog extends BenoStreamCatalog with ProcedureCatalog {
 
   override def loadProcedure(ident: Identifier): UnboundProcedure = {
     val namespace = ident.namespace()
@@ -49,7 +46,7 @@ class BenoStreamProcedureCatalog extends ProcedureCatalog with CatalogPlugin {
     }
   }
 
-  def listProcedures(namespace: Array[String]): Array[Identifier] = {
+  override def listProcedures(namespace: Array[String]): Array[Identifier] = {
     if (namespace.length == 1 && namespace(0).equalsIgnoreCase("system")) {
       Array(
         Identifier.of(namespace, "add_index"),

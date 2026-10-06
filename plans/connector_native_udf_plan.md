@@ -1,5 +1,34 @@
 # BenoStreamDB Connector Architecture: Native Engine + UDF Exposure + Version Matrix
 
+## Status (2026-10-06)
+
+- **A. Native Spark connector — DONE.** Catalog/DDL/read/write/row-level ops are
+  native; MERGE matrix verified on Spark 3.5.9 + 4.2.0 with codegen ON. Row-level
+  ops shipped as `SupportsDelta` with **primary-key row identity** (engine
+  position deletes are a placeholder, so `deleteRows`+`appendBatch` replaced the
+  `mergeRows` sketch). `iceberg-spark-runtime` is gone from Spark 4.x builds and
+  remains `provided` in the 3.5 profile only (native DSv2 `CALL` landed in 4.0).
+- **B1. Scalar catalog functions — DONE.** `FunctionCatalog` on
+  `BenoStreamCatalog` exposes `benostream.system.{cosine_distance, l2_distance,
+  dot_product, vector_distance, sparse_dot_product, hybrid_score,
+  reciprocal_rank_fusion}` — verified on 3.5.9 and 4.2.0, no registration, works
+  from PySpark. `ScalarFunction` implementations must override
+  `produceResult(InternalRow)` (required by Spark 4.x, accepted by 3.4+).
+- **B2. Remaining (this milestone)**: (1) pass-through `option("query", sql)`
+  reader (full DataFusion surface incl. pgvector operators + KNN optimizer);
+  (2) index-accelerated KNN for Spark 4.x via `SupportsTopNPushDown` rendering
+  `ORDER BY <distance fn> LIMIT k` back into engine SQL; (3) **all 21 graph
+  UDAFs** (`src/core/sql/graph_udf/mod.rs::all_graph_aggregates`: pagerank,
+  personalized_pagerank, connected_components, scc, louvain, leiden, modularity,
+  betweenness/closeness/degree centrality, jaccard, triangle_count,
+  shortest_path, all_shortest_paths, label_propagation, subgraph, connecting_paths,
+  graph_neighbors, drift_search, regional_drift, preferential_attachment) +
+  keyword/hybrid search — these are set-returning aggregates, so they surface
+  through the pass-through reader (Spark has no public set-returning catalog
+  TVF API in 3.5 or 4.x); (4) Trino `ConnectorTableFunction` set.
+- **Dialect decision**: pgvector operators (`<->`) are engine/pass-through only.
+  Spark SQL exposes snake_case function names matching Trino/DataFusion.
+
 ## Problem statement
 
 Three interlocking requirements emerged while testing the Spark connector:
@@ -31,8 +60,10 @@ Three interlocking requirements emerged while testing the Spark connector:
 - **Trino has no generic pass-through query mechanism** and connectors cannot
   register arbitrary scalar UDFs; it *does* support connector **table
   functions** (`ConnectorTableFunction`, SPI 468).
-- **Spark 4.x supports DSv2 `TableFunction`** (`FunctionCatalog`); Spark 3.5
-  does not, but supports relation options + registered Spark UDFs.
+- **Spark 3.4+/4.x support DSv2 `FunctionCatalog` scalar functions**
+  (`ScalarFunction`/`UnboundFunction`); set-returning catalog TVFs are **not**
+  public API in either line (4.x `TableFunction` is row-level LATERAL only).
+  Relation options (`option("query", ...)`) work everywhere.
 
 ## Recommended architecture
 

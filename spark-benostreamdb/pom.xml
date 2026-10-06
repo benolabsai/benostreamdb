@@ -28,14 +28,19 @@
         <skipTests>false</skipTests>
     </properties>
 
+    <!--
+        The connector is fully native (Rust engine over JNI + Arrow C Data Interface).
+        It does NOT depend on iceberg-spark-runtime: one artifact per Scala binary
+        version covers Spark 3.5.x (2.12) and Spark 4.0/4.1/4.2 (2.13).
+        The DeltaWriter/SupportsDelta/RowLevelOperation API is identical across
+        3.5.9 and 4.2.0, so no per-minor source variants are required.
+    -->
     <profiles>
         <profile>
             <id>spark-4.1</id>
             <properties>
                 <spark.version>4.1.2</spark.version>
                 <spark.major.version>4</spark.major.version>
-                <iceberg.spark.version>4.1_2.13</iceberg.spark.version>
-                <iceberg.version>1.11.0</iceberg.version>
             </properties>
         </profile>
         <profile>
@@ -43,8 +48,6 @@
             <properties>
                 <spark.version>4.2.0</spark.version>
                 <spark.major.version>4</spark.major.version>
-                <iceberg.spark.version>4.2_2.13</iceberg.spark.version>
-                <iceberg.version>1.11.0</iceberg.version>
             </properties>
         </profile>
         <profile>
@@ -55,8 +58,6 @@
             <properties>
                 <spark.version>4.0.1</spark.version>
                 <spark.major.version>4</spark.major.version>
-                <iceberg.spark.version>4.0_2.13</iceberg.spark.version>
-                <iceberg.version>1.11.0</iceberg.version>
             </properties>
         </profile>
         <profile>
@@ -64,10 +65,22 @@
             <properties>
                 <spark.version>3.5.1</spark.version>
                 <spark.major.version>3</spark.major.version>
-                <iceberg.spark.version>3.5_2.12</iceberg.spark.version>
-                <iceberg.version>1.5.2</iceberg.version>
                 <scala.binary.version>2.12</scala.binary.version>
             </properties>
+            <dependencies>
+                <!-- Spark 3.5 has no native DSv2 procedure/CALL API (that landed in
+                     Spark 4.0). Our src/main/spark-3 procedures compile against
+                     Iceberg's shim package org.apache.spark.sql.connector.iceberg.catalog,
+                     which ships inside iceberg-spark-runtime. This is the ONLY Iceberg
+                     coupling left and it is scoped to the Spark 3.5 build; Spark 4.x
+                     builds are fully native. 3.5 support will drop when EOL. -->
+                <dependency>
+                    <groupId>org.apache.iceberg</groupId>
+                    <artifactId>iceberg-spark-runtime-3.5_2.12</artifactId>
+                    <version>1.5.2</version>
+                    <scope>provided</scope>
+                </dependency>
+            </dependencies>
         </profile>
     </profiles>
 
@@ -80,13 +93,6 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Iceberg Spark Runtime -->
-        <dependency>
-            <groupId>org.apache.iceberg</groupId>
-            <artifactId>iceberg-spark-runtime-${iceberg.spark.version}</artifactId>
-            <version>${iceberg.version}</version>
-            <scope>provided</scope>
-        </dependency>
         <!-- Spark Core (Provided) -->
         <dependency>
             <groupId>org.apache.spark</groupId>
