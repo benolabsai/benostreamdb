@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
 use arrow::array::{
-    Array, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, ListArray,
-    ListBuilder, UInt8Array,
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    ListArray, ListBuilder, UInt8Array,
 };
 use arrow::datatypes::DataType;
 use datafusion::common::cast::as_fixed_size_list_array;
@@ -29,6 +29,80 @@ macro_rules! impl_dyn_traits {
             }
         }
     };
+}
+
+/// Read a vector column as `Vec<Vec<f32>>`, accepting both `List` and
+/// `FixedSizeList` layouts (and Float32/Float64/Int element types). The
+/// element-wise ops previously required `FixedSizeList`, so a `List(Float32)`
+/// argument (e.g. from a `::FLOAT[]` cast) failed with a cast error.
+fn as_vec_of_f32(arr: &ArrayRef) -> Result<Vec<Vec<f32>>> {
+    if let Some(fsl) = arr.as_any().downcast_ref::<FixedSizeListArray>() {
+        let mut out = Vec::with_capacity(fsl.len());
+        for i in 0..fsl.len() {
+            out.push(f32_values(&fsl.value(i))?);
+        }
+        return Ok(out);
+    }
+    if let Some(list) = arr.as_any().downcast_ref::<ListArray>() {
+        let mut out = Vec::with_capacity(list.len());
+        for i in 0..list.len() {
+            out.push(f32_values(&list.value(i))?);
+        }
+        return Ok(out);
+    }
+    Err(datafusion::error::DataFusionError::Execution(
+        "vector op: expected a list-typed argument".to_string(),
+    ))
+}
+
+/// Extract the `f32` values of a vector element array.
+fn f32_values(a: &ArrayRef) -> Result<Vec<f32>> {
+    if let Some(v) = a.as_any().downcast_ref::<Float32Array>() {
+        return Ok(v.values().to_vec());
+    }
+    if let Some(v) = a.as_any().downcast_ref::<Float64Array>() {
+        return Ok(v.values().iter().map(|&x| x as f32).collect());
+    }
+    if let Some(v) = a.as_any().downcast_ref::<Int32Array>() {
+        return Ok(v.values().iter().map(|&x| x as f32).collect());
+    }
+    if let Some(v) = a.as_any().downcast_ref::<Int64Array>() {
+        return Ok(v.values().iter().map(|&x| x as f32).collect());
+    }
+    if let Some(v) = a.as_any().downcast_ref::<UInt8Array>() {
+        return Ok(v.values().iter().map(|&x| x as f32).collect());
+    }
+    Err(datafusion::error::DataFusionError::Execution(
+        "vector op: unsupported element type".to_string(),
+    ))
+}
+
+/// Normalize a `ColumnarValue` to an array of `rows` length (expanding a
+/// scalar literal, e.g. `ARRAY[1.0, 1.0]::FLOAT[]`, to match the other side).
+fn as_array_of(v: &ColumnarValue, rows: usize) -> Result<ArrayRef> {
+    match v {
+        ColumnarValue::Array(a) => Ok(a.clone()),
+        ColumnarValue::Scalar(s) => s.to_array_of_size(rows),
+    }
+}
+
+/// Row count of a pair of arguments (whichever side is an array).
+fn pair_rows(l: &ColumnarValue, r: &ColumnarValue) -> usize {
+    match (l, r) {
+        (ColumnarValue::Array(a), _) => a.len(),
+        (_, ColumnarValue::Array(b)) => b.len(),
+        _ => 1,
+    }
+}
+
+/// Build a `List(Float32)` array from per-row vectors.
+fn list_of_f32(rows: &[Vec<f32>]) -> Result<ArrayRef> {
+    let mut builder = arrow::array::ListBuilder::new(Float32Array::builder(0));
+    for row in rows {
+        builder.values().append_slice(row);
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Generic Macro for Element-wise Binary Ops
@@ -76,63 +150,29 @@ macro_rules! create_vector_binary_op_udf {
                 args: datafusion::logical_expr::ScalarFunctionArgs,
             ) -> Result<ColumnarValue> {
                 let (lhs, rhs) = (&args.args[0], &args.args[1]);
-                match (lhs, rhs) {
-                    (ColumnarValue::Array(l), ColumnarValue::Array(r)) => {
-                        let l_arr = as_fixed_size_list_array(l)?;
-                        let r_arr = as_fixed_size_list_array(r)?;
-                        let len = l_arr.value_length();
-                        let mut builder = Float32Array::builder(l_arr.len() * len as usize);
-                        for i in 0..l_arr.len() {
-                            let v1_array = l_arr.value(i);
-                            let v2_array = r_arr.value(i);
-                            let v1 = v1_array
-                                .as_any()
-                                .downcast_ref::<Float32Array>()
-                                .ok_or_else(|| {
-                                    datafusion::error::DataFusionError::Execution(
-                                        "vector binary op: expected Float32 values".to_string(),
-                                    )
-                                })?
-                                .values();
-                            let v2 = v2_array
-                                .as_any()
-                                .downcast_ref::<Float32Array>()
-                                .ok_or_else(|| {
-                                    datafusion::error::DataFusionError::Execution(
-                                        "vector binary op: expected Float32 values".to_string(),
-                                    )
-                                })?
-                                .values();
-                            builder.append_slice(&$op_fn(v1, v2));
-                        }
-                        // Emit a ListArray so the produced type matches the
-                        // declared return type (`arg_types[0]`, i.e. List(Float32)
-                        // for list inputs) — a FixedSizeList result fails the
-                        // engine's result-type check.
-                        let values = builder.finish();
-                        let offsets: Vec<i32> = (0..=l_arr.len())
-                            .map(|i| (i as i32) * len as i32)
-                            .collect();
-                        let list = ListArray::try_new(
-                            Arc::new(arrow::datatypes::Field::new(
-                                "item",
-                                DataType::Float32,
-                                true,
-                            )),
-                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(
-                                offsets,
-                            )),
-                            Arc::new(values),
-                            None,
-                        )?;
-                        Ok(ColumnarValue::Array(Arc::new(list)))
-                    }
-                    _ => {
-                        return Err(datafusion::error::DataFusionError::Execution(
-                            "Unsupported arguments".to_string(),
-                        ))
-                    }
+                let rows = pair_rows(lhs, rhs);
+                let l = as_array_of(lhs, rows)?;
+                let r = as_array_of(rhs, rows)?;
+                let l_rows = as_vec_of_f32(&l)?;
+                let r_rows = as_vec_of_f32(&r)?;
+                if l_rows.len() != r_rows.len() {
+                    return Err(datafusion::error::DataFusionError::Execution(
+                        "vector binary op: argument lengths differ".to_string(),
+                    ));
                 }
+                let mut out = Vec::with_capacity(l_rows.len());
+                for (v1, v2) in l_rows.iter().zip(r_rows.iter()) {
+                    if v1.len() != v2.len() {
+                        return Err(datafusion::error::DataFusionError::Execution(
+                            "vector binary op: vector dimensions differ".to_string(),
+                        ));
+                    }
+                    out.push($op_fn(v1, v2));
+                }
+                // Emit a ListArray so the produced type matches the declared
+                // return type (`arg_types[0]`, i.e. List(Float32) for list
+                // inputs).
+                Ok(ColumnarValue::Array(list_of_f32(&out)?))
             }
         }
     };
@@ -199,48 +239,24 @@ impl ScalarUDFImpl for VectorConcatUDF {
         args: datafusion::logical_expr::ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let (lhs, rhs) = (&args.args[0], &args.args[1]);
-        match (lhs, rhs) {
-            (ColumnarValue::Array(l), ColumnarValue::Array(r)) => {
-                let l_arr = as_fixed_size_list_array(l)?;
-                let r_arr = as_fixed_size_list_array(r)?;
-
-                let mut builder =
-                    arrow::array::ListBuilder::new(arrow::array::Float32Builder::new());
-                for i in 0..l_arr.len() {
-                    let v1_array = l_arr.value(i);
-                    let v2_array = r_arr.value(i);
-                    let v1 = v1_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?;
-                    let v2 = v2_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?;
-
-                    let concatenated: Vec<f32> = v1
-                        .values()
-                        .iter()
-                        .chain(v2.values().iter())
-                        .copied()
-                        .collect();
-                    builder.values().append_slice(&concatenated);
-                    builder.append(true);
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
-            _ => Err(datafusion::error::DataFusionError::Execution(
-                "Unsupported argument combinations for vector_concat".to_string(),
-            )),
+        let rows = pair_rows(lhs, rhs);
+        let l = as_array_of(lhs, rows)?;
+        let r = as_array_of(rhs, rows)?;
+        let l_rows = as_vec_of_f32(&l)?;
+        let r_rows = as_vec_of_f32(&r)?;
+        if l_rows.len() != r_rows.len() {
+            return Err(datafusion::error::DataFusionError::Execution(
+                "vector_concat: argument lengths differ".to_string(),
+            ));
         }
+        let mut out = Vec::with_capacity(l_rows.len());
+        for (v1, v2) in l_rows.iter().zip(r_rows.iter()) {
+            let mut concatenated = Vec::with_capacity(v1.len() + v2.len());
+            concatenated.extend_from_slice(v1);
+            concatenated.extend_from_slice(v2);
+            out.push(concatenated);
+        }
+        Ok(ColumnarValue::Array(list_of_f32(&out)?))
     }
 }
 
@@ -335,22 +351,11 @@ impl ScalarUDFImpl for VectorNormUDF {
     ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let fsl = as_fixed_size_list_array(arr)?;
-                let mut results = Vec::with_capacity(fsl.len());
-                for i in 0..fsl.len() {
-                    let value_array = fsl.value(i);
-                    let v = value_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?
-                        .values();
-                    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-                    results.push(norm);
-                }
+                let rows = as_vec_of_f32(arr)?;
+                let results: Vec<f32> = rows
+                    .iter()
+                    .map(|v| v.iter().map(|x| x * x).sum::<f32>().sqrt())
+                    .collect();
                 Ok(ColumnarValue::Array(Arc::new(Float32Array::from(results))))
             }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Float32(None))),
@@ -404,47 +409,19 @@ impl ScalarUDFImpl for VectorNormalizeUDF {
     ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let fsl = as_fixed_size_list_array(arr)?;
-                let len = fsl.value_length();
-                let mut builder = Float32Array::builder(fsl.len() * len as usize);
-
-                for i in 0..fsl.len() {
-                    let value_array = fsl.value(i);
-                    let v = value_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?
-                        .values();
+                let rows = as_vec_of_f32(arr)?;
+                let mut out = Vec::with_capacity(rows.len());
+                for v in rows.iter() {
                     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 0.0 {
-                        let normalized: Vec<f32> = v.iter().map(|x| x / norm).collect();
-                        builder.append_slice(&normalized);
+                        out.push(v.iter().map(|x| x / norm).collect::<Vec<f32>>());
                     } else {
-                        builder.append_slice(v);
+                        out.push(v.clone());
                     }
                 }
-
-                // Emit a ListArray (not FixedSizeList) so the produced type
-                // matches the declared `List(Float32)` return type.
-                let values = builder.finish();
-                let offsets: Vec<i32> = (0..=fsl.len())
-                    .map(|i| (i as i32) * len as i32)
-                    .collect();
-                let list = ListArray::try_new(
-                    Arc::new(arrow::datatypes::Field::new(
-                        "item",
-                        DataType::Float32,
-                        true,
-                    )),
-                    arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(offsets)),
-                    Arc::new(values),
-                    None,
-                )?;
-                Ok(ColumnarValue::Array(Arc::new(list)))
+                // Emit a ListArray so the produced type matches the declared
+                // `List(Float32)` return type.
+                Ok(ColumnarValue::Array(list_of_f32(&out)?))
             }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
         }
@@ -705,26 +682,14 @@ impl ScalarUDFImpl for SubvectorUDF {
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(start))),
                 ColumnarValue::Scalar(ScalarValue::Int32(Some(count))),
             ) => {
-                let fsl = as_fixed_size_list_array(arr)?;
-                let mut builder = arrow::array::ListBuilder::new(Float32Array::builder(0));
-
-                for i in 0..fsl.len() {
-                    let value_array = fsl.value(i);
-                    let v = value_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?
-                        .values();
+                let rows = as_vec_of_f32(arr)?;
+                let mut out = Vec::with_capacity(rows.len());
+                for v in rows.iter() {
                     let s = (*start as usize).min(v.len());
                     let c = (*count as usize).min(v.len() - s);
-                    builder.values().append_slice(&v[s..s + c]);
-                    builder.append(true);
+                    out.push(v[s..s + c].to_vec());
                 }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+                Ok(ColumnarValue::Array(list_of_f32(&out)?))
             }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
         }

@@ -72,8 +72,22 @@ fn row_values(arr: &ArrayRef, i: usize) -> Result<Vec<f32>> {
 }
 
 /// Build a single-element `List<Float32>` scalar from `values`.
+/// Build a `List(Float32)` scalar, optionally carrying the input field's
+/// metadata (e.g. Iceberg column ids). DataFusion compares the aggregate's
+/// declared result type against the produced value, so both must agree on the
+/// field metadata or the state coalescing panics inside arrow's `coalesce`.
 fn list_scalar(values: Option<&[f32]>) -> ScalarValue {
-    let mut builder = ListBuilder::new(Float32Builder::new());
+    list_scalar_with(values, None)
+}
+
+fn list_scalar_with(
+    values: Option<&[f32]>,
+    field: Option<&Arc<arrow::datatypes::Field>>,
+) -> ScalarValue {
+    let f = field
+        .cloned()
+        .unwrap_or_else(|| Arc::new(arrow::datatypes::Field::new("item", DataType::Float32, true)));
+    let mut builder = ListBuilder::new(Float32Builder::new()).with_field(f);
     match values {
         Some(v) => {
             builder.values().append_slice(v);
@@ -96,6 +110,17 @@ fn list_type() -> DataType {
 
 fn state_field(name: &str) -> Arc<arrow::datatypes::Field> {
     Arc::new(arrow::datatypes::Field::new(name, list_type(), true))
+}
+
+/// State field for the row counter — `UInt64`, matching the `count` scalar the
+/// accumulators emit in `state()`. Declaring it as a list (as `state_field`
+/// does) makes DataFusion reject the state array with a type mismatch.
+fn count_state_field(name: &str) -> Arc<arrow::datatypes::Field> {
+    Arc::new(arrow::datatypes::Field::new(
+        name,
+        DataType::UInt64,
+        true,
+    ))
 }
 
 /// Read a partial `List<Float32>` from a merge state array.
@@ -180,10 +205,12 @@ macro_rules! elementwise_extreme_udf {
         #[derive(Debug)]
         pub struct $acc {
             value: Option<Vec<f32>>,
-        }
+                }
         impl $acc {
             fn new() -> Self {
-                Self { value: None }
+                Self {
+                    value: None,
+                        }
             }
         }
         impl Accumulator for $acc {
@@ -284,7 +311,7 @@ impl AggregateUDFImpl for CentroidUDF {
         Ok(Box::new(CentroidAccumulator::new()))
     }
     fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<Arc<arrow::datatypes::Field>>> {
-        Ok(vec![state_field("sum"), state_field("count")])
+        Ok(vec![state_field("sum"), count_state_field("count")])
     }
 }
 
@@ -404,7 +431,7 @@ impl AggregateUDFImpl for VectorStddevUDF {
         Ok(vec![
             state_field("sum"),
             state_field("sum_sq"),
-            state_field("count"),
+            count_state_field("count"),
         ])
     }
 }
@@ -561,9 +588,12 @@ pub struct VectorMedianAccumulator {
 }
 impl VectorMedianAccumulator {
     fn new() -> Self {
-        Self { rows: Vec::new() }
+        Self {
+            rows: Vec::new(),
+        }
     }
 }
+
 impl Accumulator for VectorMedianAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let arr = &values[0];

@@ -225,7 +225,59 @@ impl ExecutionPlan for BenoStreamExec {
                         use futures::StreamExt;
                         while let Some(batch) = st.next().await {
                             match batch {
-                                Ok(b) => yield Ok(b),
+                                Ok(b) => {
+                                    // Rebuild the batch with the plan's schema
+                                    // (metadata-free) so downstream operators
+                                    // see types identical to the declared ones.
+                                    // Segment batches carry the table schema,
+                                    // whose nested fields hold Iceberg metadata
+                                    // (e.g. `iceberg.id`); a mismatch there makes
+                                    // DataFusion's aggregate state coalescing
+                                    // panic inside arrow's `coalesce` kernel.
+                                    if b.schema().fields().len()
+                                        == expected_schema_inner.fields().len()
+                                    {
+                                        let mut cols: Vec<Arc<dyn arrow::array::Array>> =
+                                            Vec::with_capacity(b.num_columns());
+                                        let mut ok = true;
+                                        for (col, field) in b
+                                            .columns()
+                                            .iter()
+                                            .zip(expected_schema_inner.fields().iter())
+                                        {
+                                            if col.data_type() == field.data_type() {
+                                                cols.push(col.clone());
+                                            } else {
+                                                // Cast strips the nested field
+                                                // metadata so the array type
+                                                // matches the plan schema.
+                                                match arrow::compute::cast(
+                                                    col.as_ref(),
+                                                    field.data_type(),
+                                                ) {
+                                                    Ok(c) => cols.push(c),
+                                                    Err(_) => {
+                                                        ok = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ok {
+                                            match arrow::record_batch::RecordBatch::try_new(
+                                                expected_schema_inner.clone(),
+                                                cols,
+                                            ) {
+                                                Ok(rb) => yield Ok(rb),
+                                                Err(e) => yield Err(DataFusionError::from(e)),
+                                            }
+                                        } else {
+                                            yield Ok(b);
+                                        }
+                                    } else {
+                                        yield Ok(b);
+                                    }
+                                }
                                 Err(e) => {
                                     tracing::error!("Error reading segment: {}", e);
                                 }
