@@ -52,6 +52,14 @@ impl BenoStreamSession {
         let mut config = SessionConfig::new();
         config = config.set_str("datafusion.sql_parser.dialect", "PostgreSQL");
         config = config.with_information_schema(true);
+        // Align DataFusion's unqualified-name search path with the engine's
+        // unified default schema (see `catalog_ddl::DEFAULT_SCHEMA`), so DDL
+        // (`CREATE TABLE t`) and DML (`INSERT INTO t`) resolve to the same
+        // catalog/schema without explicit qualification.
+        config = config.with_default_catalog_and_schema(
+            "datafusion",
+            crate::core::sql::catalog_ddl::DEFAULT_SCHEMA,
+        );
         // Scale query parallelism to the effective CPU budget (respects cgroup
         // limits) instead of leaving DataFusion's default or hard-coding it.
         config = config.with_target_partitions(crate::core::sql::effective_target_partitions());

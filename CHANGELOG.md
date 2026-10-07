@@ -9,6 +9,40 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.12.0]
 
 ### Added
+- **dbt macro coverage for the whole engine function surface** — new/expanded
+  macros in `dbt-benostreamdb`: vector distances (`l2_distance`,
+  `cosine_distance`, `inner_product`, `l1_distance`, `hamming_distance`,
+  `jaccard_distance`), transforms (`vector_add/sub/mul/concat`, `vector_dims`,
+  `vector_norm`, `l2_normalize`, `binary_quantize`, `subvector`,
+  `vector_to_binary`), aggregates (`vector_sum`, `centroid`, `vector_median`,
+  `vector_stddev`, `vector_min`, `vector_max`), sparse (`sparse_to_vector`,
+  `vector_to_sparse`), lexical search (`bm25_score`, `tf_idf`,
+  `keyword_search`), JSON (`json_extract_path`, `json_extract_path_text`,
+  `json_contains`, `json_exists`, `json_typeof`, `json_path_exists`,
+  `json_path_query`), and graph (`triangle_count`, `modularity`,
+  `closeness_centrality`, `betweenness_centrality`, `all_shortest_paths`,
+  `leiden` via `community_detect`, `drift_search`, `regional_drift`). The
+  broken `topological_sort` macro (the engine registers no such function) was
+  removed. Verified by new dbt models (`test_all_functions`,
+  `test_vector_aggregates`, `test_search_functions`, `test_json_functions`,
+  `test_all_graph_functions`) — 8/10 models green, including all 20 graph
+  macros.
+- **`CREATE TABLE AS SELECT` in the engine** — `create_table` now derives the
+  target schema from the source query, creates the table, and populates it via
+  `INSERT INTO ... SELECT` (executed through the DataFusion context to keep the
+  async call graph acyclic). The query text is sliced from the original
+  statement (`extract_ctas_query`) because sqlparser's AST re-render mangles
+  parenthesized `WITH` queries — the form dbt emits. Covered by 5 unit tests.
+- **Unified default schema (`default`)** — the engine's DDL default
+  (`catalog_ddl::DEFAULT_SCHEMA`), DataFusion's unqualified-name search path
+  (`with_default_catalog_and_schema`), Spark's V2 default namespace, and the
+  dbt adapter's profile default now all agree on `default` (lakehouse
+  convention), so `CREATE TABLE t` and `INSERT INTO t` resolve identically
+  across every connector surface.
+- **`Session(warehouse=...)` Python binding** — the embedded session accepts a
+  warehouse base location (as the Flight server does via `BSDB_WAREHOUSE`), so
+  DDL/CTAS can derive table URIs; the dbt adapter passes the profile `path`
+  through (`:memory:` maps to the engine's in-memory store).
 - **Native Spark connector (v0.12.0)** — the Spark DataSource V2 connector is
   now fully native: catalog/DDL (`BenoStreamCatalog` via JNI
   `listSchemas`/`listTables`/`createTable`/`dropTable`), reads (engine SQL via
@@ -232,6 +266,35 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Vector UDF signature/return-type bugs** — `vector_add`/`vector_sub`/
+  `vector_mul`/`vector_concat`/`subvector` declared scalar `Float32` arguments
+  (rejecting every list-typed call) and `l2_normalize` plus the element-wise
+  ops declared the input type while producing `FixedSizeList(Float32)`, tripping
+  DataFusion's result-type assertion. Signatures now accept list arguments and
+  the implementations emit `List(Float32)`.
+- **dbt adapter: graph macros were never executable** — `subgraph`,
+  `personalized_pagerank`, and `connecting_paths` used
+  `map('format', "arrow_cast(%s, ...)")`, which Jinja applies in the wrong
+  direction (the item becomes the format string), raising "not all arguments
+  converted during string formatting". Replaced with a shared
+  `_bsdb_arrow_array` helper. `pagerank` also omitted the `UInt64` casts on
+  source/target that every other graph macro applies, so it failed with
+  "Expected UInt64Array for sources". The CI test had hardcoded the rendered
+  SQL, which is why neither bug was caught.
+- **dbt adapter: SQL guard vs. dbt-issued scripts** — the engine's
+  `sanitize_sql` rejects `;`/`--` anywhere; the adapter now strips `--` line
+  comments (quote-aware) and a single trailing `;` before execution while still
+  rejecting embedded semicolons (multi-statement protection preserved).
+- **dbt adapter: drop-then-create cycle** — the embedded session starts with an
+  empty relation cache, so `load_cached_relation` never saw warehouse-resident
+  tables and the drop was skipped, leaving `Table already exists`. The `table`
+  materialization now always issues an idempotent `drop table if exists`.
+- **Engine DDL: quoted identifiers and `DROP TABLE IF EXISTS`** — `split_three`
+  / `split_db_schema` now strip identifier quoting (dbt renders fully-quoted
+  names), which previously leaked `"` into warehouse paths and broke catalog
+  resolution; `DROP TABLE IF EXISTS` tolerates an unresolvable catalog path and
+  deletes the underlying data (mirroring the FFI `dropTable`), so re-created
+  tables start clean.
 - **`SHOW TABLES` listed the `.keep` namespace placeholder** — `list_subdirs`
   (`src/core/ffi.rs`) now skips dot-prefixed entries, so the `CREATE SCHEMA`
   `.keep` marker no longer surfaces as a table in Trino/Spark `SHOW TABLES`

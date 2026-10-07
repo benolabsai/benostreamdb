@@ -1,10 +1,13 @@
 {% materialization table, adapter='benostreamdb' %}
   {%- set target_relation = this.incorporate(type='table') -%}
 
-  {%- set existing_relation = load_cached_relation(this) -%}
-  {%- if existing_relation is not none -%}
-    {{ adapter.drop_relation(existing_relation) }}
-  {%- endif -%}
+  {#- The embedded session starts with an empty relation cache, so
+      `load_cached_relation` never sees warehouse-resident tables. Always issue
+      an idempotent `drop table if exists` — the engine deletes the underlying
+      data, which makes dbt's drop-then-create cycle re-runnable. -#}
+  {% call statement('drop_existing', auto_begin=False) %}
+    drop table if exists {{ target_relation }}
+  {% endcall %}
 
   {% call statement('main') %}
     {{ get_create_table_as_sql(False, target_relation, sql) }}
