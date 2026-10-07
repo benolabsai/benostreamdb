@@ -266,6 +266,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Vector aggregate UDFs over table columns** — `vector_sum`, `vector_avg`,
+  `centroid`, `vector_median`, `vector_stddev`, `vector_min`, `vector_max` all
+  failed on real tables: the `count` state field was declared as
+  `List(Float32)` while the accumulator emits `UInt64`, and scan batches
+  carried the table schema's nested Iceberg metadata (`iceberg.id`) while the
+  plan's schema is metadata-free, so DataFusion's aggregate state coalescing
+  panicked inside arrow's `coalesce` kernel. The scan now rebuilds batches
+  against the plan schema (casting away nested field metadata), and the count
+  state field is `UInt64`. All seven aggregates verified with correct values.
 - **Vector UDF signature/return-type bugs** — `vector_add`/`vector_sub`/
   `vector_mul`/`vector_concat`/`subvector` declared scalar `Float32` arguments
   (rejecting every list-typed call) and `l2_normalize` plus the element-wise

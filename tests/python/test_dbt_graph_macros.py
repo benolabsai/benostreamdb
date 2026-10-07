@@ -120,6 +120,8 @@ def test_dbt_macro_file_syntax():
         "pagerank", "personalized_pagerank", "community_detect",
         "graph_neighbors", "subgraph", "connecting_paths",
         "shortest_path", "connected_components", "degree_centrality",
-        "node_similarity", "topological_sort"
+        "node_similarity", "triangle_count", "modularity",
+        "closeness_centrality", "betweenness_centrality",
+        "all_shortest_paths", "drift_search", "regional_drift",
     ]:
         assert macro_name in content
