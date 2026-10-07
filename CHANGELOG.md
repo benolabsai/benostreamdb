@@ -266,6 +266,16 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **`graph_betweenness_centrality` panicked** — the result builder indexed the
+  score map with `cb[&node]` for every node, but only intermediate vertices
+  have an entry, so any graph with a non-intermediate node aborted with
+  "no entry found for key" (a NO_PANIC_POLICY violation). Missing nodes now
+  score `0.0`.
+- **`vector_to_binary` / `vector_to_sparse` rejected `List` inputs** — both
+  required `FixedSizeList`, so a `::FLOAT[]` cast failed ("could not cast array
+  of type List(Float32) to FixedSizeListArray" / "Expected FixedSizeListArray").
+  They now accept both layouts; `sparse_to_vector(vector_to_sparse(v))`
+  round-trips correctly.
 - **Vector aggregate UDFs over table columns** — `vector_sum`, `vector_avg`,
   `centroid`, `vector_median`, `vector_stddev`, `vector_min`, `vector_max` all
   failed on real tables: the `count` state field was declared as

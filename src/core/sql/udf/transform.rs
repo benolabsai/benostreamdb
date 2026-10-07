@@ -5,7 +5,6 @@ use arrow::array::{
     ListArray, ListBuilder, UInt8Array,
 };
 use arrow::datatypes::DataType;
-use datafusion::common::cast::as_fixed_size_list_array;
 use datafusion::error::Result;
 use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
@@ -739,22 +738,13 @@ impl ScalarUDFImpl for VectorToBinaryUDF {
     ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let fsl = as_fixed_size_list_array(arr)?;
-                let len = fsl.value_length();
-                let packed_len = (len as usize).div_ceil(8);
+                // Accept List and FixedSizeList inputs (a `::FLOAT[]` cast
+                // produces a List).
+                let rows = as_vec_of_f32(arr)?;
                 let mut list_builder = ListBuilder::new(arrow::array::UInt8Builder::new());
 
-                for i in 0..fsl.len() {
-                    let value_array = fsl.value(i);
-                    let v = value_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "vector transform: expected Float32Array values".to_string(),
-                            )
-                        })?
-                        .values();
+                for v in rows.iter() {
+                    let packed_len = v.len().div_ceil(8);
                     let mut packed = vec![0u8; packed_len];
                     for (j, &val) in v.iter().enumerate() {
                         if val >= 0.0 {

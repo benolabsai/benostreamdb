@@ -193,9 +193,12 @@ impl Accumulator for BetweennessCentralityAccumulator {
             sb.field_builder::<UInt64Builder>(0)
                 .unwrap()
                 .append_value(node);
+            // Nodes that never appear as an intermediate vertex have no entry
+            // in `cb`; indexing the map directly panicked with "no entry found
+            // for key" (NO_PANIC_POLICY violation).
             sb.field_builder::<Float64Builder>(1)
                 .unwrap()
-                .append_value(cb[&node]);
+                .append_value(cb.get(&node).copied().unwrap_or(0.0));
             sb.append(true);
         }
 
