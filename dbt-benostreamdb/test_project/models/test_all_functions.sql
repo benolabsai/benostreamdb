@@ -30,5 +30,8 @@ select
     {{ vector_concat('embedding', 'ARRAY[9.0]') }} as concatenated,
     {{ l2_normalize('embedding') }} as normalized,
     {{ subvector('embedding', 0, 2) }} as sub,
-    {{ binary_quantize('embedding') }} as quantized
+    {{ binary_quantize('embedding') }} as quantized,
+    {{ vector_to_binary('embedding') }} as packed,
+    {{ vector_to_sparse('embedding') }} as sparse_v,
+    {{ sparse_to_vector('vector_to_sparse(embedding)') }} as round_tripped
 from vectors

@@ -2,7 +2,8 @@
 
 use crate::core::index::SparseVector;
 use arrow::array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, Float32Builder, ListArray, ListBuilder,
+    Array, ArrayRef, FixedSizeListArray, Float32Array, Float32Builder, Float64Array, ListArray,
+    ListBuilder,
 };
 use arrow::datatypes::DataType;
 use datafusion::error::Result;
@@ -10,6 +11,40 @@ use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatili
 use datafusion::scalar::ScalarValue;
 use std::any::Any;
 use std::sync::Arc;
+
+/// Read a dense vector column as `Vec<Vec<f32>>`, accepting both `List` and
+/// `FixedSizeList` layouts (a `::FLOAT[]` cast produces a `List`).
+fn dense_rows(arr: &ArrayRef) -> Result<Vec<Vec<f32>>> {
+    let mut out = Vec::new();
+    if let Some(fsl) = arr.as_any().downcast_ref::<FixedSizeListArray>() {
+        for i in 0..fsl.len() {
+            out.push(f32_values(&fsl.value(i))?);
+        }
+        return Ok(out);
+    }
+    if let Some(list) = arr.as_any().downcast_ref::<ListArray>() {
+        for i in 0..list.len() {
+            out.push(f32_values(&list.value(i))?);
+        }
+        return Ok(out);
+    }
+    Err(datafusion::error::DataFusionError::Execution(
+        "vector_to_sparse: expected a list-typed argument".to_string(),
+    ))
+}
+
+/// Extract the `f32` values of a vector element array.
+fn f32_values(a: &ArrayRef) -> Result<Vec<f32>> {
+    if let Some(v) = a.as_any().downcast_ref::<Float32Array>() {
+        return Ok(v.values().to_vec());
+    }
+    if let Some(v) = a.as_any().downcast_ref::<Float64Array>() {
+        return Ok(v.values().iter().map(|&x| x as f32).collect());
+    }
+    Err(datafusion::error::DataFusionError::Execution(
+        "vector_to_sparse: unsupported element type".to_string(),
+    ))
+}
 
 /// Helper macro to implement DynEq and DynHash for UDF structs
 macro_rules! impl_dyn_traits {
@@ -93,32 +128,17 @@ impl ScalarUDFImpl for VectorToSparseUDF {
     ) -> Result<ColumnarValue> {
         match &args.args[0] {
             ColumnarValue::Array(arr) => {
-                let fixed_list = arr
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| {
-                        datafusion::error::DataFusionError::Execution(
-                            "Expected FixedSizeListArray".to_string(),
-                        )
-                    })?;
+                // Accept List and FixedSizeList inputs (a `::FLOAT[]` cast
+                // produces a List).
+                let rows = dense_rows(arr)?;
 
                 let mut indices_builder = ListBuilder::new(arrow::array::UInt32Builder::new());
                 let mut values_builder = ListBuilder::new(Float32Builder::new());
                 let mut dim_builder = arrow::array::UInt32Builder::new();
 
-                for i in 0..fixed_list.len() {
-                    let value_array = fixed_list.value(i);
-                    let dense = value_array
-                        .as_any()
-                        .downcast_ref::<Float32Array>()
-                        .ok_or_else(|| {
-                            datafusion::error::DataFusionError::Execution(
-                                "Expected Float32Array".to_string(),
-                            )
-                        })?;
-
+                for dense in rows.iter() {
                     // Use dense_to_sparse from distance module
-                    let sparse = super::distance::dense_to_sparse(dense.values());
+                    let sparse = super::distance::dense_to_sparse(dense);
 
                     // Build indices list
                     for &idx in &sparse.indices {

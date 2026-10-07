@@ -33,6 +33,9 @@ degree as (
 closeness as (
     select * from ({{ closeness_centrality(ref('edges')) }}) t
 ),
+betweenness as (
+    select * from ({{ betweenness_centrality(ref('edges')) }}) t
+),
 neighbors as (
     select * from ({{ graph_neighbors(ref('edges'), entity_id=2, hops=1) }}) t
 ),
@@ -76,6 +79,7 @@ union all select 'connected_components', count(*) from components
 union all select 'strongly_connected_components', count(*) from scc
 union all select 'degree_centrality', count(*) from degree
 union all select 'closeness_centrality', count(*) from closeness
+union all select 'betweenness_centrality', count(*) from betweenness
 union all select 'graph_neighbors', count(*) from neighbors
 union all select 'subgraph', count(*) from subgraph_cte
 union all select 'shortest_path', count(*) from shortest
