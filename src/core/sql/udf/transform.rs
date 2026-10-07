@@ -44,10 +44,12 @@ macro_rules! create_vector_binary_op_udf {
         impl $name {
             pub fn new() -> Self {
                 Self {
-                    signature: Signature::exact(
-                        vec![DataType::Float32, DataType::Float32],
-                        Volatility::Immutable,
-                    ),
+                    // Element-wise vector ops take two vector arguments. The
+                    // signature must accept list types (List/FixedSizeList of
+                    // Float32) — declaring scalar `Float32` made every call
+                    // fail argument coercion. The implementation validates the
+                    // array types and reports a clear error otherwise.
+                    signature: Signature::any(2, Volatility::Immutable),
                 }
             }
         }
@@ -103,16 +105,27 @@ macro_rules! create_vector_binary_op_udf {
                                 .values();
                             builder.append_slice(&$op_fn(v1, v2));
                         }
-                        Ok(ColumnarValue::Array(Arc::new(FixedSizeListArray::try_new(
+                        // Emit a ListArray so the produced type matches the
+                        // declared return type (`arg_types[0]`, i.e. List(Float32)
+                        // for list inputs) — a FixedSizeList result fails the
+                        // engine's result-type check.
+                        let values = builder.finish();
+                        let offsets: Vec<i32> = (0..=l_arr.len())
+                            .map(|i| (i as i32) * len as i32)
+                            .collect();
+                        let list = ListArray::try_new(
                             Arc::new(arrow::datatypes::Field::new(
                                 "item",
                                 DataType::Float32,
                                 true,
                             )),
-                            len,
-                            Arc::new(builder.finish()),
+                            arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(
+                                offsets,
+                            )),
+                            Arc::new(values),
                             None,
-                        )?)))
+                        )?;
+                        Ok(ColumnarValue::Array(Arc::new(list)))
                     }
                     _ => {
                         return Err(datafusion::error::DataFusionError::Execution(
@@ -158,10 +171,8 @@ impl Default for VectorConcatUDF {
 impl VectorConcatUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Float32, DataType::Float32],
-                Volatility::Immutable,
-            ),
+            // Two vector arguments (list types), not scalars.
+            signature: Signature::any(2, Volatility::Immutable),
         }
     }
 }
@@ -377,8 +388,15 @@ impl ScalarUDFImpl for VectorNormalizeUDF {
     fn signature(&self) -> &Signature {
         &self.signature
     }
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        Ok(arg_types[0].clone())
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        // The implementation always emits Float32 values, so the declared type
+        // must be List(Float32) — declaring the input type (e.g. List(Float64))
+        // trips DataFusion's `result_data_type == expected_type` assertion.
+        Ok(DataType::List(Arc::new(arrow::datatypes::Field::new(
+            "item",
+            DataType::Float32,
+            true,
+        ))))
     }
     fn invoke_with_args(
         &self,
@@ -410,16 +428,23 @@ impl ScalarUDFImpl for VectorNormalizeUDF {
                     }
                 }
 
-                Ok(ColumnarValue::Array(Arc::new(FixedSizeListArray::try_new(
+                // Emit a ListArray (not FixedSizeList) so the produced type
+                // matches the declared `List(Float32)` return type.
+                let values = builder.finish();
+                let offsets: Vec<i32> = (0..=fsl.len())
+                    .map(|i| (i as i32) * len as i32)
+                    .collect();
+                let list = ListArray::try_new(
                     Arc::new(arrow::datatypes::Field::new(
                         "item",
                         DataType::Float32,
                         true,
                     )),
-                    len,
-                    Arc::new(builder.finish()),
+                    arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(offsets)),
+                    Arc::new(values),
                     None,
-                )?)))
+                )?;
+                Ok(ColumnarValue::Array(Arc::new(list)))
             }
             _ => Ok(ColumnarValue::Scalar(ScalarValue::Null)),
         }
@@ -645,10 +670,9 @@ impl Default for SubvectorUDF {
 impl SubvectorUDF {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Float32, DataType::Int32, DataType::Int32],
-                Volatility::Immutable,
-            ),
+            // (vector, start, length) — the vector argument is a list type, so
+            // an exact scalar signature rejected every call.
+            signature: Signature::any(3, Volatility::Immutable),
         }
     }
 }

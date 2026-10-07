@@ -3,6 +3,16 @@
 -- Native graph analytics & Graph RAG acceleration over Apache Iceberg edge tables
 -- =============================================================================
 
+-- Internal helper: render a list of values as a make_array(...) of arrow_cast
+-- expressions, e.g. [1, 2] -> make_array(arrow_cast(1, 'UInt64'), arrow_cast(2, 'UInt64')).
+{%- macro _bsdb_arrow_array(values, sql_type) -%}
+  {%- set parts = [] -%}
+  {%- for v in (values or []) -%}
+    {%- set _ = parts.append("arrow_cast(" ~ v ~ ", '" ~ sql_type ~ "')") -%}
+  {%- endfor -%}
+  make_array({{ parts | join(', ') }})
+{%- endmacro -%}
+
 -- -----------------------------------------------------------------------------
 -- 1. PAGERANK
 -- -----------------------------------------------------------------------------
@@ -15,7 +25,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__pagerank(relation, damping=0.85, iterations=30, source='source', target='target') -%}
-  select unnest(graph_pagerank({{ source }}, {{ target }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32')))
+  select unnest(graph_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32')))
   from {{ relation }}
 {%- endmacro %}
 
@@ -32,9 +42,9 @@
 {%- endmacro %}
 
 {% macro benostreamdb__personalized_pagerank(relation, seeds, damping=0.85, iterations=30, directed=false, seed_weights=none, source='source', target='target') -%}
-  {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
+  {%- set seed_arr = _bsdb_arrow_array(seeds, 'UInt64') -%}
   {%- if seed_weights is not none and seed_weights | length > 0 -%}
-    {%- set weight_arr = "make_array(" ~ (seed_weights | map('string') | map('format', "arrow_cast(%s, 'Float64')") | join(', ')) ~ ")" -%}
+    {%- set weight_arr = _bsdb_arrow_array(seed_weights, 'Float64') -%}
     select unnest(graph_personalized_pagerank(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ damping }}, 'Float64'), arrow_cast({{ iterations }}, 'UInt32'), {{ directed | lower }}, {{ weight_arr }}))
     from {{ relation }}
   {%- else -%}
@@ -58,6 +68,9 @@
 {% macro benostreamdb__community_detect(relation, algorithm='louvain', resolution=1.0, source='source', target='target') -%}
   {%- if algorithm == 'louvain' -%}
     select unnest(graph_louvain_communities(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast(1.0, 'Float32'), arrow_cast({{ resolution }}, 'Float32'))) as community
+    from {{ relation }}
+  {%- elif algorithm == 'leiden' -%}
+    select unnest(graph_leiden_communities(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), arrow_cast({{ resolution }}, 'Float32'))) as community
     from {{ relation }}
   {%- elif algorithm == 'label_propagation' -%}
     select unnest(graph_label_propagation(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as community
@@ -97,7 +110,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__subgraph(relation, seeds, hops=1, directed=false, source='source', target='target') -%}
-  {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
+  {%- set seed_arr = _bsdb_arrow_array(seeds, 'UInt64') -%}
   select unnest(graph_subgraph(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, arrow_cast({{ hops }}, 'UInt32'), {{ directed | lower }}))
   from {{ relation }}
 {%- endmacro %}
@@ -115,7 +128,7 @@
 {%- endmacro %}
 
 {% macro benostreamdb__connecting_paths(relation, seeds, directed=false, source='source', target='target') -%}
-  {%- set seed_arr = "make_array(" ~ (seeds | map('string') | map('format', "arrow_cast(%s, 'UInt64')") | join(', ')) ~ ")" if seeds else "make_array()" -%}
+  {%- set seed_arr = _bsdb_arrow_array(seeds, 'UInt64') -%}
   select unnest(graph_connecting_paths(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'), {{ seed_arr }}, {{ directed | lower }})) as path
   from {{ relation }}
 {%- endmacro %}
@@ -242,17 +255,173 @@
 
 
 -- -----------------------------------------------------------------------------
--- 11. TOPOLOGICAL SORT
+-- 11. TRIANGLE COUNT
 -- -----------------------------------------------------------------------------
-{% macro topological_sort(relation, source='source', target='target') -%}
-  {{ return(adapter.dispatch('topological_sort', 'dbt')(relation, source, target)) }}
+{% macro triangle_count(relation, source='source', target='target') -%}
+  {{ return(adapter.dispatch('triangle_count', 'dbt')(relation, source, target)) }}
 {%- endmacro %}
 
-{% macro default__topological_sort(relation, source='source', target='target') -%}
-  {{ exceptions.raise_compiler_error("topological_sort is not supported on this adapter") }}
+{% macro default__triangle_count(relation, source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("triangle_count is not supported on this adapter") }}
 {%- endmacro %}
 
-{% macro benostreamdb__topological_sort(relation, source='source', target='target') -%}
-  select unnest(topological_sort(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64'))) as node
+{% macro benostreamdb__triangle_count(relation, source='source', target='target') -%}
+  select graph_triangle_count(arrow_cast({{ source }}, 'UInt64'), arrow_cast({{ target }}, 'UInt64')) as triangle_count
+  from {{ relation }}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 12. MODULARITY (given a community assignment)
+-- -----------------------------------------------------------------------------
+{% macro modularity(relation, community_column, weight=none, source='source', target='target') -%}
+  {{ return(adapter.dispatch('modularity', 'dbt')(relation, community_column, weight, source, target)) }}
+{%- endmacro %}
+
+{% macro default__modularity(relation, community_column, weight=none, source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("modularity is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__modularity(relation, community_column, weight=none, source='source', target='target') -%}
+  {%- if weight is not none -%}
+    select graph_modularity(
+      arrow_cast({{ source }}, 'UInt64'),
+      arrow_cast({{ target }}, 'UInt64'),
+      arrow_cast({{ weight }}, 'Float64'),
+      arrow_cast({{ community_column }}, 'UInt64'),
+      arrow_cast({{ community_column }}, 'UInt64')
+    ) as modularity
+    from {{ relation }}
+  {%- else -%}
+    select graph_modularity(
+      arrow_cast({{ source }}, 'UInt64'),
+      arrow_cast({{ target }}, 'UInt64'),
+      arrow_cast({{ community_column }}, 'UInt64'),
+      arrow_cast({{ community_column }}, 'UInt64')
+    ) as modularity
+    from {{ relation }}
+  {%- endif -%}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 13. CLOSENESS CENTRALITY
+-- -----------------------------------------------------------------------------
+{% macro closeness_centrality(relation, directed=false, source='source', target='target') -%}
+  {{ return(adapter.dispatch('closeness_centrality', 'dbt')(relation, directed, source, target)) }}
+{%- endmacro %}
+
+{% macro default__closeness_centrality(relation, directed=false, source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("closeness_centrality is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__closeness_centrality(relation, directed=false, source='source', target='target') -%}
+  select unnest(graph_closeness_centrality(
+    arrow_cast({{ source }}, 'UInt64'),
+    arrow_cast({{ target }}, 'UInt64'),
+    {{ directed | lower }}
+  ))
+  from {{ relation }}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 14. BETWEENNESS CENTRALITY
+-- -----------------------------------------------------------------------------
+{% macro betweenness_centrality(relation, directed=false, source='source', target='target') -%}
+  {{ return(adapter.dispatch('betweenness_centrality', 'dbt')(relation, directed, source, target)) }}
+{%- endmacro %}
+
+{% macro default__betweenness_centrality(relation, directed=false, source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("betweenness_centrality is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__betweenness_centrality(relation, directed=false, source='source', target='target') -%}
+  select unnest(graph_betweenness_centrality(
+    arrow_cast({{ source }}, 'UInt64'),
+    arrow_cast({{ target }}, 'UInt64'),
+    {{ directed | lower }}
+  ))
+  from {{ relation }}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 15. ALL SHORTEST PATHS
+-- -----------------------------------------------------------------------------
+{% macro all_shortest_paths(relation, start_node=none, end_node=none, source='source', target='target') -%}
+  {{ return(adapter.dispatch('all_shortest_paths', 'dbt')(relation, start_node, end_node, source, target)) }}
+{%- endmacro %}
+
+{% macro default__all_shortest_paths(relation, start_node=none, end_node=none, source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("all_shortest_paths is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__all_shortest_paths(relation, start_node=none, end_node=none, source='source', target='target') -%}
+  {%- if start_node is not none and end_node is not none -%}
+    select unnest(graph_all_shortest_paths(
+      arrow_cast({{ source }}, 'UInt64'),
+      arrow_cast({{ target }}, 'UInt64'),
+      arrow_cast({{ start_node }}, 'UInt64'),
+      arrow_cast({{ end_node }}, 'UInt64')
+    )) as path
+    from {{ relation }}
+  {%- else -%}
+    select unnest(graph_all_shortest_paths(
+      arrow_cast({{ source }}, 'UInt64'),
+      arrow_cast({{ target }}, 'UInt64')
+    )) as path
+    from {{ relation }}
+  {%- endif -%}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 16. DRIFT SEARCH (GraphRAG query drift)
+-- -----------------------------------------------------------------------------
+{% macro drift_search(relation, query, top_communities, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  {{ return(adapter.dispatch('drift_search', 'dbt')(relation, query, top_communities, n_depth, graph_uri, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__drift_search(relation, query, top_communities, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("drift_search is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__drift_search(relation, query, top_communities, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  select unnest(drift_search(
+    arrow_cast({{ source }}, 'UInt64'),
+    arrow_cast({{ target }}, 'UInt64'),
+    {{ query }},
+    {{ _bsdb_arrow_array(top_communities, 'UInt64') }},
+    arrow_cast({{ n_depth }}, 'UInt32'),
+    '{{ graph_uri }}',
+    '{{ mode }}'
+  )) as node
+  from {{ relation }}
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
+-- 17. REGIONAL DRIFT SEARCH (seeded GraphRAG drift)
+-- -----------------------------------------------------------------------------
+{% macro regional_drift(relation, query, seeds, hops=1, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  {{ return(adapter.dispatch('regional_drift', 'dbt')(relation, query, seeds, hops, n_depth, graph_uri, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__regional_drift(relation, query, seeds, hops=1, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  {{ exceptions.raise_compiler_error("regional_drift is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__regional_drift(relation, query, seeds, hops=1, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}
+  select unnest(regional_drift(
+    arrow_cast({{ source }}, 'UInt64'),
+    arrow_cast({{ target }}, 'UInt64'),
+    {{ query }},
+    {{ _bsdb_arrow_array(seeds, 'UInt64') }},
+    arrow_cast({{ hops }}, 'UInt32'),
+    arrow_cast({{ n_depth }}, 'UInt32'),
+    '{{ graph_uri }}',
+    '{{ mode }}'
+  )) as node
   from {{ relation }}
 {%- endmacro %}

@@ -20,6 +20,7 @@ use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
+use futures::StreamExt;
 use datafusion::sql::sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, CreateIndex, CreateTable,
     IndexType, ObjectType, SchemaName, Statement, TableConstraint,
@@ -478,13 +479,60 @@ async fn drop_objects(
             ObjectType::Table => {
                 let (db, schema, table) = split_three(session, &full);
                 let reference = TableReference::full(db.clone(), schema.clone(), table.clone());
-                let removed = ctx.deregister_table(reference)?;
+                // `IF EXISTS` must tolerate an unresolvable catalog path (fresh
+                // session, schema never registered) — DataFusion errors instead
+                // of returning None.
+                let removed = match ctx.deregister_table(reference) {
+                    Ok(removed) => removed,
+                    Err(e) => {
+                        if if_exists {
+                            tracing::debug!("DROP TABLE IF EXISTS '{}': {}", full, e);
+                            None
+                        } else {
+                            return Err(e).with_context(|| format!("dropping table '{}'", full));
+                        }
+                    }
+                };
                 if removed.is_none() && !if_exists {
                     bail!("table '{}' does not exist", full);
                 }
                 // Drop from the external catalog too.
                 if let Some(ext) = session.catalog_for(&db).await {
                     let _ = ext.drop_table(&schema, &table).await;
+                }
+                // Delete the underlying data so a re-created table starts from
+                // an empty location (mirrors the FFI `dropTable` used by the
+                // Spark/Trino connectors; dbt's drop-then-create cycle depends
+                // on this).
+                if let Some(w) = session.warehouse() {
+                    let uri = format!("{}/{}/{}", w.trim_end_matches('/'), schema, table);
+                    match crate::core::storage::create_object_store(&uri) {
+                        Ok(store) => {
+                            let prefix = object_store::path::Path::from("");
+                            let mut stream = store.list(Some(&prefix));
+                            let mut failed = false;
+                            while let Some(item) = stream.next().await {
+                                match item {
+                                    Ok(meta) => {
+                                        if store.delete(&meta.location).await.is_err() {
+                                            failed = true;
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if !failed {
+                                let manager =
+                                    crate::core::manifest::ManifestManager::new(store, "", &uri);
+                                manager.invalidate_caches().await;
+                            }
+                        }
+                        Err(e) => tracing::warn!("DROP TABLE '{}': could not open store: {}", uri, e),
+                    }
                 }
             }
             ObjectType::Schema => {
@@ -512,13 +560,31 @@ async fn drop_objects(
 // ---------------------------------------------------------------------------
 
 async fn create_table(session: &BenoStreamSession, ct: &CreateTable, raw_sql: &str) -> Result<()> {
-    if ct.query.is_some() {
-        bail!("CREATE TABLE AS SELECT is not supported");
-    }
     let full = ct.name.to_string();
     let (db, schema, table) = split_three(session, &full);
 
-    let arrow_schema = columns_to_arrow_schema(&ct.columns)?;
+    // CREATE TABLE AS SELECT (dbt's `table` materialization): derive the
+    // target schema from the source query, create the table, then populate it
+    // with `INSERT INTO <name> <query>` after registration. The query text is
+    // sliced from the original statement because sqlparser's AST re-rendering
+    // mangles parenthesized WITH queries (`as (with a as (...) select ...)`)
+    // into invalid SQL.
+    let ctas_sql: Option<String> = if ct.query.is_some() {
+        extract_ctas_query(raw_sql)
+    } else {
+        None
+    };
+    let arrow_schema: SchemaRef = match &ctas_sql {
+        Some(q) => {
+            let df = session
+                .get_ctx()
+                .sql(q)
+                .await
+                .with_context(|| "CREATE TABLE AS SELECT: planning source query")?;
+            Arc::new(df.schema().as_arrow().clone())
+        }
+        None => columns_to_arrow_schema(&ct.columns)?,
+    };
 
     // `GenericDialect` does not populate `CreateTable::location`, so fall back
     // to scanning the raw SQL for a `LOCATION '...'` clause.
@@ -559,7 +625,105 @@ async fn create_table(session: &BenoStreamSession, ct: &CreateTable, raw_sql: &s
     session
         .get_ctx()
         .register_table(TableReference::full(db, schema, table), provider)?;
+
+    if let Some(q) = ctas_sql {
+        // Populate the new table. Executed through the DataFusion context
+        // directly (not `session.sql`) to keep the async call graph acyclic;
+        // the session's custom INSERT plan node is registered on the context,
+        // so the write path is identical.
+        let insert_sql = format!("INSERT INTO {} {}", full, q);
+        session
+            .get_ctx()
+            .sql(&insert_sql)
+            .await
+            .with_context(|| "CREATE TABLE AS SELECT: populating new table")?
+            .collect()
+            .await
+            .with_context(|| "CREATE TABLE AS SELECT: executing insert")?;
+    }
     Ok(())
+}
+
+/// Slice the source query out of a `CREATE TABLE ... AS <query>` statement.
+/// Finds the top-level (quote-aware) `AS` keyword and strips one balanced
+/// layer of wrapping parentheses, if present.
+fn extract_ctas_query(raw_sql: &str) -> Option<String> {
+    // Byte-level scan with an ASCII-lowercased copy (same byte length), so the
+    // returned offset is a valid byte index into `raw_sql` even with multibyte
+    // UTF-8 earlier in the statement.
+    let bytes = raw_sql.as_bytes();
+    let lower = raw_sql.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    let is_ws = |b: u8| (b as char).is_ascii_whitespace();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut i = 0usize;
+    let mut as_end: Option<usize> = None;
+    while i + 2 < bytes.len() {
+        let c = bytes[i];
+        if in_single {
+            if c == b'\'' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                    i += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_double {
+            if c == b'"' {
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' => in_single = true,
+            b'"' => in_double = true,
+            b'a' | b'A' => {
+                // Top-level `AS` keyword: whitespace-delimited on both sides
+                // (dbt renders it on its own line).
+                if lb[i + 1] == b's' && i > 0 && is_ws(bytes[i - 1]) && is_ws(bytes[i + 2]) {
+                    as_end = Some(i + 2);
+                    break;
+                }
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let mut query = raw_sql[as_end?..].trim().to_string();
+    // Strip one balanced layer of outer parentheses: `(with ... select ...)`.
+    if query.starts_with('(') && query.ends_with(')') {
+        let inner = &query[1..query.len() - 1];
+        let mut depth = 0i32;
+        let mut balanced = true;
+        for c in inner.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        balanced = false;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if balanced && depth == 0 {
+            query = inner.trim().to_string();
+        }
+    }
+    if query.is_empty() {
+        None
+    } else {
+        Some(query)
+    }
 }
 
 fn apply_table_options(table: &Table, ct: &CreateTable) -> Result<()> {
@@ -783,33 +947,44 @@ fn default_catalog(session: &BenoStreamSession) -> String {
         .clone()
 }
 
+/// Strip identifier quoting (`"..."` / backticks) from a dotted name part.
+/// Engines like dbt render fully-quoted identifiers; keeping the quotes would
+/// leak them into warehouse paths and DataFusion catalog lookups.
+fn unquote(s: &str) -> String {
+    s.trim().trim_matches('"').trim_matches('`').to_string()
+}
+
+/// The unified default schema across every connector surface (Spark's V2
+/// default namespace, Trino's default schema, the dbt adapter's profile).
+pub const DEFAULT_SCHEMA: &str = "default";
+
 /// Split `db.schema.table` into its parts, defaulting to the session's default
 /// catalog/schema when fewer parts are given.
 fn split_three(session: &BenoStreamSession, name: &str) -> (String, String, String) {
-    let parts: Vec<&str> = name.split('.').collect();
+    let parts: Vec<String> = name.split('.').map(unquote).collect();
     let default_catalog = default_catalog(session);
     match parts.as_slice() {
-        [t] => (default_catalog, "public".to_string(), t.to_string()),
-        [s, t] => (default_catalog, s.to_string(), t.to_string()),
-        [d, s, t] => (d.to_string(), s.to_string(), t.to_string()),
+        [t] => (default_catalog, DEFAULT_SCHEMA.to_string(), t.clone()),
+        [s, t] => (default_catalog, s.clone(), t.clone()),
+        [d, s, t] => (d.clone(), s.clone(), t.clone()),
         _ => (
             default_catalog,
-            "public".to_string(),
-            parts.last().copied().unwrap_or("").to_string(),
+            DEFAULT_SCHEMA.to_string(),
+            parts.last().cloned().unwrap_or_default(),
         ),
     }
 }
 
 /// Split `db.schema` (or just `schema`) into (database, schema).
 fn split_db_schema(session: &BenoStreamSession, name: &str) -> (String, String) {
-    let parts: Vec<&str> = name.split('.').collect();
+    let parts: Vec<String> = name.split('.').map(unquote).collect();
     let default_catalog = default_catalog(session);
     match parts.as_slice() {
-        [s] => (default_catalog, s.to_string()),
-        [d, s] => (d.to_string(), s.to_string()),
+        [s] => (default_catalog, s.clone()),
+        [d, s] => (d.clone(), s.clone()),
         _ => (
             default_catalog,
-            parts.last().copied().unwrap_or("").to_string(),
+            parts.last().cloned().unwrap_or_default(),
         ),
     }
 }
@@ -860,4 +1035,48 @@ fn count_batch(value: i64) -> Result<RecordBatch> {
     )]));
     let array: ArrayRef = Arc::new(Int64Array::from(vec![value]));
     Ok(RecordBatch::try_new(schema, vec![array])?)
+}
+
+#[cfg(test)]
+mod ctas_tests {
+    use super::*;
+
+    #[test]
+    fn slices_bare_query() {
+        let sql = "create table t as select 1 as id";
+        assert_eq!(extract_ctas_query(sql).as_deref(), Some("select 1 as id"));
+    }
+
+    #[test]
+    fn slices_parenthesized_cte_query() {
+        // dbt renders `as (\n with ... select ... )` — the AST re-render of
+        // this form is invalid SQL, so the raw text must be sliced.
+        let sql = "create table \"db\".\"default\".\"t\"\n\nas (\n\nwith a as (select 1 as i)\nselect * from a\n)";
+        let q = extract_ctas_query(sql).expect("query");
+        assert!(q.starts_with("with a as"), "got: {q}");
+        assert!(q.ends_with("select * from a"), "got: {q}");
+    }
+
+    #[test]
+    fn ignores_as_inside_identifiers_and_strings() {
+        let sql = "create table \"as\".\"t\" as select 'as' as v";
+        assert_eq!(
+            extract_ctas_query(sql).as_deref(),
+            Some("select 'as' as v")
+        );
+    }
+
+    #[test]
+    fn keeps_inner_parentheses() {
+        let sql = "create table t as (select (1 + 2) as v)";
+        assert_eq!(
+            extract_ctas_query(sql).as_deref(),
+            Some("select (1 + 2) as v")
+        );
+    }
+
+    #[test]
+    fn returns_none_without_query() {
+        assert_eq!(extract_ctas_query("create table t (a int)"), None);
+    }
 }

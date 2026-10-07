@@ -3958,8 +3958,8 @@ class Session:
     """
     BenoStreamDB Query Session with integration for Python Table objects.
     """
-    def __init__(self, memory_mb: Optional[int] = None):
-        self._inner = _RustSession(memory_mb)
+    def __init__(self, memory_mb: Optional[int] = None, warehouse: Optional[str] = None):
+        self._inner = _RustSession(memory_mb, warehouse)
 
     def register(self, name: str, table: Union[Table, _RustTable]):
         """Register a table in the session for SQL queries."""

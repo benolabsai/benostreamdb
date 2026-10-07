@@ -16,7 +16,9 @@ logger = AdapterLogger("BenoStreamDB")
 class BenoStreamDBCredentials(Credentials):
     path: str = ":memory:"
     database: Optional[str] = "benostreamdb"
-    schema: str = "public"
+    # Unified lakehouse default schema (matches the engine's DEFAULT_SCHEMA,
+    # Spark's default namespace, and Trino's default schema).
+    schema: str = "default"
 
     @property
     def type(self):
@@ -36,11 +38,59 @@ class BenoStreamDBCursor:
         self.description = None
         self._results = []
 
+    @staticmethod
+    def _prepare_sql(sql: str) -> str:
+        """Normalize a dbt-issued SQL script for the engine's single-statement
+        `session.sql` guard (which rejects ';' and '--' anywhere).
+
+        dbt materializations legitimately emit line comments and a trailing
+        semicolon. We strip `--` line comments (quote-aware, so `--` inside a
+        string/identifier survives), drop a single trailing semicolon, and
+        still reject any *embedded* semicolon so the multi-statement injection
+        protection is preserved end to end.
+        """
+        out = []
+        i, n = 0, len(sql)
+        in_str = None
+        while i < n:
+            c = sql[i]
+            if in_str is not None:
+                out.append(c)
+                if c == in_str:
+                    if i + 1 < n and sql[i + 1] == in_str:  # doubled-quote escape
+                        out.append(sql[i + 1])
+                        i += 2
+                        continue
+                    in_str = None
+                i += 1
+                continue
+            if c in ("'", '"'):
+                in_str = c
+                out.append(c)
+                i += 1
+                continue
+            if c == "-" and i + 1 < n and sql[i + 1] == "-":
+                nl = sql.find("\n", i)
+                i = n if nl == -1 else nl  # skip comment, keep the newline
+                continue
+            out.append(c)
+            i += 1
+        prepared = "".join(out).strip()
+        if prepared.endswith(";"):
+            prepared = prepared[:-1].rstrip()
+        if ";" in prepared:
+            raise DbtRuntimeError(
+                "BenoStreamDB executes one statement at a time; "
+                "embedded ';' is not supported."
+            )
+        return prepared
+
     def execute(self, sql: str, bindings=None):
         if bindings:
             # Note: dbt-core handles most string formatting. For complex bindings, DBAPI compliance would be needed.
             pass
-        
+
+        sql = self._prepare_sql(sql)
         try:
             arrow_table = self.session.sql(sql)
             if arrow_table is not None and hasattr(arrow_table, "schema"):
@@ -89,8 +139,13 @@ class BenoStreamDBConnectionManager(SQLConnectionManager):
     @classmethod
     def get_session(cls, credentials):
         if cls._session is None:
-            # Instantiate a single embedded engine session for all connections
-            cls._session = benostreamdb.Session()
+            # Instantiate a single embedded engine session for all connections.
+            # The profile `path` is the warehouse base location so CREATE
+            # TABLE / CREATE TABLE AS SELECT can derive table URIs; the
+            # default ":memory:" maps onto the engine's in-memory store.
+            path = getattr(credentials, "path", None) or ":memory:"
+            warehouse = "memory:/dbt" if path in (":memory:", "") else path
+            cls._session = benostreamdb.Session(warehouse=warehouse)
         return cls._session
 
     @classmethod
