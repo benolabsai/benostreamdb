@@ -7,6 +7,7 @@ pub mod connected_components;
 pub mod degree_centrality;
 pub mod drift_search;
 pub mod graph_neighbors;
+pub mod graph_table_functions;
 pub mod graph_view;
 pub mod jaccard_coefficient;
 pub mod label_propagation;
@@ -29,6 +30,10 @@ pub use connected_components::ConnectedComponentsUDF;
 pub use degree_centrality::DegreeCentralityUDF;
 pub use drift_search::{DriftSearchUDF, RegionalDriftUDF};
 pub use graph_neighbors::GraphNeighborsUDF;
+pub use graph_table_functions::{
+    all_graph_table_functions, graph_table_function_names, register_graph_table_functions,
+    GraphTraversalKind,
+};
 pub use graph_view::{
     CachingGraph, GraphAccumulatorBase, GraphMode, GraphView, SimpleGraph, SubgraphView,
 };

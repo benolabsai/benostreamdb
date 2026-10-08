@@ -219,6 +219,18 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   every core function is exposed (or explicitly documented as a gap) across the
   Python session, dbt macros, Spark catalog/pass-through, and Trino. Adding a
   core UDF without wiring a surface now fails the test.
+- **SQL graph traversal table functions** — `graph_neighbors`,
+  `graph_shortest_path`, `graph_all_shortest_paths`, `graph_subgraph`, and
+  `graph_connecting_paths` are now DataFusion table functions, so a graph walk
+  is a `FROM` source (`SELECT * FROM graph_neighbors('edges', '101', 2, 'auto')`)
+  rather than an aggregate. Implemented in
+  `src/core/sql/graph_udf/graph_table_functions.rs`; each follows the same
+  in-memory / out-of-core `GraphMode` pattern as the graph UDAFs and accepts
+  optional trailing `source`/`target` column names (auto-detected otherwise).
+  Registered in the engine session, the ad-hoc `Table::sql()` context, and the
+  Python `execute_sql` path, so they are reachable from Python, dbt, Spark
+  (pass-through), Trino, and Flight SQL. The parity test now also covers the
+  Flight SQL surface.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary
@@ -282,6 +294,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Graph functions assumed `source`/`target` column names** — the Python
+  `Table.pagerank()` / `personalized_pagerank()` / `shortest_path()` wrappers
+  hard-coded `source`/`target` in their generated SQL, so an edge table using
+  `src`/`dst` (or any other convention) failed. They now auto-detect the
+  endpoint columns via `edge_endpoint_columns()`. The core
+  `Table::graph_neighbors` / `shortest_path` / `connecting_paths` gained
+  `_with_columns` variants (and `subgraph_edges_with_columns`), and the Python
+  `core_*` bindings expose optional `source_column`/`target_column`, so every
+  graph entry point can name its endpoints explicitly.
 - **Ingest RAM back-pressure could block a writer forever** — the high-water
   check compared *absolute* process RSS against `BSDB_MAX_INGEST_RAM_GB`, so once
   the process baseline (a prior test in the same process, caches, the runtime

@@ -40,7 +40,7 @@ architecture. Say:
 | :--- | :--- | :--- |
 | ✅ Done | **JSON-path inverted index** — `IndexAlgorithm::JsonPath` builds a `(path, value) -> row_ids` Puffin overlay; the planner rewrites `json_contains` / `json_exists` / `json_path_exists` / `json_extract_path_text(...) = 'value'` into index lookups, with a full-scan fallback for unindexed paths. Completes the story (SQL + BM25 + vector + graph + JSON-path indexes, all rebuildable overlays on Iceberg). | [Theme 2](#theme-2-semi-structured--json) |
 | 🔴 High | **MCP server** — excellent demo surface for the AI story | [Theme 1](#theme-1-ai-agent-tools--client-ecosystem) |
-| 🔴 High | **SQL graph traversal** (`graph_neighbors(...)`) — turns the graph capability into something immediately demonstrable | [Theme 3](#theme-3-graph-overlays) |
+| ✅ Done | **SQL graph traversal** (`FROM graph_neighbors(...)`) — DataFusion table functions (`graph_neighbors`, `graph_shortest_path`, `graph_all_shortest_paths`, `graph_subgraph`, `graph_connecting_paths`) expose graph walks directly in `FROM` clauses, following the in-memory / out-of-core `GraphMode` pattern and accepting explicit source/target columns | [Theme 3](#theme-3-graph-overlays) |
 | 🔴 High | **Documentation + benchmark reproducibility** — treat benchmarks as product work | [Benchmarks](#benchmarks-as-product-work) |
 | 🟠 High | **Predicate-filtered `Table::subscribe()`** — only if reactive/streaming is going to be a headline | [Theme 4](#theme-4-reactive-lakehouse-streaming) |
 
@@ -61,12 +61,6 @@ substantial engineering for little initial marketing benefit:
 - **Iceberg v3 `variant`** — standards alignment, not a compelling launch
   differentiator.
 
-> **Enterprise features live in the business plan, not this roadmap.** Security,
-> governance, autonomous maintenance, HA/DR, and observability are an
-> **operational control plane around the engine**, sequenced separately for the
-> commercial product. See
-> [`business_plan/ENTERPRISE_ROADMAP.md`](../business_plan/ENTERPRISE_ROADMAP.md).
-
 ---
 
 ## 🎯 Architecture & Status at a Glance
@@ -79,7 +73,7 @@ substantial engineering for little initial marketing benefit:
 | ✅ **Production Ready** | **Text & Scalar Overlays** | Inverted BM25 Okapi indexes, Roaring Bitmap scalar indexes, Composite multi-column filters, Statistics pruning. |
 | ✅ **Production Ready** | **Core Graph Primitives** | Zero-copy Memory-Mapped CSR Graph Index (`MmapCsrGraph`), Core Graph Traversal operator (`Table::graph_neighborhood`), Graph SQL UDFs. |
 | ✅ **Production Ready** | **JSON Path Functions & Index** | PostgreSQL `json_*` UDFs (`json_extract_path`, `json_contains`, `json_path_query`, …) over `Utf8` columns, plus a `json_path` `(path, value) -> row_ids` Puffin overlay with planner pushdown. |
-| ✅ **Production Ready** | **Lakehouse Connectors** | Native Apache Spark connector (`spark-benostreamdb`), Trino connector (`trino-benostreamdb`), Official dbt adapter (`dbt-benostreamdb`). |
+| ✅ **Production Ready** | **Lakehouse Connectors** | Native Apache Spark connector (`spark-benostreamdb`), Trino connector (`trino-benostreamdb`), Official dbt adapter (`dbt-benostreamdb`). Full engine function-surface parity across Python/dbt/Spark/Trino, guarded by `tests/python/test_function_parity.py`. |
 | ✅ **Production Ready** | **Ecosystem Interfaces** | Optional Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`: OpenSearch 7.10 & Qdrant REST). |
 | 🚀 **Launch Candidate** | **AI-Native & Search Extensions** | MCP server, SQL graph traversal, predicate-filtered subscriptions. |
 | 📋 **Deferred** | **Breadth** | Arrow Flight subscriptions, typed global URNs, tokenizer suite, LangChain/LlamaIndex, broker adapters, Iceberg v3 `variant`. |
@@ -109,6 +103,22 @@ BenoStreamDB implements an **indexed, compute-disaggregated lakehouse architectu
   - Seamless integration with Apache Polaris, Nessie, AWS Glue, Hive Metastore, and file-based Iceberg catalogs.
 - **PostgreSQL `json` Path Functions**:
   - `json_extract_path` / `json_extract_path_text` (variadic path), `json_contains` (recursive `@>`), `json_exists`, `json_typeof`, and `json_path_exists` / `json_path_query` (jsonpath subset: `$.a.b[0]`, `[*]`). Implemented in `src/core/sql/udf/json.rs`.
+- **Cross-connector function parity**:
+  - The engine's full custom function surface (vector scalar UDFs, vector
+    aggregates, JSON, graph UDAFs) is exposed consistently across Python, dbt,
+    Spark, and Trino, and guarded by `tests/python/test_function_parity.py`
+    (source of truth: `udf::registered_function_names()`). The Spark DSv2
+    `FunctionCatalog` exposes 30 functions, and a pass-through reader
+    (`option("query", "<engine SQL>")`) makes the vector aggregates and graph
+    UDAFs — which have no DSv2 scalar equivalent — reachable from Spark. The
+    engine's ad-hoc `Table::sql()` context now registers the full surface via the
+    shared `udf::register_all_custom_udfs` helper.
+- **Ingest back-pressure liveness**:
+  - The ingest RAM high-water mark is now baseline-relative (it bounds the
+    engine's *growth* since the write began) with a bounded fail-open grace
+    (`BSDB_INGEST_BACKPRESSURE_GRACE_SECS`, default 60s), so a writer can no
+    longer block forever when process RSS is already at/above the cap for reasons
+    the write cannot relieve.
 
 ---
 
@@ -174,16 +184,30 @@ Themes are ordered by Launch Candidate priority.
 > **Partially delivered.** The programmatic edge-table API has shipped:
 > `Table.create_edge_table(...)`, `Table.from_networkx(...)`, and
 > `Table.to_networkx(...)` create and round-trip standard edge tables with
-> automatic endpoint/embedding sidecar indexes. The declarative DDL form
-> (`table_type = 'edge'`) and typed global URNs below remain open.
+> automatic endpoint/embedding sidecar indexes. The graph UDAFs
+> (`graph_neighbors`, `graph_pagerank`, `graph_shortest_path`, …) are now
+> reachable from every connector surface — including Spark, via the pass-through
+> reader. The declarative DDL form (`table_type = 'edge'`), the `FROM`
+> table-function form, and typed global URNs below remain open.
 
-- [ ] **SQL Graph Traversal Operator Extensions** — 🟠 **High**:
-  - Expand DataFusion table functions to expose graph walks directly in `FROM`
-    clauses. This is the demo that matters — *"the graph is an overlay on your
-    lakehouse data, not a separate graph database"*:
+- [x] **SQL Graph Traversal Operator Extensions** (shipped) — 🟠 **High**:
+  - DataFusion table functions expose graph walks directly in `FROM` clauses —
+    *"the graph is an overlay on your lakehouse data, not a separate graph
+    database"*:
     ```sql
-    SELECT * FROM graph_neighbors('edges', seeds => [101], hops => 2);
+    SELECT * FROM graph_neighbors('edges', '101', 2, 'auto');
+    SELECT * FROM graph_shortest_path('edges', 101, 205, 'auto');
+    SELECT * FROM graph_all_shortest_paths('edges', 101, 205, 'auto');
+    SELECT * FROM graph_subgraph('edges', '101,102', 2, 'auto');
+    SELECT * FROM graph_connecting_paths('edges', '101,205,309', 'auto');
     ```
+  - Implemented in `src/core/sql/graph_udf/graph_table_functions.rs`. Each
+    function follows the same in-memory / out-of-core `GraphMode` pattern as the
+    graph UDAFs (`auto` | `in_memory` | `out_of_core` | `cached`), and accepts
+    optional trailing `source`/`target` column names (auto-detected otherwise).
+    Registered in the engine session, the ad-hoc `Table::sql()` context, and the
+    Python `execute_sql` path, so they are reachable from Python, dbt, Spark
+    (pass-through), Trino, and Flight SQL.
 - [ ] **Declarative Edge Table DDL** — 🟠 **High**:
   - First-class table metadata options (`table_type = 'edge'`, `src_col`, `dst_col`) that automatically register and maintain forward and reverse CSR indexes on segment commits.
 - [ ] **Typed Global Entity URNs (`table:id`)** — 🟢 **Deferred**:
