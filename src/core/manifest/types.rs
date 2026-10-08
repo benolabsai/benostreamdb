@@ -547,20 +547,48 @@ pub enum IndexAlgorithm {
     },
 }
 
+impl IndexAlgorithm {
+    /// The canonical name of this algorithm (matches `Display`).
+    pub fn name(&self) -> &'static str {
+        match self {
+            IndexAlgorithm::Hnsw { .. } => "hnsw",
+            IndexAlgorithm::HnswPq { .. } => "hnsw_pq",
+            IndexAlgorithm::HnswTq4 { .. } => "hnsw_tq4",
+            IndexAlgorithm::HnswTq8 { .. } => "hnsw_tq8",
+            IndexAlgorithm::Bm25 { .. } => "bm25",
+            IndexAlgorithm::Bloom { .. } => "bloom",
+            IndexAlgorithm::Bitmap => "bitmap",
+            IndexAlgorithm::CompositeBitmap { .. } => "composite_bitmap",
+            IndexAlgorithm::CsrGraph { .. } => "csr_graph",
+            IndexAlgorithm::JsonPath { .. } => "json_path",
+        }
+    }
+
+    /// Every index algorithm name the engine understands. Single source of
+    /// truth for the connector surface-parity test — adding a variant here
+    /// without exposing it in the Python/dbt/connector surfaces fails the test.
+    pub fn all_names() -> Vec<String> {
+        vec![
+            "hnsw",
+            "hnsw_pq",
+            "hnsw_tq4",
+            "hnsw_tq8",
+            "bm25",
+            "bloom",
+            "bitmap",
+            "composite_bitmap",
+            "csr_graph",
+            "json_path",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+}
+
 impl std::fmt::Display for IndexAlgorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IndexAlgorithm::Hnsw { .. } => write!(f, "hnsw"),
-            IndexAlgorithm::HnswPq { .. } => write!(f, "hnsw_pq"),
-            IndexAlgorithm::HnswTq4 { .. } => write!(f, "hnsw_tq4"),
-            IndexAlgorithm::HnswTq8 { .. } => write!(f, "hnsw_tq8"),
-            IndexAlgorithm::Bm25 { .. } => write!(f, "bm25"),
-            IndexAlgorithm::Bloom { .. } => write!(f, "bloom"),
-            IndexAlgorithm::Bitmap => write!(f, "bitmap"),
-            IndexAlgorithm::CompositeBitmap { .. } => write!(f, "composite_bitmap"),
-            IndexAlgorithm::CsrGraph { .. } => write!(f, "csr_graph"),
-            IndexAlgorithm::JsonPath { .. } => write!(f, "json_path"),
-        }
+        write!(f, "{}", self.name())
     }
 }
 

@@ -130,6 +130,12 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
             }),
             "bloom" => Ok(IndexAlgorithm::Bloom { fpr: 0.05 }),
             "bitmap" | "inverted" => Ok(IndexAlgorithm::Bitmap),
+            "csr_graph" | "graph" | "csr" => Ok(IndexAlgorithm::CsrGraph {
+                src_column: "src".to_string(),
+                dst_column: "dst".to_string(),
+            }),
+            "composite_bitmap" => Ok(IndexAlgorithm::CompositeBitmap { columns: vec![] }),
+            "json_path" => Ok(IndexAlgorithm::JsonPath { paths: vec![] }),
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unknown index type: {}",
                 s
@@ -309,7 +315,7 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                 Ok(IndexAlgorithm::Bloom { fpr })
             }
             "bitmap" | "inverted" => Ok(IndexAlgorithm::Bitmap),
-            "graph" | "csr" => {
+            "csr_graph" | "graph" | "csr" => {
                 let src_column = dict
                     .get_item("src_column")?
                     .and_then(|v| v.extract().ok())
@@ -322,6 +328,20 @@ pub fn parse_index_algorithm(val: Bound<'_, PyAny>) -> PyResult<IndexAlgorithm> 
                     src_column,
                     dst_column,
                 })
+            }
+            "composite_bitmap" => {
+                let columns = dict
+                    .get_item("columns")?
+                    .and_then(|v| v.extract::<Vec<String>>().ok())
+                    .unwrap_or_default();
+                Ok(IndexAlgorithm::CompositeBitmap { columns })
+            }
+            "json_path" => {
+                let paths = dict
+                    .get_item("paths")?
+                    .and_then(|v| v.extract::<Vec<String>>().ok())
+                    .unwrap_or_default();
+                Ok(IndexAlgorithm::JsonPath { paths })
             }
             _ => Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Unknown index type: {}",
@@ -616,4 +636,24 @@ pub fn registered_functions() -> Vec<String> {
 #[pyfunction]
 pub fn registered_table_functions() -> Vec<String> {
     crate::core::sql::graph_udf::graph_table_function_names()
+}
+
+/// Every index algorithm name the engine understands. Source of truth for the
+/// connector surface-parity test.
+#[pyfunction]
+pub fn registered_index_algorithms() -> Vec<String> {
+    crate::core::manifest::IndexAlgorithm::all_names()
+}
+
+/// The DDL / maintenance statement kinds the engine intercepts. Source of truth
+/// for the connector surface-parity test.
+#[pyfunction]
+pub fn registered_ddl_statements() -> Vec<String> {
+    crate::core::sql::catalog_ddl::handled_ddl_statements()
+}
+
+/// The `ALTER TABLE ... EXECUTE <action>` procedure names the engine supports.
+#[pyfunction]
+pub fn registered_table_actions() -> Vec<String> {
+    crate::core::sql::catalog_ddl::table_action_names()
 }
