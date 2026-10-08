@@ -598,3 +598,14 @@ pub fn extract_partition_spec(
 
     Ok(crate::core::manifest::PartitionSpec { spec_id: 0, fields })
 }
+
+/// Names of every custom function the engine registers with DataFusion
+/// (vector scalar UDFs, vector aggregates, JSON UDFs, graph UDAFs).
+///
+/// This is the core's function surface, consumed by
+/// `tests/python/test_function_parity.py` to assert that the Python, dbt,
+/// Trino, and Spark surfaces stay in sync as functions are added.
+#[pyfunction]
+pub fn registered_functions() -> Vec<String> {
+    crate::core::sql::udf::registered_function_names()
+}

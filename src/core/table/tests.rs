@@ -65,6 +65,22 @@ async fn caller_reserved_bytes_round_trip() {
     assert_eq!(table.caller_reserved_bytes(), 0);
 }
 
+#[test]
+fn backpressure_grace_defaults_and_parses() {
+    // The fail-open grace is the liveness backstop for the ingest RAM
+    // high-water mark: when RSS is stuck above the cap because of pre-existing
+    // process memory no background task can reclaim, the writer bails out after
+    // this long instead of blocking forever. A missing, non-positive, or
+    // unparseable value must fall back to the 60s default so a typo cannot
+    // silently disable it.
+    assert_eq!(write::backpressure_grace_secs(None), 60.0);
+    assert_eq!(write::backpressure_grace_secs(Some("15")), 15.0);
+    assert_eq!(write::backpressure_grace_secs(Some("2.5")), 2.5);
+    assert_eq!(write::backpressure_grace_secs(Some("0")), 60.0);
+    assert_eq!(write::backpressure_grace_secs(Some("-3")), 60.0);
+    assert_eq!(write::backpressure_grace_secs(Some("nope")), 60.0);
+}
+
 #[tokio::test]
 async fn test_table_lifecycle() -> Result<()> {
     let dir = tempdir()?;

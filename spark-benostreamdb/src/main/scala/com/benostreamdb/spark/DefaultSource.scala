@@ -22,10 +22,18 @@ class DefaultSource extends TableProvider with DataSourceRegister {
     u.stripSuffix("/")
   }
 
+  private def queryOf(m: JMap[String, String]): Option[String] =
+    Option(m.get("query")).map(_.trim).filter(_.nonEmpty)
+
   override def inferSchema(options: CaseInsensitiveStringMap): StructType = {
-    val json = BenoStreamJNIBridge.getInstance().getTableSchema(uriOf(options.asCaseSensitiveMap()))
-    if (json == null || json.isEmpty || json == "[]") new StructType()
-    else BenoStreamArrowUtils.schemaJsonToStructType(json)
+    val m = options.asCaseSensitiveMap()
+    queryOf(m) match {
+      case Some(sql) => BenoStreamQuerySchema.resolve(uriOf(m), sql)
+      case None =>
+        val json = BenoStreamJNIBridge.getInstance().getTableSchema(uriOf(m))
+        if (json == null || json.isEmpty || json == "[]") new StructType()
+        else BenoStreamArrowUtils.schemaJsonToStructType(json)
+    }
   }
 
   override def getTable(
@@ -34,17 +42,25 @@ class DefaultSource extends TableProvider with DataSourceRegister {
       properties: JMap[String, String]
   ): Table = {
     val uri = uriOf(properties)
-    val resolved =
-      if (schema != null && schema.fields.nonEmpty) schema
-      else {
-        val json = BenoStreamJNIBridge.getInstance().getTableSchema(uri)
-        if (json == null || json.isEmpty || json == "[]") new StructType()
-        else BenoStreamArrowUtils.schemaJsonToStructType(json)
-      }
-    val gpu = Option(properties.get("benostream.gpu_device"))
-      .orElse(Option(properties.get("gpu_device")))
-      .getOrElse("auto")
-    new BenoStreamTable(uri, resolved, properties, gpu)
+    queryOf(properties) match {
+      case Some(sql) =>
+        val resolved =
+          if (schema != null && schema.fields.nonEmpty) schema
+          else BenoStreamQuerySchema.resolve(uri, sql)
+        new BenoStreamQueryTable(uri, sql, resolved)
+      case None =>
+        val resolved =
+          if (schema != null && schema.fields.nonEmpty) schema
+          else {
+            val json = BenoStreamJNIBridge.getInstance().getTableSchema(uri)
+            if (json == null || json.isEmpty || json == "[]") new StructType()
+            else BenoStreamArrowUtils.schemaJsonToStructType(json)
+          }
+        val gpu = Option(properties.get("benostream.gpu_device"))
+          .orElse(Option(properties.get("gpu_device")))
+          .getOrElse("auto")
+        new BenoStreamTable(uri, resolved, properties, gpu)
+    }
   }
 
   override def supportsExternalMetadata(): Boolean = true

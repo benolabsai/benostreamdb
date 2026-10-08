@@ -234,8 +234,14 @@ impl ExecutionPlan for BenoStreamExec {
                                     // (e.g. `iceberg.id`); a mismatch there makes
                                     // DataFusion's aggregate state coalescing
                                     // panic inside arrow's `coalesce` kernel.
-                                    if b.schema().fields().len()
-                                        == expected_schema_inner.fields().len()
+                                    // A zero-column projection (e.g. `count(*)`)
+                                    // must be passed through untouched: rebuilding
+                                    // an empty batch fails Arrow's
+                                    // "must either specify a row count or at
+                                    // least one column" check.
+                                    if !expected_schema_inner.fields().is_empty()
+                                        && b.schema().fields().len()
+                                            == expected_schema_inner.fields().len()
                                     {
                                         let mut cols: Vec<Arc<dyn arrow::array::Array>> =
                                             Vec::with_capacity(b.num_columns());

@@ -127,6 +127,7 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::build_profile, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::is_debug_build, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::registered_functions, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(
         python_binding::create_catalog_from_config,

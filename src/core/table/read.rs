@@ -57,6 +57,12 @@ impl Table {
         }
 
         let mut ctx = SessionContext::new_with_config(session_config);
+        // Register the full custom function surface (vector scalar UDFs, vector
+        // aggregates, JSON UDFs, and graph UDAFs). Without this, connector
+        // pass-through queries (`option("query", "SELECT vector_sum(...) ...")`)
+        // fail with "Invalid function" because this ad-hoc context is separate
+        // from the engine's primary `BenoStreamSession`.
+        crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;

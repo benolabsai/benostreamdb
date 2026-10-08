@@ -39,7 +39,6 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 // use datafusion::execution::context::SessionState; // Unused
 use crate::core::sql::optimizer::IndexJoinOptimizerRule;
 use crate::core::sql::udf;
-use crate::core::sql::vector_udf;
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 
@@ -111,25 +110,11 @@ impl BenoStreamSession {
             tracing::error!(error = %e, "failed to register standard DataFusion aggregates");
         }
 
-        // Add Vector Scalar Functions (Additive registration)
-        for udf in vector_udf::all_vector_udfs() {
-            ctx.register_udf(udf);
-        }
-
-        // Add JSON path scalar functions (json_get/json_extract/json_exists/json_contains)
-        for udf in udf::all_json_udfs() {
-            ctx.register_udf(udf);
-        }
-
-        // Add Vector Aggregate Functions (Additive registration via register_udaf in DF 52)
-        for udf in vector_udf::all_vector_aggregates() {
-            ctx.register_udaf(udf);
-        }
-
-        // Add Graph Aggregate Functions
-        for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
-            ctx.register_udaf(udf);
-        }
+        // Register the full custom function surface (vector scalar UDFs, JSON
+        // path functions, vector aggregates, and graph UDAFs) from the single
+        // source of truth, so this session matches the ad-hoc `Table::sql()`
+        // context and the connectors.
+        udf::register_all_custom_udfs(&mut ctx);
 
         // Register vector operators (validates UDFs are present)
         if let Err(e) = crate::core::sql::vector_operators::register_vector_operators(&mut ctx) {
