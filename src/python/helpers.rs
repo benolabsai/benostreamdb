@@ -609,3 +609,11 @@ pub fn extract_partition_spec(
 pub fn registered_functions() -> Vec<String> {
     crate::core::sql::udf::registered_function_names()
 }
+
+/// Names of every graph traversal **table function** the engine registers
+/// (`graph_neighbors`, `graph_shortest_path`, …). The counterpart to
+/// [`registered_functions`] for the `FROM graph_*(...)` surface.
+#[pyfunction]
+pub fn registered_table_functions() -> Vec<String> {
+    crate::core::sql::graph_udf::graph_table_function_names()
+}

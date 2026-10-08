@@ -116,6 +116,9 @@ impl BenoStreamSession {
         // context and the connectors.
         udf::register_all_custom_udfs(&mut ctx);
 
+        // Register graph traversal table functions (`FROM graph_neighbors(...)`).
+        crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
+
         // Register vector operators (validates UDFs are present)
         if let Err(e) = crate::core::sql::vector_operators::register_vector_operators(&mut ctx) {
             tracing::error!(error = %e, "failed to register vector operators");

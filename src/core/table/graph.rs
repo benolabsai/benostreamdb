@@ -473,6 +473,22 @@ impl Table {
         directed: bool,
         graph_column: Option<&str>,
     ) -> Result<Vec<u64>> {
+        self.shortest_path_with_columns(start_node, end_node, directed, graph_column, None, None)
+            .await
+    }
+
+    /// Like [`Table::shortest_path`] but with explicit `source_column` /
+    /// `target_column` names (auto-detected when `None`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn shortest_path_with_columns(
+        &self,
+        start_node: u64,
+        end_node: u64,
+        directed: bool,
+        graph_column: Option<&str>,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
+    ) -> Result<Vec<u64>> {
         if start_node == end_node {
             return Ok(vec![start_node]);
         }
@@ -569,23 +585,29 @@ impl Table {
         // Fallback path: Table scan BFS
         let batches = self.read_async(None, None, None).await?;
         let schema = self.arrow_schema();
-        let src_col_name = ["source", "src", "src_id", "from", "u"]
-            .iter()
-            .find(|c| schema.column_with_name(c).is_some())
-            .unwrap_or(&"source");
-        let tgt_col_name = ["target", "dst", "dst_id", "to", "v"]
-            .iter()
-            .find(|c| schema.column_with_name(c).is_some())
-            .unwrap_or(&"target");
+        let src_col_name = source_column.map(String::from).unwrap_or_else(|| {
+            ["source", "src", "src_id", "from", "u"]
+                .iter()
+                .find(|c| schema.column_with_name(c).is_some())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "source".to_string())
+        });
+        let tgt_col_name = target_column.map(String::from).unwrap_or_else(|| {
+            ["target", "dst", "dst_id", "to", "v"]
+                .iter()
+                .find(|c| schema.column_with_name(c).is_some())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "target".to_string())
+        });
 
         let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
         for batch in &batches {
             let b_schema = batch.schema();
-            let src_idx = match b_schema.index_of(src_col_name) {
+            let src_idx = match b_schema.index_of(&src_col_name) {
                 Ok(i) => i,
                 Err(_) => continue,
             };
-            let tgt_idx = match b_schema.index_of(tgt_col_name) {
+            let tgt_idx = match b_schema.index_of(&tgt_col_name) {
                 Ok(i) => i,
                 Err(_) => continue,
             };
@@ -660,6 +682,21 @@ impl Table {
         directed: bool,
         graph_column: Option<&str>,
     ) -> Result<Vec<(u64, u64)>> {
+        self.connecting_paths_with_columns(seeds, directed, graph_column, None, None)
+            .await
+    }
+
+    /// Like [`Table::connecting_paths`] but with explicit `source_column` /
+    /// `target_column` names (auto-detected when `None`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connecting_paths_with_columns(
+        &self,
+        seeds: &[u64],
+        directed: bool,
+        graph_column: Option<&str>,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
+    ) -> Result<Vec<(u64, u64)>> {
         if seeds.len() < 2 {
             return Ok(Vec::new());
         }
@@ -671,7 +708,16 @@ impl Table {
                 let u = seeds[i];
                 let v = seeds[j];
 
-                let forward_path = self.shortest_path(u, v, directed, graph_column).await?;
+                let forward_path = self
+                    .shortest_path_with_columns(
+                        u,
+                        v,
+                        directed,
+                        graph_column,
+                        source_column,
+                        target_column,
+                    )
+                    .await?;
                 if forward_path.len() >= 2 {
                     for k in 0..forward_path.len() - 1 {
                         edges.insert((forward_path[k], forward_path[k + 1]));
@@ -679,7 +725,16 @@ impl Table {
                 }
 
                 if directed && forward_path.is_empty() {
-                    let rev_path = self.shortest_path(v, u, directed, graph_column).await?;
+                    let rev_path = self
+                        .shortest_path_with_columns(
+                            v,
+                            u,
+                            directed,
+                            graph_column,
+                            source_column,
+                            target_column,
+                        )
+                        .await?;
                     if rev_path.len() >= 2 {
                         for k in 0..rev_path.len() - 1 {
                             edges.insert((rev_path[k], rev_path[k + 1]));
@@ -701,11 +756,28 @@ impl Table {
         hops: u32,
         graph_column: Option<&str>,
     ) -> Result<Vec<u64>> {
+        self.graph_neighbors_with_columns(node, hops, graph_column, None, None)
+            .await
+    }
+
+    /// Like [`Table::graph_neighbors`] but with explicit `source_column` /
+    /// `target_column` names (auto-detected when `None`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn graph_neighbors_with_columns(
+        &self,
+        node: u64,
+        hops: u32,
+        graph_column: Option<&str>,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
+    ) -> Result<Vec<u64>> {
         let opts = GraphNeighborhoodOptions {
             seeds: vec![node],
             hops,
             directed: true,
             graph_column: graph_column.map(String::from),
+            source_column: source_column.map(String::from),
+            target_column: target_column.map(String::from),
             max_nodes: Some(100_000),
             max_degree: Some(10_000),
             ..Default::default()
@@ -718,6 +790,10 @@ impl Table {
     }
 
     /// Extract induced subgraph edges within `hops` steps of `seeds`.
+    ///
+    /// Source/target columns are auto-detected (`source`/`src`/`src_id`/`from`/`u`
+    /// and `target`/`dst`/`dst_id`/`to`/`v`); use
+    /// [`Table::subgraph_edges_with_columns`] to name them explicitly.
     pub async fn subgraph_edges(
         &self,
         seeds: &[u64],
@@ -726,6 +802,26 @@ impl Table {
         max_degree: Option<usize>,
         max_nodes: Option<usize>,
         graph_column: Option<&str>,
+    ) -> Result<Vec<(u64, u64)>> {
+        self.subgraph_edges_with_columns(
+            seeds, hops, directed, max_degree, max_nodes, graph_column, None, None,
+        )
+        .await
+    }
+
+    /// Like [`Table::subgraph_edges`] but with explicit `source_column` /
+    /// `target_column` names (auto-detected when `None`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn subgraph_edges_with_columns(
+        &self,
+        seeds: &[u64],
+        hops: u32,
+        directed: bool,
+        max_degree: Option<usize>,
+        max_nodes: Option<usize>,
+        graph_column: Option<&str>,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
     ) -> Result<Vec<(u64, u64)>> {
         use crate::core::sql::graph_udf::graph_view::GraphView;
 
@@ -736,6 +832,8 @@ impl Table {
             max_degree,
             max_nodes,
             graph_column: graph_column.map(String::from),
+            source_column: source_column.map(String::from),
+            target_column: target_column.map(String::from),
             ..Default::default()
         };
         let visited_nodes = self.graph_neighborhood(&opts).await?;
@@ -745,8 +843,24 @@ impl Table {
             return Ok(Vec::new());
         }
 
+        let schema = self.arrow_schema();
+        let src_col_name = source_column.map(String::from).unwrap_or_else(|| {
+            ["source", "src", "src_id", "from", "u"]
+                .iter()
+                .find(|c| schema.column_with_name(c).is_some())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "source".to_string())
+        });
+        let tgt_col_name = target_column.map(String::from).unwrap_or_else(|| {
+            ["target", "dst", "dst_id", "to", "v"]
+                .iter()
+                .find(|c| schema.column_with_name(c).is_some())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "target".to_string())
+        });
+
         let mut edges = HashSet::new();
-        let col_to_check = graph_column.unwrap_or("source");
+        let col_to_check = graph_column.unwrap_or(src_col_name.as_str());
 
         if let Ok(Some(forward)) = self.load_graph_index(col_to_check).await {
             for &u in &node_set {
@@ -758,23 +872,14 @@ impl Table {
             }
         } else {
             let batches = self.read_async(None, None, None).await?;
-            let schema = self.arrow_schema();
-            let src_col_name = ["source", "src", "src_id", "from", "u"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .unwrap_or(&"source");
-            let tgt_col_name = ["target", "dst", "dst_id", "to", "v"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .unwrap_or(&"target");
 
             for batch in &batches {
                 let b_schema = batch.schema();
-                let src_idx = match b_schema.index_of(src_col_name) {
+                let src_idx = match b_schema.index_of(&src_col_name) {
                     Ok(i) => i,
                     Err(_) => continue,
                 };
-                let tgt_idx = match b_schema.index_of(tgt_col_name) {
+                let tgt_idx = match b_schema.index_of(&tgt_col_name) {
                     Ok(i) => i,
                     Err(_) => continue,
                 };
@@ -848,18 +953,24 @@ impl Table {
     }
 
     /// Load the graph backing for OutOfCore or Cached modes.
+    ///
+    /// `graph_column` names the CSR index's source column (defaults to
+    /// `"source"`), so a table whose endpoints are named differently can still
+    /// use the out-of-core path.
     async fn load_graph_backing(
         &self,
         mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+        graph_column: Option<&str>,
     ) -> Result<Box<dyn crate::core::sql::graph_udf::graph_view::GraphView>> {
         use crate::core::sql::graph_udf::graph_view::{
             graph_memory_budget_bytes, CachingGraph, GraphMode,
         };
+        let col = graph_column.unwrap_or("source");
         match mode {
             GraphMode::InMemory => unreachable!("InMemory mode handled separately"),
             GraphMode::OutOfCore => {
-                let graph = self.load_graph_index("source").await?.ok_or_else(|| {
-                    anyhow::anyhow!("out-of-core graph requires a CSR graph index on 'source'")
+                let graph = self.load_graph_index(col).await?.ok_or_else(|| {
+                    anyhow::anyhow!("out-of-core graph requires a CSR graph index on '{col}'")
                 })?;
                 tracing::debug!(
                     table = %self.uri,
@@ -869,8 +980,8 @@ impl Table {
                 Ok(Box::new(graph))
             }
             GraphMode::Cached => {
-                let graph = self.load_graph_index("source").await?.ok_or_else(|| {
-                    anyhow::anyhow!("cached graph requires a CSR graph index on 'source'")
+                let graph = self.load_graph_index(col).await?.ok_or_else(|| {
+                    anyhow::anyhow!("cached graph requires a CSR graph index on '{col}'")
                 })?;
                 let cached = CachingGraph::new(graph, graph_memory_budget_bytes() as usize);
                 tracing::debug!(
@@ -885,11 +996,29 @@ impl Table {
     }
 
     /// Construct a [`GraphView`] according to the given mode, seeds, and hops.
+    ///
+    /// Source/target columns are auto-detected; use
+    /// [`Table::graph_view_with_columns`] to name them explicitly.
     pub async fn graph_view(
         &self,
         mode: crate::core::sql::graph_udf::graph_view::GraphMode,
         seeds: &[u64],
         hops: u32,
+    ) -> Result<Box<dyn crate::core::sql::graph_udf::graph_view::GraphView>> {
+        self.graph_view_with_columns(mode, seeds, hops, None, None)
+            .await
+    }
+
+    /// Like [`Table::graph_view`] but with explicit `source_column` /
+    /// `target_column` names (auto-detected when `None`). The `source_column`
+    /// also selects the CSR index used by the out-of-core / cached modes.
+    pub async fn graph_view_with_columns(
+        &self,
+        mode: crate::core::sql::graph_udf::graph_view::GraphMode,
+        seeds: &[u64],
+        hops: u32,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
     ) -> Result<Box<dyn crate::core::sql::graph_udf::graph_view::GraphView>> {
         use crate::core::sql::graph_udf::graph_view::{GraphMode, SimpleGraph, SubgraphView};
 
@@ -898,13 +1027,24 @@ impl Table {
         match mode {
             GraphMode::InMemory => {
                 let edges = self
-                    .subgraph_edges(seeds, hops, false, Some(1000), Some(50000), None)
+                    .subgraph_edges_with_columns(
+                        seeds,
+                        hops,
+                        false,
+                        Some(1000),
+                        Some(50000),
+                        source_column,
+                        source_column,
+                        target_column,
+                    )
                     .await?;
                 Ok(Box::new(SimpleGraph::from_directed_edges(&edges)))
             }
             _ => {
-                let backing = self.load_graph_backing(mode).await?;
-                let region = self.region_nodes(seeds, hops).await?;
+                let backing = self.load_graph_backing(mode, source_column).await?;
+                let region = self
+                    .region_nodes_with_columns(seeds, hops, source_column, target_column)
+                    .await?;
                 Ok(Box::new(SubgraphView::new(backing, region)))
             }
         }
@@ -913,6 +1053,17 @@ impl Table {
     /// The set of nodes within `hops` of `seeds` — the regional subgraph every
     /// graph mode operates on.
     async fn region_nodes(&self, seeds: &[u64], hops: u32) -> Result<HashSet<u64>> {
+        self.region_nodes_with_columns(seeds, hops, None, None).await
+    }
+
+    /// Like [`Table::region_nodes`] but with explicit source/target columns.
+    async fn region_nodes_with_columns(
+        &self,
+        seeds: &[u64],
+        hops: u32,
+        source_column: Option<&str>,
+        target_column: Option<&str>,
+    ) -> Result<HashSet<u64>> {
         Ok(self
             .graph_neighborhood(&GraphNeighborhoodOptions {
                 seeds: seeds.to_vec(),
@@ -920,6 +1071,8 @@ impl Table {
                 directed: false,
                 max_degree: Some(1000),
                 max_nodes: Some(50000),
+                source_column: source_column.map(String::from),
+                target_column: target_column.map(String::from),
                 ..Default::default()
             })
             .await?

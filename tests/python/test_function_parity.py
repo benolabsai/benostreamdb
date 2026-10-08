@@ -13,6 +13,9 @@ Surfaces:
   * trino  — the connector forwards SQL to the engine session (`openQuery`);
              Trino has no connector function SPI, so its user-facing function
              surface is empty by design (tracked in TRINO_KNOWN_GAPS)
+  * flight — the Arrow Flight SQL server is built on `BenoStreamSession`, so it
+             inherits the full function surface (and the graph table functions)
+             with no per-surface wiring
 """
 
 import pathlib
@@ -46,6 +49,19 @@ TRINO_PAGE_SOURCE = (
     / "trino"
     / "BenoStreamDBPageSource.java"
 )
+FLIGHT_SERVER = ROOT / "server" / "flight_sql" / "src" / "server.rs"
+
+# Graph traversal table functions (`FROM graph_*(...)`). These are a separate
+# surface from the scalar/aggregate UDFs: they are registered as DataFusion
+# table functions and reachable from every SQL surface (Python, dbt, Spark
+# pass-through, Trino, Flight SQL).
+GRAPH_TABLE_FUNCTIONS = {
+    "graph_neighbors",
+    "graph_shortest_path",
+    "graph_all_shortest_paths",
+    "graph_subgraph",
+    "graph_connecting_paths",
+}
 
 # Engine function -> dbt macro that exposes it. A macro may cover several
 # engine functions (e.g. `community_detect` covers louvain/leiden/label
@@ -274,4 +290,47 @@ def test_trino_gaps_are_documented():
     undocumented = engine_functions() - TRINO_KNOWN_GAPS
     assert not undocumented, (
         f"core functions not accounted for in TRINO_KNOWN_GAPS: {sorted(undocumented)}"
+    )
+
+
+def test_graph_table_functions_are_registered():
+    """The graph traversal table functions are registered in the engine."""
+    registered = set(benostreamdb.registered_table_functions())
+    assert registered == GRAPH_TABLE_FUNCTIONS, (
+        f"graph table functions drifted: registered={sorted(registered)} "
+        f"expected={sorted(GRAPH_TABLE_FUNCTIONS)}"
+    )
+
+
+def test_graph_table_functions_resolve_in_the_session():
+    """Each table function is callable; a missing table is a *table* error, not
+    an unknown-function error (which would mean it was never registered)."""
+    session = benostreamdb.Session()
+    # Per-function argument shapes (seeds are strings; path endpoints are ints).
+    calls = {
+        "graph_neighbors": "('__no_such_table__', '1', 1)",
+        "graph_subgraph": "('__no_such_table__', '1', 1)",
+        "graph_shortest_path": "('__no_such_table__', 1, 2)",
+        "graph_all_shortest_paths": "('__no_such_table__', 1, 2)",
+        "graph_connecting_paths": "('__no_such_table__', '1')",
+    }
+    for fn in sorted(GRAPH_TABLE_FUNCTIONS):
+        try:
+            session.sql(f"select * from {fn}{calls[fn]}")
+        except Exception as exc:  # noqa: BLE001 - the message is inspected
+            message = str(exc)
+            assert "not found" in message and "table" in message.lower(), (
+                f"{fn} did not resolve as a table function: {message}"
+            )
+        else:
+            raise AssertionError(f"{fn} unexpectedly succeeded on a missing table")
+
+
+def test_flight_surface_inherits_the_engine_session():
+    """The Flight SQL server is built on `BenoStreamSession`, so it exposes the
+    full function surface (and the graph table functions) with no extra wiring."""
+    text = FLIGHT_SERVER.read_text()
+    assert "BenoStreamSession" in text, (
+        "the Flight SQL server no longer uses BenoStreamSession; the function "
+        "parity assumptions in this test need revisiting"
     )

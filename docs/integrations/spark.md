@@ -145,6 +145,40 @@ FROM candidates;
 
 ---
 
+### 2b. Graph Traversal (table functions)
+
+Graph walks are available directly in `FROM` clauses via the engine's DataFusion
+table functions, reached through the pass-through reader
+(`option("query", ...)`). Each follows the same in-memory / out-of-core
+`GraphMode` pattern as the graph UDAFs (`auto` | `in_memory` | `out_of_core` |
+`cached`). The pass-through reader registers the table as `t`:
+
+```scala
+spark.read.format("benostream")
+  .option("path", "s3://my-lakehouse/tables/edges")
+  .option("query", "SELECT * FROM graph_neighbors('t', '101', 2, 'auto')")
+  .load()
+```
+
+```sql
+-- Nodes within 2 hops of node 101 (node, hop, seed)
+SELECT * FROM graph_neighbors('edges', '101', 2, 'auto');
+-- Shortest path between two nodes (node, hop)
+SELECT * FROM graph_shortest_path('edges', 101, 205, 'auto');
+-- Every shortest path (path)
+SELECT * FROM graph_all_shortest_paths('edges', 101, 205, 'auto');
+-- Induced subgraph edges within 2 hops (source, target)
+SELECT * FROM graph_subgraph('edges', '101,102', 2, 'auto');
+-- Union of pairwise shortest paths between seeds (source, target)
+SELECT * FROM graph_connecting_paths('edges', '101,205,309', 'auto');
+```
+
+Endpoint columns are auto-detected (`source`/`src`/`src_id`/`from`/`u` and
+`target`/`dst`/`dst_id`/`to`/`v`); pass trailing `source`, `target` string
+arguments to name them explicitly.
+
+---
+
 ### 3. Secondary & Bitmap Index Filter Pushdown
 
 `BenoStreamScanBuilder` implements `SupportsPushDownFilters` and `SupportsPushDownRequiredColumns`.

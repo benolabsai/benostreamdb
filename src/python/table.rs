@@ -1384,7 +1384,10 @@ impl PyTable {
 
     #[pyo3(signature = (damping=0.85, iterations=30))]
     fn pagerank(&self, py: Python<'_>, damping: f64, iterations: u32) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(graph_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
+        // Auto-detect the edge endpoint columns (source/src/… , target/dst/…)
+        // rather than assuming `source`/`target`.
+        let (src, tgt) = edge_endpoint_columns(&self.table);
+        let query = format!("SELECT unnest(graph_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'))) FROM t", damping, iterations);
         self.execute_sql(py, query)
     }
 
@@ -1410,6 +1413,7 @@ impl PyTable {
                     .join(", ")
             )
         };
+        let (src, tgt) = edge_endpoint_columns(&self.table);
         let query = if let Some(weights) = seed_weights {
             let weights_sql = if weights.is_empty() {
                 "make_array()".to_string()
@@ -1424,12 +1428,12 @@ impl PyTable {
                 )
             };
             format!(
-                "SELECT unnest(graph_personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {}, {})) FROM t",
                 seed_sql, damping, iterations, directed, weights_sql
             )
         } else {
             format!(
-                "SELECT unnest(graph_personalized_pagerank(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
+                "SELECT unnest(graph_personalized_pagerank(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), {}, arrow_cast({}, 'Float64'), arrow_cast({}, 'UInt32'), {})) FROM t",
                 seed_sql, damping, iterations, directed
             )
         };
@@ -1437,11 +1441,13 @@ impl PyTable {
     }
 
     fn shortest_path(&self, py: Python<'_>, start_node: u64, end_node: u64) -> PyResult<Py<PyAny>> {
-        let query = format!("SELECT unnest(graph_shortest_path(arrow_cast(source, 'UInt64'), arrow_cast(target, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
+        let (src, tgt) = edge_endpoint_columns(&self.table);
+        let query = format!("SELECT unnest(graph_shortest_path(arrow_cast({src}, 'UInt64'), arrow_cast({tgt}, 'UInt64'), arrow_cast({}, 'UInt64'), arrow_cast({}, 'UInt64'))) AS node FROM t", start_node, end_node);
         self.execute_sql(py, query)
     }
 
-    #[pyo3(signature = (start_node, end_node, directed=true, graph_column=None))]
+    #[pyo3(signature = (start_node, end_node, directed=true, graph_column=None, source_column=None, target_column=None))]
+    #[allow(clippy::too_many_arguments)]
     fn core_shortest_path(
         &self,
         py: Python<'_>,
@@ -1449,60 +1455,88 @@ impl PyTable {
         end_node: u64,
         directed: bool,
         graph_column: Option<String>,
+        source_column: Option<String>,
+        target_column: Option<String>,
     ) -> PyResult<Vec<u64>> {
         let rt = self.table.runtime();
         let table = self.table.clone();
         py.allow_threads(move || {
             rt.block_on(async {
                 table
-                    .shortest_path(start_node, end_node, directed, graph_column.as_deref())
+                    .shortest_path_with_columns(
+                        start_node,
+                        end_node,
+                        directed,
+                        graph_column.as_deref(),
+                        source_column.as_deref(),
+                        target_column.as_deref(),
+                    )
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
             })
         })
     }
 
-    #[pyo3(signature = (seeds, directed=false, graph_column=None))]
+    #[pyo3(signature = (seeds, directed=false, graph_column=None, source_column=None, target_column=None))]
+    #[allow(clippy::too_many_arguments)]
     fn core_connecting_paths(
         &self,
         py: Python<'_>,
         seeds: Vec<u64>,
         directed: bool,
         graph_column: Option<String>,
+        source_column: Option<String>,
+        target_column: Option<String>,
     ) -> PyResult<Vec<(u64, u64)>> {
         let rt = self.table.runtime();
         let table = self.table.clone();
         py.allow_threads(move || {
             rt.block_on(async {
                 table
-                    .connecting_paths(&seeds, directed, graph_column.as_deref())
+                    .connecting_paths_with_columns(
+                        &seeds,
+                        directed,
+                        graph_column.as_deref(),
+                        source_column.as_deref(),
+                        target_column.as_deref(),
+                    )
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
             })
         })
     }
 
-    #[pyo3(signature = (node, hops=1, graph_column=None))]
+    #[pyo3(signature = (node, hops=1, graph_column=None, source_column=None, target_column=None))]
+    #[allow(clippy::too_many_arguments)]
     fn core_graph_neighbors(
         &self,
         py: Python<'_>,
         node: u64,
         hops: u32,
         graph_column: Option<String>,
+        source_column: Option<String>,
+        target_column: Option<String>,
     ) -> PyResult<Vec<u64>> {
         let rt = self.table.runtime();
         let table = self.table.clone();
         py.allow_threads(move || {
             rt.block_on(async {
                 table
-                    .graph_neighbors(node, hops, graph_column.as_deref())
+                    .graph_neighbors_with_columns(
+                        node,
+                        hops,
+                        graph_column.as_deref(),
+                        source_column.as_deref(),
+                        target_column.as_deref(),
+                    )
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
             })
         })
     }
 
-    #[pyo3(signature = (seeds, hops=1, directed=false, max_degree=None, max_nodes=None, graph_column=None))]
+    #[pyo3(signature = (seeds, hops=1, directed=false, max_degree=None, max_nodes=None, graph_column=None, source_column=None, target_column=None))]
+    #[allow(clippy::too_many_arguments)]
     fn core_subgraph_edges(
         &self,
         py: Python<'_>,
@@ -1512,19 +1546,23 @@ impl PyTable {
         max_degree: Option<usize>,
         max_nodes: Option<usize>,
         graph_column: Option<String>,
+        source_column: Option<String>,
+        target_column: Option<String>,
     ) -> PyResult<Vec<(u64, u64)>> {
         let rt = self.table.runtime();
         let table = self.table.clone();
         py.allow_threads(move || {
             rt.block_on(async {
                 table
-                    .subgraph_edges(
+                    .subgraph_edges_with_columns(
                         &seeds,
                         hops,
                         directed,
                         max_degree,
                         max_nodes,
                         graph_column.as_deref(),
+                        source_column.as_deref(),
+                        target_column.as_deref(),
                     )
                     .await
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
@@ -3234,6 +3272,8 @@ impl PyTable {
             // single source of truth shared with the engine session and the
             // connector query/pass-through path.
             crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
+            // Graph traversal table functions (`FROM graph_neighbors(...)`).
+            crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
 
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;

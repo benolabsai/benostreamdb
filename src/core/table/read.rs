@@ -63,6 +63,8 @@ impl Table {
         // fail with "Invalid function" because this ad-hoc context is separate
         // from the engine's primary `BenoStreamSession`.
         crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
+        // Graph traversal table functions (`FROM graph_neighbors(...)`).
+        crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
         let _ = crate::core::sql::vector_operators::register_vector_operators(&mut ctx);
         let provider = Arc::new(BenoStreamTableProvider::new(Arc::new(self.clone())));
         ctx.register_table("t", provider)?;
