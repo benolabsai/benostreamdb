@@ -95,6 +95,42 @@ object BenoStreamArrowUtils {
     }
   }
 
+  /**
+   * Map an Arrow field type (from a query result) to a Spark type. Used by the
+   * pass-through reader, whose schema comes from the engine's result rather
+   * than from a table's stored schema.
+   */
+  def arrowFieldToSparkType(field: org.apache.arrow.vector.types.pojo.Field): DataType = {
+    import org.apache.arrow.vector.types.pojo.ArrowType
+    import org.apache.arrow.vector.types.FloatingPointPrecision
+    field.getType match {
+      case i: ArrowType.Int =>
+        if (i.getBitWidth <= 32) IntegerType else LongType
+      case f: ArrowType.FloatingPoint =>
+        if (f.getPrecision == FloatingPointPrecision.SINGLE) FloatType else DoubleType
+      case _: ArrowType.Bool => BooleanType
+      case _: ArrowType.Utf8 => StringType
+      case _: ArrowType.LargeUtf8 => StringType
+      case _: ArrowType.Date => DateType
+      case _: ArrowType.Timestamp => TimestampType
+      case _: ArrowType.List =>
+        // Children live on the Field, not on the ArrowType/FieldType.
+        val children = field.getChildren
+        if (children == null || children.isEmpty) ArrayType(StringType, containsNull = true)
+        else ArrayType(arrowFieldToSparkType(children.get(0)), containsNull = true)
+      case _: ArrowType.Struct =>
+        val children = field.getChildren
+        if (children == null) StructType(Seq.empty)
+        else
+          StructType(
+            children.asScala
+              .map(f => StructField(f.getName, arrowFieldToSparkType(f), nullable = true))
+              .toArray
+          )
+      case _ => StringType
+    }
+  }
+
   /** Decode one Arrow row (across the root's vectors) into a catalyst row. */
   def toInternalRow(vectors: Seq[ValueVector], rowId: Int, schema: StructType): InternalRow = {
     val values = new Array[Any](schema.length)

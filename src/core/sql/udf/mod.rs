@@ -67,6 +67,54 @@ pub use json::{
 /// `json_exists` tests a top-level key/element; `json_typeof` names the type;
 /// `json_path_exists` / `json_path_query` evaluate a jsonpath subset
 /// (`$.a.b[0]`, `[*]`).
+/// Names of every custom function the engine registers with DataFusion
+/// (vector scalar UDFs, vector aggregates, JSON UDFs, and graph UDAFs).
+///
+/// This is the single source of truth for the connector parity test: adding a
+/// UDF here without exposing it in the dbt/Spark/Trino surfaces fails
+/// `tests/python/test_function_parity.py`.
+pub fn registered_function_names() -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for udf in all_vector_udfs() {
+        names.push(udf.name().to_string());
+    }
+    for udf in all_vector_aggregates() {
+        names.push(udf.name().to_string());
+    }
+    for udf in all_json_udfs() {
+        names.push(udf.name().to_string());
+    }
+    for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+        names.push(udf.name().to_string());
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Register the full custom function surface (vector scalar UDFs, vector
+/// aggregates, JSON UDFs, and graph UDAFs) onto a DataFusion `SessionContext`.
+///
+/// This is the counterpart to [`registered_function_names`] and must be used by
+/// *every* DataFusion context the engine builds (the primary `BenoStreamSession`
+/// and the ad-hoc context behind `Table::sql()` used by the connector
+/// query/pass-through path), otherwise functions silently resolve as
+/// "Invalid function" there.
+pub fn register_all_custom_udfs(ctx: &mut datafusion::prelude::SessionContext) {
+    for udf in all_vector_udfs() {
+        ctx.register_udf(udf);
+    }
+    for udf in all_json_udfs() {
+        ctx.register_udf(udf);
+    }
+    for udf in all_vector_aggregates() {
+        ctx.register_udaf(udf);
+    }
+    for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
+        ctx.register_udaf(udf);
+    }
+}
+
 pub fn all_json_udfs() -> Vec<ScalarUDF> {
     vec![
         ScalarUDF::new_from_impl(JsonExtractPathUDF::new()),

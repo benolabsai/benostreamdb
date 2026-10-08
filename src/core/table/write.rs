@@ -29,6 +29,29 @@ fn current_rss_bytes() -> usize {
     crate::core::memory::rss_bytes().unwrap_or(0) as usize
 }
 
+/// Upper bound on how long the ingest back-pressure waits when RSS is stuck
+/// above the cap for reasons the current write cannot relieve (pre-existing
+/// process memory the engine will never free), before it fails open.
+///
+/// Overridable via `BSDB_INGEST_BACKPRESSURE_GRACE_SECS`; a non-positive or
+/// unparseable value falls back to the 60-second default.
+fn ingest_backpressure_grace() -> std::time::Duration {
+    std::time::Duration::from_secs_f64(backpressure_grace_secs(
+        std::env::var("BSDB_INGEST_BACKPRESSURE_GRACE_SECS")
+            .ok()
+            .as_deref(),
+    ))
+}
+
+/// Parse the fail-open grace (seconds). A missing, non-positive, or unparseable
+/// value falls back to the 60-second default so a typo cannot disable the
+/// liveness safety net. Pure so it can be asserted without process-global env.
+pub(crate) fn backpressure_grace_secs(raw: Option<&str>) -> f64 {
+    raw.and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .unwrap_or(60.0)
+}
+
 impl Table {
     /// Write Arrow RecordBatches to the table (Buffered)
     ///
@@ -156,20 +179,47 @@ impl Table {
                 .caller_reserved_bytes
                 .load(std::sync::atomic::Ordering::Relaxed) as usize;
             let engine_rss = || current_rss_bytes().saturating_sub(caller_reserved);
+
+            // Bound *growth* since this write began, not the absolute process
+            // RSS. Memory that already existed when the write started (a prior
+            // test in the same process, caches, the runtime itself) is not
+            // attributable to this write; because no background task owns it, it
+            // can never be reclaimed, so an absolute check would block forever
+            // once the process baseline is already at/above the cap.
+            let baseline = engine_rss();
+            let grace = ingest_backpressure_grace();
             let mut logged = false;
             let mut paused: Option<std::time::Instant> = None;
+            // How long RSS has been above the cap *without* the engine growing
+            // (i.e. nothing this write allocated, so waiting cannot help).
+            let mut over_absolute: Option<std::time::Instant> = None;
+            // Set when a background task signalled a reclaim while stalled.
+            let mut reclaimed_while_stalled = false;
+            let mut failed_open = false;
+
             // Back-pressure on the ingest RAM high-water mark. Wait on a
             // notification from background tasks that release memory (index
             // builds, heap trims) with a bounded fallback poll so we still
             // re-check RSS if nothing fires. The previous implementation slept a
             // flat 500 ms per iteration, which both wasted time when memory was
             // freed promptly and delayed resumption when it was not.
-            while max_bytes > 0 && engine_rss() >= max_bytes {
+            loop {
+                if max_bytes == 0 {
+                    break;
+                }
+                let rss = engine_rss();
+                let grew_over_budget = rss.saturating_sub(baseline) >= max_bytes;
+                let over_absolute_rss = rss >= max_bytes;
+                if !grew_over_budget && !over_absolute_rss {
+                    break;
+                }
+
                 if !logged {
                     tracing::warn!(
-                        "Engine RSS ({:.2} GB, excluding {:.2} GB caller-reserved) exceeds max ingest RAM limit ({:.2} GB). Pausing ingestion until background tasks reclaim memory...",
-                        engine_rss() as f64 / 1_000_000_000.0,
+                        "Engine RSS ({:.2} GB, excluding {:.2} GB caller-reserved; baseline {:.2} GB) is at/above the max ingest RAM limit ({:.2} GB). Pausing ingestion until background tasks reclaim memory...",
+                        rss as f64 / 1_000_000_000.0,
                         caller_reserved as f64 / 1_000_000_000.0,
+                        baseline as f64 / 1_000_000_000.0,
                         max_gb
                     );
                     logged = true;
@@ -177,8 +227,31 @@ impl Table {
                 if paused.is_none() {
                     paused = Some(std::time::Instant::now());
                 }
+
+                if over_absolute_rss && !grew_over_budget {
+                    // RSS is above the cap purely from memory this write did not
+                    // allocate and the engine is not growing. Waiting only helps
+                    // if a background task frees memory: if one already ran (or
+                    // the grace elapsed) and RSS is still over the cap, this write
+                    // can never clear it — fail open rather than hang forever.
+                    if reclaimed_while_stalled {
+                        failed_open = true;
+                        break;
+                    }
+                    let start = *over_absolute.get_or_insert_with(std::time::Instant::now);
+                    if start.elapsed() >= grace {
+                        failed_open = true;
+                        break;
+                    }
+                } else {
+                    over_absolute = None;
+                    reclaimed_while_stalled = false;
+                }
+
                 tokio::select! {
-                    _ = self.memory_reclaimed.notified() => {}
+                    _ = self.memory_reclaimed.notified() => {
+                        reclaimed_while_stalled = true;
+                    }
                     _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
                 }
             }
@@ -187,10 +260,20 @@ impl Table {
                 let paused_secs = start.elapsed().as_secs_f64();
                 crate::telemetry::metrics::INGEST_BACKPRESSURE_PAUSES_TOTAL.inc();
                 crate::telemetry::metrics::INGEST_BACKPRESSURE_PAUSE_SECONDS.observe(paused_secs);
-                tracing::info!(
-                    paused_seconds = paused_secs,
-                    "RSS back under the ingest RAM limit; resuming ingestion"
-                );
+                if failed_open {
+                    tracing::error!(
+                        paused_seconds = paused_secs,
+                        baseline_gb = baseline as f64 / 1_000_000_000.0,
+                        max_gb,
+                        "Ingest RAM limit exceeded by pre-existing process memory that no background task can reclaim (paused {:.1}s). Proceeding without further back-pressure (fail-open) so the writer does not block forever.",
+                        paused_secs
+                    );
+                } else {
+                    tracing::info!(
+                        paused_seconds = paused_secs,
+                        "RSS back under the ingest RAM limit; resuming ingestion"
+                    );
+                }
             }
         }
 

@@ -203,6 +203,22 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   moved to `core::jni_util` so they can be fuzzed without a JVM. The
   `benostreamdb-search` dependency is now optional in the fuzz workspace (only
   the Qdrant target needs it), so the other targets build independently.
+- **Spark catalog functions cover the whole engine surface** — the DSv2
+  `FunctionCatalog` now exposes 30 functions (distances incl. `l1`/`hamming`/
+  `jaccard` and the `inner_product` alias, transforms, `bm25_score`/`tf_idf`,
+  and the seven `json_*` functions) under `benostream.system.*`, and a new
+  pass-through reader (`BenoStreamQueryTable`, `option("query", "<engine SQL>")`)
+  makes the vector aggregates and graph UDAFs — which have no DSv2 scalar
+  equivalent — reachable from Spark. The engine's ad-hoc `Table::sql()` context
+  now registers the full custom function surface (vector scalar UDFs, JSON,
+  vector aggregates, graph UDAFs) via a single shared helper
+  (`udf::register_all_custom_udfs`), so pass-through queries no longer fail with
+  "Invalid function".
+- **Cross-surface function-parity test** — `tests/python/test_function_parity.py`
+  treats `udf::registered_function_names()` as the source of truth and asserts
+  every core function is exposed (or explicitly documented as a gap) across the
+  Python session, dbt macros, Spark catalog/pass-through, and Trino. Adding a
+  core UDF without wiring a surface now fails the test.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary
@@ -266,6 +282,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Ingest RAM back-pressure could block a writer forever** — the high-water
+  check compared *absolute* process RSS against `BSDB_MAX_INGEST_RAM_GB`, so once
+  the process baseline (a prior test in the same process, caches, the runtime
+  itself) was already at/above the cap and no background task could reclaim it,
+  `write` spun indefinitely. The check is now baseline-relative (it bounds the
+  engine's *growth* since the write began) with a bounded fail-open grace
+  (`BSDB_INGEST_BACKPRESSURE_GRACE_SECS`, default 60s) that logs an error and
+  proceeds when RSS is stuck above the cap for reasons the write cannot relieve.
+  The soak suite's memory-backpressure test now completes instead of hanging.
 - **`graph_betweenness_centrality` panicked** — the result builder indexed the
   score map with `cb[&node]` for every node, but only intermediate vertices
   have an entry, so any graph with a non-intermediate node aborted with

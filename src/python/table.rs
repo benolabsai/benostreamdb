@@ -3229,20 +3229,11 @@ impl PyTable {
             ctx.register_table("t", provider)
                 .map_err(|e| e.to_string())?;
 
-            // Register vector UDFs (dist_l2, dist_cosine, etc.)
-            for udf in crate::core::sql::vector_udf::all_vector_udfs() {
-                ctx.register_udf(udf);
-            }
-
-            // Register Vector Aggregate functions (Additive in DF 52)
-            for udf in crate::core::sql::vector_udf::all_vector_aggregates() {
-                ctx.register_udaf(udf);
-            }
-
-            // Register Graph Aggregate functions
-            for udf in crate::core::sql::graph_udf::all_graph_aggregates() {
-                ctx.register_udaf(udf);
-            }
+            // Register the full custom function surface (vector scalar UDFs,
+            // JSON path functions, vector aggregates, and graph UDAFs) from the
+            // single source of truth shared with the engine session and the
+            // connector query/pass-through path.
+            crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
 
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;
