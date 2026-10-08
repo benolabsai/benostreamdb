@@ -231,6 +231,21 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Python `execute_sql` path, so they are reachable from Python, dbt, Spark
   (pass-through), Trino, and Flight SQL. The parity test now also covers the
   Flight SQL surface.
+- **Surface parity beyond functions** — `tests/python/test_surface_parity.py`
+  asserts the engine's **index algorithms** (`IndexAlgorithm::all_names()`),
+  **DDL statements** (`catalog_ddl::handled_ddl_statements()`), and **table
+  actions** (`catalog_ddl::table_action_names()`) are consistent across Python,
+  dbt, Spark, Trino, and Flight SQL. New `registered_index_algorithms()` /
+  `registered_ddl_statements()` / `registered_table_actions()` bindings expose
+  the source-of-truth sets. The Python index parser now accepts every engine
+  algorithm (`composite_bitmap`, `json_path`, and `csr_graph` as a string were
+  missing).
+- **dbt DDL + graph table-function macros** — `create_index` / `drop_index`
+  (`macros/ddl.sql`) expose the index lifecycle, and `graph_neighbors_table` /
+  `graph_shortest_path_table` / `graph_all_shortest_paths_table` /
+  `graph_subgraph_table` / `graph_connecting_paths_table` (`macros/graph.sql`)
+  emit the `FROM graph_*(...)` table functions, so a graph walk is a dbt model
+  source. Verified by a new `test_surface_macros` model.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary
@@ -294,6 +309,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Graph table functions assumed the default catalog** — `resolve_table` looked
+  up an unqualified / 2-part name only in the session's default catalog, so a
+  table registered under a different catalog (e.g. the dbt adapter's `database`)
+  was reported "not found". It now falls back to searching every catalog/schema
+  for the table name.
 - **Graph functions assumed `source`/`target` column names** — the Python
   `Table.pagerank()` / `personalized_pagerank()` / `shortest_path()` wrappers
   hard-coded `source`/`target` in their generated SQL, so an edge table using
@@ -476,6 +496,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   (`core::ffi::list_subdirs_tests`).
 
 ### Tests
+- `tests/test_index_lifecycle_invariants.rs` — indexes survive **compaction** and
+  **snapshot rollback**, `DROP TABLE` removes index files, and `vacuum` removes
+  orphaned index files.
 - `tests/test_h1_h2_concurrency_regression.rs` — H1/H2/H3 regression coverage
   (truncate-vs-write race, `PendingWrite` atomicity under parallel writers, safe
   error bubbling).

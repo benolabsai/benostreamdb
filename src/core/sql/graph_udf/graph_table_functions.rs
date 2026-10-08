@@ -551,6 +551,12 @@ fn connecting_paths(view: &dyn GraphView, seeds: &[u64]) -> Vec<(u64, u64)> {
 
 /// Resolve a table name (unqualified, or `catalog.schema.table`) to its core
 /// [`Table`] via the session's catalog.
+///
+/// The direct lookup uses the session's default catalog/schema for unqualified
+/// names. If that misses, every catalog/schema is searched for the table name —
+/// the table may be registered under a non-default catalog (e.g. the dbt
+/// adapter's `database`), and a table function should not depend on which
+/// catalog a surface happened to use.
 async fn resolve_table(state: &SessionState, name: &str) -> Result<Arc<Table>> {
     let cfg = state.config_options();
     let parts: Vec<&str> = name.split('.').collect();
@@ -567,25 +573,42 @@ async fn resolve_table(state: &SessionState, name: &str) -> Result<Arc<Table>> {
         }
     };
 
-    let catalog_provider = state
-        .catalog_list()
-        .catalog(catalog)
-        .ok_or_else(|| DataFusionError::Plan(format!("catalog '{catalog}' not found")))?;
-    let schema_provider = catalog_provider
-        .schema(schema)
-        .ok_or_else(|| DataFusionError::Plan(format!("schema '{schema}' not found")))?;
-    let provider = schema_provider
-        .table(table)
-        .await?
-        .ok_or_else(|| DataFusionError::Plan(format!("table '{name}' not found")))?;
+    let list = state.catalog_list();
 
-    let bs = provider
+    // Direct lookup.
+    if let Some(cat) = list.catalog(catalog) {
+        if let Some(sch) = cat.schema(schema) {
+            if let Some(provider) = sch.table(table).await? {
+                return downcast_table(provider, name);
+            }
+        }
+    }
+
+    // Fallback: search every catalog/schema for the table name.
+    for cat_name in list.catalog_names() {
+        let Some(cat) = list.catalog(&cat_name) else {
+            continue;
+        };
+        for sch_name in cat.schema_names() {
+            let Some(sch) = cat.schema(&sch_name) else {
+                continue;
+            };
+            if let Some(provider) = sch.table(table).await? {
+                return downcast_table(provider, name);
+            }
+        }
+    }
+
+    plan_err!("table '{name}' not found")
+}
+
+/// Downcast a resolved provider to the core [`Table`].
+fn downcast_table(provider: Arc<dyn TableProvider>, name: &str) -> Result<Arc<Table>> {
+    provider
         .as_any()
         .downcast_ref::<BenoStreamTableProvider>()
-        .ok_or_else(|| {
-            DataFusionError::Plan(format!("'{name}' is not a BenoStreamDB table"))
-        })?;
-    Ok(bs.table.clone())
+        .map(|bs| bs.table.clone())
+        .ok_or_else(|| DataFusionError::Plan(format!("'{name}' is not a BenoStreamDB table")))
 }
 
 /// Extract a string literal argument.

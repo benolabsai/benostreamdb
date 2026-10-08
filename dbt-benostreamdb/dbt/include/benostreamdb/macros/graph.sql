@@ -402,6 +402,82 @@
 
 
 -- -----------------------------------------------------------------------------
+-- 18. GRAPH TRAVERSAL TABLE FUNCTIONS (FROM graph_*(...))
+-- -----------------------------------------------------------------------------
+-- These emit the engine's DataFusion table functions, so a graph walk is a
+-- `FROM` source rather than an aggregate. The table is passed as an unquoted
+-- `schema.table` name (the engine resolves it in the session's default catalog).
+-- `mode` is one of auto | in_memory | out_of_core | cached.
+
+{% macro graph_neighbors_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {{ return(adapter.dispatch('graph_neighbors_table', 'dbt')(relation, seeds, hops, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__graph_neighbors_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {{ exceptions.raise_compiler_error("graph_neighbors_table is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__graph_neighbors_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {%- set seed_str = seeds if seeds is string else seeds | join(',') -%}
+  select * from graph_neighbors('{{ relation.database }}.{{ relation.schema }}.{{ relation.identifier }}', '{{ seed_str }}', {{ hops }}, '{{ mode }}'{% if source is not none %}, '{{ source }}'{% endif %}{% if target is not none %}, '{{ target }}'{% endif %})
+{%- endmacro %}
+
+
+{% macro graph_shortest_path_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  {{ return(adapter.dispatch('graph_shortest_path_table', 'dbt')(relation, source_node, target_node, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__graph_shortest_path_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  {{ exceptions.raise_compiler_error("graph_shortest_path_table is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__graph_shortest_path_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  select * from graph_shortest_path('{{ relation.database }}.{{ relation.schema }}.{{ relation.identifier }}', {{ source_node }}, {{ target_node }}, '{{ mode }}'{% if source is not none %}, '{{ source }}'{% endif %}{% if target is not none %}, '{{ target }}'{% endif %})
+{%- endmacro %}
+
+
+{% macro graph_all_shortest_paths_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  {{ return(adapter.dispatch('graph_all_shortest_paths_table', 'dbt')(relation, source_node, target_node, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__graph_all_shortest_paths_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  {{ exceptions.raise_compiler_error("graph_all_shortest_paths_table is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__graph_all_shortest_paths_table(relation, source_node, target_node, mode='auto', source=none, target=none) -%}
+  select * from graph_all_shortest_paths('{{ relation.database }}.{{ relation.schema }}.{{ relation.identifier }}', {{ source_node }}, {{ target_node }}, '{{ mode }}'{% if source is not none %}, '{{ source }}'{% endif %}{% if target is not none %}, '{{ target }}'{% endif %})
+{%- endmacro %}
+
+
+{% macro graph_subgraph_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {{ return(adapter.dispatch('graph_subgraph_table', 'dbt')(relation, seeds, hops, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__graph_subgraph_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {{ exceptions.raise_compiler_error("graph_subgraph_table is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__graph_subgraph_table(relation, seeds, hops=1, mode='auto', source=none, target=none) -%}
+  {%- set seed_str = seeds if seeds is string else seeds | join(',') -%}
+  select * from graph_subgraph('{{ relation.database }}.{{ relation.schema }}.{{ relation.identifier }}', '{{ seed_str }}', {{ hops }}, '{{ mode }}'{% if source is not none %}, '{{ source }}'{% endif %}{% if target is not none %}, '{{ target }}'{% endif %})
+{%- endmacro %}
+
+
+{% macro graph_connecting_paths_table(relation, seeds, mode='auto', source=none, target=none) -%}
+  {{ return(adapter.dispatch('graph_connecting_paths_table', 'dbt')(relation, seeds, mode, source, target)) }}
+{%- endmacro %}
+
+{% macro default__graph_connecting_paths_table(relation, seeds, mode='auto', source=none, target=none) -%}
+  {{ exceptions.raise_compiler_error("graph_connecting_paths_table is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__graph_connecting_paths_table(relation, seeds, mode='auto', source=none, target=none) -%}
+  {%- set seed_str = seeds if seeds is string else seeds | join(',') -%}
+  select * from graph_connecting_paths('{{ relation.database }}.{{ relation.schema }}.{{ relation.identifier }}', '{{ seed_str }}', '{{ mode }}'{% if source is not none %}, '{{ source }}'{% endif %}{% if target is not none %}, '{{ target }}'{% endif %})
+{%- endmacro %}
+
+
+-- -----------------------------------------------------------------------------
 -- 17. REGIONAL DRIFT SEARCH (seeded GraphRAG drift)
 -- -----------------------------------------------------------------------------
 {% macro regional_drift(relation, query, seeds, hops=1, n_depth=2, graph_uri='', mode='local', source='source', target='target') -%}

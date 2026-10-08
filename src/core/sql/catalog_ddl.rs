@@ -80,6 +80,48 @@ pub enum Handled {
     Query,
 }
 
+/// The DDL / maintenance statement kinds the engine intercepts and executes
+/// itself (before DataFusion planning). Single source of truth for the
+/// connector surface-parity test.
+pub fn handled_ddl_statements() -> Vec<String> {
+    [
+        "CREATE DATABASE",
+        "CREATE SCHEMA",
+        "CREATE TABLE",
+        "CREATE INDEX",
+        "DROP TABLE",
+        "DROP SCHEMA",
+        "DROP DATABASE",
+        "ALTER TABLE",
+        "OPTIMIZE TABLE",
+        "TRUNCATE TABLE",
+        "VACUUM",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+/// The `ALTER TABLE ... EXECUTE <action>` procedure names the engine supports.
+/// Single source of truth for the connector surface-parity test.
+pub fn table_action_names() -> Vec<String> {
+    [
+        "remove_orphan_files",
+        "recover_indexes",
+        "rollback",
+        "rollback_to_snapshot",
+        "preload_indexes",
+        "verify_integrity",
+        "checkpoint",
+        "rewrite_data_files",
+        "compact",
+        "expire_snapshots",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
 /// Classify `sql` for the interception layer.
 pub fn classify(sql: &str) -> Handled {
     let trimmed = collapse_ws(sql.trim().trim_end_matches(';'));
