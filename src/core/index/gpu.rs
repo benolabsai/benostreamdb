@@ -22,6 +22,22 @@ use cudarc::driver::{LaunchAsync, LaunchConfig};
 static GLOBAL_GPU_CONTEXT: Lazy<parking_lot::RwLock<Option<ComputeContext>>> =
     Lazy::new(|| parking_lot::RwLock::new(None));
 
+// Genuine per-thread GPU context. Set explicitly (per task), or assigned
+// lazily from `GPU_DEVICE_POOL` so worker threads spread across devices.
+thread_local! {
+    static THREAD_GPU_CONTEXT: std::cell::RefCell<Option<ComputeContext>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Round-robin pool of device strings (e.g. `["cuda:0", "cuda:1"]`). When
+/// non-empty, each engine worker thread is assigned a device the first time it
+/// asks for a context, so a single query fans its kernels across multiple GPUs.
+static GPU_DEVICE_POOL: Lazy<parking_lot::RwLock<Vec<String>>> =
+    Lazy::new(|| parking_lot::RwLock::new(Vec::new()));
+
+/// Next index into [`GPU_DEVICE_POOL`].
+static GPU_POOL_NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComputeBackend {
     #[default]
@@ -883,6 +899,71 @@ impl GpuBackend for WgpuBackend {
 // ComputeContext & Dispatch
 // ============================================================================
 
+/// Wraps a hardware GPU backend so its `Drop` never runs.
+///
+/// cudarc's `Drop` calls CUDA driver functions that panic (and can segfault)
+/// once the driver has begun tearing down at process exit — which is exactly
+/// when the last `ComputeContext` clone is released (e.g. a worker thread or a
+/// static exiting). GPU handles are process-wide OS resources, so leaking one
+/// at exit is harmless and keeps the process exit clean.
+#[derive(Debug)]
+struct NoDropBackend(Arc<dyn GpuBackend>);
+
+impl GpuBackend for NoDropBackend {
+    fn name(&self) -> &str {
+        self.0.name()
+    }
+
+    fn compute_distance(
+        &self,
+        query: &[f32],
+        vectors: &[f32],
+        dim: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        self.0.compute_distance(query, vectors, dim, metric)
+    }
+
+    fn compute_kmeans_assignment(
+        &self,
+        vectors: &[f32],
+        centroids: &[f32],
+        dim: usize,
+    ) -> Result<Vec<u32>> {
+        self.0.compute_kmeans_assignment(vectors, centroids, dim)
+    }
+
+    fn compute_binary_distance(
+        &self,
+        query: &[u8],
+        vectors: &[u8],
+        dim_bytes: usize,
+        metric: VectorMetric,
+    ) -> Result<Vec<f32>> {
+        self.0.compute_binary_distance(query, vectors, dim_bytes, metric)
+    }
+}
+
+impl Drop for NoDropBackend {
+    fn drop(&mut self) {
+        let inner = std::mem::replace(&mut self.0, Arc::new(CpuBackend));
+        std::mem::forget(inner);
+    }
+}
+
+/// Wrap a hardware backend so it is leaked on drop. CPU backends are safe to
+/// drop and are returned unchanged.
+fn wrap_backend(
+    backend: ComputeBackend,
+    imp: Option<Arc<dyn GpuBackend>>,
+) -> Option<Arc<dyn GpuBackend>> {
+    if backend == ComputeBackend::Cpu {
+        imp
+    } else {
+        imp.map(|arc| Arc::new(NoDropBackend(arc)) as Arc<dyn GpuBackend>)
+    }
+}
+
 impl ComputeContext {
     pub fn from_backend(backend: ComputeBackend) -> Result<Self> {
         Self::from_backend_with_device(backend, 0)
@@ -954,7 +1035,7 @@ impl ComputeContext {
             } else {
                 device_id as i32
             },
-            implementation: imp,
+            implementation: wrap_backend(backend, imp),
         })
     }
 
@@ -985,7 +1066,7 @@ impl ComputeContext {
             return Self {
                 backend: ComputeBackend::Cuda,
                 device_id: 0,
-                implementation: Some(Arc::new(b)),
+                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
             };
         }
         #[cfg(target_os = "macos")]
@@ -993,7 +1074,7 @@ impl ComputeContext {
             return Self {
                 backend: ComputeBackend::Mps,
                 device_id: 0,
-                implementation: Some(Arc::new(b)),
+                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
             };
         }
         #[cfg(all(target_os = "linux", feature = "wgpu"))]
@@ -1001,7 +1082,7 @@ impl ComputeContext {
             return Self {
                 backend: ComputeBackend::Rocm,
                 device_id: 0,
-                implementation: Some(Arc::new(b)),
+                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
             };
         }
         #[cfg(all(target_os = "linux", feature = "wgpu"))]
@@ -1009,7 +1090,7 @@ impl ComputeContext {
             return Self {
                 backend: ComputeBackend::Intel,
                 device_id: 0,
-                implementation: Some(Arc::new(b)),
+                implementation: Some(Arc::new(NoDropBackend(Arc::new(b)))),
             };
         }
         Self {
@@ -1028,7 +1109,7 @@ impl ComputeContext {
                 device_id: -1,
                 implementation: Some(Arc::new(CpuBackend)),
             }),
-            "gpu" | "auto" => Ok(Self::auto_detect()),
+            "gpu" | "auto" | "" => Ok(Self::auto_detect()),
             "cuda" => Self::from_backend(ComputeBackend::Cuda),
             _ if trimmed.starts_with("cuda:") => {
                 let id = trimmed
@@ -1305,6 +1386,17 @@ pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
     *GLOBAL_GPU_CONTEXT.write() = ctx;
 }
 
+/// Destroy the process GPU context (global + this thread's), if any.
+///
+/// Intended to be called from a process-exit hook *before* the CUDA/MPS driver
+/// tears itself down. Releasing a CUDA resource after the driver has been
+/// deinitialized makes cudarc panic (and can segfault); destroying the context
+/// while the driver is still loaded avoids both. Safe to call repeatedly.
+pub fn clear_gpu_context() {
+    *GLOBAL_GPU_CONTEXT.write() = None;
+    THREAD_GPU_CONTEXT.with(|c| *c.borrow_mut() = None);
+}
+
 /// Parse a device string into a [`ComputeContext`].
 ///
 /// Accepts `auto` | `gpu` | `cpu` | `cuda[:N]` | `mps`/`metal` | `intel`/`xpu`
@@ -1318,7 +1410,7 @@ pub fn context_from_device_str(device: &str) -> ComputeContext {
         (ComputeBackend::Cuda, rest.trim().parse::<usize>().unwrap_or(0))
     } else {
         match d.as_str() {
-            "auto" | "gpu" | "" => return ComputeContext::auto_detect(),
+            "" | "auto" | "gpu" => return ComputeContext::auto_detect(),
             "cpu" => (ComputeBackend::Cpu, 0),
             "cuda" => (ComputeBackend::Cuda, 0),
             "mps" | "metal" => (ComputeBackend::Mps, 0),
@@ -1346,20 +1438,68 @@ pub fn apply_gpu_context_from_env() -> Option<String> {
     Some(device)
 }
 
-/// Retrieve the current GPU context.
-pub fn get_thread_gpu_context() -> Option<ComputeContext> {
-    let lock = GLOBAL_GPU_CONTEXT.read();
-    lock.clone()
+/// Install a pool of GPU devices for multi-GPU execution.
+///
+/// Each engine worker thread that first asks for a context is assigned the next
+/// device in the pool (round-robin), so one query spreads its kernels across
+/// several GPUs. An empty list disables pooling.
+pub fn set_gpu_device_pool(devices: Vec<String>) {
+    *GPU_DEVICE_POOL.write() = devices;
 }
 
-/// Check if a hardware GPU context is currently active globally.
-pub fn is_hardware_gpu_active() -> bool {
-    let lock = GLOBAL_GPU_CONTEXT.read();
-    if let Some(ctx) = &*lock {
-        ctx.backend != ComputeBackend::Cpu
-    } else {
-        false
+/// Parse a comma-separated device list and install it as the pool.
+///
+/// Blank entries are ignored. A list of 0 or 1 devices is a no-op (a single
+/// device keeps the existing process-wide behaviour); only a genuine list
+/// enables pooling. Never panics on arbitrary input.
+pub fn set_gpu_device_pool_from_str(devices: &str) {
+    let list: Vec<String> = devices
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if list.len() > 1 {
+        set_gpu_device_pool(list);
     }
+}
+
+/// Retrieve the current GPU context.
+///
+/// Resolution order: an explicit per-thread override, then a lazily-assigned
+/// device from [`GPU_DEVICE_POOL`] (multi-GPU), then the process-wide context.
+pub fn get_thread_gpu_context() -> Option<ComputeContext> {
+    // 1. Explicit per-thread override.
+    if let Some(ctx) = THREAD_GPU_CONTEXT.with(|c| c.borrow().clone()) {
+        return Some(ctx);
+    }
+    // 2. Multi-GPU pool: assign one device per worker thread, lazily.
+    if !GPU_DEVICE_POOL.read().is_empty() {
+        let assigned = THREAD_GPU_CONTEXT.with(|c| {
+            let mut slot = c.borrow_mut();
+            let ctx = slot.get_or_insert_with(|| {
+                let pool = GPU_DEVICE_POOL.read();
+                if pool.is_empty() {
+                    // The pool was cleared between the check and here.
+                    return ComputeContext::auto_detect();
+                }
+                let idx = GPU_POOL_NEXT
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    % pool.len();
+                context_from_device_str(&pool[idx])
+            });
+            ctx.clone()
+        });
+        return Some(assigned);
+    }
+    // 3. Process-wide context.
+    GLOBAL_GPU_CONTEXT.read().clone()
+}
+
+/// Check if a hardware GPU context is currently active for this thread.
+pub fn is_hardware_gpu_active() -> bool {
+    get_thread_gpu_context()
+        .map(|ctx| ctx.backend != ComputeBackend::Cpu)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1617,5 +1757,33 @@ mod tests {
         let names: Vec<&str> = available_backends().iter().map(|(n, _)| *n).collect();
         eprintln!("cross-backend harness: available backends = {names:?}");
         assert!(names.contains(&"cpu"), "cpu must always be available");
+    }
+
+    /// Fuzz-worthy: arbitrary device strings must never panic, and always
+    /// resolve to a valid backend.
+    #[test]
+    fn context_from_device_str_is_total() {
+        for s in [
+            "",
+            " ",
+            "auto",
+            "gpu",
+            "cpu",
+            "cuda",
+            "cuda:0",
+            "cuda:x",
+            "cuda:99999999999999999999",
+            "mps",
+            "metal",
+            "intel",
+            "xpu",
+            "rocm",
+            "hip",
+            "garbage",
+            "🎉",
+        ] {
+            // Must not panic; the backend is always a valid variant.
+            let _ = context_from_device_str(s).backend;
+        }
     }
 }

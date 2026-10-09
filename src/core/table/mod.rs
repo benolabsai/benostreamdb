@@ -69,6 +69,49 @@ use crate::core::wal::WriteAheadLog;
 use crate::SegmentConfig;
 use arrow::datatypes::{Schema, SchemaRef};
 
+/// Live tables' background-task queues, drained at process exit so a running
+/// index build (which may be using the GPU) does not fault during runtime
+/// teardown. Stores `Weak` references so a dropped table leaves no entry.
+static LIVE_BACKGROUND_TASKS: std::sync::LazyLock<
+    parking_lot::Mutex<Vec<std::sync::Weak<tokio::sync::Mutex<Vec<JoinHandle<()>>>>>>,
+> = std::sync::LazyLock::new(|| parking_lot::Mutex::new(Vec::new()));
+
+/// Register a table's background-task queue for exit-time draining.
+pub(crate) fn register_background_tasks(arc: &Arc<tokio::sync::Mutex<Vec<JoinHandle<()>>>>) {
+    let mut reg = LIVE_BACKGROUND_TASKS.lock();
+    reg.retain(|w| w.strong_count() > 0);
+    reg.push(Arc::downgrade(arc));
+}
+
+/// Await every live table's background tasks, bounded so shutdown cannot hang.
+///
+/// A background index build can still be running when the interpreter exits;
+/// leaving it running while the tokio runtime is torn down makes a worker
+/// thread fault (observed as a flaky segfault on GPU workloads). Draining the
+/// tasks first makes exit deterministic. The `budget` caps the total wait so a
+/// long-running (e.g. streaming) task cannot block exit forever.
+pub async fn drain_background_tasks(budget: std::time::Duration) {
+    let arcs: Vec<_> = LIVE_BACKGROUND_TASKS
+        .lock()
+        .iter()
+        .filter_map(|w| w.upgrade())
+        .collect();
+    let deadline = std::time::Instant::now() + budget;
+    for arc in arcs {
+        let taken: Vec<_> = {
+            let mut handles = arc.lock().await;
+            handles.drain(..).collect()
+        };
+        for handle in taken {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return;
+            }
+            let _ = tokio::time::timeout(remaining, handle).await;
+        }
+    }
+}
+
 pub(crate) struct PendingWrite {
     pub(crate) batch: RecordBatch,
     pub(crate) tx_id: uuid::Uuid,

@@ -411,6 +411,23 @@ pub fn gpu_device() -> String {
         .unwrap_or_else(|| "cpu".to_string())
 }
 
+/// Tear down the process cleanly at interpreter exit.
+///
+/// Registered as a Python `atexit` handler by the package `__init__`. Drains
+/// any still-running background tasks first — an index build may be using the
+/// GPU, and leaving it running while the tokio runtime is torn down makes a
+/// worker thread fault (a flaky segfault on GPU workloads). Then releases the
+/// GPU context. Safe to call more than once.
+#[pyfunction]
+pub fn shutdown_gpu(py: Python<'_>) {
+    py.detach(|| {
+        TOKIO_RUNTIME.block_on(crate::core::table::drain_background_tasks(
+            std::time::Duration::from_secs(5),
+        ));
+    });
+    crate::core::index::gpu::clear_gpu_context();
+}
+
 // ============================================================================
 // Arrow C Data Interface helpers
 // ============================================================================

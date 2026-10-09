@@ -21,6 +21,11 @@ public class BenoStreamDBJNIBridge {
     // GPU context configuration
     public static native boolean setGpuContext(String deviceType);
 
+    // Multi-GPU: install a comma-separated device pool (e.g. "cuda:0,cuda:1").
+    // Each engine worker thread is assigned one device round-robin. A single
+    // device (or empty) is a no-op and `setGpuContext` still applies.
+    public static native boolean setGpuDevicePool(String devices);
+
     // Vector Search
     public static native int vectorSearch(String table, String segmentId, String column, int k, long queryVectorPtr, int queryVectorLen, long outArrayPtr, long outSchemaPtr);
 

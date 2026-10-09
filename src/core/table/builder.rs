@@ -510,6 +510,7 @@ impl TableBuilder {
             subscribers: crate::core::table::subscribe::new_subscriber_channel(),
         };
 
+        crate::core::table::register_background_tasks(&table.background_tasks);
         table.sync_primary_key_from_schema_async().await.ok();
         let _ = table.infer_index_metadata_from_physical_async().await;
 

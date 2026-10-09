@@ -72,8 +72,13 @@ writers in the same JVM.
 
 Set `benostream.gpu-device` in the catalog properties (`auto` | `cpu` |
 `cuda[:N]` | `mps` | `intel` | `rocm`). The connector resolves it through the
-same core mapping as every other surface. Note: Trino uses a **single
-connector-wide device** — it does not distribute splits across multiple GPUs.
+same core mapping as every other surface.
+
+For **multi-GPU**, pass a comma-separated list (e.g.
+`benostream.gpu-device=cuda:0,cuda:1`). The connector installs a device pool;
+each engine worker thread is assigned one device round-robin, so a single query
+spreads its kernels across the listed GPUs. A single device (or `auto`) keeps
+the process-wide behaviour.
 
 ### Predicate Pushdown
 

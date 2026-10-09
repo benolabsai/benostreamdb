@@ -129,6 +129,7 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::is_debug_build, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::set_gpu_device, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::gpu_device, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::shutdown_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_functions, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_table_functions, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_index_algorithms, m)?)?;
