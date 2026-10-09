@@ -280,8 +280,23 @@ class PgvectorAdapter(VectorAdapter):
 
 
 class LanceDbAdapter(VectorAdapter):
-    def __init__(self) -> None:
-        super().__init__(name="lancedb", module="lancedb")
+    """LanceDB vector index.
+
+    ``index_type`` selects the ANN family, so both of LanceDB's relevant
+    algorithms can be reported side by side:
+
+    * ``ivf_pq``  — LanceDB's **default** disk-ANN index (IVF + product
+      quantization). This is what ``create_index`` builds with no config, so it
+      is the representative "what a LanceDB user gets" baseline.
+    * ``hnsw_sq`` — HNSW with scalar quantization, the closest LanceDB has to
+      the plain-float HNSW the other engines use (LanceDB has no plain-float
+      HNSW). Kept so the comparison can also be HNSW-vs-HNSW.
+    """
+
+    def __init__(self, index_type: str = "ivf_pq") -> None:
+        name = "lancedb" if index_type == "ivf_pq" else "lancedb_hnsw"
+        super().__init__(name=name, module="lancedb")
+        self.index_type = index_type
 
     def build(self, train, params, ctx):
         import lancedb
@@ -299,20 +314,24 @@ class LanceDbAdapter(VectorAdapter):
         )
         t = db.create_table("bench", data=tbl, mode="overwrite")
         metric = "cosine" if params.get("metric") == "cosine" else "l2"
-        # Use the HNSW family (scalar-quantized) with the same M/ef_construction
-        # as the other engines, so the comparison is HNSW-vs-HNSW rather than
-        # HNSW-vs-IVF_PQ. LanceDB has no plain-float HNSW; HnswSq is the closest.
         # New unified API: the first positional arg is the vector column name.
-        from lancedb.index import HnswSq
+        if self.index_type == "hnsw_sq":
+            from lancedb.index import HnswSq
 
-        t.create_index(
-            "vector",
-            config=HnswSq(
-                distance_type=metric,
-                m=int(params["m"]),
-                ef_construction=int(params["ef_construction"]),
-            ),
-        )
+            t.create_index(
+                "vector",
+                config=HnswSq(
+                    distance_type=metric,
+                    m=int(params["m"]),
+                    ef_construction=int(params["ef_construction"]),
+                ),
+            )
+        else:
+            # IVF_PQ with LanceDB's defaults (num_partitions / num_sub_vectors
+            # auto-selected) — the disk-ANN index LanceDB builds by default.
+            from lancedb.index import IvfPq
+
+            t.create_index("vector", config=IvfPq(distance_type=metric))
         return (t, uri)
 
     def search(self, handle, queries, k, ef_search, metric):
@@ -426,7 +445,10 @@ def vector_adapters() -> dict[str, VectorAdapter]:
         "faiss": FaissAdapter(),
         "hnswlib": HnswlibAdapter(),
         "pgvector": PgvectorAdapter(),
-        "lancedb": LanceDbAdapter(),
+        # LanceDB is reported twice: its default disk-ANN index (IVF_PQ) and the
+        # scalar-quantized HNSW variant, so the comparison covers both families.
+        "lancedb": LanceDbAdapter("ivf_pq"),
+        "lancedb_hnsw": LanceDbAdapter("hnsw_sq"),
         "opensearch": OpenSearchAdapter(),
     }
 

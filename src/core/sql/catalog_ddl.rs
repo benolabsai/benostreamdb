@@ -20,13 +20,13 @@ use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
-use futures::StreamExt;
 use datafusion::sql::sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, CreateIndex, CreateTable,
     Expr, ObjectType, SchemaName, SqlOption, Statement, TableConstraint, Value,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::TableReference;
+use futures::StreamExt;
 use std::sync::Arc;
 
 use crate::core::manifest::IndexAlgorithm;
@@ -588,7 +588,9 @@ async fn drop_objects(
                                 manager.invalidate_caches().await;
                             }
                         }
-                        Err(e) => tracing::warn!("DROP TABLE '{}': could not open store: {}", uri, e),
+                        Err(e) => {
+                            tracing::warn!("DROP TABLE '{}': could not open store: {}", uri, e)
+                        }
                     }
                 }
             }
@@ -1029,8 +1031,7 @@ fn sql_option_to_pair(opt: &SqlOption) -> Option<(String, String)> {
         SqlOption::KeyValue { key, value } => {
             let v = match value {
                 Expr::Value(val) => match &val.value {
-                    Value::SingleQuotedString(s)
-                    | Value::DoubleQuotedString(s) => s.clone(),
+                    Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => s.clone(),
                     Value::Number(n, _) => n.clone(),
                     Value::Boolean(b) => b.to_string(),
                     _ => val.to_string(),
@@ -1168,10 +1169,7 @@ fn split_db_schema(session: &BenoStreamSession, name: &str) -> (String, String) 
     match parts.as_slice() {
         [s] => (default_catalog, s.clone()),
         [d, s] => (d.clone(), s.clone()),
-        _ => (
-            default_catalog,
-            parts.last().cloned().unwrap_or_default(),
-        ),
+        _ => (default_catalog, parts.last().cloned().unwrap_or_default()),
     }
 }
 
@@ -1246,10 +1244,7 @@ mod ctas_tests {
     #[test]
     fn ignores_as_inside_identifiers_and_strings() {
         let sql = "create table \"as\".\"t\" as select 'as' as v";
-        assert_eq!(
-            extract_ctas_query(sql).as_deref(),
-            Some("select 'as' as v")
-        );
+        assert_eq!(extract_ctas_query(sql).as_deref(), Some("select 'as' as v"));
     }
 
     #[test]
@@ -1280,7 +1275,10 @@ mod ctas_tests {
         // Unknown / absent -> the scalar default (Bitmap).
         let unknown = "CREATE INDEX i ON t (c) USING nonsense";
         assert_eq!(index_algorithm_from_sql(unknown).name(), "bitmap");
-        assert_eq!(index_algorithm_from_sql("CREATE INDEX i ON t (c)").name(), "bitmap");
+        assert_eq!(
+            index_algorithm_from_sql("CREATE INDEX i ON t (c)").name(),
+            "bitmap"
+        );
         // Non-CREATE-INDEX statements are never scanned for USING.
         assert_eq!(extract_using_algorithm("SELECT 1 USING x"), None);
     }

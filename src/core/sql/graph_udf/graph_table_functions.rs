@@ -40,8 +40,8 @@ use arrow::array::{ArrayRef, ListBuilder, UInt32Builder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionImpl, TableProvider};
-use datafusion::datasource::TableType;
 use datafusion::common::plan_err;
+use datafusion::datasource::TableType;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::Expr;
@@ -184,7 +184,11 @@ impl GraphTraversalParams {
         // Index of the first optional trailing argument (`source_col`, `target_col`).
         let trailing_start = match kind {
             GraphTraversalKind::Neighbors | GraphTraversalKind::Subgraph => {
-                params.seeds = args.get(1).map(as_seed_list).transpose()?.unwrap_or_default();
+                params.seeds = args
+                    .get(1)
+                    .map(as_seed_list)
+                    .transpose()?
+                    .unwrap_or_default();
                 if let Some(h) = args.get(2) {
                     params.hops = as_u64(h)? as u32;
                 }
@@ -206,7 +210,11 @@ impl GraphTraversalParams {
                 4
             }
             GraphTraversalKind::ConnectingPaths => {
-                params.seeds = args.get(1).map(as_seed_list).transpose()?.unwrap_or_default();
+                params.seeds = args
+                    .get(1)
+                    .map(as_seed_list)
+                    .transpose()?
+                    .unwrap_or_default();
                 if let Some(m) = args.get(2) {
                     params.mode = parse_graph_mode(&as_string(m)?);
                 }
@@ -714,7 +722,10 @@ mod tests {
     fn schemas_are_stable() {
         assert_eq!(GraphTraversalKind::Neighbors.schema().fields().len(), 3);
         assert_eq!(GraphTraversalKind::ShortestPath.schema().fields().len(), 2);
-        assert_eq!(GraphTraversalKind::AllShortestPaths.schema().fields().len(), 1);
+        assert_eq!(
+            GraphTraversalKind::AllShortestPaths.schema().fields().len(),
+            1
+        );
         assert_eq!(GraphTraversalKind::Subgraph.schema().fields().len(), 2);
     }
 }

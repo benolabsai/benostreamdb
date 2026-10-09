@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let base_dir = &std::env::temp_dir().join("iceberg_test").to_string_lossy().into_owned();
+    let base_dir = &std::env::temp_dir()
+        .join("iceberg_test")
+        .to_string_lossy()
+        .into_owned();
     let _ = std::fs::remove_dir_all(base_dir);
     std::fs::create_dir_all(format!("{}/metadata", base_dir))?;
     std::fs::create_dir_all(format!("{}/data", base_dir))?;

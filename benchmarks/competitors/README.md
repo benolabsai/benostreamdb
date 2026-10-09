@@ -59,7 +59,7 @@ single shared envelope applied to **every** participant — the server engines
 benchmarks/competitors/docker_bench.sh --cpus 8 --mem 16g \
     --dataset sift-128-euclidean --limit 20000 --queries 500
 
-# GPU pass (faiss, benostreamdb — GPU-capable engines only)
+# GPU pass (every engine; CPU-only competitors run on CPU in the GPU container)
 benchmarks/competitors/docker_bench.sh --gpu --cpus 8 --mem 16g
 
 # Both passes, tagged device=cpu and device=gpu
@@ -74,7 +74,29 @@ benchmarks/competitors/docker_bench.sh --both --cpus 8 --mem 16g
   [`Dockerfile.bench.gpu`](Dockerfile.bench.gpu), which installs `faiss-gpu-cu12`).
 * [`Dockerfile.bench`](Dockerfile.bench) — runner image with the harness and all
   competitor clients (FAISS, hnswlib, LanceDB, DuckDB, psycopg, opensearch-py,
-  neo4j). Installs the BenoStreamDB abi3 wheel mounted at `/wheels`.
+  neo4j, tantivy). Installs the BenoStreamDB abi3 wheel mounted at `/wheels`.
+
+### BEIR lexical / hybrid under the same envelope
+
+`--workload beir` runs the BEIR harness ([`../beir/run.py`](../beir/run.py),
+[`../beir/run_hybrid.py`](../beir/run_hybrid.py)) in the runner container, with
+OpenSearch brought up under the same envelope — so BenoStreamDB, Tantivy, and
+OpenSearch are all resource-matched (previously the embedded engines ran
+in-process on the host):
+
+```bash
+# Lexical BM25: BenoStreamDB vs Tantivy vs OpenSearch
+benchmarks/competitors/docker_bench.sh --workload beir --cpus 8 --mem 16g
+
+# Hybrid (dense + sparse RRF): BenoStreamDB vs LanceDB
+benchmarks/competitors/docker_bench.sh --workload beir --beir-mode hybrid \
+    --beir-engines benostreamdb,lancedb --cpus 8 --mem 16g
+```
+
+Each engine writes a competitor-schema JSON record
+(`{engine}_{dataset}_{workload}_{device}.json`) into `benchmarks/beir/results/`,
+which [`../generate_summary.py`](../generate_summary.py) rolls into the
+consolidated report; the Markdown report is written alongside it.
 
 Results are written to `results/{engine}_{dataset}_{device}.json`, plus
 `results/rollup.md` (with a Device column) and `results/hardware_profile.txt`.
@@ -95,7 +117,9 @@ GPU pass; CPU runs report `"gpus": []`.
 
 **GPU-capable engines here:** FAISS (faiss-gpu), BenoStreamDB (wgpu/cuda), and
 cuGraph (`cugraph-cu13`). pgvector, LanceDB, OpenSearch, Neo4j (CPU GDS), and
-DuckDB are CPU-only, so they are excluded from the GPU pass by default.
+DuckDB are CPU-only. The GPU pass still runs them (on CPU, in the GPU container,
+under the same envelope) so the results make the GPU/no-GPU distinction explicit
+rather than hiding it; restrict the pass with `--gpu-engines` if desired.
 
 > **GPU is slower on small datasets — by design.** On the 20k-vector SIFT run
 > the GPU pass is *slower* than CPU for both engines (faiss 6.7k vs 8.8k QPS;
@@ -133,7 +157,7 @@ DuckDB is embedded: pass `--sql "..."` or `--parquet path.parquet`.
 | FAISS | vector | no | `pip install faiss-cpu` |
 | hnswlib | vector | no | `pip install hnswlib` |
 | pgvector | vector | no | `pip install psycopg[binary]` + Postgres w/ pgvector |
-| LanceDB | vector | no | `pip install lancedb` (IVF_PQ) |
+| LanceDB | vector | no | `pip install lancedb`; run as `lancedb` (default IVF_PQ disk-ANN) and `lancedb_hnsw` (HnswSq) |
 | OpenSearch | vector | no | `pip install opensearch-py`; dense_vector HNSW kNN |
 | NetworkX | graph | yes | reference (single-threaded) baseline |
 | Neo4j | graph | no | `pip install neo4j` + GDS plugin (pagerank/wcc/dijkstra) |

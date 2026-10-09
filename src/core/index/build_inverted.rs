@@ -533,10 +533,7 @@ impl crate::core::segment::HybridSegmentWriter {
                             format!("{}.{}.jsonpath.parquet", self.config.segment_id, col_name);
                         let jp_path = local_staging_dir.join(&jp_filename);
                         crate::core::index::json_path::build_json_path_index(
-                            col_array,
-                            &paths,
-                            row_offset,
-                            &jp_path,
+                            col_array, &paths, row_offset, &jp_path,
                         )?;
                         let mut files = self.generated_files.lock();
                         files.push(

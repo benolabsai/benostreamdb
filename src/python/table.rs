@@ -3401,7 +3401,9 @@ impl PyTable {
             crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
             // Graph traversal table functions (`FROM graph_neighbors(...)`).
             crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
-            crate::core::sql::subscribe_table_function::register_subscribe_table_functions(&mut ctx);
+            crate::core::sql::subscribe_table_function::register_subscribe_table_functions(
+                &mut ctx,
+            );
 
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;

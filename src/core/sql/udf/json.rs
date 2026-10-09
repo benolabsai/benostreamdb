@@ -151,9 +151,9 @@ fn resolve_one<'a>(root: &'a Value, steps: &[PathStep]) -> Option<&'a Value> {
 /// subset for objects, element membership for arrays, equality for scalars.
 fn contains(haystack: &Value, candidate: &Value) -> bool {
     match (haystack, candidate) {
-        (Value::Object(h), Value::Object(c)) => {
-            c.iter().all(|(k, v)| h.get(k).is_some_and(|hv| contains(hv, v)))
-        }
+        (Value::Object(h), Value::Object(c)) => c
+            .iter()
+            .all(|(k, v)| h.get(k).is_some_and(|hv| contains(hv, v))),
         (Value::Array(h), Value::Array(c)) => {
             c.iter().all(|cv| h.iter().any(|hv| contains(hv, cv)))
         }

@@ -84,6 +84,30 @@ def generate_summary():
     # 4. Lexical & Hybrid Search Benchmarks
     sections.append("## 4. Lexical & Hybrid Search Performance (BEIR SciFact: BM25 vs Tantivy & Hybrid RRF)")
     sections.append("")
+    # Roll the per-engine JSON records (written by the BEIR harness) into one
+    # table, so the lexical/hybrid numbers sit alongside the vector/graph/SQL
+    # ones in the consolidated report.
+    beir_json = glob.glob(os.path.join(BASE_DIR, "beir", "results", "*.json"))
+    if beir_json:
+        sections.append("### Rolled-up results (JSON)")
+        sections.append("")
+        sections.append(
+            "| Engine | Workload | Device | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
+        )
+        sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for f in sorted(beir_json):
+            try:
+                with open(f, encoding="utf-8") as fh:
+                    r = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            sections.append(
+                f"| {r.get('engine')} | {r.get('workload')} | {r.get('device')} | {r.get('dataset')} | "
+                f"{r.get('recall_at_k')} | {r.get('ndcg_at_k')} | {r.get('mrr_at_k')} | "
+                f"{r.get('qps')} | {r.get('p50_ms')} | {r.get('p99_ms')} | "
+                f"{r.get('build_s')} | {r.get('index_mb')} |"
+            )
+        sections.append("")
     beir_files = glob.glob(os.path.join(BASE_DIR, "beir", "results", "*.md"))
     if beir_files:
         for f in sorted(beir_files):

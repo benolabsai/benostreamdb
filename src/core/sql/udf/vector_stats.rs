@@ -84,9 +84,13 @@ fn list_scalar_with(
     values: Option<&[f32]>,
     field: Option<&Arc<arrow::datatypes::Field>>,
 ) -> ScalarValue {
-    let f = field
-        .cloned()
-        .unwrap_or_else(|| Arc::new(arrow::datatypes::Field::new("item", DataType::Float32, true)));
+    let f = field.cloned().unwrap_or_else(|| {
+        Arc::new(arrow::datatypes::Field::new(
+            "item",
+            DataType::Float32,
+            true,
+        ))
+    });
     let mut builder = ListBuilder::new(Float32Builder::new()).with_field(f);
     match values {
         Some(v) => {
@@ -116,11 +120,7 @@ fn state_field(name: &str) -> Arc<arrow::datatypes::Field> {
 /// accumulators emit in `state()`. Declaring it as a list (as `state_field`
 /// does) makes DataFusion reject the state array with a type mismatch.
 fn count_state_field(name: &str) -> Arc<arrow::datatypes::Field> {
-    Arc::new(arrow::datatypes::Field::new(
-        name,
-        DataType::UInt64,
-        true,
-    ))
+    Arc::new(arrow::datatypes::Field::new(name, DataType::UInt64, true))
 }
 
 /// Read a partial `List<Float32>` from a merge state array.
@@ -205,12 +205,10 @@ macro_rules! elementwise_extreme_udf {
         #[derive(Debug)]
         pub struct $acc {
             value: Option<Vec<f32>>,
-                }
+        }
         impl $acc {
             fn new() -> Self {
-                Self {
-                    value: None,
-                        }
+                Self { value: None }
             }
         }
         impl Accumulator for $acc {
@@ -588,9 +586,7 @@ pub struct VectorMedianAccumulator {
 }
 impl VectorMedianAccumulator {
     fn new() -> Self {
-        Self {
-            rows: Vec::new(),
-        }
+        Self { rows: Vec::new() }
     }
 }
 

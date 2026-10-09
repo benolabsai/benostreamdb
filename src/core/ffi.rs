@@ -1785,7 +1785,12 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_creat
     table_uri: JString,
     schema_json: JString,
 ) -> jboolean {
-    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createTable(env, class, table_uri, schema_json)
+    Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_createTable(
+        env,
+        class,
+        table_uri,
+        schema_json,
+    )
 }
 
 #[no_mangle]
@@ -1943,7 +1948,10 @@ mod list_subdirs_tests {
         RUNTIME.block_on(manager.invalidate_caches());
 
         let (_, ver) = RUNTIME.block_on(manager.load_latest()).unwrap();
-        assert_eq!(ver, 0, "dropped table must not be visible through the cache");
+        assert_eq!(
+            ver, 0,
+            "dropped table must not be visible through the cache"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1938,7 +1938,8 @@ impl HybridReader {
         // small files the cache is strictly better than re-reading per query.
         const BLOCK_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
         let total_rows = meta.metadata().file_metadata().num_rows() as usize;
-        let sparse_selection = total_rows > 0 && (bitmap.len() as usize).saturating_mul(8) < total_rows;
+        let sparse_selection =
+            total_rows > 0 && (bitmap.len() as usize).saturating_mul(8) < total_rows;
         if size < BLOCK_CACHE_MAX_BYTES || (size < 500 * 1024 * 1024 && !sparse_selection) {
             let mut cached_batch_opt = crate::core::cache::BLOCK_CACHE
                 .get_with_metrics(&cache_key, "block_cache")

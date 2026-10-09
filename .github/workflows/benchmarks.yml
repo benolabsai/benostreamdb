@@ -50,7 +50,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install maturin pyarrow pandas numpy duckdb datafusion networkx
+          pip install maturin pyarrow pandas numpy duckdb datafusion networkx tantivy
 
       - name: Build BenoStreamDB (Release)
         run: |
@@ -78,6 +78,17 @@ jobs:
             --rows 100000 \
             --engines benostreamdb,duckdb,datafusion \
             --out benchmarks/sql/results/sql_ci.md
+
+      # BEIR lexical baseline (BenoStreamDB vs Tantivy). The CI runner is a
+      # single machine, so every engine is inherently measured under the same
+      # envelope; the canonical envelope-controlled run is the Docker matrix
+      # (`benchmarks/competitors/docker_bench.sh --workload beir`).
+      - name: Run BEIR Lexical Benchmark
+        run: |
+          python benchmarks/beir/run.py \
+            --dataset scifact \
+            --engines benostreamdb,tantivy \
+            --out benchmarks/beir/results/scifact_bm25_ci.md
 
       - name: Run Pathological Filters & Oracle Benchmark
         run: |

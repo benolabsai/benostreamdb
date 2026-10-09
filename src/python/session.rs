@@ -39,9 +39,7 @@ impl PySession {
         let query = sanitize_sql(&query)?;
         let (batches, schema) = TOKIO_RUNTIME
             .block_on(self.inner.sql(&query))
-            .map_err(|e| {
-                pyo3::exceptions::PyRuntimeError::new_err((format!("{:#}", e),))
-            })?;
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err((format!("{:#}", e),)))?;
 
         arrow_batches_to_pyarrow(py, batches, schema)
     }
@@ -52,11 +50,7 @@ impl PySession {
     /// target_column, id_column, label_column}`. This is the discovery primitive
     /// an MCP agent uses to find the graph without being told column names.
     #[pyo3(signature = (schema=None))]
-    pub fn list_graph_tables(
-        &self,
-        py: Python<'_>,
-        schema: Option<String>,
-    ) -> PyResult<Py<PyAny>> {
+    pub fn list_graph_tables(&self, py: Python<'_>, schema: Option<String>) -> PyResult<Py<PyAny>> {
         let infos = py
             .detach(|| TOKIO_RUNTIME.block_on(self.inner.list_graph_tables()))
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;

@@ -2001,7 +2001,10 @@ mod tests {
 
     #[test]
     fn test_hnsw_ivf_path_robustness() {
-        let base_path_str = std::env::temp_dir().join("test_robust").to_string_lossy().into_owned();
+        let base_path_str = std::env::temp_dir()
+            .join("test_robust")
+            .to_string_lossy()
+            .into_owned();
 
         let paths = vec![
             format!("{}.cluster_0.hnsw.graph", base_path_str),

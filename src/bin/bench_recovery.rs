@@ -68,7 +68,9 @@ async fn main() -> anyhow::Result<()> {
             let table = Table::new_async(uri.clone()).await?;
             arm(point);
             let r = async {
-                table.write_async(vec![make_batch(SEED_ROWS, NEW_ROWS)]).await?;
+                table
+                    .write_async(vec![make_batch(SEED_ROWS, NEW_ROWS)])
+                    .await?;
                 table.commit_async().await
             }
             .await;
@@ -89,7 +91,8 @@ async fn main() -> anyhow::Result<()> {
         let atomic = total == SEED_ROWS || total == SEED_ROWS + NEW_ROWS;
         let durable = !op_result.is_ok() || total == SEED_ROWS + NEW_ROWS;
         let content_valid = (0..SEED_ROWS).all(|id| unique.contains(&id))
-            && (total == SEED_ROWS || (SEED_ROWS..SEED_ROWS + NEW_ROWS).all(|id| unique.contains(&id)));
+            && (total == SEED_ROWS
+                || (SEED_ROWS..SEED_ROWS + NEW_ROWS).all(|id| unique.contains(&id)));
         let status = if atomic && no_duplicates && durable && content_valid {
             "PASS"
         } else {
@@ -97,7 +100,11 @@ async fn main() -> anyhow::Result<()> {
         };
 
         let recovery_state = if total == SEED_ROWS + NEW_ROWS {
-            if op_result.is_ok() { "Committed" } else { "WAL Replayed" }
+            if op_result.is_ok() {
+                "Committed"
+            } else {
+                "WAL Replayed"
+            }
         } else {
             "Clean Rollback"
         };
@@ -150,7 +157,10 @@ async fn main() -> anyhow::Result<()> {
     md_lines.push("".to_string());
     md_lines.push("### Recovery Invariants Verified".to_string());
     md_lines.push("- **Atomicity**: Re-opened table always observes either the pre-crash snapshot or the post-commit snapshot, never a torn state.".to_string());
-    md_lines.push("- **Idempotency**: Replaying WAL segments never duplicates already-committed rows.".to_string());
+    md_lines.push(
+        "- **Idempotency**: Replaying WAL segments never duplicates already-committed rows."
+            .to_string(),
+    );
     md_lines.push("- **Recovery Speed**: Average time-to-first-read after crash is sub-5ms across all failure points.".to_string());
 
     let md_report = md_lines.join("\n") + "\n";

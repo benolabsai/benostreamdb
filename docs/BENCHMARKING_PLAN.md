@@ -225,12 +225,22 @@ hardware profile (CPU model, cores, RAM, Docker/Compose versions, GPU list) to
 container-visible cores/RAM.
 
 - **CPU is the baseline.** All engines run on CPU under the CPU envelope.
-- **GPU is opt-in per engine.** `--gpu` (or `--both`) adds a GPU pass
-  (`docker-compose.bench.gpu.yml`, `gpus: all`) restricted to GPU-capable
-  engines (FAISS, BenoStreamDB, and cuGraph once installed). CPU-only engines
-  (pgvector, LanceDB, OpenSearch, Neo4j CPU GDS, DuckDB) are excluded.
+- **GPU pass runs every engine.** `--gpu` (or `--both`) adds a GPU pass
+  (`docker-compose.bench.gpu.yml`, `gpus: all`) that runs the *same* engine set
+  as the CPU pass. GPU-capable engines (FAISS, BenoStreamDB, cuGraph) use the
+  GPU; the CPU-only competitors (pgvector, LanceDB, OpenSearch, Neo4j CPU GDS,
+  DuckDB) run on CPU inside the GPU container under the same envelope — so the
+  comparison shows which engines can actually exploit the GPU. Restrict with
+  `--gpu-engines` if a smaller pass is wanted.
 - Results are tagged `{engine}_{dataset}_{device}.json` with `device=cpu|gpu`,
   and `rollup.md` has a Device column.
+- **Lexical/hybrid (BEIR) uses the same envelope.** `docker_bench.sh
+  --workload beir` runs BenoStreamDB, Tantivy, and the server-backed OpenSearch
+  in containers under the same `--cpus`/`--mem` profile (previously the embedded
+  engines ran in-process on the host while OpenSearch ran in a separately-sized
+  container). Each engine emits a competitor-schema JSON record
+  (`{engine}_{dataset}_{workload}_{device}.json`) that `generate_summary.py`
+  rolls into the consolidated report.
 
 ---
 
@@ -344,8 +354,11 @@ scripted scenario with its own pass/fail criteria.
 - **CI gate:** `.github/workflows/release.yml` `soak-gate` job runs the same
   correctness gates before a release; artifacts include `soak-report.md`.
 - **Coverage:** `.github/workflows/coverage.yml` enforces a line-coverage floor.
-- **Benchmark jobs** (to add): scheduled vector/lexical/graph/SQL runs on a
-  fixed runner spec, publishing JSON + Markdown to `results/` and to the docs site.
+- **Benchmark jobs:** `.github/workflows/benchmarks.yml` runs the vector, graph,
+  SQL, and BEIR lexical suites on a fixed runner and publishes JSON + Markdown
+  to `results/`. The BEIR step runs the embedded `benostreamdb,tantivy` baseline
+  (the single CI runner is inherently equal-envelope); the canonical
+  envelope-controlled run is `docker_bench.sh --workload beir`.
 
 ---
 
