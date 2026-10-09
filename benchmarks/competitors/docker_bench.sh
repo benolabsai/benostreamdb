@@ -248,22 +248,15 @@ elif [[ "$WORKLOAD" == "beir" ]]; then
     echo "  opensearch: $state"
   fi
   docker compose "${COMPOSE[@]}" --profile run build bench
-  # BM25 is CPU-bound, so the GPU pass is envelope-identical; it still runs in a
-  # container with `gpus: all` so device visibility matches the other workloads.
-  if [[ "$DO_CPU" == "1" ]]; then
-    echo ""
-    echo "############ beir cpu pass (service=bench, cpus=$CPUS mem=$MEM) ############"
-    DEVICE=cpu docker compose -f "$HERE/docker-compose.bench.yml" \
-      --profile run run --rm bench \
-      || echo "  (beir cpu pass did not complete)"
-  fi
-  if [[ "$DO_GPU" == "1" ]]; then
-    echo ""
-    echo "############ beir gpu pass (service=bench, gpus=all, cpus=$CPUS mem=$MEM) ############"
-    DEVICE=gpu docker compose -f "$HERE/docker-compose.bench.yml" \
-      -f "$HERE/docker-compose.bench.gpu.yml" --profile run run --rm bench \
-      || echo "  (beir gpu pass did not complete)"
-  fi
+  # BEIR is CPU-bound: Okapi BM25 has no GPU path, and the hybrid dense half is
+  # an HNSW query (the GPU accelerates index *construction*, not query). So
+  # there is no GPU pass — every engine's `backend` is `cpu`. The GPU comparison
+  # lives in the vector workload, where the GPU is actually used.
+  echo ""
+  echo "############ beir pass (service=bench, cpus=$CPUS mem=$MEM) ############"
+  DEVICE=cpu docker compose -f "$HERE/docker-compose.bench.yml" \
+    --profile run run --rm bench \
+    || echo "  (beir pass did not complete)"
 else
   [[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
   [[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"

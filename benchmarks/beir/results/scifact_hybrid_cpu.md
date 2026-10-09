@@ -9,24 +9,25 @@
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
 - **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 ### Competitor Comparison (Hybrid Dense + Sparse RRF)
 
-| Engine | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
-|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.54s | 6.6 MB | **175.7** | **5.54 ms** | 7.23 ms | **0.8527** | **0.6957** | 0.6502 |
-| **lancedb** | ✅ Pass | 0.89s | 14.3 MB | **193.4** | **4.77 ms** | 6.73 ms | **0.8259** | **0.6770** | 0.6357 |
+| Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.4** | **5.73 ms** | 8.63 ms | **0.8527** | **0.6964** | 0.6509 |
+| **lancedb** | `cpu` | ✅ Pass | 0.87s | 14.4 MB | **201.8** | **4.59 ms** | 5.47 ms | **0.8291** | **0.6668** | 0.6184 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **47.3%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **46.7%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 412.1 | 2.30 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1237.6 | 0.70 ms | 0.7767 | 0.6449 | 0.6065 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 175.7 | 5.54 ms | **0.8527** | **0.6957** | **0.6502** |
+| **Sparse (BM25 Only)** | 6.6 MB | 405.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1193.3 | 0.71 ms | 0.7833 | 0.6458 | 0.6057 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.4 | 5.73 ms | **0.8527** | **0.6964** | **0.6509** |

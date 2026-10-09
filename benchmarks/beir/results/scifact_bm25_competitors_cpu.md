@@ -6,13 +6,14 @@
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
 - **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
-| Engine | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
-|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.36s | 3.3 MB | **418.1** | **2.25 ms** | 3.89 ms | 0.7909 | 0.6617 |
-| **tantivy** | ✅ Pass | 0.19s | 8.3 MB | **2690.9** | **0.31 ms** | 0.71 ms | 0.7812 | 0.6517 |
-| **opensearch** | ✅ Pass | 0.76s | 6.6 MB | **817.8** | **1.16 ms** | 2.15 ms | 0.8196 | 0.6821 |
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.37s | 3.3 MB | **422.9** | **2.22 ms** | 3.77 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 0.16s | 8.3 MB | **3520.2** | **0.23 ms** | 0.53 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.85s | 6.6 MB | **507.9** | **1.72 ms** | 4.03 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 

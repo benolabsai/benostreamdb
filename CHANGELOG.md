@@ -614,10 +614,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   Tantivy, and the server-backed OpenSearch all run in containers under one
   `--cpus`/`--memory` profile (previously BenoStreamDB/Tantivy ran in-process on
   the host while OpenSearch ran in a separately-sized container, so the
-  comparison was not resource-matched). Both CPU and GPU passes are supported
-  (`--both`); the harness gained `--data-dir` (for the read-only mount), an
-  auto-download of the BEIR corpus when absent, and a self-describing
-  `Resource Envelope` line in the report. Each engine also emits a
+  comparison was not resource-matched). BEIR is CPU-bound (Okapi BM25 has no
+  GPU path; the hybrid dense half is an HNSW query), so there is no GPU pass and
+  every engine reports `backend: cpu`. The harness gained `--data-dir` (for the
+  read-only mount), an auto-download of the BEIR corpus when absent, a
+  self-describing `Resource Envelope` line, and a per-engine `backend` field
+  (the backend the algorithm actually ran on). Each engine also emits a
   competitor-schema JSON record (`--json-dir`), which `generate_summary.py`
   rolls into the consolidated benchmark report as a table alongside the
   vector/graph/SQL rows. CI runs the embedded `benostreamdb,tantivy` baseline on

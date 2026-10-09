@@ -94,7 +94,8 @@ benchmarks/competitors/docker_bench.sh --workload beir --beir-mode hybrid \
 ```
 
 Each engine writes a competitor-schema JSON record
-(`{engine}_{dataset}_{workload}_{device}.json`) into `benchmarks/beir/results/`,
+(`{engine}_{dataset}_{workload}_{backend}.json`, where `backend` is what the
+algorithm actually ran on — `cpu` for BEIR) into `benchmarks/beir/results/`,
 which [`../generate_summary.py`](../generate_summary.py) rolls into the
 consolidated report; the Markdown report is written alongside it.
 
