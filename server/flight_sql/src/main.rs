@@ -14,6 +14,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = benostreamdb::telemetry::tracing::init_tracing("flight_sql")?;
     benostreamdb::core::telemetry::install_metrics_recorder();
 
+    // Pin the GPU device for this process from BSDB_GPU_DEVICE /
+    // BENOSTREAM_GPU_DEVICE (e.g. "cuda:1"), so vector search runs on the
+    // intended device without per-query plumbing.
+    if let Some(dev) = benostreamdb::core::index::gpu::apply_gpu_context_from_env() {
+        println!("GPU device: {}", dev);
+    }
+
     // HTTP observability surface: /metrics, /health, /readyz.
     spawn_observability_server();
 

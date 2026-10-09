@@ -1,3 +1,4 @@
+import tempfile
 import benostreamdb as bsdb
 import pyarrow as pa
 import pandas as pd
@@ -9,8 +10,8 @@ def test_connector_apis():
     
     # Setup
     uri = "file:///tmp/test_connector_api_table"
-    if os.path.exists("/tmp/test_connector_api_table"):
-        shutil.rmtree("/tmp/test_connector_api_table")
+    if os.path.exists(f"{tempfile.gettempdir()}/test_connector_api_table"):
+        shutil.rmtree(f"{tempfile.gettempdir()}/test_connector_api_table")
         
     table = bsdb.Table(uri)
     

@@ -13,7 +13,7 @@ async fn test_partitioned_write_and_delete() -> anyhow::Result<()> {
     // 1. Setup Table with Partitioning
     let table_name = "test_partitioned_writes";
     let uri = format!("file:///tmp/{}", table_name);
-    let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
+    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), table_name));
 
     // Schema: id (int64), data (string)
     let arrow_schema = Arc::new(ArrowSchema::new(vec![

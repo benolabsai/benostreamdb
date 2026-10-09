@@ -557,7 +557,7 @@ fn connecting_paths(view: &dyn GraphView, seeds: &[u64]) -> Vec<(u64, u64)> {
 /// the table may be registered under a non-default catalog (e.g. the dbt
 /// adapter's `database`), and a table function should not depend on which
 /// catalog a surface happened to use.
-async fn resolve_table(state: &SessionState, name: &str) -> Result<Arc<Table>> {
+pub(crate) async fn resolve_table(state: &SessionState, name: &str) -> Result<Arc<Table>> {
     let cfg = state.config_options();
     let parts: Vec<&str> = name.split('.').collect();
     let (catalog, schema, table) = match parts.as_slice() {
@@ -603,7 +603,7 @@ async fn resolve_table(state: &SessionState, name: &str) -> Result<Arc<Table>> {
 }
 
 /// Downcast a resolved provider to the core [`Table`].
-fn downcast_table(provider: Arc<dyn TableProvider>, name: &str) -> Result<Arc<Table>> {
+pub(crate) fn downcast_table(provider: Arc<dyn TableProvider>, name: &str) -> Result<Arc<Table>> {
     provider
         .as_any()
         .downcast_ref::<BenoStreamTableProvider>()

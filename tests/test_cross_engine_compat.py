@@ -1,3 +1,4 @@
+import tempfile
 """
 Cross-Engine Compatibility Tests for Iceberg V2/V3 Features
 
@@ -21,7 +22,7 @@ import subprocess
 import json
 
 # Test data directory
-TEST_DIR = Path("/tmp/benostream_compat_tests")
+TEST_DIR = (Path(tempfile.gettempdir()) / "benostream_compat_tests")
 TEST_DIR.mkdir(exist_ok=True)
 
 class TestSparkCompatibility:

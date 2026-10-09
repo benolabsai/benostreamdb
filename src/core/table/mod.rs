@@ -31,6 +31,8 @@ pub mod fluent;
 pub use fluent::TableQuery;
 pub mod graph;
 pub use graph::GraphNeighborhoodOptions;
+pub mod graph_metadata;
+pub use graph_metadata::{GraphMetadata, TableType};
 pub mod index_config;
 pub mod ingest;
 pub use ingest::{IngestOptions, IngestReport};
@@ -47,6 +49,8 @@ pub use state::{ColumnIndexConfig, LabelPattern};
 pub(crate) use state::{TableCatalogState, TableIndexState};
 pub mod stats;
 pub use stats::{DataFileInfo, IndexCoverage, Split, TableStatistics};
+pub mod subscribe;
+pub use subscribe::{Subscription, TableEvent};
 pub mod write;
 
 #[cfg(test)]
@@ -131,6 +135,10 @@ pub struct Table {
     /// Iceberg table format version (1, 2, or 3). v3 enables row lineage
     /// (`_row_id` / `_last_updated_sequence_number`).
     pub(crate) format_version: Arc<std::sync::atomic::AtomicI32>,
+    /// Broadcast channel for `Table::subscribe()` — committed batches and
+    /// commit markers. Shared across clones so every handle publishes to the
+    /// same subscribers.
+    pub(crate) subscribers: Arc<tokio::sync::broadcast::Sender<TableEvent>>,
 }
 
 /// Durability level for WAL writes.
@@ -238,6 +246,7 @@ impl Clone for Table {
             memory_reclaimed: self.memory_reclaimed.clone(),
             caller_reserved_bytes: self.caller_reserved_bytes.clone(),
             format_version: self.format_version.clone(),
+            subscribers: self.subscribers.clone(),
         }
     }
 }

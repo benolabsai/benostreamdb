@@ -500,7 +500,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn free_disk_bytes_walks_up_from_missing_path() {
-        let missing = std::path::Path::new("/tmp/bsdb-does-not-exist-xyz/nested/segment.parquet");
+        let missing = &std::env::temp_dir().join("bsdb-does-not-exist-xyz/nested/segment.parquet");
         assert!(
             free_disk_bytes_for_new_file(missing).is_some(),
             "should resolve via the nearest existing ancestor"

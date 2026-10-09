@@ -19,6 +19,9 @@ class BenoStreamDBCredentials(Credentials):
     # Unified lakehouse default schema (matches the engine's DEFAULT_SCHEMA,
     # Spark's default namespace, and Trino's default schema).
     schema: str = "default"
+    # Optional GPU device for the embedded engine:
+    # auto | cpu | cuda[:N] | mps | intel | rocm.
+    gpu_device: Optional[str] = None
 
     @property
     def type(self):
@@ -29,7 +32,7 @@ class BenoStreamDBCredentials(Credentials):
         return self.path
 
     def _connection_keys(self):
-        return ("path", "database", "schema")
+        return ("path", "database", "schema", "gpu_device")
 
 
 class BenoStreamDBCursor:
@@ -146,6 +149,14 @@ class BenoStreamDBConnectionManager(SQLConnectionManager):
             path = getattr(credentials, "path", None) or ":memory:"
             warehouse = "memory:/dbt" if path in (":memory:", "") else path
             cls._session = benostreamdb.Session(warehouse=warehouse)
+            # Pin the GPU device for the embedded engine (profile `gpu_device`).
+            gpu_device = getattr(credentials, "gpu_device", None)
+            if gpu_device:
+                try:
+                    resolved = benostreamdb.set_gpu_device(gpu_device)
+                    logger.debug(f"GPU device set to {resolved}")
+                except Exception as e:
+                    logger.warning(f"Could not set GPU device '{gpu_device}': {e}")
         return cls._session
 
     @classmethod

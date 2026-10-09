@@ -1,3 +1,4 @@
+import tempfile
 import os
 import shutil
 import pyarrow as pa
@@ -8,9 +9,9 @@ def test_compatibility():
     print("=== STARTING PYICEBERG COMPATIBILITY TEST ===")
     
     # 1. Setup paths
-    warehouse_path = "/tmp/pyiceberg_warehouse"
-    catalog_db_path = "/tmp/pyiceberg_catalog.db"
-    hdb_cache_path = "/tmp/pyiceberg_hdb_cache"
+    warehouse_path = f"{tempfile.gettempdir()}/pyiceberg_warehouse"
+    catalog_db_path = f"{tempfile.gettempdir()}/pyiceberg_catalog.db"
+    hdb_cache_path = f"{tempfile.gettempdir()}/pyiceberg_hdb_cache"
 
     # Clean up directories from any previous runs
     shutil.rmtree(warehouse_path, ignore_errors=True)

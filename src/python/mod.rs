@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod schema;
 pub mod session;
 pub mod stats;
+pub mod subscribe;
 pub mod table;
 
 pub use catalog::*;
@@ -18,6 +19,7 @@ pub use manifest::*;
 pub use schema::*;
 pub use session::*;
 pub use stats::*;
+pub use subscribe::*;
 pub use table::*;
 
 use pyo3::prelude::*;
@@ -28,6 +30,8 @@ pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(helpers::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::build_profile, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::is_debug_build, m)?)?;
+    m.add_function(wrap_pyfunction!(helpers::set_gpu_device, m)?)?;
+    m.add_function(wrap_pyfunction!(helpers::gpu_device, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::registered_functions, m)?)?;
 
     // Catalog factory functions
@@ -41,6 +45,7 @@ pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<stats::PyMergeMode>()?;
     m.add_class::<session::PySession>()?;
     m.add_class::<graph::PyGraphAPI>()?;
+    m.add_class::<subscribe::PySubscription>()?;
 
     // Catalog classes
     m.add_class::<catalog::PyNessieCatalog>()?;

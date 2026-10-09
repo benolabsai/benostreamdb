@@ -507,6 +507,7 @@ impl TableBuilder {
             memory_reclaimed: Arc::new(tokio::sync::Notify::new()),
             caller_reserved_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             format_version: Arc::new(std::sync::atomic::AtomicI32::new(manifest.format_version)),
+            subscribers: crate::core::table::subscribe::new_subscriber_channel(),
         };
 
         table.sync_primary_key_from_schema_async().await.ok();

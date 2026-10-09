@@ -55,6 +55,26 @@ SELECT * FROM graph_subgraph('edges', '101,102', 2, 'auto');
 Endpoint columns are auto-detected (`source`/`src`/… , `target`/`dst`/…); pass
 trailing `source`, `target` string arguments to name them explicitly.
 
+### Live Subscriptions (change feed)
+
+The engine's `subscribe_events` table function is reachable through the same
+pass-through path. It drains the next committed-change events for a table and
+returns one row per event (`event_type` = `batch` | `commit`, `rows`):
+
+```sql
+SELECT * FROM subscribe_events('edges', 'weight > 0.5', 100, 1000);
+```
+
+The change feed is in-process, so a Trino worker only observes commits made by
+writers in the same JVM.
+
+### GPU Device
+
+Set `benostream.gpu-device` in the catalog properties (`auto` | `cpu` |
+`cuda[:N]` | `mps` | `intel` | `rocm`). The connector resolves it through the
+same core mapping as every other surface. Note: Trino uses a **single
+connector-wide device** — it does not distribute splits across multiple GPUs.
+
 ### Predicate Pushdown
 
 The connector supports aggressive predicate pushdown. The query engine passes the `WHERE` clause to the Rust core, which uses:

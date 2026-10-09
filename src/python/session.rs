@@ -45,4 +45,40 @@ impl PySession {
 
         arrow_batches_to_pyarrow(py, batches, schema)
     }
+
+    /// List the graph tables (node/edge) registered in the session.
+    ///
+    /// Returns a list of dicts: `{name, table_type, source_column,
+    /// target_column, id_column, label_column}`. This is the discovery primitive
+    /// an MCP agent uses to find the graph without being told column names.
+    #[pyo3(signature = (schema=None))]
+    pub fn list_graph_tables(
+        &self,
+        py: Python<'_>,
+        schema: Option<String>,
+    ) -> PyResult<Py<PyAny>> {
+        let infos = py
+            .detach(|| TOKIO_RUNTIME.block_on(self.inner.list_graph_tables()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let list = pyo3::types::PyList::empty(py);
+        for info in infos {
+            if let Some(ref want) = schema {
+                // The name is `catalog.schema.table`; filter on the schema part.
+                let parts: Vec<&str> = info.name.split('.').collect();
+                if parts.len() < 2 || parts[parts.len() - 2] != want {
+                    continue;
+                }
+            }
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("name", info.name)?;
+            d.set_item("table_type", info.table_type)?;
+            d.set_item("source_column", info.source_column)?;
+            d.set_item("target_column", info.target_column)?;
+            d.set_item("id_column", info.id_column)?;
+            d.set_item("label_column", info.label_column)?;
+            list.append(d)?;
+        }
+        Ok(list.into())
+    }
 }

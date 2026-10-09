@@ -75,7 +75,7 @@ build_with_java() {
 }
 
 # Find Java homes
-JAVA_17_HOME="/usr/lib/jvm/java-17-openjdk-amd64"
+JAVA_17_HOME="${JAVA_17_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}"
 JAVA_21_HOME="$(pwd)/${JDK_21_DIR}"
 
 # Trino 468's SPI is compiled for Java 23 (class file version 67), so the
@@ -83,10 +83,12 @@ JAVA_21_HOME="$(pwd)/${JDK_21_DIR}"
 # bytecode still targets 17/21 (and runs on the Trino image's Java 23). A JDK 21
 # compiler cannot read the SPI and fails with "class file has wrong version
 # 67.0, should be 65.0". Prefer a system JDK 23+.
-JAVA_TRINO_HOME=""
-for cand in /usr/lib/jvm/java-25-openjdk-amd64 /usr/lib/jvm/java-24-openjdk-amd64 /usr/lib/jvm/java-23-openjdk-amd64; do
-    if [ -x "$cand/bin/javac" ]; then JAVA_TRINO_HOME="$cand"; break; fi
-done
+if [ -z "${JAVA_TRINO_HOME:-}" ]; then
+    JAVA_TRINO_HOME=""
+    for cand in /usr/lib/jvm/java-25-openjdk-amd64 /usr/lib/jvm/java-24-openjdk-amd64 /usr/lib/jvm/java-23-openjdk-amd64; do
+        if [ -x "$cand/bin/javac" ]; then JAVA_TRINO_HOME="$cand"; break; fi
+    done
+fi
 if [ -z "$JAVA_TRINO_HOME" ]; then
     echo "ERROR: the Trino connector targets Trino 468, whose SPI requires JDK >= 23 to compile." >&2
     echo "       Install a JDK 23+ (e.g. /usr/lib/jvm/java-25-openjdk-amd64) and re-run." >&2

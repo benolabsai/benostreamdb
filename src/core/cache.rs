@@ -48,7 +48,7 @@ pub static DISK_CACHE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
         .ok()
         .map(PathBuf::from)
         .or_else(|| {
-            let path = std::path::Path::new("/tmp/hdb_cache");
+            let path = &std::env::temp_dir().join("hdb_cache");
             if std::fs::create_dir_all(path).is_ok() {
                 Some(path.to_path_buf())
             } else {

@@ -127,6 +127,8 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::init_logging, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::build_profile, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::is_debug_build, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::set_gpu_device, m)?)?;
+    m.add_function(wrap_pyfunction!(python_binding::gpu_device, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_functions, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_table_functions, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_index_algorithms, m)?)?;
@@ -149,6 +151,7 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<python_binding::PyJdbcCatalog>()?;
     m.add_class::<python_binding::PySession>()?;
     m.add_class::<python_binding::PyGraphAPI>()?;
+    m.add_class::<python_binding::PySubscription>()?;
 
     m.add_class::<python_binding::PyDataFileInfo>()?;
     m.add_class::<python_binding::PySplit>()?;

@@ -115,6 +115,63 @@ impl Table {
         Ok(())
     }
 
+    /// Read the table's properties (metadata key/value pairs).
+    pub async fn properties_async(&self) -> Result<std::collections::HashMap<String, String>> {
+        let manifest = self.manifest().await?;
+        Ok(manifest.properties.clone())
+    }
+
+    /// Read the table's properties (synchronous).
+    pub fn properties(&self) -> Result<std::collections::HashMap<String, String>> {
+        self.runtime().block_on(self.properties_async())
+    }
+
+    /// Merge `properties` into the table's properties (metadata-only commit).
+    ///
+    /// Merge (not replace) so internal keys (`benostream.*`, e.g. the WAL
+    /// commit marker) are never clobbered by a user setting `table_type`.
+    pub async fn set_properties_async(
+        &self,
+        properties: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        let mut current = self.properties_async().await?;
+        current.extend(properties);
+        self.replace_properties_async(current).await
+    }
+
+    /// Merge `properties` into the table's properties (synchronous).
+    pub fn set_properties(
+        &self,
+        properties: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        self.runtime().block_on(self.set_properties_async(properties))
+    }
+
+    /// Replace the table's properties wholesale (metadata-only commit).
+    pub async fn replace_properties_async(
+        &self,
+        properties: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        let _maintenance_guard = self.maintenance_lock.write().await;
+        let manifest_manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        manifest_manager.update_properties(properties).await?;
+        Ok(())
+    }
+
+    /// Set a single table property (metadata-only commit).
+    pub async fn set_property_async(&self, key: &str, value: &str) -> Result<()> {
+        let mut props = std::collections::HashMap::new();
+        props.insert(key.to_string(), value.to_string());
+        self.set_properties_async(props).await
+    }
+
+    /// Remove a single table property (metadata-only commit).
+    pub async fn unset_property_async(&self, key: &str) -> Result<()> {
+        let mut props = self.properties_async().await?;
+        props.remove(key);
+        self.replace_properties_async(props).await
+    }
+
     /// Physically delete unreferenced data and manifest files
     pub fn vacuum(&self, retention_versions: usize) -> Result<usize> {
         self.runtime()
@@ -553,5 +610,52 @@ impl Table {
 
     pub fn recover_indexes(&self) -> Result<usize> {
         self.runtime().block_on(self.recover_indexes_async())
+    }
+
+    /// Every index file currently referenced by the table's manifest (across
+    /// all data entries), de-duplicated by file path. Backs the connector
+    /// `SHOW INDEXES` / `list_indexes` procedures, which previously returned a
+    /// hard-coded empty list.
+    pub async fn list_index_files(&self) -> Result<Vec<crate::core::manifest::IndexFile>> {
+        let manifest = self.manifest().await?;
+        let manager = ManifestManager::new(self.store.clone(), "", &self.uri);
+        let entries = manager.load_all_entries(&manifest).await?;
+        let mut out: Vec<crate::core::manifest::IndexFile> = Vec::new();
+        for entry in entries {
+            for idx in entry.index_files {
+                if !out.iter().any(|x| x.file_path == idx.file_path) {
+                    out.push(idx);
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Force a rebuild of a column's index from the current data: drop any
+    /// existing index files, then re-add the column's configured algorithm(s)
+    /// (falling back to the default vector index when none is configured).
+    /// Backs the connector `rebuild_index` procedures.
+    pub async fn rebuild_index(&self, column: String) -> Result<()> {
+        let algorithms = {
+            let configs = self.indexing.index_configs.read();
+            configs
+                .get(&column)
+                .map(|c| c.algorithms.clone())
+                .unwrap_or_default()
+        };
+        // A rebuild of a never-indexed column is valid: there is simply nothing
+        // to drop first, so a failed drop is not fatal here.
+        if let Err(e) = self.drop_index(column.clone()).await {
+            tracing::debug!("rebuild_index: no existing index to drop for '{}': {}", column, e);
+        }
+        if algorithms.is_empty() {
+            self.add_index(column, crate::core::manifest::IndexAlgorithm::default())
+                .await?;
+        } else {
+            for alg in algorithms {
+                self.add_index(column.clone(), alg).await?;
+            }
+        }
+        Ok(())
     }
 }

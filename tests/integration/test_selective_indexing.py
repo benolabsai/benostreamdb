@@ -1,3 +1,4 @@
+import tempfile
 import benostreamdb as bsdb
 import pandas as pd
 import shutil
@@ -8,8 +9,8 @@ import time
 TABLE_URI = "file:///tmp/benostream_test_selective_indexing"
 
 def setup_module():
-    if os.path.exists("/tmp/benostream_test_selective_indexing"):
-        shutil.rmtree("/tmp/benostream_test_selective_indexing")
+    if os.path.exists(f"{tempfile.gettempdir()}/benostream_test_selective_indexing"):
+        shutil.rmtree(f"{tempfile.gettempdir()}/benostream_test_selective_indexing")
 
 def count_index_files(table_uri, extension):
     """Count files with specific extension in table directory."""

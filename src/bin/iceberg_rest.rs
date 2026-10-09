@@ -510,7 +510,9 @@ pub enum TableUpdateAction {
         #[serde(rename = "file-path")]
         file_path: String,
         #[serde(rename = "index-file")]
-        index_file: benostreamdb::core::manifest::IndexFile,
+        // Boxed: `IndexFile` is large, so inlining it here would bloat every
+        // variant of this enum (clippy::large_enum_variant).
+        index_file: Box<benostreamdb::core::manifest::IndexFile>,
     },
     AddPartitionSpec {
         spec: benostreamdb::core::manifest::PartitionSpec,
@@ -632,7 +634,7 @@ async fn update_table(
                 println!("Processing AddSidecarIndex...");
                 if let Some(entries) = &mut all_existing_entries {
                     if let Some(entry) = entries.iter_mut().find(|e| e.file_path == file_path) {
-                        entry.index_files.push(index_file);
+                        entry.index_files.push(*index_file);
                         new_entries.push(entry.clone());
                     } else {
                         println!(

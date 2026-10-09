@@ -9,6 +9,7 @@ pub mod partition_rewriter;
 pub mod pgvector_rewriter;
 pub mod physical_plan;
 pub mod session;
+pub mod subscribe_table_function;
 pub mod udf;
 pub mod vector_literal;
 pub mod vector_operators;

@@ -119,6 +119,60 @@ jobs:
           name: wheels-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
 
+  windows:
+    needs: [ci]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [x86_64]
+        python-version: ["3.10"] # ABI3 Universal Wheels
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-${{ matrix.target }}-${{ matrix.python-version }}"
+          cache-targets: false
+      - name: Update version from tag
+        shell: bash
+        run: |
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            export VERSION=${GITHUB_REF#refs/tags/v}
+            export CARGO_VERSION=$(echo $VERSION | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)([a-zA-Z])/\1-\2/')
+            echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
+            # Only replace the FIRST occurrence in each file
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
+          fi
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --features "python"
+          sccache: "false"
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+      - name: Build Windows binaries and MSI
+        run: |
+          cargo build --release --workspace
+          cargo wix --nocapture
+      - name: Upload Windows MSI and Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            target/wix/*.msi
+            target/release/*.exe
+
   sdist:
     needs: [ci]
     runs-on: ubuntu-latest
@@ -233,6 +287,14 @@ jobs:
             # PyPI distribution version and keep its core dependency pin in step.
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
             perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
+            
+            # The flight server ships in lockstep with the engine.
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
+            
+            # The MCP server ships in lockstep with the engine.
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - name: Publish to crates.io
         run: |
@@ -323,6 +385,42 @@ jobs:
           packages-dir: contrib/benostreamdb-search/dist
           skip-existing: true
           verbose: true
+      - name: Build flight server (maturin wheel)
+        run: |
+          maturin build --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
+      - name: Publish flight server to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: server/flight_sql/dist
+          skip-existing: true
+          verbose: true
+      - name: Build MCP server (maturin wheel)
+        run: |
+          maturin build --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
+      - name: Publish MCP server to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: contrib/benostreamdb-mcp/dist
+          skip-existing: true
+          verbose: true
+      - name: Setup Java 17 (for Spark)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - name: Save Java 17 Home
+        run: echo "JAVA_17_HOME=$JAVA_HOME" >> $GITHUB_ENV
+      - name: Setup Java 23 (for Trino)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '23'
+      - name: Save Java 23 Home
+        run: echo "JAVA_TRINO_HOME=$JAVA_HOME" >> $GITHUB_ENV
+      - name: Build Java Connectors (Spark, Trino)
+        run: |
+          chmod +x ./build-connectors.sh
+          ./build-connectors.sh
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -331,4 +429,7 @@ jobs:
             dist/*
             dbt-benostreamdb/dist/*
             contrib/benostreamdb-search/dist/*
+            contrib/benostreamdb-mcp/dist/*
+            server/flight_sql/dist/*
+            connector-artifacts/*
           generate_release_notes: true

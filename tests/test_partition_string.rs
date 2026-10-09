@@ -12,7 +12,7 @@ async fn test_string_identity_partitioning() -> anyhow::Result<()> {
     // 1. Setup Table with String Identity Partitioning
     let table_name = "test_string_partition";
     let uri = format!("file:///tmp/{}", table_name);
-    let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
+    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), table_name));
 
     // Schema: category (string), value (int64)
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
@@ -57,7 +57,7 @@ async fn test_string_identity_partitioning() -> anyhow::Result<()> {
     // 4. Test with Dictionary strings (Categorical)
     let dict_table_name = "test_dict_partition";
     let dict_uri = format!("file:///tmp/{}", dict_table_name);
-    let _ = std::fs::remove_dir_all(format!("/tmp/{}", dict_table_name));
+    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), dict_table_name));
 
     let dict_schema = Arc::new(ArrowSchema::new(vec![
         Field::new(
@@ -98,7 +98,7 @@ async fn test_mismatched_id_name_partitioning() -> anyhow::Result<()> {
 
     let table_name = "test_mismatch_partition";
     let uri = format!("file:///tmp/{}", table_name);
-    let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
+    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), table_name));
 
     // Schema: id (int32), category (string)
     // id -> ID 1

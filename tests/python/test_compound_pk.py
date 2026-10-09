@@ -1,3 +1,4 @@
+import tempfile
 import benostreamdb as bsdb
 import pandas as pd
 import numpy as np
@@ -5,7 +6,7 @@ import os
 import shutil
 
 # Setup
-db_path = "/tmp/hdb_compound_pk_test"
+db_path = f"{tempfile.gettempdir()}/hdb_compound_pk_test"
 if os.path.exists(db_path):
     shutil.rmtree(db_path)
 

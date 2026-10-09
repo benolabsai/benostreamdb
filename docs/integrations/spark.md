@@ -177,13 +177,34 @@ Endpoint columns are auto-detected (`source`/`src`/`src_id`/`from`/`u` and
 `target`/`dst`/`dst_id`/`to`/`v`); pass trailing `source`, `target` string
 arguments to name them explicitly.
 
+Declaring an edge table (`SET TBLPROPERTIES ('table_type'='edge', 'src_col'=…, 'dst_col'=…)`)
+automatically configures the forward (source) and reverse (target) CSR graph indexes.
+
+---
+
+### 2c. Live Subscriptions (change feed)
+
+`subscribe_events` is a DataFusion table function, so it is reachable from Spark
+through the pass-through reader. It drains the next committed-change events for a
+table (a bounded live tail) and returns one row per event:
+
+```sql
+-- event_type ('batch' | 'commit'), rows
+SELECT * FROM subscribe_events('edges', 'weight > 0.5', 100, 1000);
+```
+
+Arguments: `table`, optional `filter` (SQL predicate), optional `max_events`
+(default 100), optional `timeout_ms` (default 1000). The change feed is
+**in-process**: a Spark job only observes commits made by writers in the same
+JVM. For cross-process streaming use the Flight SQL subscription ticket.
+
 ---
 
 ### 3. Secondary & Bitmap Index Filter Pushdown
 
 `BenoStreamScanBuilder` implements `SupportsPushDownFilters` and `SupportsPushDownRequiredColumns`.
 
-When queries contain equality (`=`) or membership (`IN (...)`) predicates on indexed columns, filters are intercepted and evaluated against BenoStreamDB's native RoaringBitmap and secondary indexes via JNI (`queryIndexIn`), pruning data files and row splits before Parquet data is read by Spark executors:
+Supported predicates (`=`, `<`, `<=`, `>`, `>=`, `IN (...)`, `IS [NOT] NULL`, `LIKE 'prefix%'`, `AND`/`OR`/`NOT`) are translated to SQL and pushed into the engine's DataFusion planner through `openQuery`, which applies the scalar/Bitmap, Bloom, and lexical indexes during planning — pruning data files and row splits before any Parquet is decoded by Spark executors:
 
 ```scala
 // Prunes unindexed Parquet splits using BenoStreamDB bitmap indexes
@@ -197,30 +218,40 @@ val activeUsers = spark.read
 
 ### 4. Index Lifecycle & Catalog Procedures
 
-On Spark 4.x, manage BenoStreamDB indexes directly through native Spark stored procedures under `benostream.system` (the catalog above implements the DSv2 `ProcedureCatalog` API):
+On Spark 4.x, manage BenoStreamDB indexes and primary keys directly through native Spark stored procedures under `benostream.system` (the catalog above implements the DSv2 `ProcedureCatalog` API). Every procedure routes straight into the engine over JNI, so it applies to native BenoStreamDB tables as well as externally mapped ones. (`list_indexes`, `optimize`, and `compact` are aliases.)
 
 ```sql
--- Add an index to an Iceberg column
-CALL benostream.system.add_index('spark_catalog.default.users', 'embedding', 'vector');
+-- Add an index to a column: algorithm is one of
+--   hnsw | hnsw_pq | hnsw_tq4 | hnsw_tq8 | bm25 | bloom | bitmap |
+--   composite_bitmap | csr_graph | json_path
+-- (defaults to the TurboQuant-8 vector index)
+CALL benostream.system.add_index('spark_catalog.default.users', 'embedding', 'hnsw');
 
 -- Build offline index files for all segments
 CALL benostream.system.build_index('spark_catalog.default.users');
 
--- Rebuild a specific index column
+-- Rebuild a specific index column (drops and re-creates it)
 CALL benostream.system.rebuild_index('spark_catalog.default.users', 'embedding');
 
--- List all configured and built indexes
+-- List all configured and built indexes (JSON)
 CALL benostream.system.show_indexes('spark_catalog.default.users');
 
 -- Drop an index
-CALL benostream.system.drop_index('spark_catalog.default.users', 'embedding', 'vector');
+CALL benostream.system.drop_index('spark_catalog.default.users', 'embedding', 'hnsw');
 
 -- Compact segments and consolidate index metadata
 CALL benostream.system.compact('spark_catalog.default.users');
 
--- Set Primary Key constraint for Merge-on-Read
+-- Set / drop the primary key used for Merge-on-Read row identity
 CALL benostream.system.set_primary_key('spark_catalog.default.users', 'id');
+CALL benostream.system.drop_primary_key('spark_catalog.default.users', 'id');
+
+-- Regional DRIFT graph search (top-k node ids)
+CALL benostream.system.regional_drift_search(
+  'spark_catalog.default.edges', 'vector query text', array(101L, 205L), 5, 2, 2, 3, 'auto');
 ```
+
+On Spark 3.5 the same procedures are reachable through the Iceberg `ProcedureCatalog` shim. On Spark 4.2+ the catalog also implements `listProcedures`, so `SHOW PROCEDURES IN benostream.system` lists them.
 
 ---
 

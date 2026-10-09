@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let base_dir = "/tmp/iceberg_test";
+    let base_dir = &std::env::temp_dir().join("iceberg_test").to_string_lossy().into_owned();
     let _ = std::fs::remove_dir_all(base_dir);
     std::fs::create_dir_all(format!("{}/metadata", base_dir))?;
     std::fs::create_dir_all(format!("{}/data", base_dir))?;
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
 
     println!("3. Registering external table in BenoStreamDB...");
     let hdb_uri = "file:///tmp/hdb_shadow";
-    let _ = std::fs::remove_dir_all("/tmp/hdb_shadow");
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("hdb_shadow"));
 
     let mut table =
         Table::register_external(hdb_uri.to_string(), &format!("file://{}", metadata_path)).await?;
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
 
     println!("6. Checking for local sidecar index file...");
     let mut found_idx = false;
-    for entry in std::fs::read_dir("/tmp/hdb_shadow")? {
+    for entry in std::fs::read_dir(std::env::temp_dir().join("hdb_shadow"))? {
         let entry = entry?;
         let name = entry.file_name().into_string().unwrap();
         if name.contains(".id.idx") || name.contains(".id.inv.parquet") {

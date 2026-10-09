@@ -337,22 +337,13 @@ impl Table {
     ) -> Result<Vec<u64>> {
         let schema = self.arrow_schema();
 
-        // 1. Resolve source and target columns
-        let src_col_name = options.source_column.clone().unwrap_or_else(|| {
-            ["source", "src", "src_id", "from", "u"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "source".to_string())
-        });
-
-        let tgt_col_name = options.target_column.clone().unwrap_or_else(|| {
-            ["target", "dst", "dst_id", "to", "v"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "target".to_string())
-        });
+        // 1. Resolve source and target columns (explicit → metadata → names).
+        let (src_col_name, tgt_col_name) = self
+            .resolve_endpoint_columns(
+                options.source_column.as_deref(),
+                options.target_column.as_deref(),
+            )
+            .await;
 
         // 2. Build relation filter if requested
         let rel_filter = if let Some(ref rels) = options.allowed_relations {
@@ -584,21 +575,9 @@ impl Table {
 
         // Fallback path: Table scan BFS
         let batches = self.read_async(None, None, None).await?;
-        let schema = self.arrow_schema();
-        let src_col_name = source_column.map(String::from).unwrap_or_else(|| {
-            ["source", "src", "src_id", "from", "u"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "source".to_string())
-        });
-        let tgt_col_name = target_column.map(String::from).unwrap_or_else(|| {
-            ["target", "dst", "dst_id", "to", "v"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "target".to_string())
-        });
+        let (src_col_name, tgt_col_name) = self
+            .resolve_endpoint_columns(source_column, target_column)
+            .await;
 
         let mut adj: HashMap<u64, Vec<u64>> = HashMap::new();
         for batch in &batches {
@@ -843,21 +822,9 @@ impl Table {
             return Ok(Vec::new());
         }
 
-        let schema = self.arrow_schema();
-        let src_col_name = source_column.map(String::from).unwrap_or_else(|| {
-            ["source", "src", "src_id", "from", "u"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "source".to_string())
-        });
-        let tgt_col_name = target_column.map(String::from).unwrap_or_else(|| {
-            ["target", "dst", "dst_id", "to", "v"]
-                .iter()
-                .find(|c| schema.column_with_name(c).is_some())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "target".to_string())
-        });
+        let (src_col_name, tgt_col_name) = self
+            .resolve_endpoint_columns(source_column, target_column)
+            .await;
 
         let mut edges = HashSet::new();
         let col_to_check = graph_column.unwrap_or(src_col_name.as_str());

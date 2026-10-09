@@ -1,3 +1,4 @@
+import tempfile
 
 import benostreamdb as bsdb
 import pandas as pd
@@ -6,7 +7,7 @@ import os
 import glob
 
 def test_merge_pruning():
-    base_dir = "/tmp/test_merge"
+    base_dir = f"{tempfile.gettempdir()}/test_merge"
     if os.path.exists(base_dir):
         shutil.rmtree(base_dir)
     os.makedirs(base_dir)

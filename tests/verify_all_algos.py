@@ -1,3 +1,4 @@
+import tempfile
 import pytest
 import numpy as np
 import benostreamdb as hs
@@ -19,7 +20,7 @@ def setup_table(path):
     return table
 
 def test_all_algorithms():
-    path = "/tmp/hs_all_algos_test"
+    path = f"{tempfile.gettempdir()}/hs_all_algos_test"
     table = setup_table(path)
     
     # 1. Ingest baseline data
@@ -78,6 +79,6 @@ if __name__ == "__main__":
         test_all_algorithms()
         print("\nALL ALGORITHM TESTS PASSED!")
     finally:
-        path = "/tmp/hs_all_algos_test"
+        path = f"{tempfile.gettempdir()}/hs_all_algos_test"
         if os.path.exists(path):
             shutil.rmtree(path)

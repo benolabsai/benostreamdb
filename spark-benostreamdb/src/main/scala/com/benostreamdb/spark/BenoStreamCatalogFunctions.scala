@@ -335,7 +335,10 @@ object BenoStreamCatalogFunctions {
         val words = in.getString(0).toString.toLowerCase.split("\\s+").filter(_.nonEmpty)
         if (words.isEmpty) arrData(Array.empty[Double])
         else {
-          val counts = words.groupBy(identity).view.mapValues(_.length.toDouble).toMap
+          // NOTE: avoid `view.mapValues` here — `IterableView` has no
+          // `mapValues` on Scala 2.12 (the Spark 3.5 line). A plain `map`
+          // builds the same `Map[String, Double]` on both 2.12 and 2.13.
+          val counts = words.groupBy(identity).map { case (w, ws) => (w, ws.length.toDouble) }
           arrData(words.distinct.map(w => counts(w) / words.length))
         }
       }

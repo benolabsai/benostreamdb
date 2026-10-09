@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DATA_DIR="/tmp/hdb_test_delete"
+DATA_DIR="${TMPDIR:-/tmp}/hdb_test_delete"
 TABLE_DIR="$DATA_DIR/default/test_delete_table"
 rm -rf "$DATA_DIR"
 mkdir -p "$DATA_DIR"

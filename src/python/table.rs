@@ -1391,6 +1391,133 @@ impl PyTable {
         self.execute_sql(py, query)
     }
 
+    /// Set a table property (metadata-only commit).
+    fn set_property(&self, py: Python<'_>, key: &str, value: &str) -> PyResult<()> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let (k, v) = (key.to_string(), value.to_string());
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .set_property_async(&k, &v)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                // Declaring an edge table materialises its forward/reverse CSR
+                // overlays (idempotent; no-op for non-edge tables).
+                table
+                    .ensure_edge_indexes_async()
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    /// Replace the table's properties in one metadata-only commit.
+    fn set_properties(
+        &self,
+        py: Python<'_>,
+        properties: std::collections::HashMap<String, String>,
+    ) -> PyResult<()> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .set_properties_async(properties)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                table
+                    .ensure_edge_indexes_async()
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    /// Remove a table property (metadata-only commit).
+    fn unset_property(&self, py: Python<'_>, key: &str) -> PyResult<()> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let k = key.to_string();
+        py.allow_threads(move || {
+            rt.block_on(async {
+                table
+                    .unset_property_async(&k)
+                    .await
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+            })
+        })
+    }
+
+    /// The table's properties as a dict.
+    fn properties(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let props = py
+            .allow_threads(move || rt.block_on(async { table.properties_async().await }))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        for (k, v) in props {
+            dict.set_item(k, v)?;
+        }
+        Ok(dict.into())
+    }
+
+    /// The table's declared type: `node` | `edge` | `table`.
+    fn table_type(&self, py: Python<'_>) -> PyResult<String> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let t = py
+            .allow_threads(move || rt.block_on(async { table.table_type_async().await }))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(t.as_str().to_string())
+    }
+
+    /// The table's resolved graph metadata as a dict.
+    fn graph_metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let rt = self.table.runtime();
+        let table = self.table.clone();
+        let meta = py
+            .allow_threads(move || rt.block_on(async { table.graph_metadata_async().await }))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("table_type", meta.table_type.as_str())?;
+        dict.set_item("source_column", meta.source_column)?;
+        dict.set_item("target_column", meta.target_column)?;
+        dict.set_item("relation_column", meta.relation_column)?;
+        dict.set_item("weight_column", meta.weight_column)?;
+        dict.set_item("id_column", meta.id_column)?;
+        dict.set_item("label_column", meta.label_column)?;
+        Ok(dict.into())
+    }
+
+    /// Subscribe to this table's committed changes (a live change feed).
+    fn subscribe(&self, _py: Python<'_>) -> PyResult<super::subscribe::PySubscription> {
+        let rt = self.table.runtime();
+        Ok(super::subscribe::PySubscription::new(
+            self.table.subscribe(),
+            rt,
+        ))
+    }
+
+    /// Subscribe to committed changes, yielding only rows matching `filter`
+    /// (a SQL predicate). `filter=None` is equivalent to `subscribe()`.
+    #[pyo3(signature = (filter=None))]
+    fn subscribe_filtered(
+        &self,
+        _py: Python<'_>,
+        filter: Option<String>,
+    ) -> PyResult<super::subscribe::PySubscription> {
+        let rt = self.table.runtime();
+        let sub = match filter {
+            Some(f) => self.table.subscribe_filtered(f),
+            None => self.table.subscribe(),
+        };
+        Ok(super::subscribe::PySubscription::new(sub, rt))
+    }
+
     #[pyo3(signature = (seeds, damping=0.85, iterations=30, directed=false, seed_weights=None))]
     fn personalized_pagerank(
         &self,
@@ -1725,7 +1852,7 @@ impl PyTable {
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/benostream_cc");
+                let temp_dir = &std::env::temp_dir().join("benostream_cc");
                 let final_table =
                     crate::core::algorithms::connected_components::compute_connected_components(
                         &ctx,
@@ -1768,7 +1895,7 @@ impl PyTable {
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/benostream_ts");
+                let temp_dir = &std::env::temp_dir().join("benostream_ts");
                 let final_table =
                     crate::core::algorithms::topological_sort::compute_topological_sort(
                         &ctx,
@@ -2228,7 +2355,7 @@ impl PyTable {
                 ctx.register_table("t", provider)
                     .map_err(|e| e.to_string())?;
 
-                let temp_dir = std::path::Path::new("/tmp/benostream_lp");
+                let temp_dir = &std::env::temp_dir().join("benostream_lp");
                 let final_table =
                     crate::core::algorithms::label_propagation::compute_label_propagation(
                         &ctx,
@@ -3274,6 +3401,7 @@ impl PyTable {
             crate::core::sql::udf::register_all_custom_udfs(&mut ctx);
             // Graph traversal table functions (`FROM graph_neighbors(...)`).
             crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
+            crate::core::sql::subscribe_table_function::register_subscribe_table_functions(&mut ctx);
 
             // Execute
             let df = ctx.sql(&query).await.map_err(|e| e.to_string())?;

@@ -9,6 +9,7 @@ import com.benostreamdb.spark.procedures.{
   BuildIndexProcedure,
   CompactTableProcedure,
   DropIndexProcedure,
+  DropPrimaryKeyProcedure,
   RebuildIndexProcedure,
   SetPrimaryKeyProcedure,
   ShowIndexesProcedure,
@@ -42,6 +43,7 @@ class BenoStreamProcedureCatalog extends ProcedureCatalog with CatalogPlugin {
         case "compact" | "optimize" => new CompactTableProcedure()
         case "show_indexes" | "list_indexes" => new ShowIndexesProcedure()
         case "set_primary_key" => new SetPrimaryKeyProcedure()
+        case "drop_primary_key" => new DropPrimaryKeyProcedure()
         case "regional_drift_search" => new RegionalDriftProcedure()
         case _ => throw new UnsupportedOperationException(s"Unknown procedure: $procName")
       }

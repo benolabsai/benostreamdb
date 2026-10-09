@@ -1,0 +1,126 @@
+name: Benchmarks
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: 'Run quick benchmark subset'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  benchmarks:
+    name: Run Benchmark Suite
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize build space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.98.0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "benchmarks"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install maturin pyarrow pandas numpy duckdb datafusion networkx
+
+      - name: Build BenoStreamDB (Release)
+        run: |
+          maturin develop --release
+
+      - name: Run Vector ANN Benchmark
+        run: |
+          python benchmarks/ann_benchmarks/run.py \
+            --dataset sift-128-euclidean \
+            --limit 10000 \
+            --index hnsw_tq8 \
+            --out benchmarks/ann_benchmarks/results/sift_10k_ci.md
+
+      - name: Run Graph Benchmark
+        run: |
+          python benchmarks/graph/run.py \
+            --nodes 10000 \
+            --edges 50000 \
+            --engines benostreamdb,networkx \
+            --out benchmarks/graph/results/graph_ci.md
+
+      - name: Run SQL Benchmark
+        run: |
+          python benchmarks/sql/run.py \
+            --rows 100000 \
+            --engines benostreamdb,duckdb,datafusion \
+            --out benchmarks/sql/results/sql_ci.md
+
+      - name: Run Pathological Filters & Oracle Benchmark
+        run: |
+          python benchmarks/filters/run.py --rows 50000
+
+      - name: Run Skewed Data Benchmark
+        run: |
+          python benchmarks/skew/run.py
+
+      - name: Run Production Concurrency Scaling
+        run: |
+          python benchmarks/production_workload.py --workload concurrent --sweep --queries-total 500
+
+      - name: Run Production Maintenance Saturation
+        run: |
+          python benchmarks/production_workload.py --workload maintenance --concurrency 4
+
+      - name: Run Crash Injection & Recovery Benchmark
+        run: |
+          cargo run --release --bin bench_recovery
+
+      - name: Run Object-Store Throttling & Fault Resilience Benchmark
+        run: |
+          cargo run --release --bin bench_throttling
+
+      - name: Run Multi-Writer Concurrency Correctness Benchmark
+        run: |
+          cargo run --release --bin bench_concurrency_correctness
+
+      - name: Run Mixed Workload Soak
+        run: |
+          BSDB_SOAK_SECONDS=30 cargo test --test soak mixed_workload_soak -- --ignored --nocapture
+
+      - name: Generate Consolidated Benchmark Report
+        run: |
+          python benchmarks/generate_summary.py
+
+      - name: Upload Benchmark Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-reports
+          path: |
+            benchmarks/results/
+            benchmarks/ann_benchmarks/results/
+            benchmarks/graph/results/
+            benchmarks/sql/results/

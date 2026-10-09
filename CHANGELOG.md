@@ -9,6 +9,48 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.12.0]
 
 ### Added
+- **Workflow tutorials** — one runnable tutorial per core workflow: AI/semantic
+  retrieval via MCP, JSON/document retrieval with a JSON-path index, and graph
+  traversal via `graph_neighbors(...)`. Python versions are Jupyter notebooks
+  (`examples/tutorials/*.ipynb`, verified to execute end-to-end); the
+  SQL/connector forms (Spark/Trino/dbt/Flight/MCP/Rust) are markdown pages under
+  `docs/tutorials/`.
+- **GPU device selection on every surface** — one shared core mapping
+  (`gpu::context_from_device_str`, accepting `auto` | `cpu` | `cuda[:N]` |
+  `mps`/`metal` | `intel`/`xpu` | `rocm`/`hip`) now backs the Spark/Trino JNI
+  bridges, the Python binding (`benostreamdb.set_gpu_device` / `gpu_device`),
+  the dbt adapter (profile `gpu_device`), and the Flight SQL + MCP servers
+  (`BSDB_GPU_DEVICE` / `BENOSTREAM_GPU_DEVICE` at startup). Previously only
+  Python/Spark/Trino exposed a device; Flight, dbt, and MCP had none.
+- **Reactive subscriptions (`Table::subscribe()`)** — a per-table
+  `tokio::sync::broadcast` change feed that publishes committed `RecordBatch`es
+  plus a `Commit` marker on every successful flush. `subscribe_filtered("age > 30")`
+  re-applies a SQL predicate above each batch (DataFusion) and yields only
+  matching rows (commit markers are suppressed for filtered subscriptions);
+  `Subscription::close()` unsubscribes deterministically. Exposed on **every**
+  surface: native Python (`Table.subscribe()` → `Subscription.recv`/`try_recv`/
+  `close`, context-manager), the `subscribe_events` DataFusion table function
+  (reachable from Python/dbt/Spark/Trino/Flight), a Flight SQL streaming ticket
+  (`type.googleapis.com/benostreamdb.Subscribe`), and an MCP `subscribe_events`
+  tool. The feed is in-process.
+- **Declarative edge tables auto-configure their CSR overlays** — declaring
+  `table_type = 'edge'` with `src_col`/`dst_col` (via `SET TBLPROPERTIES` or
+  Python `set_property`/`set_properties`) now materialises the forward (source)
+  and reverse (target) CSR graph indexes through
+  `Table::ensure_edge_indexes_async` (idempotent; no-op for non-edge tables).
+- **Spark stored procedures are now real (not stubs)** — the
+  `CALL benostream.system.*` surface routes end-to-end into the engine over JNI:
+  `add_index` (with an `algorithm` argument: `hnsw`, `hnsw_pq`, `hnsw_tq4`,
+  `hnsw_tq8`, `bm25`, `bloom`, `bitmap`, `composite_bitmap`, `csr_graph`,
+  `json_path`), `drop_index`, `build_index`, `rebuild_index`, `set_primary_key`,
+  the new **`drop_primary_key`**, `show_indexes` (real JSON from the manifest),
+  and `compact`. Previously each native entry point only logged and returned a
+  sentinel, so index/PK management silently did nothing.
+- **`IndexAlgorithm::from_name`** — parses a user-supplied algorithm name or
+  physical category (`vector`, `lexical`, `scalar`, `graph_v2`, `bloom`) into an
+  `IndexAlgorithm`; the single string→algorithm mapping shared by the connectors.
+- **`Table::list_index_files` / `Table::rebuild_index`** — engine helpers backing
+  the connector `show_indexes` and `rebuild_index` procedures.
 - **dbt macro coverage for the whole engine function surface** — new/expanded
   macros in `dbt-benostreamdb`: vector distances (`l2_distance`,
   `cosine_distance`, `inner_product`, `l1_distance`, `hamming_distance`,
@@ -246,6 +288,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `graph_subgraph_table` / `graph_connecting_paths_table` (`macros/graph.sql`)
   emit the `FROM graph_*(...)` table functions, so a graph walk is a dbt model
   source. Verified by a new `test_surface_macros` model.
+- **Table-type metadata (declarative edge/node tables)** — a table can declare
+  its role and endpoints in its properties: `table_type` (`node` | `edge` |
+  `table`), `src_col`, `dst_col`, `relation_col`, `weight_col`, `id_col`,
+  `label_col`. Set with `ALTER TABLE t SET TBLPROPERTIES (...)` or Python
+  `Table.set_property` / `set_properties` (backed by `Manifest.properties`,
+  metadata-only commits). `create_edge_table` / `create_node_table` stamp the
+  convention; the graph functions resolve endpoints **metadata-first** (then the
+  standard name candidates); and `Session.list_graph_tables()` enumerates the
+  node/edge tables — the discovery primitive an MCP agent uses. New
+  `Table.table_type()` / `graph_metadata()` / `edge_endpoints()` (metadata-first)
+  bindings.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary
@@ -309,6 +362,29 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **`CREATE INDEX ... USING <algorithm>` silently ignored most algorithms** —
+  the DDL `USING` clause only recognized `hnsw*`/`bm25` and mapped everything
+  else (including `json_path`, `hnsw_pq`, `bloom`, `csr_graph`,
+  `composite_bitmap`) to a scalar Bitmap. It now routes through the shared
+  `IndexAlgorithm::from_name`, so every engine algorithm is reachable from DDL.
+- **Spark connector did not compile on Spark 4.0/4.1** — the shared
+  `spark-4` catalog marked `listProcedures` as `override`, but that member only
+  exists in Spark 4.2 (it is absent in 4.0/4.1 and abstract from 4.2). Dropping
+  the `override` modifier (legal when implementing an abstract member and a
+  plain new method on 4.0/4.1) makes one source root build against every 4.x
+  minor. Verified with the offline `mvn test` matrix on 3.5/4.0/4.2.
+- **Spark connector did not compile on Spark 3.5 (Scala 2.12)** —
+  `BenoStreamCatalogFunctions` used `view.mapValues`, which does not exist on
+  Scala 2.12's `IterableView`; replaced with a plain `map`.
+- **Dead Spark JNI stubs removed** — `queryIndexIn` (always returned `{}`) and
+  `commitPositionDeletes` (a no-op) had no callers: the connector prunes with the
+  SQL that `openQuery` plans and commits deletes as predicate removals. Both the
+  native functions and their `@native` declarations are gone, and the Spark docs
+  now describe the real pushdown path.
+- **Compiler/clippy warnings cleared** — an unreachable `java.math.BigDecimal`
+  arm in the Spark filter literal builder (already covered by `java.lang.Number`),
+  plus `clippy::useless_vec`, `clippy::manual_is_multiple_of`, and
+  `clippy::large_enum_variant` in `bench_throttling` / `iceberg_rest`.
 - **Graph table functions assumed the default catalog** — `resolve_table` looked
   up an unqualified / 2-part name only in the session's default catalog, so a
   table registered under a different catalog (e.g. the dbt adapter's `database`)

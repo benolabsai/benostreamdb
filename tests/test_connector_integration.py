@@ -98,7 +98,7 @@ def test_connector_apis(table_uri):
 
 if __name__ == "__main__":
     # If run directly
-    t_uri = "/tmp/hs_manual_test"
+    t_uri = f"{tempfile.gettempdir()}/hs_manual_test"
     if os.path.exists(t_uri):
         shutil.rmtree(t_uri)
     test_connector_apis("file://" + t_uri)

@@ -215,8 +215,8 @@ object BenoStreamSql {
     case null => Some("NULL")
     case s: String => Some("'" + s.replace("'", "''") + "'")
     case b: java.lang.Boolean => Some(if (b.booleanValue()) "TRUE" else "FALSE")
+    // `java.lang.Number` already covers Integer/Long/Double/Float/BigDecimal.
     case n: java.lang.Number => Some(n.toString)
-    case d: java.math.BigDecimal => Some(d.toString)
     case _ => None
   }
 

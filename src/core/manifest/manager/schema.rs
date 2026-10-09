@@ -98,6 +98,72 @@ impl ManifestManager {
         ))
     }
 
+    /// Commit a table-properties update (metadata-only; no data change).
+    ///
+    /// MVCC: same optimistic-concurrency contract as `update_schema` — the
+    /// `PutMode::Create` write of `v{N+1}.json` is the linearization point, and
+    /// the retry loop rebases onto the latest snapshot on conflict.
+    pub async fn update_properties(
+        &self,
+        properties: HashMap<String, String>,
+    ) -> Result<Manifest> {
+        let max_retries = 10;
+        let mut attempt = 0;
+
+        loop {
+            let (current_manifest, current_ver) = self.load_latest().await?;
+            let new_ver = current_ver + 1;
+
+            let mut new_manifest = current_manifest.clone();
+            new_manifest.version = new_ver;
+            new_manifest.prev_version = Some(current_ver);
+            new_manifest.timestamp_ms = chrono::Utc::now().timestamp_millis();
+            new_manifest.properties = properties.clone();
+
+            let filename = format!("v{}.json", new_ver);
+            let path = self.manifest_dir.child(filename);
+            let bytes = serde_json::to_vec_pretty(&new_manifest)?;
+
+            use object_store::{PutMode, PutOptions};
+            let opts = PutOptions {
+                mode: PutMode::Create,
+                ..Default::default()
+            };
+
+            match self.store.put_opts(&path, bytes.into(), opts).await {
+                Ok(_) => {
+                    tracing::info!("Committed Manifest v{} (Properties Update)", new_ver);
+                    let dir_key = format!("{}/{}", self.root_uri, self.manifest_dir);
+                    crate::core::cache::LATEST_VERSION_CACHE
+                        .invalidate(&dir_key)
+                        .await;
+                    let file_key = format!("{}/{}", self.root_uri, path);
+                    crate::core::cache::MANIFEST_CACHE
+                        .insert(file_key, Arc::new(new_manifest.clone()))
+                        .await;
+                    return Ok(new_manifest);
+                }
+                Err(e) if is_already_exists(&e) => {
+                    if attempt >= max_retries {
+                        break;
+                    }
+                    attempt += 1;
+                    let base_delay = 10 * (2u64.pow(attempt.min(5) as u32));
+                    let jitter = rand::random::<u64>() % base_delay;
+                    tokio::time::sleep(std::time::Duration::from_millis(base_delay + jitter)).await;
+                    continue;
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "Failed to commit properties update after {} attempts",
+            max_retries
+        ))
+    }
+
     /// Update the primary key (identifier fields) for the table.
     /// This creates a new schema version with the updated field IDs.
     #[tracing::instrument(skip(self, new_ids))]

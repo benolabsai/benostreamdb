@@ -4,6 +4,7 @@ use jni::objects::{JClass, JObject, JString};
 use jni::sys::{jboolean, jint, jlong, jstring};
 use jni::JNIEnv;
 // use std::sync::Arc;
+use crate::core::manifest::IndexAlgorithm;
 use crate::core::reader::HybridReader;
 use crate::core::storage::create_object_store;
 use crate::core::table::Table;
@@ -444,71 +445,25 @@ pub extern "system" fn Java_com_benostreamdb_spark_BenoStreamPartitionReader_rea
 }
 
 // -----------------------------------------------------------------------------
-// Row-Level Operations JNI Bridge (MERGE / UPDATE / DELETE)
+// Index Lifecycle & Primary-Key JNI Bridge (Spark stored procedures).
+//
+// These back `CALL benostream.system.{add_index,drop_index,build_index,
+// rebuild_index,set_primary_key,drop_primary_key,show_indexes,compact}` and
+// route straight into the engine (no Iceberg Java). `queryIndexIn` /
+// `commitPositionDeletes` were removed: the connector prunes with the SQL that
+// `openQuery` already plans, and deletes commit as predicate removals, so those
+// entry points had no callers and only returned sentinel stubs.
 // -----------------------------------------------------------------------------
 
-#[no_mangle]
-pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_queryIndexIn(
-    mut env: JNIEnv,
-    _class: JClass,
-    table_uri: JString,
-    column: JString,
-    values_json: JString,
-) -> jstring {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let col: String = env
-        .get_string(&column)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let vals: String = env
-        .get_string(&values_json)
-        .map(|s| s.into())
-        .unwrap_or_default();
-
-    tracing::info!(
-        "FFI(Spark): queryIndexIn for table {}, column {}, keys: {}",
-        uri,
-        col,
-        vals.len()
-    );
-
-    // Placeholder: In the next phase, this will use the Rust Core planner to
-    // read the RoaringBitmaps and return a JSON mapping of File -> Array of Row IDs.
-    let result_json = "{}";
-
-    match env.new_string(result_json) {
-        Ok(s) => s.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+/// Split a comma-separated column list, trimming blanks.
+fn split_columns(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty())
+        .collect()
 }
 
-#[no_mangle]
-pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_commitPositionDeletes(
-    mut env: JNIEnv,
-    _class: JClass,
-    table_uri: JString,
-    deletes_json: JString,
-) -> jboolean {
-    let uri: String = env
-        .get_string(&table_uri)
-        .map(|s| s.into())
-        .unwrap_or_default();
-    let _deletes: String = env
-        .get_string(&deletes_json)
-        .map(|s| s.into())
-        .unwrap_or_default();
-
-    tracing::info!("FFI(Spark): commitPositionDeletes for table {}", uri);
-
-    // Placeholder: This will take the list of Iceberg Position Delete files generated
-    // by Spark and commit them to the BenoStreamDB/Iceberg manifest.
-
-    1 // true
-}
-
+/// Spark: add an index on `column` using the named algorithm/category.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIndex(
     mut env: JNIEnv,
@@ -529,17 +484,36 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_addIn
         .get_string(&index_category)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!(
-        "FFI(Spark): addIndex for table {}, column {}, type: {}",
-        uri,
-        col,
-        idx_type
-    );
-
-    1 // true
+    if uri.is_empty() || col.is_empty() {
+        tracing::error!("FFI(Spark): addIndex requires a table and column");
+        return 0;
+    }
+    let algorithm = IndexAlgorithm::from_name(&idx_type).unwrap_or_default();
+    let col_log = col.clone();
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.add_index(col, algorithm).await
+    });
+    match res {
+        Ok(()) => {
+            tracing::info!(
+                "FFI(Spark): addIndex committed for '{}' ({})",
+                col_log,
+                idx_type
+            );
+            1
+        }
+        Err(e) => {
+            tracing::error!("FFI(Spark): addIndex failed: {}", e);
+            0
+        }
+    }
 }
 
+/// Spark: build/rebuild index files.
+///
+/// `segment_id` is the column to rebuild; `"all"`, `"null"`, or empty means
+/// "fill in every missing index file" (the offline batch build).
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_buildIndex(
     mut env: JNIEnv,
@@ -551,20 +525,36 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_build
         .get_string(&table_uri)
         .map(|s| s.into())
         .unwrap_or_default();
-    let seg_id: String = env
+    let seg: String = env
         .get_string(&segment_id)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!(
-        "FFI(Spark): buildIndex for table {}, segment_id {}",
-        uri,
-        seg_id
-    );
-
-    1 // true
+    if uri.is_empty() {
+        tracing::error!("FFI(Spark): buildIndex requires a table");
+        return 0;
+    }
+    let target = seg.trim().to_string();
+    let all = target.is_empty()
+        || target.eq_ignore_ascii_case("all")
+        || target.eq_ignore_ascii_case("null");
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        if all {
+            table.recover_indexes_async().await.map(|_| ())
+        } else {
+            table.rebuild_index(target).await
+        }
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Spark): buildIndex failed: {}", e);
+            0
+        }
+    }
 }
 
+/// Spark: set the table primary key to the comma-separated `columns`.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setPrimaryKey(
     mut env: JNIEnv,
@@ -580,16 +570,65 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setPr
         .get_string(&columns)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!(
-        "FFI(Spark): setPrimaryKey for table {}, columns {}",
-        uri,
-        cols
-    );
-
-    1 // true
+    let columns = split_columns(&cols);
+    if uri.is_empty() || columns.is_empty() {
+        tracing::error!("FFI(Spark): setPrimaryKey requires a table and at least one column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.set_primary_key_async(columns).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Spark): setPrimaryKey failed: {}", e);
+            0
+        }
+    }
 }
 
+/// Spark: drop the comma-separated `columns` from the table primary key.
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropPrimaryKey(
+    mut env: JNIEnv,
+    _class: JClass,
+    table_uri: JString,
+    columns: JString,
+) -> jboolean {
+    let uri: String = env
+        .get_string(&table_uri)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let cols: String = env
+        .get_string(&columns)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let columns = split_columns(&cols);
+    if uri.is_empty() || columns.is_empty() {
+        tracing::error!("FFI(Spark): dropPrimaryKey requires a table and at least one column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        for c in columns {
+            table.drop_primary_key(c).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Spark): dropPrimaryKey failed: {}", e);
+            0
+        }
+    }
+}
+
+/// Spark: drop the index on `column`.
+///
+/// `index_category` is advisory only — the engine keys indexes by column, so a
+/// single column can only have one index to drop.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropIndex(
     mut env: JNIEnv,
@@ -606,21 +645,28 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_dropI
         .get_string(&column)
         .map(|s| s.into())
         .unwrap_or_default();
-    let idx_type: String = env
+    let _idx_type: String = env
         .get_string(&index_category)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!(
-        "FFI(Spark): dropIndex for table {}, column {}, type: {}",
-        uri,
-        col,
-        idx_type
-    );
-
-    1 // true
+    if uri.is_empty() || col.is_empty() {
+        tracing::error!("FFI(Spark): dropIndex requires a table and column");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.drop_index(col).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Spark): dropIndex failed: {}", e);
+            0
+        }
+    }
 }
 
+/// Spark: compact the table's data files.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_compactTable(
     mut env: JNIEnv,
@@ -631,12 +677,24 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_compa
         .get_string(&table_uri)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!("FFI(Spark): compactTable for table {}", uri);
-
-    1 // true
+    if uri.is_empty() {
+        tracing::error!("FFI(Spark): compactTable requires a table");
+        return 0;
+    }
+    let res = RUNTIME.block_on(async {
+        let table = Table::new_async(uri).await?;
+        table.rewrite_data_files_async(None).await
+    });
+    match res {
+        Ok(()) => 1,
+        Err(e) => {
+            tracing::error!("FFI(Spark): compactTable failed: {}", e);
+            0
+        }
+    }
 }
 
+/// Spark: list the table's indexes as a JSON array of index-file records.
 #[no_mangle]
 pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listIndexes(
     mut env: JNIEnv,
@@ -647,11 +705,21 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_listI
         .get_string(&table_uri)
         .map(|s| s.into())
         .unwrap_or_default();
-
-    tracing::info!("FFI(Spark): listIndexes for table {}", uri);
-
-    let list_json = "[]";
-    match env.new_string(list_json) {
+    let json = if uri.is_empty() {
+        "[]".to_string()
+    } else {
+        match RUNTIME.block_on(async {
+            let table = Table::new_async(uri).await?;
+            table.list_index_files().await
+        }) {
+            Ok(files) => serde_json::to_string(&files).unwrap_or_else(|_| "[]".to_string()),
+            Err(e) => {
+                tracing::error!("FFI(Spark): listIndexes failed: {}", e);
+                "[]".to_string()
+            }
+        }
+    };
+    match env.new_string(json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
@@ -670,38 +738,8 @@ pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setGp
 
     tracing::info!("FFI(Spark): setGpuContext to {}", device);
 
-    // Convert string to ComputeBackend
-    let context = match device.to_lowercase().as_str() {
-        "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
-        "cpu" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Cpu,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "cuda" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Cuda,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "mps" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Mps,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "intel" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Intel,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "rocm" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Rocm,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        _ => {
-            tracing::warn!(
-                "FFI(Spark): Unknown device type '{}', defaulting to auto",
-                device
-            );
-            crate::core::index::gpu::ComputeContext::auto_detect()
-        }
-    };
-
+    // Shared device-string mapping (see `context_from_device_str`).
+    let context = crate::core::index::gpu::context_from_device_str(&device);
     crate::core::index::gpu::set_thread_gpu_context(Some(context));
 
     1 // true
@@ -720,38 +758,8 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_setGpuC
 
     tracing::info!("FFI(Trino): setGpuContext to {}", device);
 
-    // Convert string to ComputeBackend
-    let context = match device.to_lowercase().as_str() {
-        "auto" | "gpu" => crate::core::index::gpu::ComputeContext::auto_detect(),
-        "cpu" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Cpu,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "cuda" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Cuda,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "mps" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Mps,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "intel" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Intel,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        "rocm" => crate::core::index::gpu::ComputeContext::from_backend(
-            crate::core::index::gpu::ComputeBackend::Rocm,
-        )
-        .unwrap_or_else(|_| crate::core::index::gpu::ComputeContext::auto_detect()),
-        _ => {
-            tracing::warn!(
-                "FFI(Trino): Unknown device type '{}', defaulting to auto",
-                device
-            );
-            crate::core::index::gpu::ComputeContext::auto_detect()
-        }
-    };
-
+    // Shared device-string mapping (see `context_from_device_str`).
+    let context = crate::core::index::gpu::context_from_device_str(&device);
     crate::core::index::gpu::set_thread_gpu_context(Some(context));
 
     1 // true

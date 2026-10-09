@@ -34,3 +34,30 @@
 {% macro benostreamdb__drop_index(relation, name) -%}
   alter table {{ relation }} drop index {{ name }}
 {%- endmacro %}
+
+
+{% macro add_primary_key(relation, columns) -%}
+  {{ return(adapter.dispatch('add_primary_key', 'dbt')(relation, columns)) }}
+{%- endmacro %}
+
+{% macro default__add_primary_key(relation, columns) -%}
+  {{ exceptions.raise_compiler_error("add_primary_key is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__add_primary_key(relation, columns) -%}
+  {%- set cols = columns if columns is string else columns | join(', ') -%}
+  alter table {{ relation }} add primary key ({{ cols }})
+{%- endmacro %}
+
+
+{% macro drop_primary_key(relation) -%}
+  {{ return(adapter.dispatch('drop_primary_key', 'dbt')(relation)) }}
+{%- endmacro %}
+
+{% macro default__drop_primary_key(relation) -%}
+  {{ exceptions.raise_compiler_error("drop_primary_key is not supported on this adapter") }}
+{%- endmacro %}
+
+{% macro benostreamdb__drop_primary_key(relation) -%}
+  alter table {{ relation }} drop primary key
+{%- endmacro %}
