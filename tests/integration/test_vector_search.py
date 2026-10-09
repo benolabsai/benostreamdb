@@ -1,3 +1,4 @@
+import tempfile
 import sys
 import os
 import time
@@ -53,7 +54,7 @@ def test_vector_search_flow():
     # 2. Ingest
     table_uri = "file:///tmp/benostream_test/embeddings"
     # Ensure clean state
-    # shutil.rmtree("/tmp/benostream_test/embeddings", ignore_errors=True) 
+    # shutil.rmtree(f"{tempfile.gettempdir()}/benostream_test/embeddings", ignore_errors=True) 
     
     try:
         table = bsdb.Table(table_uri)

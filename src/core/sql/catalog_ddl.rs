@@ -23,7 +23,7 @@ use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
 use futures::StreamExt;
 use datafusion::sql::sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, CreateIndex, CreateTable,
-    IndexType, ObjectType, SchemaName, Statement, TableConstraint,
+    Expr, IndexType, ObjectType, SchemaName, SqlOption, Statement, TableConstraint, Value,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::TableReference;
@@ -818,18 +818,19 @@ async fn add_index_columns(table: &Table, cols: Vec<String>, alg: IndexAlgorithm
     }
 }
 
+/// Map a `CREATE INDEX ... USING <name>` clause to an [`IndexAlgorithm`].
+///
+/// Uses the shared [`IndexAlgorithm::from_name`] mapping, so every algorithm
+/// the engine understands is reachable from DDL (`hnsw`, `hnsw_pq`,
+/// `hnsw_tq4`, `hnsw_tq8`, `bm25`, `bloom`, `bitmap`, `composite_bitmap`,
+/// `csr_graph`, `json_path`) — previously only `hnsw*`/`bm25` were recognized
+/// and everything else silently became a Bitmap. An absent or unknown `USING`
+/// defaults to Bitmap (the scalar default).
 fn index_algorithm_from_using(using: Option<&IndexType>) -> IndexAlgorithm {
     match using {
-        Some(IndexType::Custom(ident)) => match ident.value.to_ascii_lowercase().as_str() {
-            "hnsw" | "hnsw_tq8" => IndexAlgorithm::hnsw_tq8(),
-            "hnsw_tq4" => IndexAlgorithm::hnsw_tq4(),
-            "bm25" => IndexAlgorithm::Bm25 {
-                tokenizer: "default".to_string(),
-                k1: 1.2,
-                b: 0.75,
-            },
-            _ => IndexAlgorithm::Bitmap,
-        },
+        Some(IndexType::Custom(ident)) => {
+            IndexAlgorithm::from_name(&ident.value).unwrap_or(IndexAlgorithm::Bitmap)
+        }
         _ => IndexAlgorithm::Bitmap,
     }
 }
@@ -890,6 +891,19 @@ async fn alter_table(
                 }
                 other => bail!("unsupported ALTER COLUMN operation: {:?}", other),
             },
+            AlterTableOperation::SetTblProperties { table_properties } => {
+                let mut props = std::collections::HashMap::new();
+                for opt in table_properties {
+                    if let Some((k, v)) = sql_option_to_pair(opt) {
+                        props.insert(k, v);
+                    }
+                }
+                table.set_properties_async(props).await?;
+                // Declaring `table_type = 'edge'` (with `src_col`/`dst_col`)
+                // materialises the forward/reverse CSR overlays the graph fast
+                // paths need. Idempotent and a no-op for non-edge tables.
+                table.ensure_edge_indexes_async().await?;
+            }
             other => bail!("unsupported ALTER TABLE operation: {:?}", other),
         }
     }
@@ -899,6 +913,27 @@ async fn alter_table(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Convert a `SET TBLPROPERTIES` option into a `(key, value)` pair.
+fn sql_option_to_pair(opt: &SqlOption) -> Option<(String, String)> {
+    match opt {
+        SqlOption::KeyValue { key, value } => {
+            let v = match value {
+                Expr::Value(val) => match &val.value {
+                    Value::SingleQuotedString(s)
+                    | Value::DoubleQuotedString(s) => s.clone(),
+                    Value::Number(n, _) => n.clone(),
+                    Value::Boolean(b) => b.to_string(),
+                    _ => val.to_string(),
+                },
+                other => other.to_string(),
+            };
+            Some((key.value.clone(), v))
+        }
+        SqlOption::Ident(ident) => Some((ident.value.clone(), String::new())),
+        _ => None,
+    }
+}
 
 fn parse_single(sql: &str) -> Option<Statement> {
     let dialect = GenericDialect {};
@@ -1120,5 +1155,20 @@ mod ctas_tests {
     #[test]
     fn returns_none_without_query() {
         assert_eq!(extract_ctas_query("create table t (a int)"), None);
+    }
+
+    #[test]
+    fn using_clause_maps_every_algorithm() {
+        use datafusion::sql::sqlparser::ast::{Ident, IndexType};
+        let alg = |name: &str| {
+            index_algorithm_from_using(Some(&IndexType::Custom(Ident::new(name))))
+        };
+        // Every engine algorithm must be reachable from `USING <name>`.
+        for name in IndexAlgorithm::all_names() {
+            assert_eq!(alg(&name).name(), name, "USING {name} did not map");
+        }
+        // Unknown / absent -> the scalar default (Bitmap).
+        assert_eq!(alg("nonsense").name(), "bitmap");
+        assert_eq!(index_algorithm_from_using(None).name(), "bitmap");
     }
 }

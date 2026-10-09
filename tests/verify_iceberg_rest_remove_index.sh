@@ -51,7 +51,7 @@ cat <<EOF > /tmp/default/test_index_table/metadata/dummy_manifest.json
       "status": 1,
       "snapshot_id": 1,
       "data_file": {
-        "file_path": "/tmp/data/file1.parquet",
+        "file_path": "${TMPDIR:-/tmp}/data/file1.parquet",
         "file_format": "PARQUET",
         "partition": {},
         "record_count": 100,
@@ -88,9 +88,9 @@ ADD_INDEX_PAYLOAD='{
   "updates": [
     {
       "action": "add-sidecar-index",
-      "file-path": "/tmp/nonexistent.parquet",
+      "file-path": "${TMPDIR:-/tmp}/nonexistent.parquet",
       "index-file": {
-        "file_path": "/tmp/indexes/vec.idx",
+        "file_path": "${TMPDIR:-/tmp}/indexes/vec.idx",
         "index_type": "vector",
         "column_name": "val"
       }

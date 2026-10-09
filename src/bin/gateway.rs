@@ -245,7 +245,7 @@ async fn ingest_handler(Json(_payload): Json<IngestRequest>) -> impl IntoRespons
 
     // 2. Configure Writer
     // In a real app, base_path would be S3 bucket or config
-    let config = SegmentConfig::new("/tmp", "segment_001");
+    let config = SegmentConfig::new(&std::env::temp_dir().to_string_lossy(), "segment_001");
     let writer = HybridSegmentWriter::new(config);
 
     // 3. Write Data & Index

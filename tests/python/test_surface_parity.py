@@ -23,18 +23,31 @@ import benostreamdb
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MACROS_DIR = ROOT / "dbt-benostreamdb" / "dbt" / "include" / "benostreamdb" / "macros"
-SPARK_CATALOG = (
+SPARK_DOC = ROOT / "docs" / "integrations" / "spark.md"
+# Spark 4.x exposes stored procedures via the native DSv2 ProcedureCatalog;
+# Spark 3.5 uses the Iceberg shim instead. Both live in per-minor source roots.
+SPARK_PROCEDURE_CATALOG = (
     ROOT
     / "spark-benostreamdb"
     / "src"
     / "main"
+    / "spark-4"
+    / "com"
+    / "benostreamdb"
+    / "spark"
+    / "BenoStreamCatalog.scala"
+)
+SPARK_PROCEDURE_TEST = (
+    ROOT
+    / "spark-benostreamdb"
+    / "src"
+    / "test"
     / "scala"
     / "com"
     / "benostreamdb"
     / "spark"
-    / "BenoStreamTableCatalog.scala"
+    / "SparkProcedureCatalogTest.scala"
 )
-SPARK_DOC = ROOT / "docs" / "integrations" / "spark.md"
 TRINO_PAGE_SOURCE = (
     ROOT
     / "trino-benostreamdb"
@@ -218,14 +231,105 @@ def test_table_actions_reachable_via_execute(tmp_path):
     session.sql("ALTER TABLE t EXECUTE checkpoint")
 
 
-def test_spark_procedure_gap_is_documented():
-    """Spark's DSv2 catalog does not implement `ProcedureCatalog`, so
-    `CALL benostream.system.*` is not available there. The gap must be explicit
-    (documented) rather than silently assumed to work."""
-    catalog = SPARK_CATALOG.read_text()
-    implements_procedures = "ProcedureCatalog" in catalog
-    doc = SPARK_DOC.read_text()
-    if not implements_procedures:
-        assert "ProcedureCatalog" in doc or "not" in doc.lower(), (
-            "Spark does not implement ProcedureCatalog and the gap is undocumented"
-        )
+# Spark 4.x stored procedures (BenoStreamProcedureCatalog.loadProcedure).
+SPARK_PROCEDURES = {
+    "add_index",
+    "drop_index",
+    "build_index",
+    "rebuild_index",
+    "compact",
+    "show_indexes",
+    "set_primary_key",
+    "drop_primary_key",
+    "regional_drift_search",
+}
+
+
+def test_spark_exposes_procedures():
+    """Spark 4.x implements the native DSv2 `ProcedureCatalog`, exposing
+    `CALL benostream.system.*`. The Spark 3.5 build uses the Iceberg shim."""
+    catalog = SPARK_PROCEDURE_CATALOG.read_text()
+    assert "extends BenoStreamCatalog with ProcedureCatalog" in catalog, (
+        "spark-4 catalog no longer implements the native ProcedureCatalog"
+    )
+    # Parse the `case "<name>" =>` arms of loadProcedure.
+    found = set(re.findall(r'case\s+"([a-z_]+)"', catalog))
+    assert SPARK_PROCEDURES <= found, (
+        f"Spark catalog is missing procedures: {sorted(SPARK_PROCEDURES - found)}"
+    )
+    # The Spark 3.5 variant must resolve the Iceberg shim (no native API pre-4.0).
+    spark3 = (
+        ROOT
+        / "spark-benostreamdb"
+        / "src"
+        / "main"
+        / "spark-3"
+        / "com"
+        / "benostreamdb"
+        / "spark"
+        / "BenoStreamCatalog.scala"
+    ).read_text()
+    assert "iceberg.catalog" in spark3, "spark-3 catalog must use the Iceberg shim"
+
+
+def test_spark_procedures_are_tested():
+    """The procedure surface must have a test, and it must cover every
+    documented procedure so the catalog cannot regress silently."""
+    assert SPARK_PROCEDURE_TEST.exists(), (
+        "no Spark procedure catalog test; CALL benostream.system.* is untested"
+    )
+    test_src = SPARK_PROCEDURE_TEST.read_text()
+    for name in sorted(SPARK_PROCEDURES):
+        assert name in test_src, f"Spark procedure test does not cover '{name}'"
+
+
+def test_spark_shared_procedure_name_matches_engine_action():
+    """`compact` is the one procedure name shared with the engine's
+    `ALTER TABLE ... EXECUTE <action>` surface; the names must agree."""
+    assert "compact" in SPARK_PROCEDURES
+    assert "compact" in TABLE_ACTIONS
+
+
+# ---------------------------------------------------------------------------
+# Reactive subscriptions (Theme 4) — must be reachable from every surface
+# ---------------------------------------------------------------------------
+
+
+def test_subscribe_reachable_from_all_surfaces():
+    """`Table::subscribe()` is exposed as a SQL table function (universal), a
+    native Python object, a Flight streaming ticket, and an MCP tool."""
+    # Engine session registers the table function (so every SQL surface has it).
+    assert "register_subscribe_table_functions" in (
+        ROOT / "src" / "core" / "sql" / "session.rs"
+    ).read_text()
+    # Native Python binding.
+    assert "PySubscription" in (ROOT / "src" / "python" / "subscribe.rs").read_text()
+    # MCP tool.
+    assert "subscribe_events" in (
+        ROOT / "contrib" / "benostreamdb-mcp" / "src" / "server.rs"
+    ).read_text()
+    # Flight SQL streaming ticket.
+    assert "benostreamdb.Subscribe" in (
+        ROOT / "server" / "flight_sql" / "src" / "server.rs"
+    ).read_text()
+
+
+def test_gpu_context_wired_in_all_surfaces():
+    """GPU device selection must be reachable from every connector, through the
+    one shared core mapping (`context_from_device_str`)."""
+    assert "context_from_device_str" in (
+        ROOT / "src" / "core" / "index" / "gpu.rs"
+    ).read_text()
+    # Flight + MCP servers pin the device from the environment at startup.
+    assert "apply_gpu_context_from_env" in (
+        ROOT / "server" / "flight_sql" / "src" / "main.rs"
+    ).read_text()
+    assert "apply_gpu_context_from_env" in (
+        ROOT / "contrib" / "benostreamdb-mcp" / "src" / "server.rs"
+    ).read_text()
+    # dbt adapter applies the profile `gpu_device`.
+    assert "set_gpu_device" in (
+        ROOT / "dbt-benostreamdb" / "dbt" / "adapters" / "benostreamdb" / "connections.py"
+    ).read_text()
+    # Spark + Trino JNI bridges use the shared mapping.
+    assert "context_from_device_str" in (ROOT / "src" / "core" / "ffi.rs").read_text()

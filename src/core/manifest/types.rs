@@ -564,6 +564,43 @@ impl IndexAlgorithm {
         }
     }
 
+    /// Parse a user-supplied index name or physical category into an
+    /// [`IndexAlgorithm`].
+    ///
+    /// Accepts both the canonical names from [`Self::all_names`] and the
+    /// physical categories the manifest uses (`"vector"`, `"lexical"`,
+    /// `"scalar"`, `"bloom"`, `"graph_v2"`), so the SQL/connector surfaces can
+    /// pass whichever spelling their users know. Returns `None` for anything
+    /// unrecognized, letting each caller fall back to its own default (the
+    /// connectors use [`Self::default`] = `hnsw_tq8`).
+    pub fn from_name(name: &str) -> Option<IndexAlgorithm> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "hnsw" | "hnsw_f32" => Some(IndexAlgorithm::hnsw()),
+            // "vector" is the physical category written for the default
+            // (TurboQuant-8) vector index.
+            "vector" => Some(IndexAlgorithm::hnsw_tq8()),
+            "hnsw_pq" | "pq" => Some(IndexAlgorithm::hnsw_pq()),
+            "hnsw_tq4" | "tq4" => Some(IndexAlgorithm::hnsw_tq4()),
+            "hnsw_tq8" | "tq8" => Some(IndexAlgorithm::hnsw_tq8()),
+            "bm25" | "lexical" | "inverted" => Some(IndexAlgorithm::Bm25 {
+                k1: 1.2,
+                b: 0.75,
+                tokenizer: "default".to_string(),
+            }),
+            "bloom" => Some(IndexAlgorithm::Bloom { fpr: 0.05 }),
+            "bitmap" | "scalar" => Some(IndexAlgorithm::Bitmap),
+            "composite_bitmap" | "composite" => Some(IndexAlgorithm::CompositeBitmap {
+                columns: Vec::new(),
+            }),
+            "csr_graph" | "graph" | "graph_v2" => Some(IndexAlgorithm::CsrGraph {
+                src_column: "source".to_string(),
+                dst_column: "target".to_string(),
+            }),
+            "json_path" => Some(IndexAlgorithm::JsonPath { paths: Vec::new() }),
+            _ => None,
+        }
+    }
+
     /// Every index algorithm name the engine understands. Single source of
     /// truth for the connector surface-parity test — adding a variant here
     /// without exposing it in the Python/dbt/connector surfaces fails the test.
@@ -1206,5 +1243,53 @@ impl ManifestValue {
             ManifestValue::Boolean(b) => serde_json::json!(b),
             ManifestValue::Null => serde_json::Value::Null,
         }
+    }
+}
+
+#[cfg(test)]
+mod index_algorithm_name_tests {
+    use super::IndexAlgorithm;
+
+    #[test]
+    fn from_name_accepts_canonical_names_and_categories() {
+        // Canonical names round-trip.
+        for name in IndexAlgorithm::all_names() {
+            let alg = IndexAlgorithm::from_name(&name)
+                .unwrap_or_else(|| panic!("canonical name '{name}' did not parse"));
+            assert_eq!(alg.name(), name, "name '{name}' did not round-trip");
+        }
+        // Physical categories the manifest uses map to the right family.
+        assert_eq!(
+            IndexAlgorithm::from_name("vector").map(|a| a.name()),
+            Some("hnsw_tq8")
+        );
+        assert_eq!(
+            IndexAlgorithm::from_name("lexical").map(|a| a.name()),
+            Some("bm25")
+        );
+        assert_eq!(
+            IndexAlgorithm::from_name("scalar").map(|a| a.name()),
+            Some("bitmap")
+        );
+        assert_eq!(
+            IndexAlgorithm::from_name("graph_v2").map(|a| a.name()),
+            Some("csr_graph")
+        );
+    }
+
+    #[test]
+    fn from_name_is_case_insensitive_and_trims() {
+        assert_eq!(
+            IndexAlgorithm::from_name("  HNSW_PQ ").map(|a| a.name()),
+            Some("hnsw_pq")
+        );
+    }
+
+    #[test]
+    fn from_name_returns_none_for_unknown() {
+        // Unknown input must be `None` so callers apply their own default
+        // rather than silently mis-indexing.
+        assert!(IndexAlgorithm::from_name("not_an_index").is_none());
+        assert!(IndexAlgorithm::from_name("").is_none());
     }
 }

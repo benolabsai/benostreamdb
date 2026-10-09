@@ -1,0 +1,399 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  Copyright (C) 2017 Christopher R. Field.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+
+<!--
+  The "cargo wix" subcommand provides a variety of predefined variables available
+  for customization of this template. The values for each variable are set at
+  installer creation time. The following variables are available:
+
+  TargetTriple      = The rustc target triple name.
+  TargetEnv         = The rustc target environment. This is typically either
+                      "msvc" or "gnu" depending on the toolchain downloaded and
+                      installed.
+  TargetVendor      = The rustc target vendor. This is typically "pc", but Rust
+                      does support other vendors, like "uwp".
+  CargoTargetBinDir = The complete path to the directory containing the
+                      binaries (exes) to include. The default would be
+                      "target\release\". If an explicit rustc target triple is
+                      used, i.e. cross-compiling, then the default path would
+                      be "target\<CARGO_TARGET>\<CARGO_PROFILE>",
+                      where "<CARGO_TARGET>" is replaced with the "CargoTarget"
+                      variable value and "<CARGO_PROFILE>" is replaced with the
+                      value from the "CargoProfile" variable. This can also
+                      be overridden manually with the "target-bin-dir" flag.
+  CargoTargetDir    = The path to the directory for the build artifacts, i.e.
+                      "target".
+  CargoProfile      = The cargo profile used to build the binaries
+                      (usually "debug" or "release").
+  Version           = The version for the installer. The default is the
+                      "Major.Minor.Fix" semantic versioning number of the Rust
+                      package.
+-->
+
+<!--
+  Please do not remove these pre-processor If-Else blocks. These are used with
+  the `cargo wix` subcommand to automatically determine the installation
+  destination for 32-bit versus 64-bit installers. Removal of these lines will
+  cause installation errors.
+-->
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+
+    <Product
+        Id='*'
+        Name='benostreamdb'
+        UpgradeCode='17C8C3B0-E533-4494-A5CF-5BBD03DCDE04'
+        Manufacturer='Richard Albright and BenoStreamDB Contributors'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='BenoStreamDB - Serverless Index-Streaming Database with Overlay Indexing and Vector Search'
+            Manufacturer='Richard Albright and BenoStreamDB Contributors'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='benostreamdb Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='benostreamdb'>
+                    
+                    <!--
+                      Enabling the license sidecar file in the installer is a four step process:
+
+                      1. Uncomment the `Component` tag and its contents.
+                      2. Change the value for the `Source` attribute in the `File` tag to a path
+                         to the file that should be included as the license sidecar file. The path
+                         can, and probably should be, relative to this file.
+                      3. Change the value for the `Name` attribute in the `File` tag to the
+                         desired name for the file when it is installed alongside the `bin` folder
+                         in the installation directory. This can be omitted if the desired name is
+                         the same as the file name.
+                      4. Uncomment the `ComponentRef` tag with the Id attribute value of "License"
+                         further down in this file.
+                    -->
+                    <!--
+                    <Component Id='License' Guid='*'>
+                        <File Id='LicenseFile' Name='ChangeMe' DiskId='1' Source='C:\Path\To\File' KeyPath='yes'/>
+                    </Component>
+                    -->
+
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='Path' Guid='0D5AADA9-446B-4653-9B0D-BCB1BAE3284F' KeyPath='yes'>
+                            <Environment
+                                Id='PATH'
+                                Name='PATH'
+                                Value='[Bin]'
+                                Permanent='no'
+                                Part='last'
+                                Action='set'
+                                System='yes'/>
+                        </Component>
+                        <Component Id='binary0' Guid='*'>
+                            <File
+                                Id='exe0'
+                                Name='bench_concurrency_correctness.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bench_concurrency_correctness.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary1' Guid='*'>
+                            <File
+                                Id='exe1'
+                                Name='bench_recovery.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bench_recovery.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary2' Guid='*'>
+                            <File
+                                Id='exe2'
+                                Name='bench_throttling.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bench_throttling.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary3' Guid='*'>
+                            <File
+                                Id='exe3'
+                                Name='bsdb.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bsdb.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary4' Guid='*'>
+                            <File
+                                Id='exe4'
+                                Name='bsdb-admin.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bsdb-admin.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary5' Guid='*'>
+                            <File
+                                Id='exe5'
+                                Name='check_table_paths.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\check_table_paths.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary6' Guid='*'>
+                            <File
+                                Id='exe6'
+                                Name='fix_table_paths.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\fix_table_paths.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary7' Guid='*'>
+                            <File
+                                Id='exe7'
+                                Name='gateway.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\gateway.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary8' Guid='*'>
+                            <File
+                                Id='exe8'
+                                Name='generate_iceberg_manifests.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\generate_iceberg_manifests.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary9' Guid='*'>
+                            <File
+                                Id='exe9'
+                                Name='iceberg_rest.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\iceberg_rest.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary10' Guid='*'>
+                            <File
+                                Id='exe10'
+                                Name='ingest_wikipedia.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\ingest_wikipedia.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary11' Guid='*'>
+                            <File
+                                Id='exe11'
+                                Name='reindex_inverted.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\reindex_inverted.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary12' Guid='*'>
+                            <File
+                                Id='exe12'
+                                Name='relocate_table.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\relocate_table.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary13' Guid='*'>
+                            <File
+                                Id='exe13'
+                                Name='setup_test_data.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\setup_test_data.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary14' Guid='*'>
+                            <File
+                                Id='exe14'
+                                Name='verify_bm25.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\verify_bm25.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary15' Guid='*'>
+                            <File
+                                Id='exe15'
+                                Name='verify_iceberg_read_check.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\verify_iceberg_read_check.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary16' Guid='*'>
+                            <File
+                                Id='exe16'
+                                Name='verify_layered_indexing.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\verify_layered_indexing.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary17' Guid='*'>
+                            <File
+                                Id='exe17'
+                                Name='bsdb-search.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\bsdb-search.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary18' Guid='*'>
+                            <File
+                                Id='exe18'
+                                Name='benostreamdb-mcp.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\benostreamdb-mcp.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                        <Component Id='binary19' Guid='*'>
+                            <File
+                                Id='exe19'
+                                Name='benostreamdb-flight.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\benostreamdb-flight.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs all binaries and the license.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            
+            <!--
+              Uncomment the following `ComponentRef` tag to add the license
+              sidecar file to the installer.
+            -->
+            <!--<ComponentRef Id='License'/>-->
+
+            <ComponentRef Id='binary0'/>
+            <ComponentRef Id='binary1'/>
+            <ComponentRef Id='binary2'/>
+            <ComponentRef Id='binary3'/>
+            <ComponentRef Id='binary4'/>
+            <ComponentRef Id='binary5'/>
+            <ComponentRef Id='binary6'/>
+            <ComponentRef Id='binary7'/>
+            <ComponentRef Id='binary8'/>
+            <ComponentRef Id='binary9'/>
+            <ComponentRef Id='binary10'/>
+            <ComponentRef Id='binary11'/>
+            <ComponentRef Id='binary12'/>
+            <ComponentRef Id='binary13'/>
+            <ComponentRef Id='binary14'/>
+            <ComponentRef Id='binary15'/>
+            <ComponentRef Id='binary16'/>
+            <ComponentRef Id='binary17'/>
+            <ComponentRef Id='binary18'/>
+            <ComponentRef Id='binary19'/>
+
+            <Feature
+                Id='Environment'
+                Title='PATH Environment Variable'
+                Description='Add the install location of the [ProductName] executable to the PATH system environment variable. This allows the [ProductName] executable to be called from any location.'
+                Level='1'
+                Absent='allow'>
+                <ComponentRef Id='Path'/>
+            </Feature>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+
+        
+        <!--
+          Uncomment the following `Icon` and `Property` tags to change the product icon.
+
+          The product icon is the graphic that appears in the Add/Remove
+          Programs control panel for the application.
+        -->
+        <!--<Icon Id='ProductICO' SourceFile='wix\Product.ico'/>-->
+        <!--<Property Id='ARPPRODUCTICON' Value='ProductICO' />-->
+
+        <Property Id='ARPHELPLINK' Value='https://github.com/benolabsai/benostreamdb'/>
+        
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            
+            <!--
+              Enabling the EULA dialog in the installer is a three step process:
+
+                1. Comment out or remove the two `Publish` tags that follow the
+                   `WixVariable` tag.
+                2. Uncomment the `<WixVariable Id='WixUILicenseRtf' Value='Path\to\Eula.rft'>` tag further down
+                3. Replace the `Value` attribute of the `WixVariable` tag with
+                   the path to a RTF file that will be used as the EULA and
+                   displayed in the license agreement dialog.
+            -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='CustomizeDlg' Order='99'>1</Publish>
+            <Publish Dialog='CustomizeDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>1</Publish>
+
+        </UI>
+
+        
+        <!--
+          Enabling the EULA dialog in the installer requires uncommenting
+          the following `WixUILicenseRTF` tag and changing the `Value`
+          attribute.
+        -->
+        <!-- <WixVariable Id='WixUILicenseRtf' Value='Relative\Path\to\Eula.rtf'/> -->
+
+        
+        <!--
+          Uncomment the next `WixVariable` tag to customize the installer's
+          Graphical User Interface (GUI) and add a custom banner image across
+          the top of each screen. See the WiX Toolset documentation for details
+          about customization.
+
+          The banner BMP dimensions are 493 x 58 pixels.
+        -->
+        <!--<WixVariable Id='WixUIBannerBmp' Value='wix\Banner.bmp'/>-->
+
+        
+        <!--
+          Uncomment the next `WixVariable` tag to customize the installer's
+          Graphical User Interface (GUI) and add a custom image to the first
+          dialog, or screen. See the WiX Toolset documentation for details about
+          customization.
+
+          The dialog BMP dimensions are 493 x 312 pixels.
+        -->
+        <!--<WixVariable Id='WixUIDialogBmp' Value='wix\Dialog.bmp'/>-->
+
+    </Product>
+
+</Wix>

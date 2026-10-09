@@ -1,3 +1,4 @@
+import tempfile
 """
 Test HNSW-IVF implementation with a simple dataset
 """
@@ -38,8 +39,8 @@ def test_hnsw_ivf_integration():
     # Clean up previous run if exists
     import shutil
     import os
-    if os.path.exists("/tmp/test_hnsw_ivf_default_pytest"):
-        shutil.rmtree("/tmp/test_hnsw_ivf_default_pytest")
+    if os.path.exists(f"{tempfile.gettempdir()}/test_hnsw_ivf_default_pytest"):
+        shutil.rmtree(f"{tempfile.gettempdir()}/test_hnsw_ivf_default_pytest")
 
     table_default = bsdb.Table(table_path)
     table_default.add_index_columns(["embedding"]) 

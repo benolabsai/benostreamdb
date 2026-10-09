@@ -39,10 +39,10 @@ architecture. Say:
 | Priority | Item | Theme |
 | :--- | :--- | :--- |
 | ✅ Done | **JSON-path inverted index** — `IndexAlgorithm::JsonPath` builds a `(path, value) -> row_ids` Puffin overlay; the planner rewrites `json_contains` / `json_exists` / `json_path_exists` / `json_extract_path_text(...) = 'value'` into index lookups, with a full-scan fallback for unindexed paths. Completes the story (SQL + BM25 + vector + graph + JSON-path indexes, all rebuildable overlays on Iceberg). | [Theme 2](#theme-2-semi-structured--json) |
-| 🔴 High | **MCP server** — excellent demo surface for the AI story | [Theme 1](#theme-1-ai-agent-tools--client-ecosystem) |
+| ✅ Done | **MCP server** — `contrib/benostreamdb-mcp` (JSON-RPC over stdio, scratch-only write sandbox, `list_graph_tables` + `subscribe_events` tools, Windows `.msi` via `cargo-wix`). Excellent demo surface for the AI story | [Theme 1](#theme-1-ai-agent-tools--client-ecosystem) |
 | ✅ Done | **SQL graph traversal** (`FROM graph_neighbors(...)`) — DataFusion table functions (`graph_neighbors`, `graph_shortest_path`, `graph_all_shortest_paths`, `graph_subgraph`, `graph_connecting_paths`) expose graph walks directly in `FROM` clauses, following the in-memory / out-of-core `GraphMode` pattern and accepting explicit source/target columns | [Theme 3](#theme-3-graph-overlays) |
 | 🔴 High | **Documentation + benchmark reproducibility** — treat benchmarks as product work | [Benchmarks](#benchmarks-as-product-work) |
-| 🟠 High | **Predicate-filtered `Table::subscribe()`** — only if reactive/streaming is going to be a headline | [Theme 4](#theme-4-reactive-lakehouse-streaming) |
+| ✅ Done | **`Table::subscribe()` + predicate-filtered subscriptions** — in-process change feed, exposed natively in Python, as the `subscribe_events` SQL table function (reachable from every connector), a Flight streaming ticket, and an MCP tool | [Theme 4](#theme-4-reactive-lakehouse-streaming) |
 
 ### Do not block the announcement on
 
@@ -75,7 +75,7 @@ substantial engineering for little initial marketing benefit:
 | ✅ **Production Ready** | **JSON Path Functions & Index** | PostgreSQL `json_*` UDFs (`json_extract_path`, `json_contains`, `json_path_query`, …) over `Utf8` columns, plus a `json_path` `(path, value) -> row_ids` Puffin overlay with planner pushdown. |
 | ✅ **Production Ready** | **Lakehouse Connectors** | Native Apache Spark connector (`spark-benostreamdb`), Trino connector (`trino-benostreamdb`), Official dbt adapter (`dbt-benostreamdb`). Full engine function-surface parity across Python/dbt/Spark/Trino, guarded by `tests/python/test_function_parity.py`. |
 | ✅ **Production Ready** | **Ecosystem Interfaces** | Optional Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`: OpenSearch 7.10 & Qdrant REST). |
-| 🚀 **Launch Candidate** | **AI-Native & Search Extensions** | MCP server, SQL graph traversal, predicate-filtered subscriptions. |
+| ✅ **Production Ready** | **AI-Native & Search Extensions** | MCP server (`contrib/benostreamdb-mcp`), SQL graph traversal (`FROM graph_neighbors(...)`), `Table::subscribe()` change feed + predicate-filtered subscriptions. |
 | 📋 **Deferred** | **Breadth** | Arrow Flight subscriptions, typed global URNs, tokenizer suite, LangChain/LlamaIndex, broker adapters, Iceberg v3 `variant`. |
 | 🏢 **Business Plan** | **Enterprise Control Plane** | Auth/RBAC/RLS, audit, autonomous maintenance, observability, HA/DR, and CMEK. |
 ---
@@ -129,9 +129,10 @@ Themes are ordered by Launch Candidate priority.
 ### Theme 1: AI Agent Tools & Client Ecosystem
 *Native interfaces for AI frameworks and autonomous agent runtimes.* — 🔴 **High**
 
-- [ ] **Official Model Context Protocol (MCP) Server (`contrib/benostreamdb-mcp`)**:
+- [x] **Official Model Context Protocol (MCP) Server (`contrib/benostreamdb-mcp`)** (shipped):
   - Dedicated MCP server exposing BenoStreamDB tables, schemas, SQL queries, and hybrid vector/graph retrieval as native tools for Claude Desktop, Cursor, and Antigravity.
   - The demo that matters: an agent that (1) discovers a table, (2) inspects schema, (3) executes SQL, (4) performs vector retrieval, (5) traverses an edge table, and (6) combines the results.
+  - **Distribution**: Provide a Windows `.msi` installer via `cargo-wix` (in addition to standard platform binaries) to automatically add the standalone MCP server to the system PATH, removing friction for Windows users.
 - [ ] **LangChain & LlamaIndex Partner Integrations** — 🟢 **Deferred**:
   - `langchain-benostreamdb`: LangChain-compatible `VectorStore` and `Retriever` implementations with metadata filtering.
   - `llama-index-vector-stores-benostreamdb`: LlamaIndex vector store index adapter.
@@ -208,18 +209,29 @@ Themes are ordered by Launch Candidate priority.
     Registered in the engine session, the ad-hoc `Table::sql()` context, and the
     Python `execute_sql` path, so they are reachable from Python, dbt, Spark
     (pass-through), Trino, and Flight SQL.
-- [ ] **Declarative Edge Table DDL** — 🟠 **High**:
-  - First-class table metadata options (`table_type = 'edge'`, `src_col`, `dst_col`) that automatically register and maintain forward and reverse CSR indexes on segment commits.
+- [x] **Declarative Edge Table DDL** (shipped) — 🟠 **High**:
+  - First-class table metadata (via `Manifest.properties`): `table_type`
+    (`node` | `edge` | `table`), `src_col`, `dst_col`, `relation_col`,
+    `weight_col`, `id_col`, `label_col`. Set with
+    `ALTER TABLE t SET TBLPROPERTIES (...)` or Python
+    `Table.set_property`/`set_properties`. `create_edge_table` /
+    `create_node_table` stamp the convention; the graph functions resolve
+    endpoints **metadata-first** (then names); and `Session.list_graph_tables()`
+    enumerates the node/edge tables — the discovery primitive an MCP agent uses.
+    Declaring `table_type = 'edge'` (with `src_col`/`dst_col`) now **automatically
+    configures the forward (source) and reverse (target) CSR graph indexes**
+    (`Table::ensure_edge_indexes_async`, idempotent), wired into SQL
+    `SET TBLPROPERTIES` and Python `set_property`/`set_properties`.
 - [ ] **Typed Global Entity URNs (`table:id`)** — 🟢 **Deferred**:
   - Extend the CSR graph dictionary to support composite entity identifiers (e.g. `users:101`, `orders:5002`) so a single CSR graph overlay can seamlessly traverse across heterogeneous Iceberg tables.
 
 ### Theme 4: Reactive Lakehouse Streaming
 *Bringing change data capture (CDC) and reactive streaming to the lakehouse.* — 🟠 **High**
 
-- [ ] **`Table::subscribe()` Core API** — 🟠 **Medium**:
-  - Internal broadcast channel (`tokio::sync::broadcast`) emitting committed `RecordBatch` streams and metadata events on snapshot commits.
-- [ ] **Predicate-Filtered Subscriptions** — 🟠 **High**:
-  - Pushdown filter evaluation against incoming streaming batches before emitting to subscribers. This is what makes Live Queries genuinely useful rather than merely technically interesting.
+- [x] **`Table::subscribe()` Core API** (shipped) — 🟠 **Medium**:
+  - Per-table `tokio::sync::broadcast` channel emitting committed `RecordBatch`es plus a `Commit` marker on every successful flush. Exposed natively in Python (`Table.subscribe()` → `Subscription.recv`/`try_recv`), as the `subscribe_events` SQL table function (reachable from Python/dbt/Spark/Trino/Flight), a Flight streaming ticket (`type.googleapis.com/benostreamdb.Subscribe`), and an MCP `subscribe_events` tool.
+- [x] **Predicate-Filtered Subscriptions** (shipped) — 🟠 **High**:
+  - `Table::subscribe_filtered("age > 30")` re-applies the predicate above each incoming batch (DataFusion), yielding only matching rows; commit markers are suppressed for filtered subscriptions.
 - [ ] **Arrow Flight SQL Streaming Subscriptions** — 🟢 **Deferred**:
   - Implement Flight `DoExchange` / `DoGet` streaming endpoints allowing remote clients (Python, DuckDB, web dashboards) to subscribe to table diffs in real time without polling. Build this once somebody actually needs remote subscriptions.
 
@@ -246,7 +258,10 @@ The Launch Candidate requires **excellent end-to-end benchmarks** and
     hybrid (BEIR), production concurrency/maintenance/recovery, and the
     shared-envelope Docker competitor matrix (FAISS, hnswlib, LanceDB, pgvector,
     OpenSearch, Neo4j+GDS, cuGraph).
-- [ ] **Workflow tutorials** — 🔴 **High**:
+- [x] **Workflow tutorials** (shipped) — 🔴 **High**:
   - One runnable tutorial per workflow: (1) AI/semantic retrieval via MCP,
     (2) JSON/document retrieval with a JSON-path index, (3) graph traversal via
-    `graph_neighbors(...)`.
+    `graph_neighbors(...)`. Python versions are Jupyter notebooks
+    (`examples/tutorials/*.ipynb`, verified to execute end-to-end); the
+    SQL/connector forms (Spark/Trino/dbt/Flight/MCP/Rust) are markdown pages
+    under `docs/tutorials/`.

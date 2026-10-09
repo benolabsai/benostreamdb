@@ -35,6 +35,17 @@ pub struct BenoStreamSession {
     settings: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
+/// A graph table discovered in a session (node/edge + endpoints).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphTableInfo {
+    pub name: String,
+    pub table_type: String,
+    pub source_column: Option<String>,
+    pub target_column: Option<String>,
+    pub id_column: Option<String>,
+    pub label_column: Option<String>,
+}
+
 use datafusion::prelude::{SessionConfig, SessionContext};
 // use datafusion::execution::context::SessionState; // Unused
 use crate::core::sql::optimizer::IndexJoinOptimizerRule;
@@ -118,6 +129,7 @@ impl BenoStreamSession {
 
         // Register graph traversal table functions (`FROM graph_neighbors(...)`).
         crate::core::sql::graph_udf::register_graph_table_functions(&mut ctx);
+        crate::core::sql::subscribe_table_function::register_subscribe_table_functions(&mut ctx);
 
         // Register vector operators (validates UDFs are present)
         if let Err(e) = crate::core::sql::vector_operators::register_vector_operators(&mut ctx) {
@@ -240,6 +252,48 @@ impl BenoStreamSession {
             plan,
             datafusion::logical_expr::LogicalPlan::Dml(_)
         ))
+    }
+
+    /// List the graph tables (node/edge) registered in the session.
+    ///
+    /// The discovery primitive an MCP agent uses to find the graph without being
+    /// told the column names. Returns each table's declared type and endpoints.
+    pub async fn list_graph_tables(&self) -> Result<Vec<GraphTableInfo>> {
+        let mut out = Vec::new();
+        let list = self.ctx.state().catalog_list().clone();
+        for cat_name in list.catalog_names() {
+            let Some(cat) = list.catalog(&cat_name) else {
+                continue;
+            };
+            for sch_name in cat.schema_names() {
+                let Some(sch) = cat.schema(&sch_name) else {
+                    continue;
+                };
+                for tbl_name in sch.table_names() {
+                    let Ok(Some(provider)) = sch.table(&tbl_name).await else {
+                        continue;
+                    };
+                    let Some(bs) = provider
+                        .as_any()
+                        .downcast_ref::<BenoStreamTableProvider>()
+                    else {
+                        continue;
+                    };
+                    let meta = bs.table.graph_metadata_async().await.unwrap_or_default();
+                    if meta.is_edge() || meta.is_node() {
+                        out.push(GraphTableInfo {
+                            name: format!("{cat_name}.{sch_name}.{tbl_name}"),
+                            table_type: meta.table_type.as_str().to_string(),
+                            source_column: meta.source_column,
+                            target_column: meta.target_column,
+                            id_column: meta.id_column,
+                            label_column: meta.label_column,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Return the primary-key column names for a registered table, if any.

@@ -105,6 +105,35 @@ df = reader.query(
 print(df)
 ```
 
+### Live Subscriptions (change feed)
+
+`Table.subscribe()` returns a live subscription to the table's committed
+changes. `recv()` blocks (with an optional timeout); `try_recv()` is
+non-blocking. `subscribe_filtered("age > 30")` yields only matching rows.
+`close()` (or dropping the object / using it as a context manager) unsubscribes.
+
+```python
+sub = table.subscribe()                 # or table.subscribe_filtered("age > 30")
+ev = sub.recv(timeout_ms=1000)          # {"event_type": "batch", "rows": 3, "data": <pyarrow.Table>}
+ev = sub.try_recv()                     # non-blocking; None when idle
+sub.close()                             # unsubscribe (idempotent)
+
+with table.subscribe() as sub:          # context manager
+    ...
+```
+
+The change feed is **in-process**: it observes commits made by writers in the
+same process. The same primitive is available as the `subscribe_events` SQL
+table function (reachable from every connector) and as a Flight SQL streaming
+ticket.
+
+### GPU Device
+
+`benostreamdb.set_gpu_device("cuda:1")` pins the process GPU device
+(`auto` | `cpu` | `cuda[:N]` | `mps` | `intel` | `rocm`); `benostreamdb.gpu_device()`
+returns the active backend. This is the same mapping the Spark/Trino JNI
+bridges and the Flight/MCP servers use.
+
 ## Architecture
 
 The Python binding is a thin wrapper around the Rust core. It uses **Arrow C Data Interface** to transfer data between Rust (Apache Arrow) and Python (Pandas/PyArrow) with **zero-copy**. This ensures that reading data in Python is as fast as reading it in Rust.

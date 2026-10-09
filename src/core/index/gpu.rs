@@ -1305,6 +1305,47 @@ pub fn set_thread_gpu_context(ctx: Option<ComputeContext>) {
     *GLOBAL_GPU_CONTEXT.write() = ctx;
 }
 
+/// Parse a device string into a [`ComputeContext`].
+///
+/// Accepts `auto` | `gpu` | `cpu` | `cuda[:N]` | `mps`/`metal` | `intel`/`xpu`
+/// | `rocm`/`hip`. Unknown input (and `auto`) falls back to
+/// [`ComputeContext::auto_detect`]. This is the single mapping shared by the
+/// JNI bridges, the Flight server, the MCP server, and the Python binding, so
+/// every surface resolves a device identically.
+pub fn context_from_device_str(device: &str) -> ComputeContext {
+    let d = device.trim().to_ascii_lowercase();
+    let (backend, device_id) = if let Some(rest) = d.strip_prefix("cuda:") {
+        (ComputeBackend::Cuda, rest.trim().parse::<usize>().unwrap_or(0))
+    } else {
+        match d.as_str() {
+            "auto" | "gpu" | "" => return ComputeContext::auto_detect(),
+            "cpu" => (ComputeBackend::Cpu, 0),
+            "cuda" => (ComputeBackend::Cuda, 0),
+            "mps" | "metal" => (ComputeBackend::Mps, 0),
+            "intel" | "xpu" => (ComputeBackend::Intel, 0),
+            "rocm" | "hip" => (ComputeBackend::Rocm, 0),
+            _ => return ComputeContext::auto_detect(),
+        }
+    };
+    ComputeContext::from_backend_with_device(backend, device_id)
+        .unwrap_or_else(|_| ComputeContext::auto_detect())
+}
+
+/// Resolve the GPU device from `BSDB_GPU_DEVICE` (or `BENOSTREAM_GPU_DEVICE`)
+/// and set the process GPU context. Returns the resolved device string, or
+/// `None` when neither variable is set (leaving the context untouched).
+///
+/// Called at startup by the Flight and MCP servers so a deployment can pin a
+/// device without any per-query plumbing.
+pub fn apply_gpu_context_from_env() -> Option<String> {
+    let device = std::env::var("BSDB_GPU_DEVICE")
+        .or_else(|_| std::env::var("BENOSTREAM_GPU_DEVICE"))
+        .ok()
+        .filter(|s| !s.trim().is_empty())?;
+    set_thread_gpu_context(Some(context_from_device_str(&device)));
+    Some(device)
+}
+
 /// Retrieve the current GPU context.
 pub fn get_thread_gpu_context() -> Option<ComputeContext> {
     let lock = GLOBAL_GPU_CONTEXT.read();

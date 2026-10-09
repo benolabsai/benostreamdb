@@ -2923,14 +2923,33 @@ class Table:
         return pd.DataFrame(fused_rows)
 
     def is_edge_table(self) -> bool:
-        """Check whether this table conforms to the standard edge table convention."""
+        """Check whether this table is declared (or conforms) as an edge table.
+
+        Metadata-first: a table with `table_type='edge'` is an edge table
+        regardless of column names; otherwise the standard name convention is
+        used.
+        """
+        try:
+            if self._inner.table_type() == "edge":
+                return True
+        except Exception:
+            pass
         cols = self.columns
         has_source = any(c in cols for c in ["source", "source_id", "src", "u"])
         has_target = any(c in cols for c in ["target", "target_id", "dst", "v"])
         return has_source and has_target
 
     def edge_endpoints(self) -> tuple:
-        """Return the (source, target) column names for this edge table."""
+        """Return the (source, target) column names for this edge table.
+
+        Metadata-first (`src_col`/`dst_col`), then the standard name candidates.
+        """
+        try:
+            meta = self._inner.graph_metadata()
+            if meta.get("source_column") and meta.get("target_column"):
+                return (meta["source_column"], meta["target_column"])
+        except Exception:
+            pass
         cols = self.columns
         source_col = next((c for c in ["source", "source_id", "src", "u"] if c in cols), None)
         target_col = next((c for c in ["target", "target_id", "dst", "v"] if c in cols), None)
@@ -3026,7 +3045,78 @@ class Table:
                 table.add_index("embedding", "hnsw")
             except Exception:
                 pass
-                
+
+        # Stamp the declarative edge-table metadata so the graph functions and
+        # connectors resolve the endpoints without being told the column names.
+        try:
+            props = {"table_type": "edge", "src_col": "source", "dst_col": "target"}
+            if with_relation:
+                props["relation_col"] = "relation"
+            if with_weight:
+                props["weight_col"] = "weight"
+            table.set_properties(props)
+        except Exception:
+            pass
+
+        return table
+
+    @classmethod
+    def create_node_table(
+        cls,
+        uri: str,
+        schema: Optional[Any] = None,
+        id_col: str = "id",
+        label_col: Optional[str] = "name",
+        embedding_dim: Optional[int] = None,
+        index_id: bool = True,
+        index_embedding: bool = True,
+        device: Optional[Any] = None,
+    ) -> 'Table':
+        """Create a node/entity table with `table_type='node'` metadata.
+
+        Args:
+            uri: Table location.
+            schema: Optional explicit pyarrow.Schema.
+            id_col: Node identifier column (default 'id').
+            label_col: Optional label/name column (default 'name').
+            embedding_dim: Optional vector dimension for node embeddings.
+            index_id: Configure a Bitmap index on the id column.
+            index_embedding: Configure an HNSW index on 'embedding' if present.
+            device: Compute device.
+        """
+        import pyarrow as pa
+        uri = _resolve_uri(uri)
+
+        if schema is None:
+            fields = [pa.field(id_col, pa.uint64(), nullable=False)]
+            if label_col:
+                fields.append(pa.field(label_col, pa.string(), nullable=True))
+            if embedding_dim is not None and embedding_dim > 0:
+                fields.append(pa.field("embedding", pa.list_(pa.float32(), embedding_dim), nullable=True))
+            schema = pa.schema(fields)
+
+        table = cls.create(uri, schema, device=device)
+
+        if index_id:
+            try:
+                table.add_index(id_col)
+            except Exception:
+                pass
+
+        if index_embedding and embedding_dim is not None and "embedding" in [f.name for f in schema]:
+            try:
+                table.add_index("embedding", "hnsw")
+            except Exception:
+                pass
+
+        try:
+            props = {"table_type": "node", "id_col": id_col}
+            if label_col:
+                props["label_col"] = label_col
+            table.set_properties(props)
+        except Exception:
+            pass
+
         return table
 
     @classmethod
@@ -3971,3 +4061,13 @@ class Session:
     def sql(self, query: str) -> Any:
         """Execute a SQL query against the table (registered as 't')."""
         return self._inner.sql(query)
+
+    def list_graph_tables(self, schema: Optional[str] = None) -> List[Dict[str, Any]]:
+        """List the graph tables (node/edge) registered in the session.
+
+        Returns a list of dicts: ``{name, table_type, source_column,
+        target_column, id_column, label_column}``. This is the discovery
+        primitive an MCP agent uses to find the graph without being told the
+        column names.
+        """
+        return self._inner.list_graph_tables(schema)

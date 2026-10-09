@@ -4,12 +4,12 @@ use arrow_flight::sql::ProstMessageExt;
 use arrow_flight::sql::{
     ActionBeginTransactionRequest, ActionBeginTransactionResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, Any, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
-    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
-    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
-    CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate, SqlInfo,
-    TicketStatementQuery,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, Any, Command,
+    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
+    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes,
+    CommandGetTables, CommandGetXdbcTypeInfo, CommandPreparedStatementQuery,
+    CommandPreparedStatementUpdate, CommandStatementIngest, CommandStatementQuery,
+    CommandStatementUpdate, SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::{
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
@@ -116,6 +116,40 @@ impl BenoStreamFlightSqlService {
     }
 }
 
+/// Custom Flight ticket type for a live subscription. A client sends a
+/// `Command::Unknown(Any)` with this `type_url` and a JSON body; the server
+/// streams the drained events back. This is the true-streaming counterpart of
+/// the `subscribe_events` SQL table function.
+const SUBSCRIBE_TYPE_URL: &str = "type.googleapis.com/benostreamdb.Subscribe";
+
+/// JSON body of a subscription ticket.
+#[derive(serde::Deserialize)]
+struct SubscribeRequest {
+    table: String,
+    #[serde(default)]
+    filter: String,
+    #[serde(default = "default_max_events")]
+    max_events: u64,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+fn default_max_events() -> u64 {
+    100
+}
+fn default_timeout_ms() -> u64 {
+    1000
+}
+
+/// Arrow schema of the `subscribe_events` result (one row per event).
+fn subscribe_events_schema() -> std::sync::Arc<arrow::datatypes::Schema> {
+    use arrow::datatypes::{DataType, Field, Schema};
+    std::sync::Arc::new(Schema::new(vec![
+        Field::new("event_type", DataType::Utf8, false),
+        Field::new("rows", DataType::Int64, false),
+    ]))
+}
+
 #[tonic::async_trait]
 impl FlightSqlService for BenoStreamFlightSqlService {
     type FlightService = BenoStreamFlightSqlService;
@@ -139,9 +173,72 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         _request: Request<Ticket>,
         message: Any,
     ) -> Result<Response<BoxStream<'static, Result<FlightData, Status>>>, Status> {
+        if message.type_url != SUBSCRIBE_TYPE_URL {
+            return Err(Status::unimplemented(format!(
+                "do_get_fallback not implemented for: {:?}",
+                message.type_url
+            )));
+        }
+        let req: SubscribeRequest = serde_json::from_slice(message.value.as_ref())
+            .map_err(|e| Status::invalid_argument(format!("invalid subscribe ticket: {e}")))?;
+        let esc = |s: &str| s.replace('\'', "''");
+        let sql = format!(
+            "SELECT * FROM subscribe_events('{}', '{}', {}, {})",
+            esc(&req.table),
+            esc(&req.filter),
+            req.max_events,
+            req.timeout_ms
+        );
+        let df = self
+            .session
+            .sql_to_df(&sql)
+            .await
+            .map_err(|e| Status::internal(format!("Error planning subscription: {e}")))?;
+        let schema = df.schema().inner().clone();
+        let batches = df
+            .collect()
+            .await
+            .map_err(|e| Status::internal(format!("Error draining subscription: {e}")))?;
+        let flight_data = arrow_flight::utils::batches_to_flight_data(&schema, batches)
+            .map_err(|e| Status::internal(e.to_string()))?;
+        Ok(Response::new(Box::pin(futures::stream::iter(
+            flight_data.into_iter().map(Ok),
+        ))))
+    }
+
+    async fn get_flight_info_fallback(
+        &self,
+        cmd: Command,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<FlightInfo>, Status> {
+        if let Command::Unknown(any) = &cmd {
+            if any.type_url == SUBSCRIBE_TYPE_URL {
+                let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
+                let schema = subscribe_events_schema();
+                let schema_as_ipc = SchemaAsIpc::new(schema.as_ref(), &options);
+                let schema_bytes = IpcMessage::try_from(schema_as_ipc)
+                    .map_err(|e| Status::internal(e.to_string()))?
+                    .0;
+                let ticket = Ticket::new(any.encode_to_vec());
+                let endpoint = FlightEndpoint {
+                    ticket: Some(ticket),
+                    location: vec![],
+                    ..Default::default()
+                };
+                return Ok(Response::new(FlightInfo {
+                    schema: schema_bytes,
+                    endpoint: vec![endpoint],
+                    flight_descriptor: Some(request.into_inner()),
+                    total_bytes: -1,
+                    total_records: -1,
+                    ordered: false,
+                    app_metadata: vec![].into(),
+                }));
+            }
+        }
         Err(Status::unimplemented(format!(
-            "do_get_fallback not implemented for: {:?}",
-            message.type_url
+            "get_flight_info: invalid request: {}",
+            cmd.type_url()
         )))
     }
 

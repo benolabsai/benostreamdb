@@ -1,9 +1,10 @@
+import tempfile
 import os
 import shutil
 import benostreamdb as bsdb
 
 def test_query_planning():
-    base_dir = "/tmp/test_query_planning"
+    base_dir = f"{tempfile.gettempdir()}/test_query_planning"
     if os.path.exists(base_dir):
         shutil.rmtree(base_dir)
     os.makedirs(base_dir)

@@ -897,6 +897,11 @@ impl Table {
             return Err(e);
         }
 
+        // Publish the committed rows to any `Table::subscribe()` consumers.
+        // Only after the commit succeeded, so subscribers never observe data
+        // that was rolled back.
+        self.publish_committed(&batches_to_write);
+
         Ok(())
     }
 

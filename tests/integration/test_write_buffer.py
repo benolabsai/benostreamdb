@@ -1,3 +1,4 @@
+import tempfile
 import pytest
 import benostreamdb as bsdb
 import pyarrow as pa
@@ -7,7 +8,7 @@ import shutil
 
 def test_write_buffer_and_index():
     # Setup
-    uri = f"/tmp/test_benostream_{uuid.uuid4()}"
+    uri = f"{tempfile.gettempdir()}/test_benostream_{uuid.uuid4()}"
     if os.path.exists(uri):
         shutil.rmtree(uri)
     

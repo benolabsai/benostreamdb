@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 import numpy as np
 import benostreamdb as bsdb
@@ -7,7 +8,7 @@ import shutil
 
 class TestPgVectorCompatibility(unittest.TestCase):
     def setUp(self):
-        self.db_path = "/tmp/hdb_pgvector_test"
+        self.db_path = f"{tempfile.gettempdir()}/hdb_pgvector_test"
         if os.path.exists(self.db_path):
             shutil.rmtree(self.db_path)
         

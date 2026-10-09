@@ -1,3 +1,4 @@
+import tempfile
 import pytest
 import numpy as np
 import benostreamdb as hs
@@ -6,7 +7,7 @@ import shutil
 
 @pytest.fixture
 def table():
-    path = "/tmp/hs_tq_test"
+    path = f"{tempfile.gettempdir()}/hs_tq_test"
     if os.path.exists(path):
         shutil.rmtree(path)
     

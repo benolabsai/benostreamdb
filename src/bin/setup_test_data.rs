@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("BSDB_STORAGE_URI").unwrap_or_else(|_| "file:///tmp/test_table".to_string());
 
     // Clean up previous run
-    let _ = std::fs::remove_dir_all("/tmp/test_table");
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("test_table"));
 
     println!("Creating table at {}", uri);
     let schema = Arc::new(Schema::new(vec![

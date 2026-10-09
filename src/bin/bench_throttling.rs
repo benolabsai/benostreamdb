@@ -102,7 +102,7 @@ impl ObjectStore for ThrottledStore {
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
         let n = self.puts.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_every_put > 0 && n % self.fail_every_put == 0 {
+        if self.fail_every_put > 0 && n.is_multiple_of(self.fail_every_put) {
             self.failed_puts.fetch_add(1, Ordering::SeqCst);
             return Err(object_store::Error::Generic {
                 store: "ThrottledStore",
@@ -119,7 +119,7 @@ impl ObjectStore for ThrottledStore {
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
         let n = self.gets.fetch_add(1, Ordering::SeqCst) + 1;
-        if self.fail_every_get > 0 && n % self.fail_every_get == 0 {
+        if self.fail_every_get > 0 && n.is_multiple_of(self.fail_every_get) {
             self.failed_gets.fetch_add(1, Ordering::SeqCst);
             return Err(object_store::Error::Generic {
                 store: "ThrottledStore",
@@ -422,7 +422,7 @@ async fn run_scenario(cfg: &ScenarioConfig, baseline_write_p99: f64, baseline_re
 async fn main() -> Result<()> {
     println!("Running Object-Store Throttling & Fault Resilience Benchmark (§7.4)...");
 
-    let scenarios = vec![
+    let scenarios = [
         ScenarioConfig {
             name: "T1 (Quiescent Baseline)",
             description: "Unthrottled memory store (0ms delay, 0% failure)",

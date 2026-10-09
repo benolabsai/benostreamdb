@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "benostreamdb-mcp"
+version = "0.12.0"
+description = "BenoStreamDB Model Context Protocol (MCP) Server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT AND Apache-2.0" }
+authors = [
+    { name = "Richard Albright and BenoStreamDB Contributors" }
+]
+keywords = ["database", "mcp", "llm", "claude", "ai", "vector-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+]
+dependencies = [
+    "benostreamdb>=0.12.0",
+]
+
+[tool.maturin]
+bindings = "bin"
+strip = true

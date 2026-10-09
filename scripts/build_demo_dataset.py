@@ -1,3 +1,4 @@
+import tempfile
 #!/usr/bin/env python3
 """Consume the full Wikipedia dump parquets and prune them into a compact,
 interactive demo dataset for the Streamlit web UI.
@@ -298,7 +299,7 @@ def main() -> None:
     parser.add_argument("--no-embed", action="store_true",
                         help="Skip sentence-transformers embeddings "
                              "(UI falls back to fuzzy title match)")
-    parser.add_argument("--workdir", default="/tmp/hdb_demo_build")
+    parser.add_argument("--workdir", default=f"{tempfile.gettempdir()}/hdb_demo_build")
     parser.add_argument("--tmp-uri", default="file:///tmp/hdb_demo_cc")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 8,
                         help="Parallel processes for the CPU-bound resolve phase")

@@ -15,7 +15,7 @@ def test_wal_durability():
     # Setup
     ts = int(time.time())
     uri = f"file:///tmp/test_wal_{ts}"
-    base_path = f"/tmp/test_wal_{ts}"
+    base_path = f"{tempfile.gettempdir()}/test_wal_{ts}"
     if os.path.exists(base_path):
         shutil.rmtree(base_path)
     

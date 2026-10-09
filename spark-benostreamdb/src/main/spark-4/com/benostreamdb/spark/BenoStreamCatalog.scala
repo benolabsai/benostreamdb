@@ -7,6 +7,7 @@ import com.benostreamdb.spark.procedures.{
   BuildIndexProcedure,
   CompactTableProcedure,
   DropIndexProcedure,
+  DropPrimaryKeyProcedure,
   RebuildIndexProcedure,
   SetPrimaryKeyProcedure,
   ShowIndexesProcedure,
@@ -38,6 +39,7 @@ class BenoStreamProcedureCatalog extends BenoStreamCatalog with ProcedureCatalog
         case "compact" | "optimize" => new CompactTableProcedure()
         case "show_indexes" | "list_indexes" => new ShowIndexesProcedure()
         case "set_primary_key" => new SetPrimaryKeyProcedure()
+        case "drop_primary_key" => new DropPrimaryKeyProcedure()
         case "regional_drift_search" => new RegionalDriftProcedure()
         case _ => throw new UnsupportedOperationException(s"Unknown procedure: $procName")
       }
@@ -46,7 +48,13 @@ class BenoStreamProcedureCatalog extends BenoStreamCatalog with ProcedureCatalog
     }
   }
 
-  override def listProcedures(namespace: Array[String]): Array[Identifier] = {
+  // NOTE: `listProcedures` is a *new* method on Spark 4.0/4.1 (where
+  // `ProcedureCatalog` only declares `loadProcedure`) and an *abstract* member
+  // of `ProcedureCatalog` from Spark 4.2 onwards. Implementing an abstract
+  // member does not require `override`, and defining a brand-new method must
+  // not use it — so omitting the modifier is what lets this single source root
+  // compile against every 4.x minor.
+  def listProcedures(namespace: Array[String]): Array[Identifier] = {
     if (namespace.length == 1 && namespace(0).equalsIgnoreCase("system")) {
       Array(
         Identifier.of(namespace, "add_index"),
@@ -56,6 +64,7 @@ class BenoStreamProcedureCatalog extends BenoStreamCatalog with ProcedureCatalog
         Identifier.of(namespace, "compact"),
         Identifier.of(namespace, "show_indexes"),
         Identifier.of(namespace, "set_primary_key"),
+        Identifier.of(namespace, "drop_primary_key"),
         Identifier.of(namespace, "regional_drift_search")
       )
     } else {

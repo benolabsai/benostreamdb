@@ -389,6 +389,28 @@ pub fn is_debug_build() -> bool {
     cfg!(debug_assertions)
 }
 
+/// Set the process GPU device for subsequent operations.
+///
+/// Accepts `auto` | `cpu` | `cuda[:N]` | `mps`/`metal` | `intel`/`xpu` |
+/// `rocm`/`hip`. This is the same mapping the Spark/Trino JNI bridges and the
+/// Flight/MCP servers use, so every surface resolves a device identically.
+/// Returns the resolved backend name (e.g. `"cuda"`, `"cpu"`).
+#[pyfunction]
+pub fn set_gpu_device(device: &str) -> String {
+    let ctx = crate::core::index::gpu::context_from_device_str(device);
+    let resolved = format!("{:?}", ctx.backend).to_lowercase();
+    crate::core::index::gpu::set_thread_gpu_context(Some(ctx));
+    resolved
+}
+
+/// The currently active GPU backend name (`"cpu"` when none is set).
+#[pyfunction]
+pub fn gpu_device() -> String {
+    crate::core::index::gpu::get_thread_gpu_context()
+        .map(|c| format!("{:?}", c.backend).to_lowercase())
+        .unwrap_or_else(|| "cpu".to_string())
+}
+
 // ============================================================================
 // Arrow C Data Interface helpers
 // ============================================================================

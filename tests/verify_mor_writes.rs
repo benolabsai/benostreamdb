@@ -11,7 +11,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mor_position_deletes() -> anyhow::Result<()> {
-        let test_dir = "/tmp/benostream_mor_test";
+        let test_dir = &std::env::temp_dir().join("benostream_mor_test").to_string_lossy().into_owned();
         let _ = fs::remove_dir_all(test_dir);
         fs::create_dir_all(test_dir)?;
 

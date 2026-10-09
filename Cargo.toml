@@ -37,6 +37,7 @@ members = [
     "benostream-gpu-ann",
     "server/flight_sql",
     "contrib/benostreamdb-search",
+    "contrib/benostreamdb-mcp",
 ]
 
 # Single source of truth for the version of the core engine and the connectors

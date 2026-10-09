@@ -13,7 +13,7 @@ async fn test_delete_correctness_standard_compliance() -> anyhow::Result<()> {
     // 1. Setup Table
     let table_name = "test_delete_correctness";
     let uri = format!("file:///tmp/{}", table_name);
-    let _ = std::fs::remove_dir_all(format!("/tmp/{}", table_name));
+    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), table_name));
 
     // We used to define manifest schema here, but create_async takes Arrow schema
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
