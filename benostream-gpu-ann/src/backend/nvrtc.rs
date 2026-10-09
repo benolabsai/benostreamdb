@@ -220,7 +220,10 @@ fn candidate_dirs() -> Vec<PathBuf> {
 
 /// Is `name` an nvrtc shared library (not the `-builtins` companion)?
 fn is_nvrtc_lib(name: &str) -> bool {
-    name.starts_with("libnvrtc") && name.contains(".so") && !name.starts_with("libnvrtc-builtins")
+    let is_lib = name.starts_with("libnvrtc") || name.starts_with("nvrtc");
+    let is_shared = name.contains(".so") || name.contains(".dll") || name.contains(".dylib");
+    let not_builtins = !name.contains("builtins");
+    is_lib && is_shared && not_builtins
 }
 
 /// Rank a library filename by CUDA version so the highest wins.
@@ -284,11 +287,14 @@ fn preload_builtins(nvrtc_path: &Path) {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("libnvrtc-builtins") || !name.contains(".so") {
+            let is_builtins = name.starts_with("libnvrtc-builtins") || name.starts_with("nvrtc-builtins") || name.starts_with("nvrtc64_builtins");
+            let is_shared = name.contains(".so") || name.contains(".dll") || name.contains(".dylib");
+            if !is_builtins || !is_shared {
                 continue;
             }
             // SAFETY: loading a shared library from a directory we just
             // resolved; RTLD_GLOBAL makes it visible to nvrtc's own dlopen.
+            #[cfg(unix)]
             if let Ok(lib) = unsafe {
                 libloading::os::unix::Library::open(
                     Some(entry.path()),
@@ -296,6 +302,10 @@ fn preload_builtins(nvrtc_path: &Path) {
                 )
             } {
                 // Keep it loaded for the process lifetime.
+                std::mem::forget(lib);
+            }
+            #[cfg(not(unix))]
+            if let Ok(lib) = unsafe { libloading::Library::new(entry.path()) } {
                 std::mem::forget(lib);
             }
         }
@@ -450,7 +460,9 @@ mod tests {
     fn is_nvrtc_lib_excludes_builtins() {
         assert!(is_nvrtc_lib("libnvrtc.so.13"));
         assert!(is_nvrtc_lib("libnvrtc64_120_0.so"));
+        assert!(is_nvrtc_lib("nvrtc64_120_0.dll"));
         assert!(!is_nvrtc_lib("libnvrtc-builtins.so.13.0"));
+        assert!(!is_nvrtc_lib("nvrtc64_builtins_120_0.dll"));
         assert!(!is_nvrtc_lib("libcudart.so.13"));
     }
 
