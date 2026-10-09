@@ -220,7 +220,10 @@ fn candidate_dirs() -> Vec<PathBuf> {
 
 /// Is `name` an nvrtc shared library (not the `-builtins` companion)?
 fn is_nvrtc_lib(name: &str) -> bool {
-    name.starts_with("libnvrtc") && name.contains(".so") && !name.starts_with("libnvrtc-builtins")
+    let is_lib = name.starts_with("libnvrtc") || name.starts_with("nvrtc");
+    let is_shared = name.contains(".so") || name.contains(".dll") || name.contains(".dylib");
+    let not_builtins = !name.contains("builtins");
+    is_lib && is_shared && not_builtins
 }
 
 /// Rank a library filename by CUDA version so the highest wins.
@@ -297,11 +300,14 @@ fn preload_builtins(nvrtc_path: &Path) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("libnvrtc-builtins") || !name.contains(".so") {
+        let is_builtins = name.starts_with("libnvrtc-builtins") || name.starts_with("nvrtc-builtins") || name.starts_with("nvrtc64_builtins");
+        let is_shared = name.contains(".so") || name.contains(".dll") || name.contains(".dylib");
+        if !is_builtins || !is_shared {
             continue;
         }
         // SAFETY: loading a shared library from a directory we just
         // resolved; RTLD_GLOBAL makes it visible to nvrtc's own dlopen.
+        #[cfg(unix)]
         if let Ok(lib) = unsafe {
             libloading::os::unix::Library::open(
                 Some(entry.path()),
@@ -309,6 +315,10 @@ fn preload_builtins(nvrtc_path: &Path) {
             )
         } {
             // Keep it loaded for the process lifetime.
+            std::mem::forget(lib);
+        }
+        #[cfg(not(unix))]
+        if let Ok(lib) = unsafe { libloading::Library::new(entry.path()) } {
             std::mem::forget(lib);
         }
     }
@@ -364,15 +374,25 @@ pub fn compile_ptx(src: &str) -> Result<String> {
 /// binding mode. Process-level eager binding is available via `LD_BIND_NOW=1`
 /// (set by the demo load) when a caller wants lazy-resolution faults surfaced
 /// as load errors.
-const NVRTC_DLOPEN_FLAGS: c_int =
+#[cfg(unix)]
+const NVRTC_DLOPEN_FLAGS: std::ffi::c_int =
     libloading::os::unix::RTLD_LAZY | libloading::os::unix::RTLD_LOCAL;
 
 /// Open the resolved nvrtc library with eager binding.
-fn open_nvrtc(path: &Path) -> Result<libloading::os::unix::Library> {
+#[cfg(unix)]
+fn open_nvrtc(path: &Path) -> Result<libloading::Library> {
     // nvrtc needs its builtins companion on the loader path; preload it.
     preload_builtins(path);
     // SAFETY: `path` points at a real shared library.
     unsafe { libloading::os::unix::Library::open(Some(path), NVRTC_DLOPEN_FLAGS) }
+        .map(libloading::Library::from)
+        .with_context(|| format!("dlopen {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn open_nvrtc(path: &Path) -> Result<libloading::Library> {
+    preload_builtins(path);
+    unsafe { libloading::Library::new(path) }
         .with_context(|| format!("dlopen {}", path.display()))
 }
 
@@ -514,7 +534,9 @@ mod tests {
     fn is_nvrtc_lib_excludes_builtins() {
         assert!(is_nvrtc_lib("libnvrtc.so.13"));
         assert!(is_nvrtc_lib("libnvrtc64_120_0.so"));
+        assert!(is_nvrtc_lib("nvrtc64_120_0.dll"));
         assert!(!is_nvrtc_lib("libnvrtc-builtins.so.13.0"));
+        assert!(!is_nvrtc_lib("nvrtc64_builtins_120_0.dll"));
         assert!(!is_nvrtc_lib("libcudart.so.13"));
     }
 
@@ -552,6 +574,7 @@ mod tests {
     /// opt-in at the process level via `LD_BIND_NOW`. `RTLD_NOW` here regressed
     /// the pip-wheel builtins lookup (see `NVRTC_DLOPEN_FLAGS`).
     #[test]
+    #[cfg(unix)]
     fn nvrtc_dlopen_flags_keep_loader_default() {
         assert_ne!(NVRTC_DLOPEN_FLAGS & libloading::os::unix::RTLD_LAZY, 0);
     }
