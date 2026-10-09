@@ -765,6 +765,38 @@ pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_setGpuC
     1 // true
 }
 
+/// Trino/Spark: install a comma-separated GPU device pool for multi-GPU
+/// execution (e.g. `"cuda:0,cuda:1"`). Each engine worker thread is assigned
+/// one device round-robin, so a single query spreads across GPUs. A list of 0
+/// or 1 devices is a no-op (the process-wide `setGpuContext` still applies).
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_trino_BenoStreamDBJNIBridge_setGpuDevicePool(
+    mut env: JNIEnv,
+    _class: JClass,
+    devices: JString,
+) -> jboolean {
+    let csv: String = env
+        .get_string(&devices)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    crate::core::index::gpu::set_gpu_device_pool_from_str(&csv);
+    1 // true
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_benostreamdb_spark_jni_BenoStreamJNIBridge_setGpuDevicePool(
+    mut env: JNIEnv,
+    _class: JClass,
+    devices: JString,
+) -> jboolean {
+    let csv: String = env
+        .get_string(&devices)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    crate::core::index::gpu::set_gpu_device_pool_from_str(&csv);
+    1 // true
+}
+
 // -----------------------------------------------------------------------------
 // Vector Index Traversal JNI Bridge (Spark & Trino)
 // -----------------------------------------------------------------------------

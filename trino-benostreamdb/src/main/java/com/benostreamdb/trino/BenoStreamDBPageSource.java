@@ -39,7 +39,13 @@ public class BenoStreamDBPageSource implements ConnectorPageSource {
                     "BenoStreamDB native library (libbenostreamdb) is not loaded; "
                             + "add it to java.library.path");
         }
-        BenoStreamDBJNIBridge.setGpuContext(gpuDevice);
+        // Multi-GPU: install the device pool (no-op for a single device) so the
+        // engine's worker threads spread across GPUs; otherwise bind the single
+        // configured device process-wide.
+        BenoStreamDBJNIBridge.setGpuDevicePool(gpuDevice);
+        if (gpuDevice == null || !gpuDevice.contains(",")) {
+            BenoStreamDBJNIBridge.setGpuContext(gpuDevice);
+        }
         this.queryHandle = BenoStreamDBJNIBridge.openQuery(split.getTableUri(), split.getSql());
         if (this.queryHandle == 0) {
             throw new RuntimeException("BenoStreamDB openQuery failed for " + split.getTableUri());

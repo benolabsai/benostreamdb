@@ -32,6 +32,7 @@ pub fn migrate_benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(helpers::is_debug_build, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::set_gpu_device, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::gpu_device, m)?)?;
+    m.add_function(wrap_pyfunction!(helpers::shutdown_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(helpers::registered_functions, m)?)?;
 
     // Catalog factory functions

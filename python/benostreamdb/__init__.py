@@ -9,6 +9,17 @@ from .benostreamdb import Table as _RustTable
 from .benostreamdb import Session as _RustSession
 from .benostreamdb import *
 
+# Destroy the GPU context before the CUDA/MPS driver unloads at interpreter
+# exit. A context that outlives the driver's teardown makes the process panic
+# or segfault on exit, so release it here while the driver is still loaded.
+import atexit as _atexit
+
+try:
+    _atexit.register(shutdown_gpu)
+except Exception:  # pragma: no cover - only if the symbol is missing
+    pass
+
+
 def _has_torch():
     try:
         import torch

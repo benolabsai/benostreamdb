@@ -23,7 +23,7 @@ use datafusion::sql::parser::{DFParserBuilder, Statement as DFStatement};
 use futures::StreamExt;
 use datafusion::sql::sqlparser::ast::{
     AlterColumnOperation, AlterTableOperation, ColumnDef, ColumnOption, CreateIndex, CreateTable,
-    Expr, IndexType, ObjectType, SchemaName, SqlOption, Statement, TableConstraint, Value,
+    Expr, ObjectType, SchemaName, SqlOption, Statement, TableConstraint, Value,
 };
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::TableReference;
@@ -216,7 +216,10 @@ pub async fn try_parse_and_execute(
     }
 
     // 2. Statements sqlparser models but DataFusion cannot plan.
-    let stmt = match parse_single(sql) {
+    //    The generic dialect rejects a trailing `WITH (paths = ...)` on
+    //    CREATE INDEX, so strip it before parsing and apply it to the index.
+    let (parse_sql, index_paths) = split_create_index_with(sql);
+    let stmt = match parse_single(&parse_sql) {
         Some(s) => s,
         None => return Ok(None),
     };
@@ -244,7 +247,19 @@ pub async fn try_parse_and_execute(
             Ok(Some(empty_batch()))
         }
         Statement::CreateIndex(ci) => {
-            create_index(session, ci).await?;
+            // The parser drops `USING`, so the algorithm is read from the raw
+            // SQL (minus the stripped `WITH` clause).
+            let mut alg = index_algorithm_from_sql(&parse_sql);
+            // `WITH (paths = '$.a,$.b')` supplies the JSON paths a `json_path`
+            // index needs (the `USING` clause alone cannot carry them).
+            if matches!(alg, IndexAlgorithm::JsonPath { .. }) {
+                if let Some(paths) = &index_paths {
+                    alg = IndexAlgorithm::JsonPath {
+                        paths: paths.clone(),
+                    };
+                }
+            }
+            create_index(session, ci, alg).await?;
             Ok(Some(empty_batch()))
         }
         Statement::Drop {
@@ -803,11 +818,84 @@ fn apply_table_options(table: &Table, ct: &CreateTable) -> Result<()> {
 // Indexes
 // ---------------------------------------------------------------------------
 
-async fn create_index(session: &BenoStreamSession, ci: &CreateIndex) -> Result<()> {
+async fn create_index(
+    session: &BenoStreamSession,
+    ci: &CreateIndex,
+    alg: IndexAlgorithm,
+) -> Result<()> {
     let table = resolve_table(session, &ci.table_name.to_string()).await?;
     let cols: Vec<String> = ci.columns.iter().map(|c| c.column.to_string()).collect();
-    let alg = index_algorithm_from_using(ci.using.as_ref());
     add_index_columns(&table, cols, alg).await
+}
+
+/// Split an engine-extension `CREATE INDEX ... WITH ( paths = '$.a,$.b' )`
+/// clause off the statement before parsing.
+///
+/// The generic dialect used by the engine's parser rejects `WITH` on
+/// `CREATE INDEX`, so the clause is handled by hand: return the statement with
+/// the trailing `WITH (...)` removed, plus the parsed `paths` (if present).
+/// Applies only to `CREATE INDEX`; everything else is returned unchanged.
+/// Never panics on arbitrary input.
+fn split_create_index_with(sql: &str) -> (String, Option<Vec<String>>) {
+    let collapsed = collapse_ws(sql.trim().trim_end_matches(';'));
+    let upper = collapsed.to_ascii_uppercase();
+    if !upper.starts_with("CREATE ") || !upper.contains(" INDEX ") {
+        return (sql.to_string(), None);
+    }
+    // `to_ascii_uppercase` preserves byte length for ASCII, so the offset found
+    // in `upper` is valid in `collapsed`.
+    let Some(pos) = upper.rfind(" WITH ") else {
+        return (sql.to_string(), None);
+    };
+    let head = collapsed[..pos].trim_end().to_string();
+    let tail = collapsed[pos + " WITH ".len()..].trim();
+    (head, parse_paths_option(tail))
+}
+
+/// Parse the JSON paths out of a `( paths = '$.a,$.b' )` option list.
+fn parse_paths_option(tail: &str) -> Option<Vec<String>> {
+    let inner = tail.trim().strip_prefix('(')?.strip_suffix(')')?;
+    for part in split_top_level_commas(inner) {
+        let mut it = part.splitn(2, '=');
+        let key = it.next()?.trim();
+        let val = it.next()?.trim();
+        if key.eq_ignore_ascii_case("paths") {
+            let val = val.trim_matches(|c| c == '\'' || c == '"');
+            let paths: Vec<String> = val
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            return Some(paths);
+        }
+    }
+    None
+}
+
+/// Split on top-level commas, ignoring commas inside single/double quotes.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    for (i, c) in s.char_indices() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                ',' => {
+                    out.push(&s[start..i]);
+                    start = i + 1;
+                }
+                _ => {}
+            },
+        }
+    }
+    out.push(&s[start..]);
+    out
 }
 
 async fn add_index_columns(table: &Table, cols: Vec<String>, alg: IndexAlgorithm) -> Result<()> {
@@ -818,21 +906,42 @@ async fn add_index_columns(table: &Table, cols: Vec<String>, alg: IndexAlgorithm
     }
 }
 
-/// Map a `CREATE INDEX ... USING <name>` clause to an [`IndexAlgorithm`].
+/// Extract the algorithm name from a `CREATE INDEX ... USING <name>` clause.
 ///
-/// Uses the shared [`IndexAlgorithm::from_name`] mapping, so every algorithm
-/// the engine understands is reachable from DDL (`hnsw`, `hnsw_pq`,
-/// `hnsw_tq4`, `hnsw_tq8`, `bm25`, `bloom`, `bitmap`, `composite_bitmap`,
-/// `csr_graph`, `json_path`) — previously only `hnsw*`/`bm25` were recognized
-/// and everything else silently became a Bitmap. An absent or unknown `USING`
-/// defaults to Bitmap (the scalar default).
-fn index_algorithm_from_using(using: Option<&IndexType>) -> IndexAlgorithm {
-    match using {
-        Some(IndexType::Custom(ident)) => {
-            IndexAlgorithm::from_name(&ident.value).unwrap_or(IndexAlgorithm::Bitmap)
-        }
-        _ => IndexAlgorithm::Bitmap,
+/// The generic dialect the engine parses with accepts `CREATE INDEX` but
+/// **drops the `USING` clause** (it parses, then `ci.using` is `None`), so the
+/// name is read from the raw SQL instead. Returns `None` when absent. Only
+/// inspects `CREATE INDEX` statements; never panics on arbitrary input.
+fn extract_using_algorithm(sql: &str) -> Option<String> {
+    let collapsed = collapse_ws(sql.trim().trim_end_matches(';'));
+    let upper = collapsed.to_ascii_uppercase();
+    if !upper.starts_with("CREATE ") || !upper.contains(" INDEX ") {
+        return None;
     }
+    let pos = upper.find(" USING ")?;
+    let rest = &collapsed[pos + " USING ".len()..];
+    let name: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Resolve the index algorithm for a `CREATE INDEX ... [USING <name>]`.
+///
+/// Every algorithm the engine understands is reachable from DDL (`hnsw`,
+/// `hnsw_pq`, `hnsw_tq4`, `hnsw_tq8`, `bm25`, `bloom`, `bitmap`,
+/// `composite_bitmap`, `csr_graph`, `json_path`). An absent or unknown `USING`
+/// defaults to Bitmap (the scalar default).
+fn index_algorithm_from_sql(sql: &str) -> IndexAlgorithm {
+    extract_using_algorithm(sql)
+        .as_deref()
+        .and_then(IndexAlgorithm::from_name)
+        .unwrap_or(IndexAlgorithm::Bitmap)
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,16 +1268,54 @@ mod ctas_tests {
 
     #[test]
     fn using_clause_maps_every_algorithm() {
-        use datafusion::sql::sqlparser::ast::{Ident, IndexType};
-        let alg = |name: &str| {
-            index_algorithm_from_using(Some(&IndexType::Custom(Ident::new(name))))
-        };
         // Every engine algorithm must be reachable from `USING <name>`.
         for name in IndexAlgorithm::all_names() {
-            assert_eq!(alg(&name).name(), name, "USING {name} did not map");
+            let sql = format!("CREATE INDEX i ON t (c) USING {name}");
+            assert_eq!(
+                index_algorithm_from_sql(&sql).name(),
+                name,
+                "USING {name} did not map"
+            );
         }
         // Unknown / absent -> the scalar default (Bitmap).
-        assert_eq!(alg("nonsense").name(), "bitmap");
-        assert_eq!(index_algorithm_from_using(None).name(), "bitmap");
+        let unknown = "CREATE INDEX i ON t (c) USING nonsense";
+        assert_eq!(index_algorithm_from_sql(unknown).name(), "bitmap");
+        assert_eq!(index_algorithm_from_sql("CREATE INDEX i ON t (c)").name(), "bitmap");
+        // Non-CREATE-INDEX statements are never scanned for USING.
+        assert_eq!(extract_using_algorithm("SELECT 1 USING x"), None);
+    }
+
+    #[test]
+    fn create_index_with_clause_is_split_off_and_parsed() {
+        let sql = "CREATE INDEX idx ON t (doc) USING json_path WITH (paths = '$.a,$.b')";
+        let (head, paths) = split_create_index_with(sql);
+        assert_eq!(paths, Some(vec!["$.a".to_string(), "$.b".to_string()]));
+        // The head must now parse (WITH was the un-parseable part), and the
+        // algorithm is recovered from the raw SQL.
+        assert!(parse_single(&head).is_some());
+        assert_eq!(index_algorithm_from_sql(&head).name(), "json_path");
+    }
+
+    #[test]
+    fn create_index_without_clause_is_unchanged() {
+        let sql = "CREATE INDEX idx ON t (v) USING hnsw";
+        let (head, paths) = split_create_index_with(sql);
+        assert!(paths.is_none());
+        assert!(parse_single(&head).is_some());
+    }
+
+    #[test]
+    fn split_create_index_with_is_total() {
+        // Arbitrary input must not panic.
+        for sql in [
+            "",
+            "WITH (paths = 'x')",
+            "CREATE TABLE t (a INT) WITH (x = 1)",
+            "CREATE INDEX i ON t (c) WITH (",
+            "CREATE INDEX i ON t (c) WITH (paths = )",
+            "CREATE INDEX i ON t (c) WITH (paths = 'unterminated)",
+        ] {
+            let _ = split_create_index_with(sql);
+        }
     }
 }

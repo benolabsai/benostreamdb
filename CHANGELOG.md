@@ -22,6 +22,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   the dbt adapter (profile `gpu_device`), and the Flight SQL + MCP servers
   (`BSDB_GPU_DEVICE` / `BENOSTREAM_GPU_DEVICE` at startup). Previously only
   Python/Spark/Trino exposed a device; Flight, dbt, and MCP had none.
+- **Multi-GPU execution** — `gpu::set_gpu_device_pool` (+ `set_gpu_device_pool_from_str`)
+  installs a round-robin pool of devices; each engine worker thread is assigned
+  one the first time it asks for a context, so a single query spreads across
+  GPUs. Wired into the Trino connector (`benostream.gpu-device` may be a
+  comma-separated list; `BenoStreamDBJNIBridge.setGpuDevicePool`) and the Spark
+  JNI bridge. A single device keeps the previous process-wide behaviour.
 - **Reactive subscriptions (`Table::subscribe()`)** — a per-table
   `tokio::sync::broadcast` change feed that publishes committed `RecordBatch`es
   plus a `Commit` marker on every successful flush. `subscribe_filtered("age > 30")`
@@ -363,10 +369,21 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - **`CREATE INDEX ... USING <algorithm>` silently ignored most algorithms** —
-  the DDL `USING` clause only recognized `hnsw*`/`bm25` and mapped everything
-  else (including `json_path`, `hnsw_pq`, `bloom`, `csr_graph`,
-  `composite_bitmap`) to a scalar Bitmap. It now routes through the shared
-  `IndexAlgorithm::from_name`, so every engine algorithm is reachable from DDL.
+  the engine's parser accepts `CREATE INDEX` but **drops the `USING` clause**
+  (`ci.using` is always `None`), and the mapped set was only `hnsw*`/`bm25`, so
+  every other algorithm (including `json_path`, `hnsw_pq`, `bloom`,
+  `csr_graph`, `composite_bitmap`) became a scalar Bitmap. The algorithm is now
+  read from the raw SQL via the shared `IndexAlgorithm::from_name`, so every
+  engine algorithm is reachable from DDL. A trailing `WITH (paths = '$.a,$.b')`
+  (which the generic dialect also rejects) is stripped and hand-parsed to supply
+  the JSON paths a `json_path` index needs.
+- **Flaky crash at interpreter exit on GPU workloads** — a background index
+  build (which may use the GPU) could still be running on a tokio worker when
+  the runtime was torn down, faulting the worker. `Table` background-task queues
+  are now registered globally and **drained at exit** (bounded, via the Python
+  `atexit` handler `benostreamdb.shutdown_gpu`), and hardware GPU backends are
+  leaked on drop so cudarc never releases a CUDA resource after the driver has
+  deinitialised. Repeated GPU exit runs went from ~2-4/10 crashes to 0/12.
 - **Spark connector did not compile on Spark 4.0/4.1** — the shared
   `spark-4` catalog marked `listProcedures` as `override`, but that member only
   exists in Spark 4.2 (it is absent in 4.0/4.1 and abstract from 4.2). Dropping
