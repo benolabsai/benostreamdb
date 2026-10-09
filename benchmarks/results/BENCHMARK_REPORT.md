@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-09 11:56:29 UTC
+- **Generated At**: 2026-10-09 21:09:25 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
 
@@ -161,13 +161,13 @@
 
 ### Rolled-up results (JSON)
 
-| Engine | Workload | Device | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+| Engine | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| benostreamdb | hybrid_rrf | cpu | scifact | 0.8527 | 0.6957 | 0.6502 | 175.7 | 5.542 | 7.229 | 0.536 | 6.63 |
-| benostreamdb | lexical_bm25 | cpu | scifact | 0.7909 | 0.6617 | 0.6276 | 418.1 | 2.249 | 3.893 | 0.364 | 3.31 |
-| lancedb | hybrid_rrf | cpu | scifact | 0.8259 | 0.677 | 0.6357 | 193.4 | 4.767 | 6.728 | 0.886 | 14.31 |
-| opensearch | lexical_bm25 | cpu | scifact | 0.8196 | 0.6821 | 0.6431 | 817.8 | 1.16 | 2.147 | 0.756 | 6.62 |
-| tantivy | lexical_bm25 | cpu | scifact | 0.7812 | 0.6517 | 0.615 | 2690.9 | 0.307 | 0.707 | 0.193 | 8.34 |
+| benostreamdb | cpu | hybrid_rrf | scifact | 0.846 | 0.6915 | 0.6466 | 184.4 | 5.278 | 6.787 | 0.601 | 6.62 |
+| benostreamdb | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 422.9 | 2.225 | 3.767 | 0.366 | 3.31 |
+| lancedb | cpu | hybrid_rrf | scifact | 0.8338 | 0.6759 | 0.6327 | 205.5 | 4.48 | 5.775 | 0.849 | 14.39 |
+| opensearch | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 507.9 | 1.723 | 4.032 | 0.85 | 6.62 |
+| tantivy | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3520.2 | 0.233 | 0.534 | 0.159 | 8.34 |
 
 ### Results from `scifact_bm25_competitors_cpu.md`
 
@@ -179,18 +179,43 @@
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
 - **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
-| Engine | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
-|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.36s | 3.3 MB | **418.1** | **2.25 ms** | 3.89 ms | 0.7909 | 0.6617 |
-| **tantivy** | ✅ Pass | 0.19s | 8.3 MB | **2690.9** | **0.31 ms** | 0.71 ms | 0.7812 | 0.6517 |
-| **opensearch** | ✅ Pass | 0.76s | 6.6 MB | **817.8** | **1.16 ms** | 2.15 ms | 0.8196 | 0.6821 |
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.37s | 3.3 MB | **422.9** | **2.22 ms** | 3.77 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 0.16s | 8.3 MB | **3520.2** | **0.23 ms** | 0.53 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.85s | 6.6 MB | **507.9** | **1.72 ms** | 4.03 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 
 - **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
 - **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
+
+### Results from `scifact_bm25_competitors_gpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `scifact`
+- **Corpus Documents**: 5,183
+- **Evaluated Queries**: 300
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.38s | 3.3 MB | **425.0** | **2.22 ms** | 3.88 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 0.21s | 8.3 MB | **2476.3** | **0.32 ms** | 0.94 ms | 0.7812 | 0.6517 |
+| **opensearch** | - | ❌ Failed (index build failed: AuthorizationException(403, 'index_create_block_exception', 'blocked by: [FORBIDDEN/10/cluster create-index blocked (api)];')) | - | - | - | - | - | - | - |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
 ### Results from `scifact_hybrid_cpu.md`
@@ -206,27 +231,64 @@
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
 - **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
 - **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 ### Competitor Comparison (Hybrid Dense + Sparse RRF)
 
-| Engine | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
-|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.54s | 6.6 MB | **175.7** | **5.54 ms** | 7.23 ms | **0.8527** | **0.6957** | 0.6502 |
-| **lancedb** | ✅ Pass | 0.89s | 14.3 MB | **193.4** | **4.77 ms** | 6.73 ms | **0.8259** | **0.6770** | 0.6357 |
+| Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.4** | **5.73 ms** | 8.63 ms | **0.8527** | **0.6964** | 0.6509 |
+| **lancedb** | `cpu` | ✅ Pass | 0.87s | 14.4 MB | **201.8** | **4.59 ms** | 5.47 ms | **0.8291** | **0.6668** | 0.6184 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **47.3%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **46.7%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 412.1 | 2.30 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1237.6 | 0.70 ms | 0.7767 | 0.6449 | 0.6065 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 175.7 | 5.54 ms | **0.8527** | **0.6957** | **0.6502** |
+| **Sparse (BM25 Only)** | 6.6 MB | 405.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1193.3 | 0.71 ms | 0.7833 | 0.6458 | 0.6057 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.4 | 5.73 ms | **0.8527** | **0.6964** | **0.6509** |
+
+### Results from `scifact_hybrid_gpu.md`
+
+# BEIR Hybrid Search Benchmark Results: BenoStreamDB vs Competitor
+
+- **Dataset**: `scifact`
+- **Corpus Documents**: 5,183
+- **Evaluated Queries**: 300
+- **Dense Embedding Model**: `all-MiniLM-L6-v2` (384-d)
+- **Lexical Algorithm**: Okapi BM25 (`k1=1.2, b=0.75`)
+- **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k=60`)
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+### Competitor Comparison (Hybrid Dense + Sparse RRF)
+
+| Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.60s | 6.6 MB | **184.4** | **5.28 ms** | 6.79 ms | **0.8460** | **0.6915** | 0.6466 |
+| **lancedb** | `cpu` | ✅ Pass | 0.85s | 14.4 MB | **205.5** | **4.48 ms** | 5.78 ms | **0.8338** | **0.6759** | 0.6327 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap**: **46.5%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
+
+### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
+
+| Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
+|---|---|---|---|---|---|---|
+| **Sparse (BM25 Only)** | 6.6 MB | 412.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1306.3 | 0.66 ms | 0.7733 | 0.6414 | 0.6030 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 184.4 | 5.28 ms | **0.8460** | **0.6915** | **0.6466** |
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -412,7 +474,7 @@
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
-# Benchmark rollup (2026-10-09T07:56:12-04:00)
+# Benchmark rollup (2026-10-09T17:09:06-04:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 

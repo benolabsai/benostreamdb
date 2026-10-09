@@ -33,6 +33,7 @@ import math
 import os
 import platform
 import shutil
+import subprocess
 import tempfile
 import time
 from typing import Any, Dict, List, Set, Tuple
@@ -94,6 +95,49 @@ def envelope_info() -> Dict[str, Any]:
     }
 
 
+def _gpu_list() -> List[str]:
+    """Best-effort list of visible GPUs across vendors.
+
+    The client machine running the tests may have an NVIDIA (CUDA), AMD (ROCm),
+    Apple (Metal), or Intel GPU, so probe each vendor's tool in turn and return
+    whatever is found (empty on a CPU-only host).
+    """
+    gpus: List[str] = []
+
+    def _run(cmd: List[str], timeout: int = 5) -> str:
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            return out.stdout if out.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+
+    # NVIDIA (CUDA).
+    for line in _run(
+        ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"]
+    ).splitlines():
+        if line.strip():
+            gpus.append(line.strip())
+    if gpus:
+        return gpus
+
+    # AMD (ROCm).
+    for line in _run(["rocm-smi", "--showproductname", "--csv"]).splitlines():
+        s = line.strip()
+        if s and "card" in s.lower():
+            gpus.append(s)
+    if gpus:
+        return gpus
+
+    # Apple (Metal) — macOS only.
+    if platform.system() == "Darwin":
+        for line in _run(["system_profiler", "SPDisplaysDataType"], timeout=10).splitlines():
+            s = line.strip()
+            if s.startswith("Chipset Model:"):
+                gpus.append(s.split(":", 1)[1].strip())
+
+    return gpus
+
+
 def _env_record() -> Dict[str, Any]:
     """Container-visible environment, mirroring the competitor JSON ``env`` block."""
     ram_gb = None
@@ -112,8 +156,25 @@ def _env_record() -> Dict[str, Any]:
         "os": platform.platform(),
         "python": platform.python_version(),
         "containerized": os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"),
-        "gpus": [],
+        "gpus": _gpu_list(),
     }
+
+
+def _engine_backend(engine: str) -> str:
+    """The backend the engine actually used (``cuda``/``metal``/``cpu``/...).
+
+    For BenoStreamDB this is the live GPU context; competitors are CPU-only, so
+    they report ``cpu``. This is what distinguishes a real GPU run from a CPU
+    run that merely happened inside the GPU container.
+    """
+    if engine in ("benostreamdb", "bsdb"):
+        try:
+            import benostreamdb as bsdb
+
+            return bsdb.gpu_device()
+        except Exception:
+            return "unknown"
+    return "cpu"
 
 
 def write_json_records(
@@ -124,6 +185,7 @@ def write_json_records(
     json_dir: str,
     workload: str,
     device: str,
+    algo_backend: str,
 ) -> None:
     """Write one competitor-schema JSON record per engine.
 
@@ -131,6 +193,10 @@ def write_json_records(
     (``{engine}_{dataset}_{device}.json``), so ``generate_summary.py`` can roll
     the BEIR rows into the consolidated benchmark report alongside the
     vector/graph/SQL records.
+
+    ``algo_backend`` is the backend the *measured algorithm* ran on. Okapi BM25
+    is a CPU-only algorithm, so it is ``cpu`` even when a GPU is available — the
+    record never claims a GPU the algorithm did not use.
     """
     os.makedirs(json_dir, exist_ok=True)
     env = _env_record()
@@ -141,7 +207,7 @@ def write_json_records(
             "engine": r["engine"],
             "dataset": dataset,
             "workload": workload,
-            "device": device,
+            "backend": algo_backend,
             "queries": num_queries,
             "k": k,
             "build_s": round(r["build_s"], 3),
@@ -154,7 +220,7 @@ def write_json_records(
             "p99_ms": round(r["p99_ms"], 3),
             "env": env,
         }
-        path = os.path.join(json_dir, f"{r['engine']}_{dataset}_{workload}_{device}.json")
+        path = os.path.join(json_dir, f"{r['engine']}_{dataset}_{workload}_{algo_backend}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(record, f, indent=2)
         print(f"wrote {path}", flush=True)
@@ -361,11 +427,15 @@ def run_tantivy(
         index.reload()
         build_s = time.perf_counter() - t_build_0
 
-        index_bytes = sum(
-            os.path.getsize(os.path.join(r, f))
-            for r, _, files in os.walk(tmpdir)
-            for f in files
-        )
+        # Tantivy may still be cleaning up a temp file while we walk the dir, so
+        # skip files that vanish between listing and stat (a benign race).
+        index_bytes = 0
+        for r, _, files in os.walk(tmpdir):
+            for f in files:
+                try:
+                    index_bytes += os.path.getsize(os.path.join(r, f))
+                except OSError:
+                    pass
 
         searcher = index.searcher()
 
@@ -586,6 +656,19 @@ def main():
 
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
 
+    # In the GPU pass, select the GPU backend for BenoStreamDB so the run is a
+    # real GPU run rather than a CPU run that merely happened inside the GPU
+    # container. `auto` picks the best available device; override with
+    # BSDB_GPU_DEVICE (e.g. `cuda:1`).
+    if args.device == "gpu":
+        try:
+            import benostreamdb as bsdb
+
+            resolved = bsdb.set_gpu_device(os.environ.get("BSDB_GPU_DEVICE", "auto"))
+            print(f"BenoStreamDB GPU backend: {resolved}", flush=True)
+        except Exception as exc:  # no GPU / no wheel: fall back to CPU
+            print(f"GPU device selection failed ({exc}); using CPU", flush=True)
+
     results = []
     for engine in engines:
         print(f"Running {engine}...", flush=True)
@@ -644,23 +727,27 @@ def main():
         f"- **Host**: {platform.processor() or platform.machine()} ({platform.system()})",
         f"- **Resource Envelope**: {envelope_str}"
         + (" (containerized)" if env["containerized"] else ""),
+        f"- **GPUs**: {', '.join(_gpu_list()) or 'none (CPU-only host)'}",
         "- **Methodology**: every engine runs in a Docker container under the same "
         "`--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh "
         "--workload beir`), so no participant gets more cores or RAM than another.",
         "",
-        f"| Engine | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@{args.k} | nDCG@{args.k} |",
-        "|---|---|---|---|---|---|---|---|---|",
+        f"| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@{args.k} | nDCG@{args.k} |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
 
     for r in results:
         if r.get("available"):
             lines.append(
-                f"| **{r['engine']}** | ✅ Pass | {r['build_s']:.2f}s | {r['index_mb']:.1f} MB | "
+                f"| **{r['engine']}** | `cpu` | ✅ Pass | "
+                f"{r['build_s']:.2f}s | {r['index_mb']:.1f} MB | "
                 f"**{r['qps']:.1f}** | **{r['p50_ms']:.2f} ms** | {r['p99_ms']:.2f} ms | "
                 f"{r.get(f'recall@{args.k}', 0):.4f} | {r.get(f'ndcg@{args.k}', 0):.4f} |"
             )
         else:
-            lines.append(f"| **{r['engine']}** | ❌ Failed ({r.get('error')}) | - | - | - | - | - | - | - |")
+            lines.append(
+                f"| **{r['engine']}** | - | ❌ Failed ({r.get('error')}) | - | - | - | - | - | - | - |"
+            )
 
     if agreements:
         lines.extend(["", "### Differential Oracle & Result Agreement", ""])
@@ -689,6 +776,9 @@ def main():
             args.json_dir,
             workload="lexical_bm25",
             device=args.device,
+            # Okapi BM25 is a CPU-only algorithm: it never uses the GPU, so the
+            # record is always tagged `cpu` regardless of the pass.
+            algo_backend="cpu",
         )
 
 

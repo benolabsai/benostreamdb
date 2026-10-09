@@ -238,8 +238,10 @@ container-visible cores/RAM.
   --workload beir` runs BenoStreamDB, Tantivy, and the server-backed OpenSearch
   in containers under the same `--cpus`/`--mem` profile (previously the embedded
   engines ran in-process on the host while OpenSearch ran in a separately-sized
-  container). Each engine emits a competitor-schema JSON record
-  (`{engine}_{dataset}_{workload}_{device}.json`) that `generate_summary.py`
+  container). BEIR is CPU-bound, so there is no GPU pass; each record carries a
+  `backend` field (the backend the algorithm actually ran on). Each engine emits
+  a competitor-schema JSON record
+  (`{engine}_{dataset}_{workload}_{backend}.json`) that `generate_summary.py`
   rolls into the consolidated report.
 
 ---
