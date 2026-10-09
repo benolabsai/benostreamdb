@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>> {
-    let path = &std::env::temp_dir().join("hs_df_test_rust_v2").to_string_lossy().into_owned();
+    let path = &std::env::temp_dir()
+        .join("hs_df_test_rust_v2")
+        .to_string_lossy()
+        .into_owned();
     let _ = std::fs::remove_dir_all(path);
     // Use async constructor to avoid blocking thread
     let table = Table::new_async(format!("file://{}", path)).await?;
@@ -66,7 +69,10 @@ async fn test_datafusion_integration() -> Result<(), Box<dyn std::error::Error>>
     session.register_table("t1", Arc::new(table.clone()))?;
 
     // Create second table
-    let path2 = &std::env::temp_dir().join("hs_df_test_rust_v2_orders").to_string_lossy().into_owned();
+    let path2 = &std::env::temp_dir()
+        .join("hs_df_test_rust_v2_orders")
+        .to_string_lossy()
+        .into_owned();
     let _ = std::fs::remove_dir_all(path2);
     let table2 = Table::new_async(format!("file://{}", path2)).await?;
 

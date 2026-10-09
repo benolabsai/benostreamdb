@@ -273,9 +273,7 @@ impl BenoStreamSession {
                     let Ok(Some(provider)) = sch.table(&tbl_name).await else {
                         continue;
                     };
-                    let Some(bs) = provider
-                        .as_any()
-                        .downcast_ref::<BenoStreamTableProvider>()
+                    let Some(bs) = provider.as_any().downcast_ref::<BenoStreamTableProvider>()
                     else {
                         continue;
                     };

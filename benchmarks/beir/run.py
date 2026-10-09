@@ -1,12 +1,27 @@
 #!/usr/bin/env python3
-"""BEIR Lexical / BM25 Benchmark Runner: BenoStreamDB vs Tantivy.
+"""BEIR Lexical / BM25 Benchmark Runner: BenoStreamDB vs Tantivy / OpenSearch / Elasticsearch.
 
 Evaluates BM25 inverted index construction, index size on disk, query latency
 (p50, p90, p99), throughput (QPS), and IR retrieval quality (Recall@10, nDCG@10, MRR@10)
 on standard Information Retrieval benchmarks (SciFact / BEIR).
 
+Engines:
+  * ``benostreamdb``  — embedded engine, BM25 overlay index.
+  * ``tantivy``       — embedded Rust IR library (``pip install tantivy``).
+  * ``opensearch``    — server-backed BM25 (``pip install opensearch-py``); the
+    docker compose stack runs OpenSearch and exports ``ES_URL``.
+  * ``elasticsearch`` — server-backed BM25 (``pip install elasticsearch``).
+
+Every engine is measured with the same corpus, queries, ``k``, and metric code,
+so the numbers are directly comparable.
+
 Usage:
-    python benchmarks/beir/run.py --dataset scifact --engines benostreamdb,tantivy --out benchmarks/beir/results/scifact_bm25.md
+    python benchmarks/beir/run.py --dataset scifact --engines benostreamdb,tantivy \\
+        --out benchmarks/beir/results/scifact_bm25.md
+
+    python benchmarks/beir/run.py --dataset scifact \\
+        --engines benostreamdb,tantivy,opensearch --host http://localhost:9200 \\
+        --out benchmarks/beir/results/scifact_bm25_competitors.md
 """
 
 from __future__ import annotations
@@ -28,12 +43,129 @@ import pyarrow as pa
 
 BEIR_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
+# Canonical BEIR dataset archives (the data dir is gitignored, so a fresh clone
+# or CI run downloads the corpus on first use).
+BEIR_DATASET_URLS = {
+    "scifact": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+}
 
-def load_scifact_data(dataset_name: str = "scifact") -> Tuple[List[Tuple[str, str]], Dict[str, str], Dict[str, Dict[str, int]]]:
+
+def ensure_dataset(dataset_name: str, data_dir: str | None = None) -> str:
+    """Return the dataset directory, downloading + extracting the BEIR zip if absent."""
+    base = data_dir or BEIR_DATA_DIR
+    dataset_dir = os.path.join(base, dataset_name)
+    if os.path.isdir(dataset_dir):
+        return dataset_dir
+    url = BEIR_DATASET_URLS.get(dataset_name)
+    if not url:
+        raise FileNotFoundError(
+            f"Dataset directory not found: {dataset_dir} "
+            f"(no download URL registered for {dataset_name!r})"
+        )
+    import urllib.request
+    import zipfile
+
+    os.makedirs(base, exist_ok=True)
+    zip_path = os.path.join(base, f"{dataset_name}.zip")
+    print(f"Downloading {dataset_name} from {url} ...", flush=True)
+    urllib.request.urlretrieve(url, zip_path)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(base)
+    os.remove(zip_path)
+    if not os.path.isdir(dataset_dir):
+        raise FileNotFoundError(f"Extracted archive did not contain {dataset_dir}")
+    return dataset_dir
+
+
+def envelope_info() -> Dict[str, Any]:
+    """Container-visible resource envelope, so results are self-describing.
+
+    Reads the same ``BENCH_CPUS`` / ``BENCH_MEM`` variables the Docker compose
+    stack applies to *every* participant (server engines and the runner), so a
+    BEIR row can be checked against the envelope it was measured under.
+    """
+    cpus = os.environ.get("BENCH_CPUS")
+    mem = os.environ.get("BENCH_MEM")
+    containerized = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    return {
+        "cpus": int(cpus) if cpus and cpus.isdigit() else None,
+        "mem": mem,
+        "containerized": containerized,
+    }
+
+
+def _env_record() -> Dict[str, Any]:
+    """Container-visible environment, mirroring the competitor JSON ``env`` block."""
+    ram_gb = None
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    ram_gb = round(int(line.split()[1]) / 1048576, 1)
+                    break
+    except OSError:
+        pass
+    return {
+        "cpu_model": platform.processor() or platform.machine(),
+        "cores": os.cpu_count() or 0,
+        "ram_gb": ram_gb,
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "containerized": os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"),
+        "gpus": [],
+    }
+
+
+def write_json_records(
+    results: List[Dict[str, Any]],
+    dataset: str,
+    k: int,
+    num_queries: int,
+    json_dir: str,
+    workload: str,
+    device: str,
+) -> None:
+    """Write one competitor-schema JSON record per engine.
+
+    The record matches the shape the competitor matrix emits
+    (``{engine}_{dataset}_{device}.json``), so ``generate_summary.py`` can roll
+    the BEIR rows into the consolidated benchmark report alongside the
+    vector/graph/SQL records.
+    """
+    os.makedirs(json_dir, exist_ok=True)
+    env = _env_record()
+    for r in results:
+        if not r.get("available"):
+            continue
+        record = {
+            "engine": r["engine"],
+            "dataset": dataset,
+            "workload": workload,
+            "device": device,
+            "queries": num_queries,
+            "k": k,
+            "build_s": round(r["build_s"], 3),
+            "index_mb": r["index_mb"],
+            "recall_at_k": round(r.get(f"recall@{k}", 0.0), 4),
+            "ndcg_at_k": round(r.get(f"ndcg@{k}", 0.0), 4),
+            "mrr_at_k": round(r.get(f"mrr@{k}", 0.0), 4),
+            "qps": round(r["qps"], 1),
+            "p50_ms": round(r["p50_ms"], 3),
+            "p99_ms": round(r["p99_ms"], 3),
+            "env": env,
+        }
+        path = os.path.join(json_dir, f"{r['engine']}_{dataset}_{workload}_{device}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2)
+        print(f"wrote {path}", flush=True)
+
+
+def load_scifact_data(
+    dataset_name: str = "scifact",
+    data_dir: str | None = None,
+) -> Tuple[List[Tuple[str, str]], Dict[str, str], Dict[str, Dict[str, int]]]:
     """Loads corpus, test queries, and ground-truth relevance judgements (qrels)."""
-    dataset_dir = os.path.join(BEIR_DATA_DIR, dataset_name)
-    if not os.path.exists(dataset_dir):
-        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+    dataset_dir = ensure_dataset(dataset_name, data_dir)
 
     corpus_path = os.path.join(dataset_dir, "corpus.jsonl")
     queries_path = os.path.join(dataset_dir, "queries.jsonl")
@@ -280,6 +412,139 @@ def run_tantivy(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _search_client(host: str):
+    """Return ``(client, helpers, kind)`` for an OpenSearch/Elasticsearch server.
+
+    Prefers ``opensearch-py`` (the compose stack runs OpenSearch), falling back
+    to the ``elasticsearch`` client. Returns ``(None, None, None)`` when neither
+    is installed so the caller can report "not available" instead of crashing.
+    """
+    url = host if "://" in host else f"http://{host}"
+    if importlib.util.find_spec("opensearchpy"):
+        from opensearchpy import OpenSearch, helpers
+
+        return OpenSearch(url), helpers, "opensearch"
+    if importlib.util.find_spec("elasticsearch"):
+        from elasticsearch import Elasticsearch, helpers
+
+        return Elasticsearch(url), helpers, "elasticsearch"
+    return None, None, None
+
+
+def run_opensearch(
+    corpus: List[Tuple[str, str]],
+    queries: Dict[str, str],
+    k: int = 10,
+    host: str = "http://localhost:9200",
+    engine_name: str = "opensearch",
+) -> Dict[str, Any]:
+    """Benchmarks server-backed BM25 (OpenSearch/Elasticsearch) over BEIR.
+
+    Measured with the same corpus / queries / ``k`` / metric code as the
+    embedded engines, so the row is directly comparable. A server-side index is
+    built fresh per run, and its on-disk size is read from the index stats.
+    """
+    client, helpers, _kind = _search_client(host)
+    if client is None:
+        return {
+            "engine": engine_name,
+            "available": False,
+            "error": "pip install opensearch-py (or elasticsearch)",
+        }
+
+    index_name = "bsdb-beir-lexical"
+    try:
+        t_build_0 = time.perf_counter()
+        client.indices.delete(index=index_name, ignore_unavailable=True)
+        client.indices.create(
+            index=index_name,
+            body={
+                "mappings": {
+                    "properties": {"text": {"type": "text", "analyzer": "english"}}
+                }
+            },
+        )
+        helpers.bulk(
+            client,
+            (
+                {"_index": index_name, "_id": doc_id, "_source": {"text": text}}
+                for doc_id, text in corpus
+            ),
+        )
+        client.indices.refresh(index=index_name)
+        build_s = time.perf_counter() - t_build_0
+    except Exception as exc:  # server unreachable / mapping rejected
+        return {
+            "engine": engine_name,
+            "available": False,
+            "error": f"index build failed: {exc}",
+        }
+
+    index_bytes = 0
+    try:
+        stats = client.indices.stats(index=index_name)
+        index_bytes = int(stats["_all"]["primaries"]["store"]["size_in_bytes"])
+    except Exception:
+        pass
+
+    import re
+
+    def _search(q_text: str):
+        # Strip punctuation the analyzer would otherwise drop, mirroring the
+        # query-normalisation the embedded harness relies on.
+        safe = re.sub(r"[^\w\s]", " ", q_text)
+        return client.search(
+            index=index_name,
+            body={"query": {"match": {"text": safe}}, "size": k, "_source": False},
+        )
+
+    query_items = list(queries.items())
+    for _, q_text in query_items[:5]:
+        try:
+            _search(q_text)
+        except Exception:
+            pass
+
+    latencies = []
+    retrieved: Dict[str, List[str]] = {}
+    t_search_start = time.perf_counter()
+    for qid, q_text in query_items:
+        t0 = time.perf_counter()
+        res = _search(q_text)
+        latencies.append((time.perf_counter() - t0) * 1000.0)
+        retrieved[qid] = [str(h["_id"]) for h in res["hits"]["hits"]]
+    total_search_time = time.perf_counter() - t_search_start
+    qps = len(query_items) / total_search_time if total_search_time > 0 else 0.0
+
+    return {
+        "engine": engine_name,
+        "available": True,
+        "build_s": build_s,
+        "index_mb": round(index_bytes / (1024 * 1024), 2),
+        "p50_ms": float(np.percentile(latencies, 50)),
+        "p90_ms": float(np.percentile(latencies, 90)),
+        "p99_ms": float(np.percentile(latencies, 99)),
+        "mean_ms": float(np.mean(latencies)),
+        "qps": qps,
+        "retrieved": retrieved,
+    }
+
+
+def _jaccard_agreement(
+    a_res: Dict[str, Any],
+    b_res: Dict[str, Any],
+    queries: Dict[str, str],
+) -> float:
+    """Mean top-k Jaccard overlap of two engines' retrieved sets, in percent."""
+    overlaps = []
+    for qid in queries:
+        a_hits = set(a_res["retrieved"].get(qid, []))
+        b_hits = set(b_res["retrieved"].get(qid, []))
+        if a_hits or b_hits:
+            overlaps.append(len(a_hits & b_hits) / max(len(a_hits | b_hits), 1))
+    return float(np.mean(overlaps)) * 100.0 if overlaps else 0.0
+
+
 def main():
     parser = argparse.ArgumentParser(description="BEIR Lexical / BM25 Benchmark Runner")
     parser.add_argument("--dataset", default="scifact", help="Dataset name under benchmarks/beir/data/")
@@ -287,10 +552,32 @@ def main():
     parser.add_argument("--k", type=int, default=10, help="Top-k retrieval limit")
     parser.add_argument("--limit-queries", type=int, default=None, help="Limit number of queries evaluated")
     parser.add_argument("--out", default=None, help="Output markdown path")
+    parser.add_argument(
+        "--json-dir",
+        default=None,
+        help="If set, write one competitor-schema JSON record per engine here, "
+        "so generate_summary.py rolls the BEIR rows into the benchmark report",
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("DEVICE", "cpu"),
+        help="Device tag for the JSON records (default: $DEVICE or cpu)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Directory holding <dataset>/ (default: benchmarks/beir/data)",
+    )
+    parser.add_argument(
+        "--host",
+        default=None,
+        help="OpenSearch/Elasticsearch URL (default: $ES_URL or http://localhost:9200)",
+    )
     args = parser.parse_args()
 
+    env = envelope_info()
     print(f"Loading {args.dataset} dataset...", flush=True)
-    corpus, queries, qrels = load_scifact_data(args.dataset)
+    corpus, queries, qrels = load_scifact_data(args.dataset, data_dir=args.data_dir)
     if args.limit_queries and args.limit_queries < len(queries):
         subset_keys = list(queries.keys())[: args.limit_queries]
         queries = {k: queries[k] for k in subset_keys}
@@ -298,24 +585,23 @@ def main():
     print(f"Loaded: {len(corpus):,} documents, {len(queries):,} queries ({len(qrels):,} qrels)", flush=True)
 
     engines = [e.strip() for e in args.engines.split(",") if e.strip()]
-    runners = {
-        "benostreamdb": run_benostreamdb,
-        "tantivy": run_tantivy,
-    }
 
     results = []
     for engine in engines:
-        runner = runners.get(engine)
-        if not runner:
+        print(f"Running {engine}...", flush=True)
+        if engine == "benostreamdb":
+            res = run_benostreamdb(corpus, queries, k=args.k)
+        elif engine == "tantivy":
+            res = run_tantivy(corpus, queries, k=args.k)
+        elif engine in ("opensearch", "elasticsearch"):
+            host = args.host or os.environ.get("ES_URL", "http://localhost:9200")
+            res = run_opensearch(corpus, queries, k=args.k, host=host, engine_name=engine)
+        else:
             print(f"Skipping unknown engine: {engine}")
             continue
 
-        print(f"Running {engine}...", flush=True)
-        res = runner(corpus, queries, k=args.k)
         if res.get("available"):
-            # Compute IR metrics
-            ir_metrics = compute_ir_metrics(res["retrieved"], qrels, k=args.k)
-            res.update(ir_metrics)
+            res.update(compute_ir_metrics(res["retrieved"], qrels, k=args.k))
             print(
                 f"  -> {engine}: p50={res['p50_ms']:.2f}ms, p99={res['p99_ms']:.2f}ms, "
                 f"QPS={res['qps']:.1f}, nDCG@{args.k}={res.get(f'ndcg@{args.k}', 0):.4f}, "
@@ -327,22 +613,27 @@ def main():
 
         results.append(res)
 
-    # Compute Top-K Agreement between BenoStreamDB and Tantivy
-    agreement_pct = None
+    # Top-k agreement of every competitor vs BenoStreamDB.
     bsdb_res = next((r for r in results if r["engine"] == "benostreamdb" and r.get("available")), None)
-    tantivy_res = next((r for r in results if r["engine"] == "tantivy" and r.get("available")), None)
-    if bsdb_res and tantivy_res:
-        overlaps = []
-        for qid in queries:
-            b_hits = set(bsdb_res["retrieved"].get(qid, []))
-            t_hits = set(tantivy_res["retrieved"].get(qid, []))
-            if b_hits or t_hits:
-                overlap = len(b_hits.intersection(t_hits)) / max(len(b_hits.union(t_hits)), 1)
-                overlaps.append(overlap)
-        agreement_pct = float(np.mean(overlaps)) * 100.0 if overlaps else 0.0
-        print(f"\nBenoStreamDB vs Tantivy Top-{args.k} Jaccard Agreement: {agreement_pct:.1f}%", flush=True)
+    agreements: Dict[str, float] = {}
+    if bsdb_res:
+        for r in results:
+            if r is bsdb_res or not r.get("available"):
+                continue
+            pct = _jaccard_agreement(bsdb_res, r, queries)
+            agreements[r["engine"]] = pct
+            print(
+                f"\nBenoStreamDB vs {r['engine']} Top-{args.k} Jaccard Agreement: {pct:.1f}%",
+                flush=True,
+            )
 
     # Format Markdown Report
+    env_bits = []
+    if env["cpus"] is not None:
+        env_bits.append(f"{env['cpus']} CPUs")
+    if env["mem"]:
+        env_bits.append(f"{env['mem']} RAM")
+    envelope_str = ", ".join(env_bits) if env_bits else "unconstrained (host)"
     lines = [
         "# BEIR Lexical / BM25 Benchmark Results",
         "",
@@ -351,6 +642,11 @@ def main():
         f"- **Evaluated Queries**: {len(queries):,}",
         f"- **Top-K**: {args.k}",
         f"- **Host**: {platform.processor() or platform.machine()} ({platform.system()})",
+        f"- **Resource Envelope**: {envelope_str}"
+        + (" (containerized)" if env["containerized"] else ""),
+        "- **Methodology**: every engine runs in a Docker container under the same "
+        "`--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh "
+        "--workload beir`), so no participant gets more cores or RAM than another.",
         "",
         f"| Engine | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@{args.k} | nDCG@{args.k} |",
         "|---|---|---|---|---|---|---|---|---|",
@@ -366,14 +662,14 @@ def main():
         else:
             lines.append(f"| **{r['engine']}** | ❌ Failed ({r.get('error')}) | - | - | - | - | - | - | - |")
 
-    if agreement_pct is not None:
-        lines.extend([
-            "",
-            "### Differential Oracle & Result Agreement",
-            "",
-            f"- **Top-{args.k} Jaccard Overlap**: **{agreement_pct:.1f}%** between BenoStreamDB and Tantivy.",
-            "- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.",
-        ])
+    if agreements:
+        lines.extend(["", "### Differential Oracle & Result Agreement", ""])
+        for engine, pct in agreements.items():
+            lines.append(f"- **Top-{args.k} Jaccard Overlap vs {engine}**: **{pct:.1f}%**.")
+        lines.append(
+            "- High ranking agreement validates correct Okapi BM25 implementation across "
+            "vocabulary, inverted postings, and document length normalization sidecars."
+        )
 
     report = "\n".join(lines) + "\n"
     print("\n" + report)
@@ -383,6 +679,17 @@ def main():
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"Wrote BEIR benchmark report to {args.out}")
+
+    if args.json_dir:
+        write_json_records(
+            results,
+            args.dataset,
+            args.k,
+            len(queries),
+            args.json_dir,
+            workload="lexical_bm25",
+            device=args.device,
+        )
 
 
 if __name__ == "__main__":

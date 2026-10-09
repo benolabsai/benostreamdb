@@ -14,7 +14,7 @@
 //! then `.key` / bare `key` segments and `[index]` subscripts.
 
 use anyhow::{Context, Result};
-use arrow::array::{Array, ListBuilder, StringBuilder, StringArray, UInt32Builder};
+use arrow::array::{Array, ListBuilder, StringArray, StringBuilder, UInt32Builder};
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use roaring::RoaringBitmap;
@@ -243,7 +243,10 @@ pub fn build_json_path_index(
     covered.dedup();
     let covered_json = serde_json::to_string(&covered)?;
 
-    let tmp = format!("{}.tmp", out_path.to_str().context("Invalid UTF-8 in path")?);
+    let tmp = format!(
+        "{}.tmp",
+        out_path.to_str().context("Invalid UTF-8 in path")?
+    );
     let file = File::create(&tmp)?;
     let props = parquet::file::properties::WriterProperties::builder()
         .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue {
@@ -374,7 +377,10 @@ mod tests {
 
     #[test]
     fn value_text_unquotes_strings() {
-        assert_eq!(value_text(&Value::String("error".into())), Some("error".into()));
+        assert_eq!(
+            value_text(&Value::String("error".into())),
+            Some("error".into())
+        );
         assert_eq!(value_text(&Value::from(500)), Some("500".into()));
         assert_eq!(value_text(&Value::Bool(true)), Some("true".into()));
         assert_eq!(value_text(&Value::Null), None);

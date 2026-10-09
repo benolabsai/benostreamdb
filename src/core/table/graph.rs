@@ -783,7 +783,14 @@ impl Table {
         graph_column: Option<&str>,
     ) -> Result<Vec<(u64, u64)>> {
         self.subgraph_edges_with_columns(
-            seeds, hops, directed, max_degree, max_nodes, graph_column, None, None,
+            seeds,
+            hops,
+            directed,
+            max_degree,
+            max_nodes,
+            graph_column,
+            None,
+            None,
         )
         .await
     }
@@ -1020,7 +1027,8 @@ impl Table {
     /// The set of nodes within `hops` of `seeds` — the regional subgraph every
     /// graph mode operates on.
     async fn region_nodes(&self, seeds: &[u64], hops: u32) -> Result<HashSet<u64>> {
-        self.region_nodes_with_columns(seeds, hops, None, None).await
+        self.region_nodes_with_columns(seeds, hops, None, None)
+            .await
     }
 
     /// Like [`Table::region_nodes`] but with explicit source/target columns.

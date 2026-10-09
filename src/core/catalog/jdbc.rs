@@ -27,7 +27,12 @@ impl JdbcCatalogClient {
 
         let client = Self {
             pool,
-            warehouse: warehouse.unwrap_or_else(|| std::env::temp_dir().join("benostream_warehouse").to_string_lossy().into_owned()),
+            warehouse: warehouse.unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join("benostream_warehouse")
+                    .to_string_lossy()
+                    .into_owned()
+            }),
             catalog_name,
         };
 

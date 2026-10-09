@@ -131,10 +131,22 @@ fn benostreamdb(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python_binding::gpu_device, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::shutdown_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(python_binding::registered_functions, m)?)?;
-    m.add_function(wrap_pyfunction!(python_binding::registered_table_functions, m)?)?;
-    m.add_function(wrap_pyfunction!(python_binding::registered_index_algorithms, m)?)?;
-    m.add_function(wrap_pyfunction!(python_binding::registered_ddl_statements, m)?)?;
-    m.add_function(wrap_pyfunction!(python_binding::registered_table_actions, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::registered_table_functions,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::registered_index_algorithms,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::registered_ddl_statements,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        python_binding::registered_table_actions,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(python_binding::create_catalog, m)?)?;
     m.add_function(wrap_pyfunction!(
         python_binding::create_catalog_from_config,

@@ -300,7 +300,9 @@ fn preload_builtins(nvrtc_path: &Path) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let is_builtins = name.starts_with("libnvrtc-builtins") || name.starts_with("nvrtc-builtins") || name.starts_with("nvrtc64_builtins");
+        let is_builtins = name.starts_with("libnvrtc-builtins")
+            || name.starts_with("nvrtc-builtins")
+            || name.starts_with("nvrtc64_builtins");
         let is_shared = name.contains(".so") || name.contains(".dll") || name.contains(".dylib");
         if !is_builtins || !is_shared {
             continue;
@@ -392,8 +394,7 @@ fn open_nvrtc(path: &Path) -> Result<libloading::Library> {
 #[cfg(not(unix))]
 fn open_nvrtc(path: &Path) -> Result<libloading::Library> {
     preload_builtins(path);
-    unsafe { libloading::Library::new(path) }
-        .with_context(|| format!("dlopen {}", path.display()))
+    unsafe { libloading::Library::new(path) }.with_context(|| format!("dlopen {}", path.display()))
 }
 
 /// Loader-safe probe: resolve nvrtc, `dlopen` it with `RTLD_NOW`, and confirm

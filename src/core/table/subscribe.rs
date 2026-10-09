@@ -202,11 +202,7 @@ mod tests {
         let b = batch(&[1, 5, 10, 20]);
         let out = filter_batch(&b, "v >= 10").await.unwrap().unwrap();
         assert_eq!(out.num_rows(), 2);
-        let col = out
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
+        let col = out.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(col.value(0), 10);
         assert_eq!(col.value(1), 20);
     }

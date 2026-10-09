@@ -80,7 +80,11 @@ struct ConcurrencyTestResult {
 // 1. Multi-Writer Insert Scaling (2 to 16 writers)
 // ---------------------------------------------------------------------------
 
-async fn bench_multi_writer_inserts(writers: usize, ops_per_writer: usize, rows_per_op: usize) -> Result<ConcurrencyTestResult> {
+async fn bench_multi_writer_inserts(
+    writers: usize,
+    ops_per_writer: usize,
+    rows_per_op: usize,
+) -> Result<ConcurrencyTestResult> {
     let uri = format!("memory://bench-mw-insert-w{writers}");
     let tmp = tempdir()?;
 
@@ -101,7 +105,8 @@ async fn bench_multi_writer_inserts(writers: usize, ops_per_writer: usize, rows_
             let t = open_shared(&uri_clone, &wal_dir).await?;
             for op in 0..ops_per_writer {
                 let start = 1_000 + (w as i32) * 100_000 + (op as i32) * 100;
-                t.write_async(vec![make_batch(start, rows_per_op as i32)]).await?;
+                t.write_async(vec![make_batch(start, rows_per_op as i32)])
+                    .await?;
                 t.commit_async().await?;
             }
             Ok::<(), anyhow::Error>(())
@@ -141,7 +146,10 @@ async fn bench_multi_writer_inserts(writers: usize, ops_per_writer: usize, rows_
 
     Ok(ConcurrencyTestResult {
         scenario: format!("C1.{} (Concurrent Writers: {})", writers, writers),
-        workload_description: format!("{} writers committing simultaneously ({} ops, {} rows/op)", writers, ops_per_writer, rows_per_op),
+        workload_description: format!(
+            "{} writers committing simultaneously ({} ops, {} rows/op)",
+            writers, ops_per_writer, rows_per_op
+        ),
         concurrent_threads: writers,
         operations_total: total_ops,
         duration_ms: (duration_ms * 100.0).round() / 100.0,
@@ -151,8 +159,16 @@ async fn bench_multi_writer_inserts(writers: usize, ops_per_writer: usize, rows_
         lost_rows,
         duplicate_rows,
         torn_snapshots_observed: 0,
-        row_content_integrity: if exact_match { "✅ 100% Match".to_string() } else { "❌ Mismatch".to_string() },
-        status: if pass { "PASS".to_string() } else { "FAIL".to_string() },
+        row_content_integrity: if exact_match {
+            "✅ 100% Match".to_string()
+        } else {
+            "❌ Mismatch".to_string()
+        },
+        status: if pass {
+            "PASS".to_string()
+        } else {
+            "FAIL".to_string()
+        },
     })
 }
 
@@ -160,7 +176,11 @@ async fn bench_multi_writer_inserts(writers: usize, ops_per_writer: usize, rows_
 // 2. Concurrent Inserts + Compaction
 // ---------------------------------------------------------------------------
 
-async fn bench_concurrent_compaction(writers: usize, ops_per_writer: usize, rows_per_op: usize) -> Result<ConcurrencyTestResult> {
+async fn bench_concurrent_compaction(
+    writers: usize,
+    ops_per_writer: usize,
+    rows_per_op: usize,
+) -> Result<ConcurrencyTestResult> {
     let uri = "memory://bench-mw-compaction";
     let tmp = tempdir()?;
 
@@ -181,7 +201,8 @@ async fn bench_concurrent_compaction(writers: usize, ops_per_writer: usize, rows
             let t = open_shared(uri, &wal_dir).await?;
             for op in 0..ops_per_writer {
                 let start = 1_000 + (w as i32) * 100_000 + (op as i32) * 100;
-                t.write_async(vec![make_batch(start, rows_per_op as i32)]).await?;
+                t.write_async(vec![make_batch(start, rows_per_op as i32)])
+                    .await?;
                 t.commit_async().await?;
             }
             Ok::<(), anyhow::Error>(())
@@ -233,7 +254,8 @@ async fn bench_concurrent_compaction(writers: usize, ops_per_writer: usize, rows
 
     Ok(ConcurrencyTestResult {
         scenario: "C2 (Inserts + Concurrent Compaction)".to_string(),
-        workload_description: "8 concurrent writers committing while compaction swaps manifests".to_string(),
+        workload_description: "8 concurrent writers committing while compaction swaps manifests"
+            .to_string(),
         concurrent_threads: writers + 1,
         operations_total: total_ops,
         duration_ms: (duration_ms * 100.0).round() / 100.0,
@@ -243,8 +265,16 @@ async fn bench_concurrent_compaction(writers: usize, ops_per_writer: usize, rows
         lost_rows,
         duplicate_rows,
         torn_snapshots_observed: 0,
-        row_content_integrity: if exact_match { "✅ 100% Match".to_string() } else { "❌ Mismatch".to_string() },
-        status: if pass { "PASS".to_string() } else { "FAIL".to_string() },
+        row_content_integrity: if exact_match {
+            "✅ 100% Match".to_string()
+        } else {
+            "❌ Mismatch".to_string()
+        },
+        status: if pass {
+            "PASS".to_string()
+        } else {
+            "FAIL".to_string()
+        },
     })
 }
 
@@ -252,7 +282,11 @@ async fn bench_concurrent_compaction(writers: usize, ops_per_writer: usize, rows
 // 3. Concurrent Inserts + Targeted Deletes
 // ---------------------------------------------------------------------------
 
-async fn bench_concurrent_deletes(writers: usize, ops_per_writer: usize, rows_per_op: usize) -> Result<ConcurrencyTestResult> {
+async fn bench_concurrent_deletes(
+    writers: usize,
+    ops_per_writer: usize,
+    rows_per_op: usize,
+) -> Result<ConcurrencyTestResult> {
     let uri = "memory://bench-mw-deletes";
     let tmp = tempdir()?;
 
@@ -272,12 +306,14 @@ async fn bench_concurrent_deletes(writers: usize, ops_per_writer: usize, rows_pe
             let t = open_shared(uri, &wal_dir).await?;
             for op in 0..ops_per_writer {
                 let start = 1_000 + (w as i32) * 100_000 + (op as i32) * 100;
-                t.write_async(vec![make_batch(start, rows_per_op as i32)]).await?;
+                t.write_async(vec![make_batch(start, rows_per_op as i32)])
+                    .await?;
                 t.commit_async().await?;
 
                 // Targeted position delete on every 3rd op: remove 2 rows
                 if op % 3 == 0 {
-                    t.delete_async(&format!("id >= {start} AND id < {}", start + 2)).await?;
+                    t.delete_async(&format!("id >= {start} AND id < {}", start + 2))
+                        .await?;
                     t.commit_async().await?;
                 }
             }
@@ -325,12 +361,14 @@ async fn bench_concurrent_deletes(writers: usize, ops_per_writer: usize, rows_pe
 
     let duplicate_rows = actual_rows.saturating_sub(unique_ids.len());
     let lost_rows = expected_rows.saturating_sub(unique_ids.len());
-    let exact_match = unique_ids == expected_ids && actual_rows == expected_rows && deleted_resurrected == 0;
+    let exact_match =
+        unique_ids == expected_ids && actual_rows == expected_rows && deleted_resurrected == 0;
     let pass = exact_match && duplicate_rows == 0 && lost_rows == 0;
 
     Ok(ConcurrencyTestResult {
         scenario: "C3 (Inserts + Position Deletes)".to_string(),
-        workload_description: "8 concurrent writers performing interleaved inserts and position deletes".to_string(),
+        workload_description:
+            "8 concurrent writers performing interleaved inserts and position deletes".to_string(),
         concurrent_threads: writers,
         operations_total: total_ops,
         duration_ms: (duration_ms * 100.0).round() / 100.0,
@@ -340,8 +378,16 @@ async fn bench_concurrent_deletes(writers: usize, ops_per_writer: usize, rows_pe
         lost_rows,
         duplicate_rows,
         torn_snapshots_observed: 0,
-        row_content_integrity: if exact_match { "✅ 100% Match".to_string() } else { "❌ Mismatch".to_string() },
-        status: if pass { "PASS".to_string() } else { "FAIL".to_string() },
+        row_content_integrity: if exact_match {
+            "✅ 100% Match".to_string()
+        } else {
+            "❌ Mismatch".to_string()
+        },
+        status: if pass {
+            "PASS".to_string()
+        } else {
+            "FAIL".to_string()
+        },
     })
 }
 
@@ -349,7 +395,11 @@ async fn bench_concurrent_deletes(writers: usize, ops_per_writer: usize, rows_pe
 // 4. Concurrent Readers + Concurrent Writers (Snapshot Isolation)
 // ---------------------------------------------------------------------------
 
-async fn bench_reader_writer_isolation(writers: usize, readers: usize, ops: usize) -> Result<ConcurrencyTestResult> {
+async fn bench_reader_writer_isolation(
+    writers: usize,
+    readers: usize,
+    ops: usize,
+) -> Result<ConcurrencyTestResult> {
     let uri = "memory://bench-mw-read-write-isolation";
     let tmp = tempdir()?;
 
@@ -437,7 +487,8 @@ async fn bench_reader_writer_isolation(writers: usize, readers: usize, ops: usiz
 
     Ok(ConcurrencyTestResult {
         scenario: "C4 (Readers + Writers Isolation)".to_string(),
-        workload_description: "4 writers and 4 readers concurrently saturating shared storage".to_string(),
+        workload_description: "4 writers and 4 readers concurrently saturating shared storage"
+            .to_string(),
         concurrent_threads: writers + readers,
         operations_total: total_ops,
         duration_ms: (duration_ms * 100.0).round() / 100.0,
@@ -447,8 +498,16 @@ async fn bench_reader_writer_isolation(writers: usize, readers: usize, ops: usiz
         lost_rows,
         duplicate_rows,
         torn_snapshots_observed: torn_count,
-        row_content_integrity: if exact_match { "✅ 100% Match".to_string() } else { "❌ Mismatch".to_string() },
-        status: if pass { "PASS".to_string() } else { "FAIL".to_string() },
+        row_content_integrity: if exact_match {
+            "✅ 100% Match".to_string()
+        } else {
+            "❌ Mismatch".to_string()
+        },
+        status: if pass {
+            "PASS".to_string()
+        } else {
+            "FAIL".to_string()
+        },
     })
 }
 
@@ -468,8 +527,13 @@ async fn main() -> Result<()> {
         let res = bench_multi_writer_inserts(w, 10, 5).await?;
         println!(
             "-> Ops/sec: {:>6.1} | Duration: {:>6.2}ms | Rows: {}/{} | Lost: {} | Dups: {} | {}",
-            res.throughput_ops_sec, res.duration_ms, res.actual_rows, res.expected_rows,
-            res.lost_rows, res.duplicate_rows, res.status
+            res.throughput_ops_sec,
+            res.duration_ms,
+            res.actual_rows,
+            res.expected_rows,
+            res.lost_rows,
+            res.duplicate_rows,
+            res.status
         );
         results.push(res);
     }
@@ -479,8 +543,13 @@ async fn main() -> Result<()> {
     let res_c2 = bench_concurrent_compaction(8, 10, 5).await?;
     println!(
         "-> Ops/sec: {:>6.1} | Duration: {:>6.2}ms | Rows: {}/{} | Lost: {} | Dups: {} | {}",
-        res_c2.throughput_ops_sec, res_c2.duration_ms, res_c2.actual_rows, res_c2.expected_rows,
-        res_c2.lost_rows, res_c2.duplicate_rows, res_c2.status
+        res_c2.throughput_ops_sec,
+        res_c2.duration_ms,
+        res_c2.actual_rows,
+        res_c2.expected_rows,
+        res_c2.lost_rows,
+        res_c2.duplicate_rows,
+        res_c2.status
     );
     results.push(res_c2);
 
@@ -489,8 +558,13 @@ async fn main() -> Result<()> {
     let res_c3 = bench_concurrent_deletes(8, 10, 5).await?;
     println!(
         "-> Ops/sec: {:>6.1} | Duration: {:>6.2}ms | Rows: {}/{} | Lost: {} | Dups: {} | {}",
-        res_c3.throughput_ops_sec, res_c3.duration_ms, res_c3.actual_rows, res_c3.expected_rows,
-        res_c3.lost_rows, res_c3.duplicate_rows, res_c3.status
+        res_c3.throughput_ops_sec,
+        res_c3.duration_ms,
+        res_c3.actual_rows,
+        res_c3.expected_rows,
+        res_c3.lost_rows,
+        res_c3.duplicate_rows,
+        res_c3.status
     );
     results.push(res_c3);
 
@@ -499,8 +573,12 @@ async fn main() -> Result<()> {
     let res_c4 = bench_reader_writer_isolation(4, 4, 20).await?;
     println!(
         "-> Ops/sec: {:>6.1} | Duration: {:>6.2}ms | Rows: {}/{} | Torn Snapshots: {} | {}",
-        res_c4.throughput_ops_sec, res_c4.duration_ms, res_c4.actual_rows, res_c4.expected_rows,
-        res_c4.torn_snapshots_observed, res_c4.status
+        res_c4.throughput_ops_sec,
+        res_c4.duration_ms,
+        res_c4.actual_rows,
+        res_c4.expected_rows,
+        res_c4.torn_snapshots_observed,
+        res_c4.status
     );
     results.push(res_c4);
 
@@ -517,7 +595,11 @@ async fn main() -> Result<()> {
     ];
 
     for r in &results {
-        let status_icon = if r.status == "PASS" { "✅ PASS" } else { "❌ FAIL" };
+        let status_icon = if r.status == "PASS" {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        };
         md_lines.push(format!(
             "| **{}** | {} | {} | **{:.1}** | {:.2} ms | {} / {} | {} | {} | {} | {} | {} |",
             r.scenario,
@@ -547,7 +629,10 @@ async fn main() -> Result<()> {
     let out_dir = Path::new("benchmarks/results");
     fs::create_dir_all(out_dir)?;
 
-    fs::write(out_dir.join("production_concurrency_correctness.md"), &md_report)?;
+    fs::write(
+        out_dir.join("production_concurrency_correctness.md"),
+        &md_report,
+    )?;
     fs::write(
         out_dir.join("production_concurrency_correctness.json"),
         serde_json::to_string_pretty(&results)?,

@@ -33,14 +33,128 @@ import pyarrow as pa
 
 BEIR_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
+# Canonical BEIR dataset archives (the data dir is gitignored, so a fresh clone
+# or CI run downloads the corpus on first use).
+BEIR_DATASET_URLS = {
+    "scifact": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+}
+
+
+def ensure_dataset(dataset_name: str, data_dir: str | None = None) -> str:
+    """Return the dataset directory, downloading + extracting the BEIR zip if absent."""
+    base = data_dir or BEIR_DATA_DIR
+    dataset_dir = os.path.join(base, dataset_name)
+    if os.path.isdir(dataset_dir):
+        return dataset_dir
+    url = BEIR_DATASET_URLS.get(dataset_name)
+    if not url:
+        raise FileNotFoundError(
+            f"Dataset directory not found: {dataset_dir} "
+            f"(no download URL registered for {dataset_name!r})"
+        )
+    import urllib.request
+    import zipfile
+
+    os.makedirs(base, exist_ok=True)
+    zip_path = os.path.join(base, f"{dataset_name}.zip")
+    print(f"Downloading {dataset_name} from {url} ...", flush=True)
+    urllib.request.urlretrieve(url, zip_path)
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(base)
+    os.remove(zip_path)
+    if not os.path.isdir(dataset_dir):
+        raise FileNotFoundError(f"Extracted archive did not contain {dataset_dir}")
+    return dataset_dir
+
+
+def envelope_info() -> Dict[str, Any]:
+    """Container-visible resource envelope, so results are self-describing.
+
+    Reads the same ``BENCH_CPUS`` / ``BENCH_MEM`` variables the Docker compose
+    stack applies to *every* participant, so a hybrid row can be checked against
+    the envelope it was measured under.
+    """
+    cpus = os.environ.get("BENCH_CPUS")
+    mem = os.environ.get("BENCH_MEM")
+    containerized = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    return {
+        "cpus": int(cpus) if cpus and cpus.isdigit() else None,
+        "mem": mem,
+        "containerized": containerized,
+    }
+
+
+def _env_record() -> Dict[str, Any]:
+    """Container-visible environment, mirroring the competitor JSON ``env`` block."""
+    ram_gb = None
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    ram_gb = round(int(line.split()[1]) / 1048576, 1)
+                    break
+    except OSError:
+        pass
+    return {
+        "cpu_model": platform.processor() or platform.machine(),
+        "cores": os.cpu_count() or 0,
+        "ram_gb": ram_gb,
+        "os": platform.platform(),
+        "python": platform.python_version(),
+        "containerized": os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"),
+        "gpus": [],
+    }
+
+
+def write_json_records(
+    results: List[Dict[str, Any]],
+    dataset: str,
+    k: int,
+    num_queries: int,
+    json_dir: str,
+    workload: str,
+    device: str,
+) -> None:
+    """Write one competitor-schema JSON record per engine.
+
+    The record matches the shape the competitor matrix emits
+    (``{engine}_{dataset}_{device}.json``), so ``generate_summary.py`` can roll
+    the BEIR hybrid rows into the consolidated benchmark report.
+    """
+    os.makedirs(json_dir, exist_ok=True)
+    env = _env_record()
+    for r in results:
+        if not r.get("available"):
+            continue
+        record = {
+            "engine": r["engine"],
+            "dataset": dataset,
+            "workload": workload,
+            "device": device,
+            "queries": num_queries,
+            "k": k,
+            "build_s": round(r["build_s"], 3),
+            "index_mb": r["index_mb"],
+            "recall_at_k": round(r.get(f"recall@{k}", 0.0), 4),
+            "ndcg_at_k": round(r.get(f"ndcg@{k}", 0.0), 4),
+            "mrr_at_k": round(r.get(f"mrr@{k}", 0.0), 4),
+            "qps": round(r["qps"], 1),
+            "p50_ms": round(r["p50_ms"], 3),
+            "p99_ms": round(r["p99_ms"], 3),
+            "env": env,
+        }
+        path = os.path.join(json_dir, f"{r['engine']}_{dataset}_{workload}_{device}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2)
+        print(f"wrote {path}", flush=True)
+
 
 def load_dataset_with_embeddings(
     dataset_name: str = "scifact",
+    data_dir: str | None = None,
 ) -> Tuple[List[Tuple[str, str, np.ndarray]], Dict[str, Tuple[str, np.ndarray]], Dict[str, Dict[str, int]]]:
     """Loads corpus with dense embeddings, test queries with embeddings, and qrels."""
-    dataset_dir = os.path.join(BEIR_DATA_DIR, dataset_name)
-    if not os.path.exists(dataset_dir):
-        raise FileNotFoundError(f"Dataset directory not found: {dataset_dir}")
+    dataset_dir = ensure_dataset(dataset_name, data_dir)
 
     corpus_path = os.path.join(dataset_dir, "corpus.jsonl")
     queries_path = os.path.join(dataset_dir, "queries.jsonl")
@@ -328,6 +442,12 @@ def run_lancedb_hybrid(
         ]
         tbl = db.create_table("scifact", data)
         tbl.create_fts_index("text")
+        # Build LanceDB's default disk-ANN vector index (IVF_PQ) so the dense
+        # half of the hybrid search is index-backed, matching the docstring and
+        # what a LanceDB user gets from `create_index` with no config.
+        from lancedb.index import IvfPq
+
+        tbl.create_index("vector", config=IvfPq(distance_type="cosine"))
         build_s = time.perf_counter() - t_build_0
 
         index_bytes = sum(
@@ -379,10 +499,27 @@ def main():
     parser.add_argument("--rrf-k", type=int, default=60, help="RRF constant (default: 60)")
     parser.add_argument("--limit-queries", type=int, default=None, help="Limit number of queries evaluated")
     parser.add_argument("--out", default=None, help="Output markdown path")
+    parser.add_argument(
+        "--json-dir",
+        default=None,
+        help="If set, write one competitor-schema JSON record per engine here, "
+        "so generate_summary.py rolls the BEIR rows into the benchmark report",
+    )
+    parser.add_argument(
+        "--device",
+        default=os.environ.get("DEVICE", "cpu"),
+        help="Device tag for the JSON records (default: $DEVICE or cpu)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Directory holding <dataset>/ (default: benchmarks/beir/data)",
+    )
     args = parser.parse_args()
 
+    env = envelope_info()
     print(f"Loading {args.dataset} dataset with dense embeddings...", flush=True)
-    corpus, queries, qrels = load_dataset_with_embeddings(args.dataset)
+    corpus, queries, qrels = load_dataset_with_embeddings(args.dataset, data_dir=args.data_dir)
     if args.limit_queries and args.limit_queries < len(queries):
         subset_keys = list(queries.keys())[: args.limit_queries]
         queries = {k: queries[k] for k in subset_keys}
@@ -432,6 +569,12 @@ def main():
         print(f"\nBenoStreamDB vs LanceDB Top-{args.k} Jaccard Agreement: {agreement_pct:.1f}%", flush=True)
 
     # Format Markdown Report
+    env_bits = []
+    if env["cpus"] is not None:
+        env_bits.append(f"{env['cpus']} CPUs")
+    if env["mem"]:
+        env_bits.append(f"{env['mem']} RAM")
+    envelope_str = ", ".join(env_bits) if env_bits else "unconstrained (host)"
     lines = [
         "# BEIR Hybrid Search Benchmark Results: BenoStreamDB vs Competitor",
         "",
@@ -443,6 +586,11 @@ def main():
         f"- **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k={args.rrf_k}`)",
         f"- **Top-K**: {args.k}",
         f"- **Host**: {platform.processor() or platform.machine()} ({platform.system()})",
+        f"- **Resource Envelope**: {envelope_str}"
+        + (" (containerized)" if env["containerized"] else ""),
+        "- **Methodology**: every engine runs in a Docker container under the same "
+        "`--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh "
+        "--workload beir`), so no participant gets more cores or RAM than another.",
         "",
         "### Competitor Comparison (Hybrid Dense + Sparse RRF)",
         "",
@@ -494,6 +642,17 @@ def main():
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"Wrote Hybrid benchmark report to {args.out}")
+
+    if args.json_dir:
+        write_json_records(
+            results,
+            args.dataset,
+            args.k,
+            len(queries),
+            args.json_dir,
+            workload="hybrid_rrf",
+            device=args.device,
+        )
 
 
 if __name__ == "__main__":

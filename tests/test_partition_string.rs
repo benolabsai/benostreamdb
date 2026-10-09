@@ -57,7 +57,11 @@ async fn test_string_identity_partitioning() -> anyhow::Result<()> {
     // 4. Test with Dictionary strings (Categorical)
     let dict_table_name = "test_dict_partition";
     let dict_uri = format!("file:///tmp/{}", dict_table_name);
-    let _ = std::fs::remove_dir_all(format!("{}/{}", std::env::temp_dir().display(), dict_table_name));
+    let _ = std::fs::remove_dir_all(format!(
+        "{}/{}",
+        std::env::temp_dir().display(),
+        dict_table_name
+    ));
 
     let dict_schema = Arc::new(ArrowSchema::new(vec![
         Field::new(

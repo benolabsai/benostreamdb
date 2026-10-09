@@ -940,7 +940,8 @@ impl GpuBackend for NoDropBackend {
         dim_bytes: usize,
         metric: VectorMetric,
     ) -> Result<Vec<f32>> {
-        self.0.compute_binary_distance(query, vectors, dim_bytes, metric)
+        self.0
+            .compute_binary_distance(query, vectors, dim_bytes, metric)
     }
 }
 
@@ -1407,7 +1408,10 @@ pub fn clear_gpu_context() {
 pub fn context_from_device_str(device: &str) -> ComputeContext {
     let d = device.trim().to_ascii_lowercase();
     let (backend, device_id) = if let Some(rest) = d.strip_prefix("cuda:") {
-        (ComputeBackend::Cuda, rest.trim().parse::<usize>().unwrap_or(0))
+        (
+            ComputeBackend::Cuda,
+            rest.trim().parse::<usize>().unwrap_or(0),
+        )
     } else {
         match d.as_str() {
             "" | "auto" | "gpu" => return ComputeContext::auto_detect(),
@@ -1482,9 +1486,8 @@ pub fn get_thread_gpu_context() -> Option<ComputeContext> {
                     // The pool was cleared between the check and here.
                     return ComputeContext::auto_detect();
                 }
-                let idx = GPU_POOL_NEXT
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    % pool.len();
+                let idx =
+                    GPU_POOL_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % pool.len();
                 context_from_device_str(&pool[idx])
             });
             ctx.clone()

@@ -131,7 +131,9 @@ impl Table {
 
     /// The table's resolved graph metadata.
     pub async fn graph_metadata_async(&self) -> Result<GraphMetadata> {
-        Ok(GraphMetadata::from_properties(&self.properties_async().await?))
+        Ok(GraphMetadata::from_properties(
+            &self.properties_async().await?,
+        ))
     }
 
     /// The table's resolved graph metadata (synchronous).

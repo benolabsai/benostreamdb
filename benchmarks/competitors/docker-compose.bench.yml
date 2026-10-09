@@ -42,6 +42,11 @@ x-bench-env: &bench-env
   DEVICE: "${DEVICE:-cpu}"
   WORKLOAD: "${WORKLOAD:-vector}"
   ALGORITHM: "${ALGORITHM:-pagerank}"
+  # BEIR lexical/hybrid workload (WORKLOAD=beir). One process runs every engine
+  # under this container's envelope; the dataset is mounted read-only.
+  BEIR_DATASET: "${BEIR_DATASET:-scifact}"
+  BEIR_ENGINES: "${BEIR_ENGINES:-benostreamdb,tantivy,opensearch}"
+  BEIR_MODE: "${BEIR_MODE:-lexical}"
   GRAPH_EDGES: "${GRAPH_EDGES:-}"
   SQL: "${SQL:-}"
   PARQUET: "${PARQUET:-}"
@@ -179,6 +184,11 @@ services:
     volumes:
       - ./results:/results
       - ./data:/opt/bench/data
+      # BEIR corpus/queries/qrels (read-only) and the report output dir. The
+      # reports land in benchmarks/beir/results/ so generate_summary.py picks
+      # them up alongside the host-run artifacts.
+      - ../beir/data:/opt/bench/beir_data:ro
+      - ../beir/results:/results/beir
       - ../../dist:/wheels:ro
     # The runner logic lives in the image's CMD (`/opt/bench/run_bench.sh`);
     # an inline compose `command:` was mangled by YAML folding.

@@ -655,11 +655,11 @@ async fn update_table(
                         if !entry.index_files.is_empty() {
                             let old_len = entry.index_files.len();
                             entry.index_files.retain(|idx| {
-                                let match_type =
-                                    index_category.as_ref().is_none_or(|t| idx.index_category == *t);
-                                let match_col = column_name
+                                let match_type = index_category
                                     .as_ref()
-                                    .is_none_or(|c| &idx.column_name == c);
+                                    .is_none_or(|t| idx.index_category == *t);
+                                let match_col =
+                                    column_name.as_ref().is_none_or(|c| &idx.column_name == c);
                                 !(match_type && match_col) // Keep if NOT matching removal criteria
                             });
                             if entry.index_files.len() < old_len {

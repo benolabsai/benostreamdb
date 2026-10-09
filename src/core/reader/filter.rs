@@ -973,9 +973,7 @@ impl HybridReader {
                 JsonPathOp::Exists => {
                     let key = p.path.strip_prefix("$.").unwrap_or(&p.path);
                     let a = self.get_json_path_bitmap(&p.column, &p.path, None).await?;
-                    let b = self
-                        .get_json_path_bitmap(&p.column, "$", Some(key))
-                        .await?;
+                    let b = self.get_json_path_bitmap(&p.column, "$", Some(key)).await?;
                     match (a, b) {
                         (Some(a), Some(b)) => Some(a | b),
                         (Some(a), None) => Some(a),

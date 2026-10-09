@@ -27,8 +27,14 @@ fn edge_batch(offset: i64) -> RecordBatch {
         Field::new("source", DataType::Int64, false),
         Field::new("target", DataType::Int64, false),
     ]));
-    let src: Vec<i64> = vec![0, 0, 1, 2, 2, 2, 3].into_iter().map(|v| v + offset).collect();
-    let dst: Vec<i64> = vec![1, 2, 2, 0, 1, 3, 0].into_iter().map(|v| v + offset).collect();
+    let src: Vec<i64> = vec![0, 0, 1, 2, 2, 2, 3]
+        .into_iter()
+        .map(|v| v + offset)
+        .collect();
+    let dst: Vec<i64> = vec![1, 2, 2, 0, 1, 3, 0]
+        .into_iter()
+        .map(|v| v + offset)
+        .collect();
     RecordBatch::try_new(
         schema,
         vec![
@@ -50,11 +56,7 @@ fn count_files_with_suffix(dir: &str, suffix: &str) -> usize {
     std::fs::read_dir(dir)
         .map(|rd| {
             rd.flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .ends_with(suffix)
-                })
+                .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
                 .count()
         })
         .unwrap_or(0)

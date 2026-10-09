@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-04 21:15:37 UTC
+- **Generated At**: 2026-10-09 11:56:29 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
 
@@ -159,7 +159,17 @@
 
 ## 4. Lexical & Hybrid Search Performance (BEIR SciFact: BM25 vs Tantivy & Hybrid RRF)
 
-### Results from `scifact_bm25.md`
+### Rolled-up results (JSON)
+
+| Engine | Workload | Device | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| benostreamdb | hybrid_rrf | cpu | scifact | 0.8527 | 0.6957 | 0.6502 | 175.7 | 5.542 | 7.229 | 0.536 | 6.63 |
+| benostreamdb | lexical_bm25 | cpu | scifact | 0.7909 | 0.6617 | 0.6276 | 418.1 | 2.249 | 3.893 | 0.364 | 3.31 |
+| lancedb | hybrid_rrf | cpu | scifact | 0.8259 | 0.677 | 0.6357 | 193.4 | 4.767 | 6.728 | 0.886 | 14.31 |
+| opensearch | lexical_bm25 | cpu | scifact | 0.8196 | 0.6821 | 0.6431 | 817.8 | 1.16 | 2.147 | 0.756 | 6.62 |
+| tantivy | lexical_bm25 | cpu | scifact | 0.7812 | 0.6517 | 0.615 | 2690.9 | 0.307 | 0.707 | 0.193 | 8.34 |
+
+### Results from `scifact_bm25_competitors_cpu.md`
 
 # BEIR Lexical / BM25 Benchmark Results
 
@@ -168,18 +178,22 @@
 - **Evaluated Queries**: 300
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 | Engine | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.34s | 3.3 MB | **435.8** | **2.16 ms** | 3.82 ms | 0.7909 | 0.6617 |
-| **tantivy** | ✅ Pass | 0.26s | 8.4 MB | **3798.0** | **0.22 ms** | 0.50 ms | 0.7812 | 0.6517 |
+| **benostreamdb** | ✅ Pass | 0.36s | 3.3 MB | **418.1** | **2.25 ms** | 3.89 ms | 0.7909 | 0.6617 |
+| **tantivy** | ✅ Pass | 0.19s | 8.3 MB | **2690.9** | **0.31 ms** | 0.71 ms | 0.7812 | 0.6517 |
+| **opensearch** | ✅ Pass | 0.76s | 6.6 MB | **817.8** | **1.16 ms** | 2.15 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **81.4%** between BenoStreamDB and Tantivy.
+- **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
-### Results from `scifact_hybrid.md`
+### Results from `scifact_hybrid_cpu.md`
 
 # BEIR Hybrid Search Benchmark Results: BenoStreamDB vs Competitor
 
@@ -191,26 +205,28 @@
 - **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k=60`)
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 ### Competitor Comparison (Hybrid Dense + Sparse RRF)
 
 | Engine | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.98s | 6.7 MB | **190.7** | **5.12 ms** | 6.94 ms | **0.8460** | **0.6859** | 0.6394 |
-| **lancedb** | ✅ Pass | 0.71s | 13.9 MB | **167.2** | **5.70 ms** | 7.36 ms | **0.8367** | **0.7118** | 0.6783 |
+| **benostreamdb** | ✅ Pass | 0.54s | 6.6 MB | **175.7** | **5.54 ms** | 7.23 ms | **0.8527** | **0.6957** | 0.6502 |
+| **lancedb** | ✅ Pass | 0.89s | 14.3 MB | **193.4** | **4.77 ms** | 6.73 ms | **0.8259** | **0.6770** | 0.6357 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **60.2%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **47.3%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.7 MB | 414.3 | 2.29 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1308.8 | 0.67 ms | 0.7517 | 0.6290 | 0.5935 |
-| **Hybrid (Dense + BM25 RRF)** | 6.7 MB | 190.7 | 5.12 ms | **0.8460** | **0.6859** | **0.6394** |
+| **Sparse (BM25 Only)** | 6.6 MB | 412.1 | 2.30 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1237.6 | 0.70 ms | 0.7767 | 0.6449 | 0.6065 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 175.7 | 5.54 ms | **0.8527** | **0.6957** | **0.6502** |
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -396,19 +412,12 @@
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
-# Benchmark rollup (2026-10-04T17:14:29-04:00)
+# Benchmark rollup (2026-10-09T07:56:12-04:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 
 | Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|
-| benostreamdb | cpu | sift-128-euclidean | 0.9572 | 2983.3 | 0.336 | 0.422 | 0.665 | 26.18 |
-| benostreamdb | gpu | sift-128-euclidean | 0.9532 | 2903.1 | 0.344 | 0.432 | 0.977 | 26.17 |
-| faiss | cpu | sift-128-euclidean | 1.0 | 9158.3 | 0.107 | 0.197 | 0.298 | 0.0 |
-| faiss | gpu | sift-128-euclidean | 1.0 | 7180.2 | 0.137 | 0.271 | 0.323 | 0.0 |
-| hnswlib | cpu | sift-128-euclidean | 1.0 | 11522.7 | 0.084 | 0.191 | 0.428 | 0.0 |
-| lancedb | cpu | sift-128-euclidean | 0.9308 | 413.3 | 1.858 | 2.45 | 2.487 | 16.17 |
-| opensearch | cpu | sift-128-euclidean | 0.949 | 931.1 | 1.01 | 1.714 | 5.07 | 0.02 |
-| pgvector | cpu | sift-128-euclidean | 0.9926 | 324.9 | 2.984 | 3.86 | 2.743 | 29.22 |
+| (no results) | | | | | | | | |
 
 

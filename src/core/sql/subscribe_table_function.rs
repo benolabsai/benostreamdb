@@ -132,10 +132,8 @@ impl TableProvider for SubscribeEventsProvider {
         let table = resolve_table(session_state, &self.table).await?;
         let batch = drain_events(&table, &self.filter, self.max_events, self.timeout_ms).await?;
 
-        let mem = datafusion::datasource::memory::MemTable::try_new(
-            event_schema(),
-            vec![vec![batch]],
-        )?;
+        let mem =
+            datafusion::datasource::memory::MemTable::try_new(event_schema(), vec![vec![batch]])?;
         mem.scan(state, projection, filters, limit).await
     }
 }

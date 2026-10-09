@@ -103,10 +103,7 @@ impl ManifestManager {
     /// MVCC: same optimistic-concurrency contract as `update_schema` — the
     /// `PutMode::Create` write of `v{N+1}.json` is the linearization point, and
     /// the retry loop rebases onto the latest snapshot on conflict.
-    pub async fn update_properties(
-        &self,
-        properties: HashMap<String, String>,
-    ) -> Result<Manifest> {
+    pub async fn update_properties(&self, properties: HashMap<String, String>) -> Result<Manifest> {
         let max_retries = 10;
         let mut attempt = 0;
 

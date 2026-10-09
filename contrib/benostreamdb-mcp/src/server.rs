@@ -139,10 +139,18 @@ impl McpServer {
                     debug!("Received line: {}", line);
                     if let Ok(req) = serde_json::from_str::<JsonRpcRequest>(&line) {
                         if let Some(id) = req.id {
-                            let response = self.handle_request(&req.method, req.params.unwrap_or(json!({}))).await;
+                            let response = self
+                                .handle_request(&req.method, req.params.unwrap_or(json!({})))
+                                .await;
                             let send_result = match response {
-                                Ok(res) => self.send_response(JsonRpcResponse::success(id.clone(), res)),
-                                Err(err) => self.send_response(JsonRpcResponse::error(id.clone(), -32603, err.to_string())),
+                                Ok(res) => {
+                                    self.send_response(JsonRpcResponse::success(id.clone(), res))
+                                }
+                                Err(err) => self.send_response(JsonRpcResponse::error(
+                                    id.clone(),
+                                    -32603,
+                                    err.to_string(),
+                                )),
                             };
                             if let Err(e) = send_result {
                                 error!("Stdout closed or write failed, exiting loop: {}", e);
@@ -150,11 +158,17 @@ impl McpServer {
                             }
                         } else {
                             // It's a notification, handle without response
-                            let _ = self.handle_notification(&req.method, req.params.unwrap_or(json!({}))).await;
+                            let _ = self
+                                .handle_notification(&req.method, req.params.unwrap_or(json!({})))
+                                .await;
                         }
                     } else {
                         error!("Failed to parse JSON-RPC request");
-                        if let Err(e) = self.send_response(JsonRpcResponse::error(Value::Null, -32700, "Parse error".to_string())) {
+                        if let Err(e) = self.send_response(JsonRpcResponse::error(
+                            Value::Null,
+                            -32700,
+                            "Parse error".to_string(),
+                        )) {
                             error!("Stdout closed or write failed, exiting loop: {}", e);
                             break;
                         }
@@ -201,19 +215,17 @@ impl McpServer {
     async fn handle_request(&self, method: &str, params: Value) -> Result<Value> {
         info!("Handling request method: {}", method);
         match method {
-            "initialize" => {
-                Ok(json!({
-                    "protocolVersion": "2024-11-05",
-                    "serverInfo": {
-                        "name": "benostreamdb-mcp",
-                        "version": "0.1.0"
-                    },
-                    "capabilities": {
-                        "tools": {},
-                        "resources": {}
-                    }
-                }))
-            },
+            "initialize" => Ok(json!({
+                "protocolVersion": "2024-11-05",
+                "serverInfo": {
+                    "name": "benostreamdb-mcp",
+                    "version": "0.1.0"
+                },
+                "capabilities": {
+                    "tools": {},
+                    "resources": {}
+                }
+            })),
             "resources/list" => {
                 let mut resources = Vec::new();
                 if let Ok(rows) = self.query_to_json("SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema != 'information_schema'").await {
@@ -237,10 +249,10 @@ impl McpServer {
                 Ok(json!({
                     "resources": resources
                 }))
-            },
+            }
             "resources/read" => {
                 let uri = params.get("uri").and_then(|u| u.as_str()).unwrap_or("");
-                
+
                 if uri == "benostreamdb://docs/sql_manual.md" {
                     let md_content = "# BenoStreamDB SQL Reference Manual\n\n\
                     BenoStreamDB extends standard Apache DataFusion SQL with advanced analytical capabilities designed for AI, graph, and document workloads.\n\n\
@@ -349,7 +361,7 @@ impl McpServer {
                     - **SQL**: `SELECT * FROM subscribe_events('scratch.my_table', 'id > 10', 100, 1000);` returns one row per event (`event_type` = 'batch' | 'commit', `rows`).\n\
                     - **Tool**: call the `subscribe_events` tool with `{ table, filter?, max_events?, timeout_ms? }`.\n\
                     - **Note**: the change feed is in-process; it only observes commits made by writers in the same process.";
-                    
+
                     return Ok(json!({
                         "contents": [{
                             "uri": uri,
@@ -358,9 +370,12 @@ impl McpServer {
                         }]
                     }));
                 }
-                
+
                 if uri.starts_with("benostreamdb://tables/") {
-                    let parts: Vec<&str> = uri.trim_start_matches("benostreamdb://tables/").split('/').collect();
+                    let parts: Vec<&str> = uri
+                        .trim_start_matches("benostreamdb://tables/")
+                        .split('/')
+                        .collect();
                     if parts.len() == 2 {
                         let schema = parts[0];
                         let table = parts[1];
@@ -393,7 +408,7 @@ impl McpServer {
                     }
                 }
                 Err(anyhow::anyhow!("Resource not found: {}", uri))
-            },
+            }
             "tools/list" => {
                 let execute_sql_desc = "Execute a SQL query against the BenoStreamDB engine. Uses Apache DataFusion SQL dialect.\n\n\
                 Available custom functions and syntax:\n\
@@ -480,13 +495,17 @@ impl McpServer {
                         }
                     ]
                 }))
-            },
+            }
             "tools/call" => {
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                
+
                 match name {
                     "execute_sql" => {
-                        let query = params.get("arguments").and_then(|a| a.get("query")).and_then(|q| q.as_str()).unwrap_or("");
+                        let query = params
+                            .get("arguments")
+                            .and_then(|a| a.get("query"))
+                            .and_then(|q| q.as_str())
+                            .unwrap_or("");
                         if let Err(e) = guard_scratch_only(query) {
                             return Ok(json!({
                                 "content": [ { "type": "text", "text": e.to_string() } ],
@@ -499,7 +518,8 @@ impl McpServer {
                                 if !batches.is_empty() {
                                     let mut buf = Vec::new();
                                     {
-                                        let mut writer = arrow_json::LineDelimitedWriter::new(&mut buf);
+                                        let mut writer =
+                                            arrow_json::LineDelimitedWriter::new(&mut buf);
                                         for batch in &batches {
                                             writer.write(batch).unwrap();
                                         }
@@ -519,23 +539,33 @@ impl McpServer {
                                     ]
                                 }))
                             }
-                            Err(e) => {
-                                Ok(json!({
-                                    "content": [
-                                        {
-                                            "type": "text",
-                                            "text": format!("Error executing SQL: {}", e)
-                                        }
-                                    ],
-                                    "isError": true
-                                }))
-                            }
+                            Err(e) => Ok(json!({
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": format!("Error executing SQL: {}", e)
+                                    }
+                                ],
+                                "isError": true
+                            })),
                         }
                     }
                     "create_scratch_table" => {
-                        let table_name = params.get("arguments").and_then(|a| a.get("table_name")).and_then(|v| v.as_str()).unwrap_or("");
-                        let schema_ddl = params.get("arguments").and_then(|a| a.get("schema_ddl")).and_then(|v| v.as_str()).unwrap_or("");
-                        let table_type = params.get("arguments").and_then(|a| a.get("table_type")).and_then(|v| v.as_str()).unwrap_or("");
+                        let table_name = params
+                            .get("arguments")
+                            .and_then(|a| a.get("table_name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let schema_ddl = params
+                            .get("arguments")
+                            .and_then(|a| a.get("schema_ddl"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let table_type = params
+                            .get("arguments")
+                            .and_then(|a| a.get("table_type"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
 
                         let _ = self
                             .session
@@ -590,7 +620,10 @@ impl McpServer {
                                         full_table_name, table_type
                                     );
                                     if let Err(e) = self.session.sql(&alter).await {
-                                        error!("Failed to set table_type on {}: {}", full_table_name, e);
+                                        error!(
+                                            "Failed to set table_type on {}: {}",
+                                            full_table_name, e
+                                        );
                                     }
                                 }
                                 Ok(json!({
@@ -599,23 +632,30 @@ impl McpServer {
                                     ]
                                 }))
                             }
-                            Err(e) => {
-                                Ok(json!({
-                                    "content": [
-                                        { "type": "text", "text": format!("Error creating table: {}", e) }
-                                    ],
-                                    "isError": true
-                                }))
-                            }
+                            Err(e) => Ok(json!({
+                                "content": [
+                                    { "type": "text", "text": format!("Error creating table: {}", e) }
+                                ],
+                                "isError": true
+                            })),
                         }
                     }
                     "insert_scratch_records" => {
-                        let table_name = params.get("arguments").and_then(|a| a.get("table_name")).and_then(|v| v.as_str()).unwrap_or("");
-                        let records = params.get("arguments").and_then(|a| a.get("records")).and_then(|v| v.as_array());
-                        
+                        let table_name = params
+                            .get("arguments")
+                            .and_then(|a| a.get("table_name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let records = params
+                            .get("arguments")
+                            .and_then(|a| a.get("records"))
+                            .and_then(|v| v.as_array());
+
                         if let Some(records) = records {
                             if records.is_empty() {
-                                return Ok(json!({"content": [{"type": "text", "text": "No records to insert."}]}));
+                                return Ok(
+                                    json!({"content": [{"type": "text", "text": "No records to insert."}]}),
+                                );
                             }
                             // Write records to a temporary NDJSON file for DataFusion insertion
                             use std::io::Write;
@@ -627,33 +667,52 @@ impl McpServer {
                                         let _ = writer.write_all(b"\n");
                                     }
                                     let _ = writer.flush();
-                                    
-                                    let path = temp_file.path().to_str().unwrap().replace("\\", "/");
-                                    let temp_import_name = format!("{}.temp_import_{}", SCRATCH_SCHEMA, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+
+                                    let path =
+                                        temp_file.path().to_str().unwrap().replace("\\", "/");
+                                    let temp_import_name = format!(
+                                        "{}.temp_import_{}",
+                                        SCRATCH_SCHEMA,
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_nanos()
+                                    );
 
                                     let full_table_name = if table_name.contains('.') {
                                         table_name.to_string()
                                     } else {
                                         format!("{}.{}", SCRATCH_SCHEMA, table_name)
                                     };
-                                    
-                                    let query1 = format!("CREATE EXTERNAL TABLE {} STORED AS JSON LOCATION '{}'", temp_import_name, path);
-                                    let query2 = format!("INSERT INTO {} SELECT * FROM {}", full_table_name, temp_import_name);
+
+                                    let query1 = format!(
+                                        "CREATE EXTERNAL TABLE {} STORED AS JSON LOCATION '{}'",
+                                        temp_import_name, path
+                                    );
+                                    let query2 = format!(
+                                        "INSERT INTO {} SELECT * FROM {}",
+                                        full_table_name, temp_import_name
+                                    );
                                     let query3 = format!("DROP TABLE {}", temp_import_name);
-                                    
+
                                     let mut success = false;
                                     let mut error_msg = String::new();
                                     match self.session.sql(&query1).await {
                                         Ok(_) => {
                                             match self.session.sql(&query2).await {
                                                 Ok(_) => success = true,
-                                                Err(e) => error_msg = format!("INSERT error: {}", e),
+                                                Err(e) => {
+                                                    error_msg = format!("INSERT error: {}", e)
+                                                }
                                             }
                                             let _ = self.session.sql(&query3).await;
                                         }
-                                        Err(e) => error_msg = format!("CREATE EXTERNAL TABLE error: {}", e),
+                                        Err(e) => {
+                                            error_msg =
+                                                format!("CREATE EXTERNAL TABLE error: {}", e)
+                                        }
                                     }
-                                    
+
                                     if success {
                                         Ok(json!({
                                             "content": [
@@ -669,68 +728,92 @@ impl McpServer {
                                         }))
                                     }
                                 }
-                                Err(e) => {
-                                    Ok(json!({"content": [{"type": "text", "text": format!("Failed to create temp file: {}", e)}], "isError": true}))
-                                }
+                                Err(e) => Ok(
+                                    json!({"content": [{"type": "text", "text": format!("Failed to create temp file: {}", e)}], "isError": true}),
+                                ),
                             }
                         } else {
-                            Ok(json!({"content": [{"type": "text", "text": "Missing 'records' array."}], "isError": true}))
+                            Ok(
+                                json!({"content": [{"type": "text", "text": "Missing 'records' array."}], "isError": true}),
+                            )
                         }
                     }
                     "export_table" => {
-                        let table_name = params.get("arguments").and_then(|a| a.get("table_name")).and_then(|v| v.as_str()).unwrap_or("");
-                        let export_path = params.get("arguments").and_then(|a| a.get("export_path")).and_then(|v| v.as_str()).unwrap_or("");
-                        
+                        let table_name = params
+                            .get("arguments")
+                            .and_then(|a| a.get("table_name"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let export_path = params
+                            .get("arguments")
+                            .and_then(|a| a.get("export_path"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
                         let full_table_name = if table_name.contains('.') {
                             table_name.to_string()
                         } else {
                             format!("{}.{}", SCRATCH_SCHEMA, table_name)
                         };
 
-                        let query = format!("COPY {} TO '{}' STORED AS PARQUET", full_table_name, export_path.replace("\\", "/"));
+                        let query = format!(
+                            "COPY {} TO '{}' STORED AS PARQUET",
+                            full_table_name,
+                            export_path.replace("\\", "/")
+                        );
                         match self.session.sql(&query).await {
-                            Ok(_) => {
-                                Ok(json!({
-                                    "content": [
-                                        { "type": "text", "text": format!("Successfully exported {} to {}", table_name, export_path) }
-                                    ]
-                                }))
-                            }
-                            Err(e) => {
-                                Ok(json!({
-                                    "content": [
-                                        { "type": "text", "text": format!("Error exporting table: {}", e) }
-                                    ],
-                                    "isError": true
-                                }))
-                            }
-                        }
-                    }
-                    "list_graph_tables" => {
-                        match self.session.list_graph_tables().await {
-                            Ok(infos) => {
-                                let text = if infos.is_empty() {
-                                    "No graph tables found. Declare one with \
-                                     ALTER TABLE t SET TBLPROPERTIES ('table_type'='edge', 'src_col'='src', 'dst_col'='dst')."
-                                        .to_string()
-                                } else {
-                                    serde_json::to_string_pretty(&infos).unwrap_or_default()
-                                };
-                                Ok(json!({
-                                    "content": [ { "type": "text", "text": text } ]
-                                }))
-                            }
+                            Ok(_) => Ok(json!({
+                                "content": [
+                                    { "type": "text", "text": format!("Successfully exported {} to {}", table_name, export_path) }
+                                ]
+                            })),
                             Err(e) => Ok(json!({
-                                "content": [ { "type": "text", "text": format!("Error listing graph tables: {}", e) } ],
+                                "content": [
+                                    { "type": "text", "text": format!("Error exporting table: {}", e) }
+                                ],
                                 "isError": true
                             })),
                         }
                     }
+                    "list_graph_tables" => match self.session.list_graph_tables().await {
+                        Ok(infos) => {
+                            let text = if infos.is_empty() {
+                                "No graph tables found. Declare one with \
+                                     ALTER TABLE t SET TBLPROPERTIES ('table_type'='edge', 'src_col'='src', 'dst_col'='dst')."
+                                        .to_string()
+                            } else {
+                                serde_json::to_string_pretty(&infos).unwrap_or_default()
+                            };
+                            Ok(json!({
+                                "content": [ { "type": "text", "text": text } ]
+                            }))
+                        }
+                        Err(e) => Ok(json!({
+                            "content": [ { "type": "text", "text": format!("Error listing graph tables: {}", e) } ],
+                            "isError": true
+                        })),
+                    },
                     "subscribe_events" => {
-                        let table = params.get("arguments").and_then(|a| a.get("table")).and_then(|v| v.as_str()).unwrap_or("");
-                        let filter = params.get("arguments").and_then(|a| a.get("filter")).and_then(|v| v.as_str()).unwrap_or("");
-                        let max_events = params.get("arguments").and_then(|a| a.get("max_events")).and_then(|v| v.as_u64()).unwrap_or(100);
-                        let timeout_ms = params.get("arguments").and_then(|a| a.get("timeout_ms")).and_then(|v| v.as_u64()).unwrap_or(1000);
+                        let table = params
+                            .get("arguments")
+                            .and_then(|a| a.get("table"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let filter = params
+                            .get("arguments")
+                            .and_then(|a| a.get("filter"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let max_events = params
+                            .get("arguments")
+                            .and_then(|a| a.get("max_events"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(100);
+                        let timeout_ms = params
+                            .get("arguments")
+                            .and_then(|a| a.get("timeout_ms"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(1000);
                         if table.is_empty() {
                             return Ok(json!({
                                 "content": [ { "type": "text", "text": "subscribe_events requires a 'table' argument." } ],
@@ -740,7 +823,10 @@ impl McpServer {
                         let esc = |s: &str| s.replace('\'', "''");
                         let query = format!(
                             "SELECT * FROM subscribe_events('{}', '{}', {}, {})",
-                            esc(table), esc(filter), max_events, timeout_ms
+                            esc(table),
+                            esc(filter),
+                            max_events,
+                            timeout_ms
                         );
                         match self.session.sql(&query).await {
                             Ok((batches, _schema)) => {
@@ -748,7 +834,8 @@ impl McpServer {
                                 if !batches.is_empty() {
                                     let mut buf = Vec::new();
                                     {
-                                        let mut writer = arrow_json::LineDelimitedWriter::new(&mut buf);
+                                        let mut writer =
+                                            arrow_json::LineDelimitedWriter::new(&mut buf);
                                         for batch in &batches {
                                             writer.write(batch).unwrap();
                                         }
@@ -771,10 +858,8 @@ impl McpServer {
                     }
                     _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
                 }
-            },
-            _ => {
-                Err(anyhow::anyhow!("Method not found: {}", method))
             }
+            _ => Err(anyhow::anyhow!("Method not found: {}", method)),
         }
     }
 
@@ -801,7 +886,10 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_initialize() {
         let server = McpServer::new();
-        let res = server.handle_request("initialize", json!({})).await.unwrap();
+        let res = server
+            .handle_request("initialize", json!({}))
+            .await
+            .unwrap();
         assert_eq!(res["protocolVersion"], "2024-11-05");
         assert_eq!(res["serverInfo"]["name"], "benostreamdb-mcp");
     }
@@ -809,7 +897,10 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_tools_list() {
         let server = McpServer::new();
-        let res = server.handle_request("tools/list", json!({})).await.unwrap();
+        let res = server
+            .handle_request("tools/list", json!({}))
+            .await
+            .unwrap();
         let tools = res["tools"].as_array().unwrap();
         assert!(tools.iter().any(|t| t["name"] == "execute_sql"));
         assert!(tools.iter().any(|t| t["name"] == "create_scratch_table"));
@@ -820,13 +911,19 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_execute_sql() {
         let server = McpServer::new();
-        let res = server.handle_request("tools/call", json!({
-            "name": "execute_sql",
-            "arguments": {
-                "query": "SELECT 1 as x"
-            }
-        })).await.unwrap();
-        
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT 1 as x"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
+
         let content = res["content"][0]["text"].as_str().unwrap();
         assert!(content.contains("\"x\":1") || content.contains("\"x\": 1"));
     }
@@ -834,72 +931,114 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_scratch_table_workflow() {
         let server = McpServer::new();
-        
+
         // 1. Create table
-        let res = server.handle_request("tools/call", json!({
-            "name": "create_scratch_table",
-            "arguments": {
-                "table_name": "test_table",
-                "schema_ddl": "id INT, val VARCHAR"
-            }
-        })).await.unwrap();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": {
+                        "table_name": "test_table",
+                        "schema_ddl": "id INT, val VARCHAR"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
         assert!(res.get("isError").is_none());
-        
+
         // 2. Insert records
-        let res = server.handle_request("tools/call", json!({
-            "name": "insert_scratch_records",
-            "arguments": {
-                "table_name": "test_table",
-                "records": [
-                    {"id": 1, "val": "hello"},
-                    {"id": 2, "val": "world"}
-                ]
-            }
-        })).await.unwrap();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "insert_scratch_records",
+                    "arguments": {
+                        "table_name": "test_table",
+                        "records": [
+                            {"id": 1, "val": "hello"},
+                            {"id": 2, "val": "world"}
+                        ]
+                    }
+                }),
+            )
+            .await
+            .unwrap();
         assert!(res.get("isError").is_none());
-        
+
         // 3. Select back
-        let res = server.handle_request("tools/call", json!({
-            "name": "execute_sql",
-            "arguments": {
-                "query": "SELECT * FROM scratch.test_table ORDER BY id"
-            }
-        })).await.unwrap();
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "execute_sql",
+                    "arguments": {
+                        "query": "SELECT * FROM scratch.test_table ORDER BY id"
+                    }
+                }),
+            )
+            .await
+            .unwrap();
         let content = res["content"][0]["text"].as_str().unwrap();
         assert!(content.contains("hello"));
         assert!(content.contains("world"));
     }
-    
+
     #[tokio::test]
     async fn test_mcp_export_workflow() {
         let server = McpServer::new();
-        
-        server.handle_request("tools/call", json!({
-            "name": "create_scratch_table",
-            "arguments": { "table_name": "export_test", "schema_ddl": "id INT" }
-        })).await.unwrap();
-        
-        server.handle_request("tools/call", json!({
-            "name": "insert_scratch_records",
-            "arguments": { "table_name": "export_test", "records": [{"id": 42}] }
-        })).await.unwrap();
-        
+
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": { "table_name": "export_test", "schema_ddl": "id INT" }
+                }),
+            )
+            .await
+            .unwrap();
+
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "insert_scratch_records",
+                    "arguments": { "table_name": "export_test", "records": [{"id": 42}] }
+                }),
+            )
+            .await
+            .unwrap();
+
         let temp_dir = std::env::temp_dir();
-        let export_path = temp_dir.join(format!("export_test_{}.parquet", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let export_path = temp_dir.join(format!(
+            "export_test_{}.parquet",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         let _ = std::fs::remove_dir_all(&export_path);
         let _ = std::fs::remove_file(&export_path);
-        
-        let res = server.handle_request("tools/call", json!({
-            "name": "export_table",
-            "arguments": {
-                "table_name": "export_test",
-                "export_path": export_path.to_str().unwrap()
-            }
-        })).await.unwrap();
+
+        let res = server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "export_table",
+                    "arguments": {
+                        "table_name": "export_test",
+                        "export_path": export_path.to_str().unwrap()
+                    }
+                }),
+            )
+            .await
+            .unwrap();
         assert!(res.get("isError").is_none());
         assert!(export_path.exists());
     }
-    
+
     #[tokio::test]
     async fn test_mcp_scratch_only_guard() {
         let server = McpServer::new();
@@ -934,7 +1073,10 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert!(res.get("isError").is_none(), "expected success for {q}: {res}");
+            assert!(
+                res.get("isError").is_none(),
+                "expected success for {q}: {res}"
+            );
         }
     }
 
@@ -953,7 +1095,10 @@ mod tests {
             .await
             .unwrap();
         let res = server
-            .handle_request("tools/call", json!({ "name": "list_graph_tables", "arguments": {} }))
+            .handle_request(
+                "tools/call",
+                json!({ "name": "list_graph_tables", "arguments": {} }),
+            )
             .await
             .unwrap();
         let text = res["content"][0]["text"].as_str().unwrap();
@@ -1007,21 +1152,38 @@ mod tests {
     #[tokio::test]
     async fn test_mcp_resources() {
         let server = McpServer::new();
-        
-        server.handle_request("tools/call", json!({
-            "name": "create_scratch_table",
-            "arguments": { "table_name": "resource_test", "schema_ddl": "id INT" }
-        })).await.unwrap();
-        
-        let res = server.handle_request("resources/list", json!({})).await.unwrap();
+
+        server
+            .handle_request(
+                "tools/call",
+                json!({
+                    "name": "create_scratch_table",
+                    "arguments": { "table_name": "resource_test", "schema_ddl": "id INT" }
+                }),
+            )
+            .await
+            .unwrap();
+
+        let res = server
+            .handle_request("resources/list", json!({}))
+            .await
+            .unwrap();
         let resources = res["resources"].as_array().unwrap();
         println!("Resources: {:?}", resources);
-        assert!(resources.iter().any(|r| r["name"].as_str().unwrap().contains("resource_test")));
-        
-        let res = server.handle_request("resources/read", json!({
-            "uri": "benostreamdb://tables/scratch/resource_test"
-        })).await.unwrap();
-        
+        assert!(resources
+            .iter()
+            .any(|r| r["name"].as_str().unwrap().contains("resource_test")));
+
+        let res = server
+            .handle_request(
+                "resources/read",
+                json!({
+                    "uri": "benostreamdb://tables/scratch/resource_test"
+                }),
+            )
+            .await
+            .unwrap();
+
         let content = res["contents"][0]["text"].as_str().unwrap();
         assert!(content.contains("id"));
     }

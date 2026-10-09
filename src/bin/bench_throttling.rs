@@ -64,7 +64,12 @@ impl std::fmt::Display for ThrottledStore {
 }
 
 impl ThrottledStore {
-    fn new(inner: Arc<dyn ObjectStore>, delay_ms: u64, fail_every_put: usize, fail_every_get: usize) -> Self {
+    fn new(
+        inner: Arc<dyn ObjectStore>,
+        delay_ms: u64,
+        fail_every_put: usize,
+        fail_every_get: usize,
+    ) -> Self {
         Self {
             inner,
             delay_ms,
@@ -237,7 +242,11 @@ async fn read_all_ids(table: &Table) -> Result<Vec<i32>> {
     Ok(ids)
 }
 
-async fn write_batch_with_retry(table: &Table, batch: RecordBatch, max_retries: usize) -> Result<usize> {
+async fn write_batch_with_retry(
+    table: &Table,
+    batch: RecordBatch,
+    max_retries: usize,
+) -> Result<usize> {
     table.write_async(vec![batch]).await?;
     let mut attempts = 0;
     loop {
@@ -299,7 +308,11 @@ struct ScenarioResult {
     status: String,
 }
 
-async fn run_scenario(cfg: &ScenarioConfig, baseline_write_p99: f64, baseline_read_p99: f64) -> Result<ScenarioResult> {
+async fn run_scenario(
+    cfg: &ScenarioConfig,
+    baseline_write_p99: f64,
+    baseline_read_p99: f64,
+) -> Result<ScenarioResult> {
     let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
     let throttled = Arc::new(ThrottledStore::new(
         inner,
@@ -535,8 +548,16 @@ async fn main() -> Result<()> {
             format!("{} ms", r.delta_read_p99_ms)
         };
 
-        let content_icon = if r.content_verified { "✅ 100% Match" } else { "❌ MISMATCH" };
-        let status_icon = if r.status == "PASS" { "✅ PASS" } else { "❌ FAIL" };
+        let content_icon = if r.content_verified {
+            "✅ 100% Match"
+        } else {
+            "❌ MISMATCH"
+        };
+        let status_icon = if r.status == "PASS" {
+            "✅ PASS"
+        } else {
+            "❌ FAIL"
+        };
 
         md_lines.push(format!(
             "| **{}** | {} | **{:.2} ms** | {:.2} ms | **{}** | **{:.2} ms** | {:.2} ms | **{}** | {} | {} | {} | {} |",
@@ -573,6 +594,8 @@ async fn main() -> Result<()> {
         serde_json::to_string_pretty(&results)?,
     )?;
 
-    println!("\nWrote trustworthy throttling report to benchmarks/results/production_throttling.md");
+    println!(
+        "\nWrote trustworthy throttling report to benchmarks/results/production_throttling.md"
+    );
     Ok(())
 }

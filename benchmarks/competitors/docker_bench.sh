@@ -12,6 +12,11 @@
 #   # Both passes, tagged device=cpu and device=gpu:
 #   benchmarks/competitors/docker_bench.sh --both --cpus 8 --mem 16g
 #
+#   # BEIR lexical/hybrid (BenoStreamDB vs Tantivy vs OpenSearch), same envelope:
+#   benchmarks/competitors/docker_bench.sh --workload beir --cpus 8 --mem 16g
+#   benchmarks/competitors/docker_bench.sh --workload beir --beir-mode hybrid \
+#       --beir-engines benostreamdb,lancedb --cpus 8 --mem 16g
+#
 # Every participant (server engines AND the runner that executes each client,
 # including BenoStreamDB) is constrained to the same --cpus/--memory envelope.
 # The envelope and the host hardware profile are written to results/.
@@ -32,8 +37,15 @@ K=10
 M=16
 EFC=200
 EFS=200
-CPU_ENGINES="faiss hnswlib lancedb pgvector opensearch benostreamdb"
-GPU_ENGINES="faiss benostreamdb"
+# `lancedb` is LanceDB's default disk-ANN index (IVF_PQ); `lancedb_hnsw` is its
+# scalar-quantized HNSW variant. Both are run so the comparison covers each
+# family rather than only the HNSW-shaped one.
+CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch benostreamdb"
+# The GPU pass runs EVERY engine, not just the GPU-capable ones: the CPU-only
+# competitors run on CPU inside the GPU container (same envelope), which makes
+# the comparison show that BenoStreamDB (and FAISS) can use the GPU while the
+# others cannot. Override with --gpu-engines to restrict it.
+GPU_ENGINES="$CPU_ENGINES"
 UP_ENGINES="pgvector opensearch neo4j clickhouse trino"
 # Workload families. `vector` is the default; `graph` and `sql` reuse the same
 # runner image and envelope but dispatch to the graph/SQL adapters.
@@ -44,6 +56,11 @@ ALGORITHM=pagerank
 GRAPH_NODES=10000
 GRAPH_EDGES_COUNT=50000
 SQL_ROWS=500000
+# BEIR lexical/hybrid workload. One process runs every engine, so the whole
+# comparison shares a single container envelope (see the `beir` dispatch below).
+BEIR_DATASET=scifact
+BEIR_ENGINES="benostreamdb,tantivy,opensearch"
+BEIR_MODE=lexical
 DO_CPU=1
 DO_GPU=0
 BUILD_WHEEL=0
@@ -70,11 +87,14 @@ while [[ $# -gt 0 ]]; do
     --graph-nodes) GRAPH_NODES="$2"; shift 2 ;;
     --graph-edges-count) GRAPH_EDGES_COUNT="$2"; shift 2 ;;
     --sql-rows) SQL_ROWS="$2"; shift 2 ;;
+    --beir-dataset) BEIR_DATASET="$2"; shift 2 ;;
+    --beir-engines) BEIR_ENGINES="$2"; shift 2 ;;
+    --beir-mode) BEIR_MODE="$2"; shift 2 ;;
     --gpu) DO_CPU=0; DO_GPU=1; shift ;;
     --both) DO_CPU=1; DO_GPU=1; shift ;;
     --build-wheel) BUILD_WHEEL=1; shift ;;
     --engines-only) ENGINES_ONLY=1; shift ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -89,6 +109,7 @@ export BENCH_RAM_GB="${MEM%g}"
 export DATASET LIMIT QUERIES K M EF_CONSTRUCTION="$EFC" EF_SEARCH="$EFS"
 export WORKLOAD ALGORITHM
 export GRAPH_EDGES="${GRAPH_EDGES:-}" SQL="${SQL:-}" PARQUET="${PARQUET:-}"
+export BEIR_DATASET BEIR_ENGINES BEIR_MODE
 
 mkdir -p "$HERE/results" "$HERE/data"
 
@@ -210,6 +231,39 @@ PY
   export PARQUET="/opt/bench/data/sql_t/data.parquet"
   export SQL="SELECT category, count(*) AS n, avg(value) AS avg_value FROM t GROUP BY category ORDER BY n DESC LIMIT 10"
   run_pass cpu bench "$SQL_ENGINES"
+elif [[ "$WORKLOAD" == "beir" ]]; then
+  # BEIR lexical/hybrid: a single process runs every engine (embedded Tantivy +
+  # BenoStreamDB, plus the server-backed OpenSearch), so the whole comparison
+  # shares one container envelope. OpenSearch is the only server-backed engine,
+  # so it is brought up under the same envelope as the runner.
+  if [[ "$ENGINES_ONLY" == "0" ]]; then
+    echo "starting engines: opensearch (cpus=$CPUS mem=$MEM)"
+    docker compose "${COMPOSE[@]}" up -d opensearch
+    cid="$(docker compose "${COMPOSE[@]}" ps -q opensearch || true)"
+    for _ in $(seq 1 60); do
+      state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$cid" 2>/dev/null || echo unknown)"
+      [[ "$state" == "healthy" || "$state" == "running" ]] && break
+      sleep 5
+    done
+    echo "  opensearch: $state"
+  fi
+  docker compose "${COMPOSE[@]}" --profile run build bench
+  # BM25 is CPU-bound, so the GPU pass is envelope-identical; it still runs in a
+  # container with `gpus: all` so device visibility matches the other workloads.
+  if [[ "$DO_CPU" == "1" ]]; then
+    echo ""
+    echo "############ beir cpu pass (service=bench, cpus=$CPUS mem=$MEM) ############"
+    DEVICE=cpu docker compose -f "$HERE/docker-compose.bench.yml" \
+      --profile run run --rm bench \
+      || echo "  (beir cpu pass did not complete)"
+  fi
+  if [[ "$DO_GPU" == "1" ]]; then
+    echo ""
+    echo "############ beir gpu pass (service=bench, gpus=all, cpus=$CPUS mem=$MEM) ############"
+    DEVICE=gpu docker compose -f "$HERE/docker-compose.bench.yml" \
+      -f "$HERE/docker-compose.bench.gpu.yml" --profile run run --rm bench \
+      || echo "  (beir gpu pass did not complete)"
+  fi
 else
   [[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
   [[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"

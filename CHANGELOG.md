@@ -608,6 +608,33 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   asserting the visible id set matches an independent model after every step.
 
 ### Benchmarks
+- **BEIR lexical/hybrid comparisons now run under the same Docker envelope.**
+  The BEIR harness (`benchmarks/beir/run.py`, `run_hybrid.py`) is wired into the
+  shared-envelope matrix as `docker_bench.sh --workload beir`: BenoStreamDB,
+  Tantivy, and the server-backed OpenSearch all run in containers under one
+  `--cpus`/`--memory` profile (previously BenoStreamDB/Tantivy ran in-process on
+  the host while OpenSearch ran in a separately-sized container, so the
+  comparison was not resource-matched). Both CPU and GPU passes are supported
+  (`--both`); the harness gained `--data-dir` (for the read-only mount), an
+  auto-download of the BEIR corpus when absent, and a self-describing
+  `Resource Envelope` line in the report. Each engine also emits a
+  competitor-schema JSON record (`--json-dir`), which `generate_summary.py`
+  rolls into the consolidated benchmark report as a table alongside the
+  vector/graph/SQL rows. CI runs the embedded `benostreamdb,tantivy` baseline on
+  the single runner.
+- **The GPU pass now runs every engine.** `docker_bench.sh --gpu`/`--both` runs
+  the same engine set as the CPU pass instead of only the GPU-capable ones, so
+  the CPU-only competitors (pgvector, LanceDB, OpenSearch, Neo4j CPU GDS,
+  DuckDB) run on CPU inside the GPU container under the same envelope. This
+  makes the GPU/no-GPU distinction explicit in the results rather than hiding
+  it. Restrict with `--gpu-engines` for a smaller pass.
+- **LanceDB is reported with both of its ANN algorithms.** The vector adapter
+  now runs LanceDB's **default** disk-ANN index (IVF_PQ, `lancedb`) *and* its
+  scalar-quantized HNSW variant (`lancedb_hnsw`), instead of only the
+  HNSW-shaped one. On the 20k SIFT run the default IVF_PQ index reaches
+  recall@10 0.492 vs 0.924 for HnswSq — reporting only the HNSW variant
+  overstated LanceDB's recall. The BEIR hybrid adapter also builds the IVF_PQ
+  index (its docstring claimed a vector index but none was created).
 - **Docker competitor matrix runs end-to-end.** The shared-envelope runner
   (`benchmarks/competitors/docker_bench.sh`) now builds and runs every
   participant — FAISS, hnswlib, LanceDB, pgvector, OpenSearch, and

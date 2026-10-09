@@ -144,7 +144,8 @@ impl Table {
         &self,
         properties: std::collections::HashMap<String, String>,
     ) -> Result<()> {
-        self.runtime().block_on(self.set_properties_async(properties))
+        self.runtime()
+            .block_on(self.set_properties_async(properties))
     }
 
     /// Replace the table's properties wholesale (metadata-only commit).
@@ -646,7 +647,11 @@ impl Table {
         // A rebuild of a never-indexed column is valid: there is simply nothing
         // to drop first, so a failed drop is not fatal here.
         if let Err(e) = self.drop_index(column.clone()).await {
-            tracing::debug!("rebuild_index: no existing index to drop for '{}': {}", column, e);
+            tracing::debug!(
+                "rebuild_index: no existing index to drop for '{}': {}",
+                column,
+                e
+            );
         }
         if algorithms.is_empty() {
             self.add_index(column, crate::core::manifest::IndexAlgorithm::default())
