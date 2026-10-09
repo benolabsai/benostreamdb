@@ -265,3 +265,36 @@ The Launch Candidate requires **excellent end-to-end benchmarks** and
     (`examples/tutorials/*.ipynb`, verified to execute end-to-end); the
     SQL/connector forms (Spark/Trino/dbt/Flight/MCP/Rust) are markdown pages
     under `docs/tutorials/`.
+
+---
+
+## 🔭 Post-Launch — v0.13.0
+
+Deferred from the Launch Candidate; tracked for the next minor.
+
+### GPU scaling: single-query multi-GPU + cross-call batching — 🟠 **High**
+
+> **Shipped in 0.12.0.** The multi-GPU device pool
+> (`gpu::set_gpu_device_pool`, wired into Trino/Spark) round-robins devices
+> across **worker threads**, and each kernel call is already batched (one
+> H2D → launch → D2H over the whole vector set, with a 50k floor:
+> `GPU_DISPATCH_THRESHOLD`).
+>
+> **Remaining.** The round-robin only spreads work across **concurrent**
+> dispatches — a single large query still runs on one device
+> (`HnswIvfIndex::search` makes one synchronous `compute_distance` call), and
+> there is no overlap of transfer with compute across calls.
+
+- [ ] **Single-query multi-GPU sharding** — shard the candidate set (e.g.
+  `HnswIvfIndex::search`'s centroid / distance batch) across the devices in the
+  pool, launch concurrently on each, and merge top-k. This is what turns the
+  pool from a concurrency-only feature into a genuine per-query speedup.
+- [ ] **Cross-call batching + streams** — overlap H2D / compute / D2H across
+  successive batches with CUDA streams instead of one synchronous round trip
+  per call; pipeline rather than block.
+- [ ] **Avoid redundant transfers** — keep vectors/centroids device-resident and
+  cache the uploaded query. Today each call re-uploads the query and copies the
+  whole batch to host (`htod_copy(vectors.to_vec())`).
+- [ ] **Adaptive dispatch threshold** — `GPU_DISPATCH_THRESHOLD` (50k) is a
+  coarse floor; make it adaptive to the measured launch/transfer overhead so
+  mid-size batches can still benefit without paying H2D/D2H for nothing.
