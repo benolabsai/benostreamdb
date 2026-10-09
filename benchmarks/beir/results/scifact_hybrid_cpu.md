@@ -8,23 +8,25 @@
 - **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k=60`)
 - **Top-K**: 10
 - **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
 
 ### Competitor Comparison (Hybrid Dense + Sparse RRF)
 
 | Engine | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | ✅ Pass | 0.98s | 6.7 MB | **190.7** | **5.12 ms** | 6.94 ms | **0.8460** | **0.6859** | 0.6394 |
-| **lancedb** | ✅ Pass | 0.71s | 13.9 MB | **167.2** | **5.70 ms** | 7.36 ms | **0.8367** | **0.7118** | 0.6783 |
+| **benostreamdb** | ✅ Pass | 0.54s | 6.6 MB | **175.7** | **5.54 ms** | 7.23 ms | **0.8527** | **0.6957** | 0.6502 |
+| **lancedb** | ✅ Pass | 0.89s | 14.3 MB | **193.4** | **4.77 ms** | 6.73 ms | **0.8259** | **0.6770** | 0.6357 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **60.2%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **47.3%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.7 MB | 414.3 | 2.29 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1308.8 | 0.67 ms | 0.7517 | 0.6290 | 0.5935 |
-| **Hybrid (Dense + BM25 RRF)** | 6.7 MB | 190.7 | 5.12 ms | **0.8460** | **0.6859** | **0.6394** |
+| **Sparse (BM25 Only)** | 6.6 MB | 412.1 | 2.30 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1237.6 | 0.70 ms | 0.7767 | 0.6449 | 0.6065 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 175.7 | 5.54 ms | **0.8527** | **0.6957** | **0.6502** |

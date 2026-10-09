@@ -1,0 +1,25 @@
+{
+  "engine": "lancedb",
+  "dataset": "scifact",
+  "workload": "hybrid_rrf",
+  "device": "cpu",
+  "queries": 300,
+  "k": 10,
+  "build_s": 0.886,
+  "index_mb": 14.31,
+  "recall_at_k": 0.8259,
+  "ndcg_at_k": 0.677,
+  "mrr_at_k": 0.6357,
+  "qps": 193.4,
+  "p50_ms": 4.767,
+  "p99_ms": 6.728,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

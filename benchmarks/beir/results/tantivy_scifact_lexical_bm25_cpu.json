@@ -1,0 +1,25 @@
+{
+  "engine": "tantivy",
+  "dataset": "scifact",
+  "workload": "lexical_bm25",
+  "device": "cpu",
+  "queries": 300,
+  "k": 10,
+  "build_s": 0.193,
+  "index_mb": 8.34,
+  "recall_at_k": 0.7812,
+  "ndcg_at_k": 0.6517,
+  "mrr_at_k": 0.615,
+  "qps": 2690.9,
+  "p50_ms": 0.307,
+  "p99_ms": 0.707,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

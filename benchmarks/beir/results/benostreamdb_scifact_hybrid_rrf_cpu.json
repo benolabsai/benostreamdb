@@ -1,0 +1,25 @@
+{
+  "engine": "benostreamdb",
+  "dataset": "scifact",
+  "workload": "hybrid_rrf",
+  "device": "cpu",
+  "queries": 300,
+  "k": 10,
+  "build_s": 0.536,
+  "index_mb": 6.63,
+  "recall_at_k": 0.8527,
+  "ndcg_at_k": 0.6957,
+  "mrr_at_k": 0.6502,
+  "qps": 175.7,
+  "p50_ms": 5.542,
+  "p99_ms": 7.229,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}
