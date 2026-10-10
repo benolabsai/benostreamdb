@@ -157,8 +157,8 @@ impl Accumulator for LeidenAccumulator {
             }
         }
 
-        let sources_arr = values[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let targets_arr = values[1].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let sources_arr = values[0].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| datafusion::error::DataFusionError::Execution("type mismatch".into()))?;
+        let targets_arr = values[1].as_any().downcast_ref::<UInt64Array>().ok_or_else(|| datafusion::error::DataFusionError::Execution("type mismatch".into()))?;
 
         for i in 0..len {
             if sources_arr.is_valid(i) && targets_arr.is_valid(i) {

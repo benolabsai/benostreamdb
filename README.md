@@ -812,10 +812,11 @@ sharding/replicas, and Kibana. See
 - [x] **Connectors & Gateways**: Apache Spark (`spark-benostreamdb`), Trino (`trino-benostreamdb`), dbt (`dbt-benostreamdb`), Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`).
 
 ### 📋 Active Roadmap Themes
-- [ ] **Reactive Lakehouse Streaming & Flight Subscriptions**: `Table::subscribe()` core API with live Arrow Flight push streams ("Live Queries") and predicate pushdown.
-- [ ] **Declarative Edge Tables & Multi-Table Graph Overlays**: programmatic `Table.create_edge_table` / `from_networkx` / `to_networkx` APIs have shipped; `table_type = 'edge'` DDL, typed global URNs (`table:id`), and native DataFusion SQL graph walk functions remain.
+- [x] **Reactive Lakehouse Streaming**: `Table::subscribe()` core API and predicate-filtered subscriptions are shipped. (Arrow Flight streaming subscriptions are deferred).
+- [x] **Declarative Edge Tables & Graph Overlays**: `table_type = 'edge'` DDL and native DataFusion SQL graph walk functions (`graph_neighbors`, etc.) are shipped.
+- [x] **JSON-Path Inverted Index**: Shipped.
 - [ ] **Domain-Specific BM25 Analyzers**: Configurable table tokenizers (CamelCase code tokenizer, multilingual Snowball stemmers, CJK segmentation).
-- [ ] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`), LangChain/LlamaIndex vector store adapters.
+- [x] **AI Agent Tools & Client Ecosystem**: Dedicated Model Context Protocol (MCP) server (`contrib/benostreamdb-mcp`) shipped. LangChain/LlamaIndex vector store adapters remain.
 
 *For the complete detailed roadmap and architecture status, see [docs/ROADMAP.md](docs/ROADMAP.md).*
 

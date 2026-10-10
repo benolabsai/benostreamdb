@@ -105,11 +105,26 @@ impl BenoStreamFlightSqlService {
         &self,
         sql: &str,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, Status> {
-        let df = self
+        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            if self.session.is_ddl(sql).await.unwrap_or(false)
+                || self.session.is_dml(sql).await.unwrap_or(false)
+            {
+                return Err(Status::permission_denied("Server is in read-only mode"));
+            }
+        }
+        let mut df = self
             .session
             .sql_to_df(sql)
             .await
             .map_err(|e| Status::internal(format!("Error executing statement: {}", e)))?;
+            
+        let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
+            .unwrap_or_else(|_| "100000".to_string())
+            .parse::<usize>()
+            .unwrap_or(100000);
+            
+        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+
         df.collect()
             .await
             .map_err(|e| Status::internal(format!("Error collecting execution result: {}", e)))
@@ -282,6 +297,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         if self.session.is_ddl(&sql).await.unwrap_or(false)
             || self.session.is_dml(&sql).await.unwrap_or(false)
         {
+            if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+                return Err(Status::permission_denied("Server is in read-only mode"));
+            }
             self.execute_statement(&sql).await?;
             let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
             let empty = datafusion::arrow::datatypes::Schema::empty();
@@ -351,6 +369,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         if self.session.is_ddl(&sql).await.unwrap_or(false)
             || self.session.is_dml(&sql).await.unwrap_or(false)
         {
+            if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+                return Err(Status::permission_denied("Server is in read-only mode"));
+            }
             self.execute_statement(&sql).await?;
             let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
             let empty = datafusion::arrow::datatypes::Schema::empty();
@@ -543,13 +564,20 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         let sql = String::from_utf8(ticket.statement_handle.to_vec())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        let df = self
+        let mut df = self
             .session
             .sql_to_df(&sql)
             .await
             .map_err(|e| Status::internal(format!("Error planning query: {}", e)))?;
 
         let schema = df.schema().inner().clone();
+        
+        let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
+            .unwrap_or_else(|_| "100000".to_string())
+            .parse::<usize>()
+            .unwrap_or(100000);
+            
+        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
@@ -569,12 +597,20 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         _request: Request<Ticket>,
     ) -> Result<Response<BoxStream<'static, Result<FlightData, Status>>>, Status> {
         let sql = self.prepared_sql(&query.prepared_statement_handle).await?;
-        let df = self
+        let mut df = self
             .session
             .sql_to_df(&sql)
             .await
             .map_err(|e| Status::internal(format!("Error planning query: {}", e)))?;
         let schema = df.schema().inner().clone();
+        
+        let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
+            .unwrap_or_else(|_| "100000".to_string())
+            .parse::<usize>()
+            .unwrap_or(100000);
+            
+        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+
         let batches = df
             .collect()
             .await
@@ -797,6 +833,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         query: CommandStatementUpdate,
         _request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
+        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            return Err(Status::permission_denied("Server is in read-only mode"));
+        }
         let sql = query.query;
         {
             let mut tx = self.tx.lock().await;
@@ -826,6 +865,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         query: CommandPreparedStatementUpdate,
         _request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
+        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            return Err(Status::permission_denied("Server is in read-only mode"));
+        }
         let sql = self.prepared_sql(&query.prepared_statement_handle).await?;
         let batches = self.execute_statement(&sql).await?;
         Ok(batches.iter().map(|b| b.num_rows() as i64).sum())
@@ -977,6 +1019,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         ticket: CommandStatementIngest,
         request: Request<arrow_flight::sql::server::PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
+        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            return Err(Status::permission_denied("Server is in read-only mode"));
+        }
         // Decode the incoming Arrow stream and append it to the target table.
         let mut stream = request.into_inner();
         let mut schema: Option<arrow::datatypes::SchemaRef> = None;

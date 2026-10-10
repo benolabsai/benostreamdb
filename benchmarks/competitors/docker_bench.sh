@@ -31,6 +31,9 @@ COMPOSE=(-f "$HERE/docker-compose.bench.yml")
 CPUS=8
 MEM=16g
 DATASET=sift-128-euclidean
+# Space-separated list of datasets to run in one pass (defaults to $DATASET).
+# Engines stay up across datasets, so the whole vector matrix runs in one go.
+DATASETS=""
 LIMIT=20000
 QUERIES=500
 K=10
@@ -55,7 +58,15 @@ SQL_ENGINES="duckdb datafusion clickhouse trino benostreamdb"
 ALGORITHM=pagerank
 GRAPH_NODES=10000
 GRAPH_EDGES_COUNT=50000
+# Optional host edge-list file (source\ttarget per line) to use instead of the
+# synthetic graph — e.g. a SNAP dataset. Copied into the mounted data dir.
+GRAPH_EDGES_HOST=""
 SQL_ROWS=500000
+# Optional host Parquet file + SQL query to use instead of the synthetic table
+# (e.g. TPC-H or NYC TLC). Both are copied/passed into the runner.
+SQL_PARQUET_HOST=""
+SQL_QUERY=""
+SQL_DATASET=""
 # BEIR lexical/hybrid workload. One process runs every engine, so the whole
 # comparison shares a single container envelope (see the `beir` dispatch below).
 BEIR_DATASET=scifact
@@ -71,6 +82,7 @@ while [[ $# -gt 0 ]]; do
     --cpus) CPUS="$2"; shift 2 ;;
     --mem) MEM="$2"; shift 2 ;;
     --dataset) DATASET="$2"; shift 2 ;;
+    --datasets) DATASETS="$2"; shift 2 ;;
     --limit) LIMIT="$2"; shift 2 ;;
     --queries) QUERIES="$2"; shift 2 ;;
     --k) K="$2"; shift 2 ;;
@@ -84,9 +96,13 @@ while [[ $# -gt 0 ]]; do
     --graph-engines) GRAPH_ENGINES="$2"; shift 2 ;;
     --sql-engines) SQL_ENGINES="$2"; shift 2 ;;
     --algorithm) ALGORITHM="$2"; shift 2 ;;
+    --graph-edges-host) GRAPH_EDGES_HOST="$2"; shift 2 ;;
     --graph-nodes) GRAPH_NODES="$2"; shift 2 ;;
     --graph-edges-count) GRAPH_EDGES_COUNT="$2"; shift 2 ;;
     --sql-rows) SQL_ROWS="$2"; shift 2 ;;
+    --sql-parquet-host) SQL_PARQUET_HOST="$2"; shift 2 ;;
+    --sql-query) SQL_QUERY="$2"; shift 2 ;;
+    --sql-dataset) SQL_DATASET="$2"; shift 2 ;;
     --beir-dataset) BEIR_DATASET="$2"; shift 2 ;;
     --beir-engines) BEIR_ENGINES="$2"; shift 2 ;;
     --beir-mode) BEIR_MODE="$2"; shift 2 ;;
@@ -179,8 +195,18 @@ run_pass() {
 
 # --- Workload dispatch ------------------------------------------------------ #
 if [[ "$WORKLOAD" == "graph" ]]; then
-  # A synthetic edge list, mounted into the runner at /opt/bench/data.
-  "$REPO/.venv/bin/python" - "$HERE/data/graph_edges.txt" "$GRAPH_NODES" "$GRAPH_EDGES_COUNT" <<'PY'
+  mkdir -p "$HERE/data"
+  if [[ -n "$GRAPH_EDGES_HOST" ]]; then
+    # A real edge list (e.g. a SNAP dataset), copied into the mounted data dir.
+    base="$(basename "$GRAPH_EDGES_HOST")"
+    cp "$GRAPH_EDGES_HOST" "$HERE/data/$base"
+    export GRAPH_EDGES="/opt/bench/data/$base"
+    # The dataset name (extension stripped) flows into the result filename.
+    export GRAPH_DATASET="${GRAPH_DATASET:-${base%.tsv}}"
+    echo "using graph edge list: $base (dataset=$GRAPH_DATASET)"
+  else
+    # A synthetic edge list, mounted into the runner at /opt/bench/data.
+    "$REPO/.venv/bin/python" - "$HERE/data/graph_edges.txt" "$GRAPH_NODES" "$GRAPH_EDGES_COUNT" <<'PY'
 import random, sys
 path, nodes, edges = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
 random.seed(42)
@@ -189,7 +215,9 @@ with open(path, "w", encoding="utf-8") as f:
         f.write(f"{random.randrange(nodes)}\t{random.randrange(nodes)}\n")
 print(f"wrote {path} ({nodes} nodes, {edges} edges)")
 PY
-  export GRAPH_EDGES="/opt/bench/data/graph_edges.txt"
+    export GRAPH_EDGES="/opt/bench/data/graph_edges.txt"
+    export GRAPH_DATASET="synth_${GRAPH_NODES}_${GRAPH_EDGES_COUNT}"
+  fi
   # cuGraph needs the GPU runner; the other graph engines run fine there too.
   if [[ " $GRAPH_ENGINES " == *" cugraph "* ]]; then
     COMPOSE+=(-f "$HERE/docker-compose.bench.gpu.yml")
@@ -208,12 +236,18 @@ PY
     run_pass cpu bench "$GRAPH_ENGINES"
   fi
 elif [[ "$WORKLOAD" == "sql" ]]; then
-  # A synthetic Parquet table, mounted into the runner at /opt/bench/data.
-  # Written into its own directory (`sql_t/`) so Trino's Hive connector can
-  # register the directory as an external table without picking up the other
-  # files in the shared data dir.
+  # The Parquet table is mounted into the runner at /opt/bench/data/sql_t/ so
+  # Trino's Hive connector can register the directory as an external table
+  # without picking up the other files in the shared data dir.
   mkdir -p "$HERE/data/sql_t"
-  "$REPO/.venv/bin/python" - "$HERE/data/sql_t/data.parquet" "$SQL_ROWS" <<'PY'
+  if [[ -n "$SQL_PARQUET_HOST" ]]; then
+    base="$(basename "$SQL_PARQUET_HOST")"
+    cp "$SQL_PARQUET_HOST" "$HERE/data/sql_t/$base"
+    export PARQUET="/opt/bench/data/sql_t/$base"
+    export SQL_DATASET="${SQL_DATASET:-${base%.parquet}}"
+    echo "using sql parquet: $base (dataset=$SQL_DATASET)"
+  else
+    "$REPO/.venv/bin/python" - "$HERE/data/sql_t/data.parquet" "$SQL_ROWS" <<'PY'
 import sys
 import numpy as np
 import pyarrow as pa
@@ -228,8 +262,14 @@ t = pa.table({
 pq.write_table(t, path)
 print(f"wrote {path} ({n} rows)")
 PY
-  export PARQUET="/opt/bench/data/sql_t/data.parquet"
-  export SQL="SELECT category, count(*) AS n, avg(value) AS avg_value FROM t GROUP BY category ORDER BY n DESC LIMIT 10"
+    export PARQUET="/opt/bench/data/sql_t/data.parquet"
+    export SQL_DATASET="${SQL_DATASET:-synth_${SQL_ROWS}}"
+  fi
+  if [[ -n "$SQL_QUERY" ]]; then
+    export SQL="$SQL_QUERY"
+  else
+    export SQL="SELECT category, count(*) AS n, avg(value) AS avg_value FROM t GROUP BY category ORDER BY n DESC LIMIT 10"
+  fi
   run_pass cpu bench "$SQL_ENGINES"
 elif [[ "$WORKLOAD" == "beir" ]]; then
   # BEIR lexical/hybrid: a single process runs every engine (embedded Tantivy +
@@ -258,8 +298,14 @@ elif [[ "$WORKLOAD" == "beir" ]]; then
     --profile run run --rm bench \
     || echo "  (beir pass did not complete)"
 else
-  [[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
-  [[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"
+  # Vector: loop over the dataset list so the engines stay up across datasets.
+  for ds in ${DATASETS:-$DATASET}; do
+    export DATASET="$ds"
+    echo ""
+    echo "######## dataset: $ds ########"
+    [[ "$DO_CPU" == "1" ]] && run_pass cpu bench "$CPU_ENGINES"
+    [[ "$DO_GPU" == "1" ]] && run_pass gpu bench-gpu "$GPU_ENGINES"
+  done
 fi
 
 # --- Rollup ----------------------------------------------------------------- #

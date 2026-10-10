@@ -184,7 +184,9 @@ impl Accumulator for AllShortestPathsAccumulator {
                             prev.insert(n, vec![curr]);
                             do_push = true;
                         } else if dist[&n] == alt {
-                            prev.get_mut(&n).unwrap().push(curr);
+                            if let Some(p) = prev.get_mut(&n) {
+                                p.push(curr);
+                            }
                         }
                         if do_push {
                             q.push_back(n);

@@ -407,14 +407,17 @@ class OpenSearchAdapter(VectorAdapter):
                 },
             },
         )
-        actions = (
-            {
-                "_index": "bsdb-bench",
-                "_id": int(i),
-                "_source": {"vector": row.tolist()},
-            }
-            for i, row in enumerate(train)
-        )
+        def _row_source(i, row):
+            vec = row.tolist()
+            # OpenSearch rejects an all-zero vector for cosinesimil ("zero vector
+            # is not supported"); nudge it to a tiny vector. A zero vector is
+            # orthogonal to everything, so this preserves the similarity result.
+            if space_type == "cosinesimil" and not any(vec):
+                vec = list(vec)
+                vec[0] = 1e-6
+            return {"_index": "bsdb-bench", "_id": int(i), "_source": {"vector": vec}}
+
+        actions = (_row_source(i, row) for i, row in enumerate(train))
         helpers.bulk(es, actions)
         es.indices.refresh(index="bsdb-bench")
         return es
@@ -600,11 +603,16 @@ def _graph_neo4j(args, edges) -> dict:
     t_load = time.time()
     with driver.session() as session:
         session.run("MATCH (n) DETACH DELETE n")
-        session.run(
-            "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
-            "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
-            rows=[(int(a), int(b)) for a, b in edges],
-        )
+        session.run("DROP CONSTRAINT node_id IF EXISTS")
+        session.run("CREATE CONSTRAINT node_id FOR (n:Node) REQUIRE n.id IS UNIQUE")
+        edges_list = [(int(a), int(b)) for a, b in edges]
+        batch_size = 10000
+        for i in range(0, len(edges_list), batch_size):
+            session.run(
+                "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
+                "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
+                rows=edges_list[i:i + batch_size],
+            )
         session.run("CALL gds.graph.drop('bench', false)").consume()
         session.run("CALL gds.graph.project('bench', 'Node', 'E')").consume()
     load_s = time.time() - t_load
@@ -759,6 +767,14 @@ def _graph_cugraph(args, edges) -> dict:
 
 
 def run_graph(args) -> dict:
+    """Dispatch a graph engine, tagging the record with the dataset label."""
+    res = _graph_dispatch(args)
+    if isinstance(res, dict):
+        res.setdefault("dataset", getattr(args, "dataset", None) or "graph")
+    return res
+
+
+def _graph_dispatch(args) -> dict:
     if not args.graph_edges:
         return {
             "workload": "graph",
@@ -1090,27 +1106,47 @@ def _sql_clickhouse(args) -> dict:
     sql = args.sql
     if args.parquet:
         # Materialise the Parquet into a table named `t` so the shared SQL
-        # (which references `t`) works across every SQL engine. Load via the
-        # client (not `file()`) so ClickHouse needs no data volume — its
-        # entrypoint chowns any mounted dir, which would break the host.
+        # (which references `t`) works across every SQL engine. The schema is
+        # taken from the Parquet itself (ClickBench, TPC-H, NYC TLC, ... all
+        # differ). Load via the client (not `file()`) so ClickHouse needs no
+        # data volume — its entrypoint chowns any mounted dir.
+        import pyarrow as pa
         import pyarrow.parquet as pq
 
+        def _ch_type(t) -> str:
+            if pa.types.is_int64(t):
+                return "Int64"
+            if pa.types.is_int32(t):
+                return "Int32"
+            if pa.types.is_int16(t):
+                return "Int16"
+            if pa.types.is_float64(t):
+                return "Float64"
+            if pa.types.is_float32(t):
+                return "Float32"
+            if pa.types.is_boolean(t):
+                return "UInt8"
+            if pa.types.is_date32(t):
+                return "Date32"
+            if pa.types.is_date64(t):
+                return "Date"
+            if pa.types.is_timestamp(t):
+                return "DateTime64(6)"
+            if pa.types.is_decimal(t):
+                return f"Decimal({t.precision},{t.scale})"
+            return "String"
+
         tbl = pq.read_table(args.parquet)
-        client.command("DROP TABLE IF EXISTS t")
-        client.command(
-            "CREATE TABLE t (id Int64, value Float64, category Int64) "
-            "ENGINE = MergeTree ORDER BY tuple()"
+        cols = tbl.schema.names
+        col_defs = ", ".join(
+            f"`{c}` {_ch_type(tbl.schema.field(c).type)}" for c in cols
         )
+        client.command("DROP TABLE IF EXISTS t")
+        client.command(f"CREATE TABLE t ({col_defs}) ENGINE = MergeTree ORDER BY tuple()")
         client.insert(
             "t",
-            list(
-                zip(
-                    tbl.column("id").to_pylist(),
-                    tbl.column("value").to_pylist(),
-                    tbl.column("category").to_pylist(),
-                )
-            ),
-            column_names=["id", "value", "category"],
+            list(zip(*[tbl.column(c).to_pylist() for c in cols])),
+            column_names=cols,
         )
     if not sql:
         if not args.parquet:
@@ -1149,6 +1185,10 @@ def _sql_trino(args) -> dict:
     user = getattr(args, "user", None) or os.environ.get("TRINO_USER", "bench")
     catalog = getattr(args, "catalog", None) or os.environ.get("TRINO_CATALOG", "memory")
     schema = getattr(args, "schema", None) or os.environ.get("TRINO_SCHEMA", "default")
+    # A Parquet dataset is registered as an external Hive table (the memory
+    # connector cannot bulk-load large datasets), so query through `hive`.
+    if args.parquet:
+        catalog = "hive"
 
     try:
         conn = connect(host=host, port=port, user=user, catalog=catalog, schema=schema)
@@ -1163,26 +1203,48 @@ def _sql_trino(args) -> dict:
     cur = conn.cursor()
     ingest_s = None
     if args.parquet:
-        # Load the shared Parquet into the memory connector as table `t` so the
-        # shared SQL runs unchanged. The memory connector needs no metastore,
-        # which keeps the Trino benchmark self-contained. Bulk-insert in batches
-        # (a single 100k-row VALUES list is rejected by the parser).
+        # Register the shared Parquet as an external Hive table `t` (the memory
+        # connector cannot bulk-load large datasets — it OOMs). The schema is
+        # taken from the Parquet itself (ClickBench / TPC-H / NYC TLC differ).
+        # The runner and Trino mount the same data dir at the same path, so the
+        # `file://` location resolves inside Trino.
+        import pyarrow as pa
         import pyarrow.parquet as pq
+
+        def _trino_type(t) -> str:
+            if pa.types.is_boolean(t):
+                return "boolean"
+            if pa.types.is_int64(t):
+                return "bigint"
+            if pa.types.is_int32(t):
+                return "integer"
+            if pa.types.is_int16(t):
+                return "smallint"
+            if pa.types.is_float64(t):
+                return "double"
+            if pa.types.is_float32(t):
+                return "real"
+            if pa.types.is_date(t):
+                return "date"
+            if pa.types.is_timestamp(t):
+                return "timestamp"
+            if pa.types.is_decimal(t):
+                return f"decimal({t.precision},{t.scale})"
+            return "varchar"
 
         t_ingest = time.time()
         tbl = pq.read_table(args.parquet)
-        cur.execute("DROP TABLE IF EXISTS t")
-        cur.execute("CREATE TABLE t (id bigint, value double, category bigint)")
-        ids = tbl.column("id").to_pylist()
-        vals = tbl.column("value").to_pylist()
-        cats = tbl.column("category").to_pylist()
-        batch = 5000
-        for start in range(0, len(ids), batch):
-            end = min(start + batch, len(ids))
-            values = ",".join(
-                f"({ids[i]},{vals[i]},{cats[i]})" for i in range(start, end)
-            )
-            cur.execute(f"INSERT INTO t VALUES {values}")
+        cols = tbl.schema.names
+        col_defs = ", ".join(
+            f'"{c}" {_trino_type(tbl.schema.field(c).type)}' for c in cols
+        )
+        location = "file://" + os.path.dirname(args.parquet)
+        cur.execute("CREATE SCHEMA IF NOT EXISTS hive.default")
+        cur.execute("DROP TABLE IF EXISTS hive.default.t")
+        cur.execute(
+            f"CREATE TABLE hive.default.t ({col_defs}) "
+            f"WITH (format = 'PARQUET', external_location = '{location}')"
+        )
         ingest_s = round(time.time() - t_ingest, 3)
 
     sql = args.sql

@@ -35,6 +35,55 @@ import numpy as np
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 
+# Public, citable edge-list datasets (SNAP). Files are gzip-compressed with a
+# `#`-prefixed comment header; we strip the header and cache a plain `.tsv`.
+GRAPH_DATASETS = {
+    "snap-web-google": "https://snap.stanford.edu/data/web-Google.txt.gz",
+    "snap-roadnet-ca": "https://snap.stanford.edu/data/roadNet-CA.txt.gz",
+    "snap-com-livejournal": "https://snap.stanford.edu/data/soc-LiveJournal1.txt.gz",
+}
+
+
+def ensure_named_dataset(name: str, max_edges: int = 0) -> str:
+    """Download + decompress a named public dataset into a cached `.tsv`.
+
+    `max_edges` caps the number of edges kept (0 = all), so a large SNAP graph
+    can still be run through the single-threaded NetworkX baseline.
+    """
+    import gzip
+    import urllib.request
+
+    url = GRAPH_DATASETS.get(name)
+    if not url:
+        raise SystemExit(f"unknown dataset '{name}' (have: {sorted(GRAPH_DATASETS)})")
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    suffix = f"_{max_edges}" if max_edges else ""
+    out_path = os.path.join(CACHE_DIR, f"{name}{suffix}.tsv")
+    if os.path.exists(out_path):
+        return out_path
+
+    gz_path = os.path.join(CACHE_DIR, f"{name}.txt.gz")
+    if not os.path.exists(gz_path):
+        print(f"downloading {url} ...", flush=True)
+        urllib.request.urlretrieve(url, gz_path)
+
+    print(f"extracting {gz_path} -> {out_path} ...", flush=True)
+    kept = 0
+    with gzip.open(gz_path, "rt", encoding="utf-8", errors="ignore") as src, \
+            open(out_path, "w", encoding="utf-8") as dst:
+        for line in src:
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                dst.write(f"{parts[0]}\t{parts[1]}\n")
+                kept += 1
+                if max_edges and kept >= max_edges:
+                    break
+    print(f"wrote {out_path} ({kept} edges)", flush=True)
+    return out_path
+
+
 def ensure_graph_dataset(
     edges_file: Optional[str], nodes: int, edges_target: int, seed: int = 42
 ) -> str:
@@ -202,9 +251,72 @@ def run_cugraph(edges: np.ndarray, algorithm: str, source: int, target: int, dam
     }
 
 
+def run_neo4j(
+    edges: np.ndarray, algorithm: str, source: int, target: int, damping: float, iterations: int
+) -> Dict[str, Any]:
+    """Neo4j with the Graph Data Science plugin (Tier-1 graph reference)."""
+    if not importlib.util.find_spec("neo4j"):
+        return {"engine": "neo4j", "available": False, "error": "neo4j not installed"}
+    from neo4j import GraphDatabase
+
+    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    user = os.environ.get("NEO4J_USER", "neo4j")
+    password = os.environ.get("NEO4J_PASSWORD", "benchpass")
+    procs = {
+        "pagerank": "gds.pageRank.stream",
+        "connected_components": "gds.wcc.stream",
+        "shortest_path": "gds.shortestPath.dijkstra.stream",
+    }
+    proc = procs.get(algorithm)
+    if proc is None:
+        return {"engine": "neo4j", "available": False, "error": f"unknown algorithm {algorithm}"}
+
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    # Load + project are setup, not query time, so time them separately.
+    t_load = time.perf_counter()
+    rows = [(int(a), int(b)) for a, b in edges]
+    try:
+        with driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n")
+            for i in range(0, len(rows), 50_000):
+                session.run(
+                    "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
+                    "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
+                    rows=rows[i : i + 50_000],
+                )
+            session.run("CALL gds.graph.drop('bench', false)").consume()
+            session.run("CALL gds.graph.project('bench', 'Node', 'E')").consume()
+        build_s = time.perf_counter() - t_load
+
+        t0 = time.perf_counter()
+        with driver.session() as session:
+            if algorithm == "shortest_path":
+                res = session.run(
+                    f"CALL {proc}('bench', {{sourceNode: $src, targetNode: $tgt}})",
+                    src=int(source),
+                    tgt=int(target),
+                )
+            else:
+                res = session.run(f"CALL {proc}('bench')")
+            out_rows = list(res)
+        return {
+            "engine": "neo4j",
+            "available": True,
+            "build_s": build_s,
+            "seconds": time.perf_counter() - t0,
+            "result_size": len(out_rows),
+        }
+    except Exception as exc:  # server unreachable / GDS missing
+        return {"engine": "neo4j", "available": False, "error": str(exc)[:200]}
+    finally:
+        driver.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Graph Algorithm Benchmark Runner")
     parser.add_argument("--graph-edges", default=None, help="Path to edgelist file (txt/tsv)")
+    parser.add_argument("--dataset", default=None, help="Named public dataset (e.g. snap-web-google, snap-roadnet-ca, snap-com-livejournal)")
+    parser.add_argument("--max-edges", type=int, default=0, help="Cap edges for a named dataset (0 = all)")
     parser.add_argument("--nodes", type=int, default=20000, help="Number of nodes for synthetic graph")
     parser.add_argument("--edges", type=int, default=100000, help="Number of edges for synthetic graph")
     parser.add_argument("--engines", default="benostreamdb,networkx", help="Comma-separated engines to run")
@@ -216,7 +328,10 @@ def main():
     parser.add_argument("--out", default=None, help="Output markdown path")
     args = parser.parse_args()
 
-    edges_path = ensure_graph_dataset(args.graph_edges, args.nodes, args.edges)
+    if args.dataset:
+        edges_path = ensure_named_dataset(args.dataset, args.max_edges)
+    else:
+        edges_path = ensure_graph_dataset(args.graph_edges, args.nodes, args.edges)
     edges = np.loadtxt(edges_path, dtype=np.int64, ndmin=2)
     num_nodes = len(np.unique(edges))
     num_edges = len(edges)
@@ -229,6 +344,7 @@ def main():
     runners = {
         "benostreamdb": run_benostreamdb,
         "networkx": run_networkx,
+        "neo4j": run_neo4j,
         "cugraph": run_cugraph,
     }
 

@@ -25,5 +25,7 @@ kernel void inner_product_kernel(
     }
     
     // Inner product is the dot product itself (no normalization)
-    distances[row] = dot_product;
+    // Negate: inner product is a similarity, so "smaller is more similar"
+    // (matches the flat scan and the HNSW graph).
+    distances[row] = -dot_product;
 }

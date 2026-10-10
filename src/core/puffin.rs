@@ -197,7 +197,7 @@ impl<W: Write + Seek> PuffinIndexWriter<W> {
         };
 
         self.entries.push(entry);
-        Ok(self.entries.last().expect("entry was just pushed"))
+        Ok(self.entries.last().ok_or_else(|| crate::core::error::BenoStreamError::internal("entry was just pushed"))?)
     }
 
     /// Finish writing the Puffin container and return the underlying writer

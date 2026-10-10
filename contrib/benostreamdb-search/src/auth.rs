@@ -70,6 +70,22 @@ pub async fn auth_middleware(
     match token {
         Some(t) => match cfg.verify(&t) {
             Ok(claims) => {
+                let is_write = match req.method().as_str() {
+                    "PUT" | "DELETE" | "PATCH" => true,
+                    "POST" => {
+                        let path = req.uri().path();
+                        !(path.ends_with("_search") 
+                          || path.ends_with("/search") 
+                          || path.ends_with("/scroll") 
+                          || path.ends_with("/count") 
+                          || path.ends_with("/_msearch")
+                          || path.ends_with("/_mget"))
+                    },
+                    _ => false,
+                };
+                if is_write && !claims.roles.iter().any(|r| r == "admin") {
+                    return (StatusCode::FORBIDDEN, "admin role required for writes").into_response();
+                }
                 req.extensions_mut().insert(claims);
                 next.run(req).await
             }

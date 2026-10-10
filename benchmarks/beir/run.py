@@ -48,6 +48,8 @@ BEIR_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 # or CI run downloads the corpus on first use).
 BEIR_DATASET_URLS = {
     "scifact": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip",
+    "nfcorpus": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip",
+    "arguana": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/arguana.zip",
 }
 
 

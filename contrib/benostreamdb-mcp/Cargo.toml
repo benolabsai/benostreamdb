@@ -16,3 +16,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 arrow = "57.2.0"
 arrow-json = "57.2.0"
 tempfile = "3.10"
+sqlparser = { version = "0.55.0", features = ["visitor"] }

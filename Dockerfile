@@ -11,7 +11,7 @@
 #   6333  — Qdrant compatible REST API
 #   50051 — Arrow Flight SQL gRPC (ADBC/JDBC/ODBC)
 # ---------------------------------------------------------------------------
-FROM rust:1.93-slim AS builder
+FROM rust:1.98-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -43,7 +43,7 @@ RUN mkdir -p src \
     && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
     && echo "fn main() {}" > benches/performance.rs \
     && echo "fn main() {}" > benches/bench_table.rs \
-    && cargo build --release -p benostreamdb-search -p benostreamdb-flight \
+    && cargo build --locked --release -p benostreamdb-search -p benostreamdb-flight \
     && rm -rf target/release/.fingerprint/benostreamdb* \
               target/release/deps/*benostreamdb* \
               target/release/deps/libbenostreamdb* \
@@ -58,7 +58,7 @@ COPY contrib/benostreamdb-search/src ./contrib/benostreamdb-search/src
 COPY server/flight_sql/src ./server/flight_sql/src
 
 # Build both binaries
-RUN cargo build --release -p benostreamdb-search -p benostreamdb-flight
+RUN cargo build --locked --release -p benostreamdb-search -p benostreamdb-flight
 
 
 # ---------------------------------------------------------------------------
