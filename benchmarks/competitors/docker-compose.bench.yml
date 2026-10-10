@@ -87,10 +87,13 @@ services:
       POSTGRES_USER: bench
       POSTGRES_PASSWORD: bench
       POSTGRES_DB: bench
-    # Give Postgres a realistic server config for an ANN build/query workload.
-    # The stock defaults (shared_buffers=128MB, maintenance_work_mem=64MB)
-    # throttle HNSW construction; the envelope still caps total memory.
-    command: ["postgres", "-c", "shared_buffers=4GB", "-c", "maintenance_work_mem=2GB", "-c", "max_parallel_maintenance_workers=4"]
+    # Give Postgres a realistic server config for an ANN build/query workload
+    # (stock shared_buffers=128MB / maintenance_work_mem=64MB throttle HNSW).
+    # Parallel maintenance workers allocate maintenance_work_mem each in
+    # /dev/shm (Docker's default is 64MB), so raise shm_size and bound the
+    # workers. The envelope still caps total memory.
+    command: ["postgres", "-c", "shared_buffers=4GB", "-c", "maintenance_work_mem=1GB", "-c", "max_parallel_maintenance_workers=1"]
+    shm_size: "2g"
     networks: [bench]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bench -d bench"]

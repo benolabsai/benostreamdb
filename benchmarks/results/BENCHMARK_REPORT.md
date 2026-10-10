@@ -1,8 +1,8 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-10 04:09:51 UTC
-- **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
-- **Python**: 3.14.4
+- **Generated At**: 2026-10-10 19:45:32 UTC
+- **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.41
+- **Python**: 3.12.15
 
 ---
 
@@ -69,9 +69,7 @@
 | Pure Index p99 latency | 0.42 ms |
 
 
-## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX)
-
-### Results from `graph_competitors.md`
+## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)
 
 # Graph Competitor Comparison: BenoStreamDB vs NetworkX vs Neo4j+GDS
 
@@ -105,37 +103,46 @@
 - BenoStreamDB / NetworkX: `benchmarks/graph/run.py` (10k/50k synthetic graph).
 - Neo4j: `benchmarks/competitors/run_competitor.py --engine neo4j` against Neo4j 5.26 + GDS (`gds.pageRank.stream`, `gds.wcc.stream`); load and algorithm timed separately.
 
-### Results from `graph_snap_web_google.md`
+### Graph — `snap-com-livejournal_500000` (pagerank)
 
-# Graph Benchmark Results
+| Engine | Layer | Device | Load (s) | Execution (s) | Result size |
+|---|---|---|---|---|---|
+| benostreamdb | embedded (in-process Rust) | cpu | 4.413 | 0.096 | 291629 |
+| memgraph | memgraph MAGE (native engine) | cpu | 5.665 | 0.201 | 291629 |
+| neo4j | neo4j GDS (native JVM) | cpu | 12.087 | 0.296 | 291629 |
+| kuzu | embedded (in-process C++) | cpu | 1026.579 | 0.511 | 291629 |
+| networkx | embedded (in-process Python) | cpu | - | 1.135 | 291629 |
 
-- **Graph Nodes**: 158,508
-- **Graph Edges**: 500,000
-- **Source Dataset**: `snap-web-google_500000.tsv`
+### Graph — `snap-roadnet-ca_500000` (pagerank)
 
-| Algorithm | Engine | Status | Build (s) | Execution Latency (ms) | Result Size | Speedup vs NetworkX |
-|---|---|---|---|---|---|---|
-| pagerank | benostreamdb | ✅ Pass | 1.352s | 290.56 ms | 158508 | 1.48x |
-| pagerank | networkx | ✅ Pass | 0.842s | 430.71 ms | 158508 | 1.00x (baseline) |
-| connected_components | benostreamdb | ✅ Pass | 1.266s | 54.30 ms | 1383 | 1.93x |
-| connected_components | networkx | ✅ Pass | 0.719s | 104.60 ms | 1383 | 1.00x (baseline) |
+| Engine | Layer | Device | Load (s) | Execution (s) | Result size |
+|---|---|---|---|---|---|
+| memgraph | memgraph MAGE (native engine) | cpu | 5.294 | 0.153 | 183395 |
+| benostreamdb | embedded (in-process Rust) | cpu | 2.124 | 0.215 | 183395 |
+| neo4j | neo4j GDS (native JVM) | cpu | 9.843 | 0.3 | 183395 |
+| kuzu | embedded (in-process C++) | cpu | 782.472 | 0.348 | 183395 |
+| networkx | embedded (in-process Python) | cpu | - | 0.571 | 183395 |
 
-### Results from `graph_synth_10k.md`
+### Graph — `snap-web-google_500000` (pagerank)
 
-# Graph Benchmark Results
+| Engine | Layer | Device | Load (s) | Execution (s) | Result size |
+|---|---|---|---|---|---|
+| benostreamdb | embedded (in-process Rust) | cpu | 2.147 | 0.123 | 158508 |
+| memgraph | memgraph MAGE (native engine) | cpu | 5.617 | 0.13 | 158508 |
+| kuzu | embedded (in-process C++) | cpu | 778.778 | 0.256 | 158508 |
+| neo4j | neo4j GDS (native JVM) | cpu | 11.48 | 0.277 | 158508 |
+| networkx | embedded (in-process Python) | cpu | - | 0.806 | 158508 |
 
-- **Graph Nodes**: 10,000
-- **Graph Edges**: 49,975
-- **Source Dataset**: `synth_graph_n10000_e50000_s42.txt`
+### Graph — `synth_10000_50000` (pagerank)
 
-| Algorithm | Engine | Status | Build (s) | Execution Latency (ms) | Result Size | Speedup vs NetworkX |
-|---|---|---|---|---|---|---|
-| pagerank | benostreamdb | ✅ Pass | 0.136s | 16.15 ms | 10000 | 4.35x |
-| pagerank | networkx | ✅ Pass | 0.084s | 70.25 ms | 10000 | 1.00x (baseline) |
-| connected_components | benostreamdb | ✅ Pass | 0.132s | 4.53 ms | 1 | 1.02x |
-| connected_components | networkx | ✅ Pass | 0.060s | 4.62 ms | 1 | 1.00x (baseline) |
-| shortest_path | benostreamdb | ✅ Pass | 0.131s | 1.69 ms | 3 | 0.23x |
-| shortest_path | networkx | ✅ Pass | 0.062s | 0.39 ms | 3 | 1.00x (baseline) |
+| Engine | Layer | Device | Load (s) | Execution (s) | Result size |
+|---|---|---|---|---|---|
+| memgraph | memgraph MAGE (native engine) | cpu | 165.892 | 0.011 | 10000 |
+| benostreamdb | embedded (in-process Rust) | cpu | 0.224 | 0.017 | 10000 |
+| neo4j | neo4j GDS (native JVM) | cpu | 1.382 | 0.073 | 10000 |
+| kuzu | embedded (in-process C++) | cpu | 9.692 | 0.091 | 10000 |
+| cugraph | embedded (in-process GPU) | cpu | 0.142 | 0.124 | 10000 |
+| networkx | embedded (in-process Python) | cpu | - | 0.674 | 10000 |
 
 
 ## 3. SQL OLAP Performance (ClickBench Q0–Q9: BenoStreamDB vs DuckDB vs DataFusion)
@@ -485,15 +492,176 @@
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
-# Benchmark rollup (2026-10-10T00:09:27-04:00)
+### Vector — `fashion-mnist-784-euclidean` (cpu)
 
-Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| faiss | 1.0 | 4493.2 | 0.22 | 0.331 | 0.696 | 0.0 |
+| hnswlib | 1.0 | 4052.0 | 0.243 | 0.378 | 1.678 | 0.0 |
+| weaviate | 0.9998 | 1153.9 | 0.846 | 1.166 | 5.68 | 0.0 |
+| benostreamdb | 0.9324 | 1139.7 | 0.767 | 1.035 | 2.019 | 149.12 |
+| opensearch | 0.9798 | 967.9 | 1.014 | 1.361 | 5.999 | 0.02 |
+| pgvector | 1.0 | 835.8 | 1.158 | 1.725 | 11.249 | 166.35 |
+| qdrant | 1.0 | 630.5 | 1.561 | 1.889 | 10.049 | 62.72 |
+| lancedb_hnsw | 1.0 | 503.9 | 1.868 | 2.28 | 1.876 | 81.67 |
+| lancedb | 0.7502 | 451.3 | 2.126 | 2.571 | 5.613 | 64.59 |
+| milvus | 0.9984 | 3.4 | 200.68 | 401.128 | 2.705 | 0.0 |
 
-| Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
-|---|---|---|---|---|---|---|---|---|
-| benostreamdb | - | - | - | - | - | - | - | - |
-| clickhouse | - | - | - | - | - | - | - | - |
-| datafusion | - | - | - | - | - | - | - | - |
-| duckdb | - | - | - | - | - | - | - | - |
+### Vector — `gist-960-euclidean` (cpu)
 
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| faiss | 0.9916 | 2502.7 | 0.411 | 0.546 | 1.305 | 0.0 |
+| hnswlib | 0.991 | 2166.9 | 0.474 | 0.65 | 3.514 | 0.0 |
+| weaviate | 0.9782 | 988.1 | 1.007 | 1.264 | 7.972 | 0.0 |
+| benostreamdb | 0.8194 | 957.6 | 0.924 | 1.33 | 2.497 | 177.14 |
+| lancedb_hnsw | 0.9648 | 465.2 | 2.0 | 2.467 | 2.433 | 99.15 |
+| lancedb | 0.4718 | 436.4 | 2.108 | 2.713 | 6.883 | 79.07 |
+| opensearch | 0.8582 | 340.7 | 2.911 | 3.682 | 16.944 | 0.02 |
+| pgvector | 0.9988 | 340.4 | 2.98 | 3.95 | 26.002 | 247.29 |
+| milvus | 0.8864 | 3.4 | 200.631 | 400.963 | 3.14 | 0.0 |
+
+### Vector — `glove-100-angular` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| hnswlib | 0.4624 | 8873.2 | 0.112 | 0.262 | 0.631 | 0.0 |
+| faiss | 0.9826 | 7711.3 | 0.128 | 0.28 | 0.383 | 0.0 |
+| benostreamdb | 0.3416 | 1614.8 | 0.534 | 0.831 | 0.668 | 20.68 |
+| weaviate | 0.4614 | 1228.4 | 0.784 | 1.27 | 4.22 | 0.0 |
+| qdrant | 0.461 | 983.5 | 0.987 | 1.432 | 1.797 | 8.0 |
+| pgvector | 0.462 | 762.9 | 1.311 | 1.991 | 6.216 | 24.85 |
+| opensearch | 0.4308 | 756.4 | 1.309 | 1.637 | 8.354 | 0.02 |
+| lancedb | 0.0288 | 581.5 | 1.615 | 1.922 | 0.4 | 8.2 |
+| lancedb_hnsw | 0.4632 | 502.4 | 1.901 | 2.39 | 0.69 | 13.27 |
+| milvus | 0.4408 | 3.5 | 200.495 | 401.04 | 1.599 | 0.0 |
+
+### Vector — `glove-200-angular` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| hnswlib | 0.1758 | 6450.4 | 0.155 | 0.364 | 0.968 | 0.0 |
+| faiss | 0.9494 | 5752.8 | 0.172 | 0.305 | 0.592 | 0.0 |
+| benostreamdb | 0.2026 | 1442.9 | 0.564 | 0.868 | 0.842 | 38.97 |
+| weaviate | 0.1782 | 1080.4 | 0.905 | 1.315 | 5.066 | 0.0 |
+| qdrant | 0.1752 | 751.6 | 1.299 | 1.958 | 3.113 | 16.0 |
+| pgvector | 0.1758 | 586.0 | 1.685 | 2.851 | 8.615 | 42.27 |
+| lancedb_hnsw | 0.1774 | 493.0 | 1.909 | 2.672 | 1.0 | 23.26 |
+| lancedb | 0.0998 | 483.4 | 1.974 | 2.421 | 2.237 | 16.78 |
+| opensearch | 0.1638 | 368.7 | 2.679 | 3.868 | 12.628 | 0.02 |
+| milvus | 0.1646 | 3.4 | 200.835 | 400.98 | 1.598 | 0.0 |
+
+### Vector — `lastfm-64-dot` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| hnswlib | 0.9916 | 19925.7 | 0.049 | 0.07 | 0.33 | 0.0 |
+| faiss | 0.9964 | 14794.7 | 0.065 | 0.098 | 0.196 | 0.0 |
+| benostreamdb | 0.73 | 2210.8 | 0.378 | 0.563 | 0.926 | 15.2 |
+| weaviate | 0.98 | 1561.1 | 0.607 | 1.131 | 4.02 | 0.0 |
+| pgvector | 0.996 | 1221.8 | 0.802 | 1.261 | 6.803 | 18.51 |
+| opensearch | 0.5684 | 1144.0 | 0.859 | 1.11 | 3.323 | 0.02 |
+| qdrant | 1.0 | 1098.4 | 0.89 | 1.13 | 1.222 | 5.2 |
+| lancedb | 0.2092 | 575.9 | 1.643 | 2.049 | 0.478 | 5.36 |
+| lancedb_hnsw | 0.903 | 531.3 | 1.772 | 2.303 | 0.547 | 7.88 |
+| milvus | 0.9756 | 3.5 | 200.44 | 401.054 | 1.686 | 0.0 |
+
+### Vector — `mnist-784-euclidean` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| faiss | 0.9998 | 3568.7 | 0.284 | 0.438 | 0.933 | 0.0 |
+| hnswlib | 1.0 | 3158.3 | 0.324 | 0.459 | 2.233 | 0.0 |
+| weaviate | 0.9988 | 1077.5 | 0.912 | 1.332 | 6.478 | 0.0 |
+| benostreamdb | 0.9572 | 1027.0 | 0.855 | 1.27 | 2.02 | 149.37 |
+| opensearch | 0.968 | 901.4 | 1.071 | 1.631 | 6.412 | 0.02 |
+| pgvector | 1.0 | 746.5 | 1.318 | 2.262 | 13.644 | 166.36 |
+| qdrant | 1.0 | 584.4 | 1.694 | 2.218 | 9.925 | 62.72 |
+| lancedb_hnsw | 1.0 | 502.0 | 1.872 | 2.339 | 1.935 | 81.79 |
+| lancedb | 0.8262 | 466.1 | 2.028 | 2.6 | 5.511 | 64.59 |
+| milvus | 0.9914 | 3.5 | 200.546 | 401.119 | 2.958 | 0.0 |
+
+### Vector — `nytimes-256-angular` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| faiss | 0.0922 | 4483.3 | 0.221 | 0.378 | 0.683 | 0.0 |
+| hnswlib | 0.0908 | 3970.8 | 0.244 | 0.393 | 1.247 | 0.0 |
+| benostreamdb | 0.2682 | 1241.2 | 0.658 | 0.959 | 0.935 | 49.75 |
+| weaviate | 0.0906 | 1139.3 | 0.867 | 1.117 | 5.432 | 0.0 |
+| qdrant | 0.0908 | 662.9 | 1.49 | 2.032 | 3.905 | 20.48 |
+| lancedb | 0.0838 | 526.8 | 1.796 | 2.264 | 1.69 | 21.14 |
+| pgvector | 0.0908 | 521.3 | 1.875 | 3.236 | 10.346 | 50.91 |
+| lancedb_hnsw | 0.0906 | 432.5 | 2.201 | 2.658 | 1.058 | 28.85 |
+| opensearch | 0.081 | 197.8 | 3.913 | 35.965 | 15.42 | 0.02 |
+| milvus | 0.0854 | 3.5 | 200.635 | 400.981 | 2.114 | 0.0 |
+
+### Vector — `sift-128-euclidean` (cpu)
+
+| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|
+| hnswlib | 1.0 | 11241.5 | 0.087 | 0.206 | 0.428 | 0.0 |
+| faiss | 1.0 | 5610.5 | 0.101 | 0.231 | 0.33 | 0.0 |
+| benostreamdb | 0.9506 | 1524.9 | 0.552 | 0.863 | 0.606 | 26.18 |
+| weaviate | 0.999 | 1290.2 | 0.731 | 1.428 | 4.008 | 0.0 |
+| opensearch | 0.9386 | 1253.6 | 0.776 | 1.179 | 3.193 | 0.02 |
+| qdrant | 1.0 | 1022.8 | 0.952 | 1.323 | 1.959 | 10.24 |
+| pgvector | 1.0 | 1016.4 | 0.969 | 1.333 | 4.125 | 29.21 |
+| lancedb | 0.4984 | 560.9 | 1.632 | 1.982 | 1.105 | 10.61 |
+| lancedb_hnsw | 0.9884 | 482.4 | 1.987 | 2.398 | 0.675 | 16.18 |
+| milvus | 0.9754 | 3.5 | 200.601 | 401.085 | 1.836 | 0.0 |
+
+### Graph
+
+Graph results for every engine (incl. Neo4j + GDS) are in **§2**.
+
+### SQL
+
+| Engine | Dataset | Device | Seconds | Rows |
+|---|---|---|---|---|
+| duckdb | - | cpu | 0.003 | 10 |
+| clickhouse | - | cpu | 0.006 | 10 |
+| clickhouse | - | cpu | 0.007 | 10 |
+| datafusion | - | cpu | 0.007 | 10 |
+| benostreamdb | - | cpu | 0.008 | 10 |
+| clickhouse | - | cpu | 0.008 | 4 |
+| duckdb | - | cpu | 0.01 | 4 |
+| datafusion | - | cpu | 0.014 | 1 |
+| duckdb | - | cpu | 0.014 | 1 |
+| duckdb | - | cpu | 0.014 | 10 |
+| datafusion | - | cpu | 0.015 | 4 |
+| benostreamdb | - | cpu | 0.018 | 10 |
+| clickhouse | - | cpu | 0.022 | 1 |
+| benostreamdb | - | cpu | 0.032 | 4 |
+| benostreamdb | - | cpu | 0.054 | 1 |
+| trino | - | cpu | 0.104 | 10 |
+| datafusion | - | cpu | 0.131 | 10 |
+
+## 10. Competitor Configurations (frame of reference)
+
+Every engine runs inside the same Docker envelope (`BENCH_CPUS`/`BENCH_MEM`, recorded in `hardware_profile.txt`). The table documents the index/engine setup and the measurement layer behind each number.
+
+| Workload | Engine | Configuration | Measurement layer |
+|---|---|---|---|
+| vector | benostreamdb | Native HNSW/IVF via benchmarks/ann_benchmarks | embedded (in-process Rust) |
+| vector | faiss | IndexHNSWFlat, M/efConstruction/efSearch; L2 or IP (L2-normalized for cosine) | embedded (in-process C++) |
+| vector | hnswlib | HNSW, M/ef_construction/ef; space = l2 / ip / cosine per metric | embedded (in-process C++) |
+| vector | lancedb | IVF_PQ (LanceDB default), distance l2/cosine/dot, nprobes = ef_search/10 | embedded (in-process Rust) |
+| vector | lancedb_hnsw | HnswSq (scalar-quantized HNSW), M/ef_construction, ef = ef_search | embedded (in-process Rust) |
+| vector | pgvector | HNSW m/ef_construction; shared_buffers=4GB + maintenance_work_mem=2GB; hnsw.ef_search; op matches opclass (<-> L2 / <=> cosine / <#> IP) | client → server (Postgres) |
+| vector | opensearch | knn_vector, Lucene HNSW, m/ef_construction, knn.algo_param.ef_search | client → server (OpenSearch) |
+| vector | qdrant | collection HNSW, m/ef_construct, hnsw_ef; distance Euclid/Cosine/Dot | client → server (Qdrant) |
+| vector | milvus | collection HNSW, M/efConstruction, ef; distance L2/IP/COSINE; Strong consistency | client → server (Milvus) |
+| vector | weaviate | collection HNSW, max_connections/ef_construction, dynamic ef; distance cosine/dot/l2-squared | client → server (Weaviate) |
+| graph | benostreamdb | CSR graph, in-process Rust (PageRank 30 iters / connected components / shortest path) | embedded (in-process Rust) |
+| graph | networkx | in-memory Python (correctness oracle, not a perf baseline) | embedded (in-process Python) |
+| graph | neo4j | Neo4j 5.26 + GDS, gds.graph.project + native gds.*.mutate; page cache 4G; latency = JVM compute (no per-node Bolt marshalling) | native GDS (Neo4j JVM) |
+| graph | memgraph | native engine + MAGE query modules (pagerank.get / weakly_connected_components); aggregate-only result | native engine (Memgraph) |
+| graph | kuzu | embedded columnar graph DB; page_rank / weakly_connected_components on a projected graph | embedded (in-process C++) |
+| graph | cugraph | cuGraph on GPU (RMM managed memory, renumber=True) | embedded (in-process GPU) |
+| sql | benostreamdb | in-process SQL (DataFusion-backed) | embedded (in-process Rust) |
+| sql | duckdb | SET threads = BENCH_CPUS; SET memory_limit = BENCH_MEM | embedded (in-process C++) |
+| sql | datafusion | target_partitions = BENCH_CPUS | embedded (in-process Rust) |
+| sql | clickhouse | MergeTree ORDER BY tuple(); Parquet loaded via the client | client → server (ClickHouse) |
+| sql | trino | Hive connector over the shared Parquet (external table) | client → server (Trino) |
 

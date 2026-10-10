@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Benchmarks
+- **Competitor matrix expanded** — added **Qdrant**, **Milvus** and **Weaviate**
+  (vector) and **Memgraph** (MAGE) and **Kùzu** (embedded) graph engines, all
+  under the shared Docker envelope. The report gains a **§10 "Competitor
+  Configurations"** reference table (index/engine setup + measurement layer) and
+  **§2** now renders the graph matrix (incl. Neo4j + GDS) with a `layer` column.
+- Re-ran the graph (SNAP + synthetic) and vector (8 ANN-Benchmarks datasets)
+  matrices under the shared envelope after the fixes below.
+
+### Fixed
+- **Neo4j graph benchmark measured the driver, not the database** —
+  `_graph_neo4j` timed `gds.*.stream` with `list(res)`, i.e. Python marshalling
+  of 100k+ Bolt records (PageRank read as ~3.7 s on web-Google). It now runs
+  native GDS `.mutate` in the Neo4j JVM (~0.1 s of compute) and returns a
+  summary row; results carry a `layer` describing the measurement layer.
+- **pgvector L2 queries did a full sequential scan** — the query used `<=>`
+  (cosine) against a `vector_l2_ops` index, so Postgres could not use the HNSW
+  index. Fixed to `<->` to match the opclass (QPS ~3x higher; recall now
+  properly approximate). Raised `shared_buffers`/`maintenance_work_mem` and the
+  container `shm_size` so the HNSW build is not throttled by the Postgres
+  defaults or Docker's 64 MB `/dev/shm`.
+- **hnswlib built dot-product datasets in L2 space** — now maps
+  `inner_product` → `ip`; LanceDB maps it to `dot` and applies the `ef`
+  (HNSW) / `nprobes` (IVF_PQ) recall knob, which it previously ignored.
+- **DuckDB / DataFusion ignored the cgroup envelope** — DuckDB now pins
+  `threads`/`memory_limit` and DataFusion `target_partitions` to
+  `BENCH_CPUS`/`BENCH_MEM` (they otherwise used every host core).
+- **Benchmark env over-reported host resources** — `env.cores`/`env.ram_gb` now
+  read the cgroup CPU/memory limits. The containers were always capped at
+  8 CPU / 16 GiB, but the *reported* values previously showed 32 CPUs / 121 GB.
+- **Memgraph loader hung / pegged a core** — the un-indexed
+  `MERGE (n:Node {id})` load was O(n²); a `:Node(id)` index is now created
+  first (500k-edge load: minutes/hang → ~5 s). Kùzu's default 8 TB `max_db_size`
+  and host-sized buffer pool also failed to mmap under the cgroup cap; both are
+  now sized from the envelope.
+
 ## [0.12.0]
 
 ### Added
