@@ -20,6 +20,78 @@ import time
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 
+# Reference configuration for every participant, so the numbers in this report
+# can be read against HOW each engine was set up and WHERE it was measured.
+COMPETITOR_CONFIG = [
+    ("vector", "benostreamdb",
+     "Native HNSW/IVF via benchmarks/ann_benchmarks",
+     "embedded (in-process Rust)"),
+    ("vector", "faiss",
+     "IndexHNSWFlat, M/efConstruction/efSearch; L2 or IP (L2-normalized for cosine)",
+     "embedded (in-process C++)"),
+    ("vector", "hnswlib",
+     "HNSW, M/ef_construction/ef; space = l2 / ip / cosine per metric",
+     "embedded (in-process C++)"),
+    ("vector", "lancedb",
+     "IVF_PQ (LanceDB default), distance l2/cosine/dot, nprobes = ef_search/10",
+     "embedded (in-process Rust)"),
+    ("vector", "lancedb_hnsw",
+     "HnswSq (scalar-quantized HNSW), M/ef_construction, ef = ef_search",
+     "embedded (in-process Rust)"),
+    ("vector", "pgvector",
+     "HNSW m/ef_construction; shared_buffers=4GB + maintenance_work_mem=2GB; "
+     "hnsw.ef_search; op matches opclass (<-> L2 / <=> cosine / <#> IP)",
+     "client → server (Postgres)"),
+    ("vector", "opensearch",
+     "knn_vector, Lucene HNSW, m/ef_construction, knn.algo_param.ef_search",
+     "client → server (OpenSearch)"),
+    ("vector", "qdrant",
+     "collection HNSW, m/ef_construct, hnsw_ef; distance Euclid/Cosine/Dot",
+     "client → server (Qdrant)"),
+    ("vector", "milvus",
+     "collection HNSW, M/efConstruction, ef; distance L2/IP/COSINE; Strong consistency",
+     "client → server (Milvus)"),
+    ("vector", "weaviate",
+     "collection HNSW, max_connections/ef_construction, dynamic ef; "
+     "distance cosine/dot/l2-squared",
+     "client → server (Weaviate)"),
+    ("graph", "benostreamdb",
+     "CSR graph, in-process Rust (PageRank 30 iters / connected components / shortest path)",
+     "embedded (in-process Rust)"),
+    ("graph", "networkx",
+     "in-memory Python (correctness oracle, not a perf baseline)",
+     "embedded (in-process Python)"),
+    ("graph", "neo4j",
+     "Neo4j 5.26 + GDS, gds.graph.project + native gds.*.mutate; page cache 4G; "
+     "latency = JVM compute (no per-node Bolt marshalling)",
+     "native GDS (Neo4j JVM)"),
+    ("graph", "memgraph",
+     "native engine + MAGE query modules (pagerank.get / weakly_connected_components); "
+     "aggregate-only result",
+     "native engine (Memgraph)"),
+    ("graph", "kuzu",
+     "embedded columnar graph DB; page_rank / weakly_connected_components on a projected graph",
+     "embedded (in-process C++)"),
+    ("graph", "cugraph",
+     "cuGraph on GPU (RMM managed memory, renumber=True)",
+     "embedded (in-process GPU)"),
+    ("sql", "benostreamdb",
+     "in-process SQL (DataFusion-backed)",
+     "embedded (in-process Rust)"),
+    ("sql", "duckdb",
+     "SET threads = BENCH_CPUS; SET memory_limit = BENCH_MEM",
+     "embedded (in-process C++)"),
+    ("sql", "datafusion",
+     "target_partitions = BENCH_CPUS",
+     "embedded (in-process Rust)"),
+    ("sql", "clickhouse",
+     "MergeTree ORDER BY tuple(); Parquet loaded via the client",
+     "client → server (ClickHouse)"),
+    ("sql", "trino",
+     "Hive connector over the shared Parquet (external table)",
+     "client → server (Trino)"),
+]
+
 
 def generate_summary():
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -52,15 +124,47 @@ def generate_summary():
     sections.append("")
 
     # 2. Graph Analytics Benchmarks
-    sections.append("## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX)")
+    #
+    # Sourced from the same Docker competitor matrix as the vector/SQL results
+    # (shared hardware envelope) so every engine appears — incl. Neo4j + GDS,
+    # Memgraph and cuGraph. The `layer` column records HOW each engine is
+    # measured: Neo4j/Memgraph run the algorithm server-side in a native engine
+    # (timing `.stream` from Python measured Bolt/Python marshalling, not the
+    # algorithm), while the others are in-process libraries.
+    sections.append("## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)")
     sections.append("")
-    graph_files = glob.glob(os.path.join(BASE_DIR, "graph", "results", "*.md"))
-    if graph_files:
-        for f in sorted(graph_files):
-            sections.append(f"### Results from `{os.path.basename(f)}`")
-            sections.append("")
+    narrative = os.path.join(BASE_DIR, "graph", "results", "graph_competitors.md")
+    if os.path.exists(narrative):
+        with open(narrative, encoding="utf-8") as fh:
+            sections.append(fh.read().strip())
+        sections.append("")
+
+    graph_records = []
+    for f in sorted(glob.glob(os.path.join(BASE_DIR, "competitors", "results", "*.json"))):
+        try:
             with open(f, encoding="utf-8") as fh:
-                sections.append(fh.read().strip())
+                r = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if r.get("workload") == "graph" and r.get("available") is not False and "seconds" in r:
+            graph_records.append(r)
+
+    if graph_records:
+        groups: dict = {}
+        for r in graph_records:
+            key = (r.get("dataset") or "synthetic-10k", r.get("algorithm", "-"))
+            groups.setdefault(key, []).append(r)
+        for (ds, algo) in sorted(groups):
+            sections.append(f"### Graph — `{ds}` ({algo})")
+            sections.append("")
+            sections.append("| Engine | Layer | Device | Load (s) | Execution (s) | Result size |")
+            sections.append("|---|---|---|---|---|---|")
+            for r in sorted(groups[(ds, algo)], key=lambda x: (x.get("seconds") or 0)):
+                load = r.get("load_s", r.get("build_seconds", "-"))
+                sections.append(
+                    f"| {r.get('engine')} | {r.get('layer', '-')} | {r.get('device', 'cpu')} | "
+                    f"{load} | {r.get('seconds')} | {r.get('result_size')} |"
+                )
             sections.append("")
     else:
         sections.append("*No graph benchmark results found.*")
@@ -201,15 +305,79 @@ def generate_summary():
     sections.append("")
 
     # 9. Docker Competitor Matrix (single shared hardware envelope)
+    #
+    # Aggregate the per-engine JSON records (not the per-run `rollup.md`, which
+    # only reflects the most recent invocation) so the report always shows the
+    # full matrix — every engine, every dataset, and both CPU/GPU passes.
     sections.append("## 9. Docker Competitor Matrix (shared hardware envelope)")
     sections.append("")
-    rollup_md = os.path.join(BASE_DIR, "competitors", "results", "rollup.md")
-    if os.path.exists(rollup_md):
-        with open(rollup_md, encoding="utf-8") as fh:
-            sections.append(fh.read().strip())
+    records = []
+    for f in sorted(glob.glob(os.path.join(BASE_DIR, "competitors", "results", "*.json"))):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                r = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if r.get("available") is False:
+            continue
+        records.append(r)
+
+    vector = [r for r in records if "recall_at_k" in r]
+    graph = [r for r in records if r.get("workload") == "graph" and "seconds" in r]
+    sql = [r for r in records if r.get("workload") == "sql" and "seconds" in r]
+
+    if vector:
+        groups = {}
+        for r in vector:
+            groups.setdefault((r.get("dataset", "-"), r.get("device", "cpu")), []).append(r)
+        for (ds, dev) in sorted(groups):
+            sections.append(f"### Vector — `{ds}` ({dev})")
+            sections.append("")
+            sections.append("| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |")
+            sections.append("|---|---|---|---|---|---|---|")
+            for r in sorted(groups[(ds, dev)], key=lambda x: -(x.get("qps") or 0)):
+                sections.append(
+                    f"| {r.get('engine')} | {r.get('recall_at_k')} | {r.get('qps')} | "
+                    f"{r.get('p50_ms')} | {r.get('p99_ms')} | {r.get('build_s')} | {r.get('index_mb')} |"
+                )
+            sections.append("")
+
+    if graph:
+        # Graph is covered in full (all engines, incl. Neo4j + GDS) by §2.
+        sections.append("### Graph")
         sections.append("")
-    else:
+        sections.append("Graph results for every engine (incl. Neo4j + GDS) are in **§2**.")
+        sections.append("")
+
+    if sql:
+        sections.append("### SQL")
+        sections.append("")
+        sections.append("| Engine | Dataset | Device | Seconds | Rows |")
+        sections.append("|---|---|---|---|---|")
+        for r in sorted(sql, key=lambda x: (x.get("dataset", ""), x.get("seconds") or 0)):
+            sections.append(
+                f"| {r.get('engine')} | {r.get('dataset', '-')} | {r.get('device', 'cpu')} | "
+                f"{r.get('seconds')} | {r.get('rows')} |"
+            )
+        sections.append("")
+
+    if not (vector or graph or sql):
         sections.append("*No Docker competitor matrix results found.*")
+        sections.append("")
+
+    # 10. Competitor configurations (frame of reference)
+    sections.append("## 10. Competitor Configurations (frame of reference)")
+    sections.append("")
+    sections.append(
+        "Every engine runs inside the same Docker envelope (`BENCH_CPUS`/`BENCH_MEM`, "
+        "recorded in `hardware_profile.txt`). The table documents the index/engine "
+        "setup and the measurement layer behind each number."
+    )
+    sections.append("")
+    sections.append("| Workload | Engine | Configuration | Measurement layer |")
+    sections.append("|---|---|---|---|")
+    for wl, engine, config, layer in COMPETITOR_CONFIG:
+        sections.append(f"| {wl} | {engine} | {config} | {layer} |")
     sections.append("")
 
     content = "\n".join(sections) + "\n"
