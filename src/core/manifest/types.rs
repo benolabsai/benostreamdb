@@ -572,13 +572,13 @@ impl IndexAlgorithm {
     /// `"scalar"`, `"bloom"`, `"graph_v2"`), so the SQL/connector surfaces can
     /// pass whichever spelling their users know. Returns `None` for anything
     /// unrecognized, letting each caller fall back to its own default (the
-    /// connectors use [`Self::default`] = `hnsw_tq8`).
+    /// connectors use [`Self::default`] = `hnsw`, full precision).
     pub fn from_name(name: &str) -> Option<IndexAlgorithm> {
         match name.trim().to_ascii_lowercase().as_str() {
             "hnsw" | "hnsw_f32" => Some(IndexAlgorithm::hnsw()),
-            // "vector" is the physical category written for the default
-            // (TurboQuant-8) vector index.
-            "vector" => Some(IndexAlgorithm::hnsw_tq8()),
+            // "vector" is the physical category for the default vector index,
+            // which is now full-precision HNSW.
+            "vector" => Some(IndexAlgorithm::hnsw()),
             "hnsw_pq" | "pq" => Some(IndexAlgorithm::hnsw_pq()),
             "hnsw_tq4" | "tq4" => Some(IndexAlgorithm::hnsw_tq4()),
             "hnsw_tq8" | "tq8" => Some(IndexAlgorithm::hnsw_tq8()),
@@ -630,8 +630,13 @@ impl std::fmt::Display for IndexAlgorithm {
 }
 
 impl Default for IndexAlgorithm {
+    /// Full-precision HNSW is the default. Quantized variants (TurboQuant
+    /// `hnsw_tq4`/`hnsw_tq8`, `hnsw_pq`) are opt-in: they trade recall for a
+    /// smaller index and cheaper distance computation. Holding multiple
+    /// precisions on one column and selecting one at query time is on the
+    /// roadmap.
     fn default() -> Self {
-        Self::hnsw_tq8()
+        Self::hnsw()
     }
 }
 

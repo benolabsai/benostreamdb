@@ -1,0 +1,35 @@
+{
+  "engine": "benostreamdb",
+  "dataset": "mnist-784-euclidean",
+  "workload": "vector_ann",
+  "device": "cpu",
+  "n": 20000,
+  "dim": 784,
+  "index": {
+    "type": "hnsw_tq4",
+    "m": 16,
+    "ef_construction": 200,
+    "ef_search": 200,
+    "metric": "l2"
+  },
+  "queries": 500,
+  "k": 10,
+  "build_s": 2.288,
+  "index_mb": 139.13,
+  "recall_at_k": 0.6192,
+  "qps": 467.1,
+  "p50_ms": 2.041,
+  "p99_ms": 2.525,
+  "pure_index_qps": 621.9,
+  "pure_p50_ms": 1.596,
+  "pure_p99_ms": 2.018,
+  "env": {
+    "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

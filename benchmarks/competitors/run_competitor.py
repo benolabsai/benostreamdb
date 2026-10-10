@@ -198,6 +198,16 @@ class FaissAdapter(VectorAdapter):
         _, ids = handle.search(q, k)
         return ids
 
+    def index_bytes(self, handle):
+        import faiss
+        try:
+            return int(len(faiss.serialize_index(handle)))
+        except Exception:
+            try:
+                return int(handle.ntotal) * int(handle.d) * 4
+            except Exception:
+                return 0
+
 
 class HnswlibAdapter(VectorAdapter):
     def __init__(self) -> None:
@@ -225,6 +235,21 @@ class HnswlibAdapter(VectorAdapter):
         handle.set_ef(ef_search)
         labels, _ = handle.knn_query(queries, k=k)
         return labels
+
+    def index_bytes(self, handle):
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".hnsw")
+        tmp.close()
+        try:
+            handle.save_index(tmp.name)
+            return int(os.path.getsize(tmp.name))
+        except Exception:
+            return 0
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
 
 
 class PgvectorAdapter(VectorAdapter):
@@ -462,9 +487,10 @@ class OpenSearchAdapter(VectorAdapter):
         return np.array(out)
 
     def index_bytes(self, handle):
-        # Server-side size is not meaningful per index; report the count instead.
+        # OpenSearch exposes the on-disk index size via the stats API.
         try:
-            return int(handle.count(index="bsdb-bench")["count"])
+            stats = handle.indices.stats(index="bsdb-bench")
+            return int(stats["indices"]["bsdb-bench"]["total"]["store"]["size_in_bytes"])
         except Exception:
             return 0
 
@@ -584,10 +610,10 @@ class MilvusAdapter(VectorAdapter):
                 data=[{"id": int(i), "vector": train[i].tolist()} for i in range(start, end)],
             )
         client.load_collection(name)
-        return (client, name, metric)
+        return (client, name, metric, int(train.shape[1]), int(len(train)))
 
     def search(self, handle, queries, k, ef_search, metric):
-        client, name, mtype = handle
+        client, name, mtype, _dim, _n = handle
         out = []
         for q in queries:
             hits = client.search(
@@ -600,7 +626,10 @@ class MilvusAdapter(VectorAdapter):
         return np.array(out)
 
     def index_bytes(self, handle):
-        return 0
+        # Milvus does not expose per-index bytes; report the raw vector payload
+        # (dim * count * 4B) as a comparable floor.
+        _client, _name, _metric, dim, n = handle
+        return int(dim) * int(n) * 4
 
 
 class WeaviateAdapter(VectorAdapter):
@@ -645,10 +674,10 @@ class WeaviateAdapter(VectorAdapter):
         with coll.batch.dynamic() as batch:
             for i in range(len(train)):
                 batch.add_object(properties={"rid": int(i)}, vector=train[i].tolist())
-        return (client, coll)
+        return (client, coll, int(train.shape[1]), int(len(train)))
 
     def search(self, handle, queries, k, ef_search, metric):
-        _client, coll = handle
+        _client, coll, _dim, _n = handle
         out = []
         for q in queries:
             try:
@@ -668,7 +697,10 @@ class WeaviateAdapter(VectorAdapter):
         return np.array(out)
 
     def index_bytes(self, handle):
-        return 0
+        # Weaviate's schema API exposes object counts, not index bytes; report
+        # the raw vector payload (dim * count * 4B) as a comparable floor.
+        _client, _coll, dim, n = handle
+        return int(dim) * int(n) * 4
 
 
 def vector_adapters() -> dict[str, VectorAdapter]:

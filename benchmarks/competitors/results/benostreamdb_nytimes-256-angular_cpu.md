@@ -7,18 +7,18 @@
 | Queries | 500 |
 | k | 10 |
 | Metric | cosine |
-| Index | hnsw_tq8 |
+| Index | hnsw |
 | M (complexity) | 16 |
 | ef_construction (quality) | 200 |
 | ef_search | 200 |
 | Cores | 8 |
 | RAM (GB) | default |
-| recall@10 | 0.2682 |
-| QPS | 1241.2 |
-| Build time | 0.9s |
-| Index size | 49.7 MB |
-| p50 latency | 0.66 ms |
-| p99 latency | 0.96 ms |
-| Pure Index QPS | 2408.1 |
-| Pure Index p50 latency | 0.41 ms |
-| Pure Index p99 latency | 0.53 ms |
+| recall@10 | 0.0844 |
+| QPS | 694.4 |
+| Build time | 1.2s |
+| Index size | 66.3 MB |
+| p50 latency | 1.27 ms |
+| p99 latency | 1.75 ms |
+| Pure Index QPS | 1053.9 |
+| Pure Index p50 latency | 0.94 ms |
+| Pure Index p99 latency | 1.25 ms |

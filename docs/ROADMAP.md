@@ -245,6 +245,29 @@ Themes are ordered by Launch Candidate priority.
   - **Multilingual Stemming**: Integration of Snowball stemmers for English, Spanish, French, and German.
   - **CJK Segmentation**: Character/bi-gram tokenization for Chinese, Japanese, and Korean corpora.
 
+### Theme 6: Multi-Precision Vector Indexes
+*Let one vector column serve both exact and compressed search.* — 🟢 **Deferred**
+
+> **Current state.** A vector column holds a **single** index: adding a second
+> replaces the first (see `Table::add_index` in `src/core/table/index_config.rs`),
+> and the default is now full-precision `hnsw`. Quantized variants are opt-in:
+> `hnsw_tq8` (TurboQuant 8-bit, ≈4× smaller), `hnsw_tq4` (≈8× smaller) and
+> `hnsw_pq` — all trading recall for a smaller index and cheaper distance
+> computation. The reader already ranks multiple index files for a column
+> (`vector_search_index_raw`), but with float-first precedence and no per-query
+> override.
+
+- [ ] **Multiple vector indexes per column + query-time selection** — 🟢 **Deferred**:
+  - Allow a column to carry a float `hnsw` (exact / best recall) **and** a
+    TurboQuant `hnsw_tq8`/`hnsw_tq4`/`hnsw_pq` index, chosen per query, e.g.
+    `table.vector_search(..., index='tq8')` — exact precision for
+    recall-critical reads, the compressed index for latency-sensitive scans.
+  - Requires: (1) `add_index` to **append** a vector variant instead of replacing
+    the whole family; (2) a query-time selector threaded through
+    `vector_search_index`/`vector_search_index_raw`/`vector_search_scored` and
+    the Python/SQL surfaces; (3) defining precedence when no selector is given
+    (full precision first).
+
 ---
 
 ## Benchmarks as Product Work
