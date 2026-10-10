@@ -266,7 +266,7 @@ impl HybridReader {
         // tokenized `bm25`. A `scalar` index is a roaring bitmap (`.idx`),
         // handled separately below.
         let inv_idx_info = self.config.index_files.iter().find(|f| {
-            f.is_lexical() && f.column_name == *filter_column && self.config.is_index_valid(f)
+            f.is_lexical() && f.algorithm != "doclen" && f.column_name == *filter_column && self.config.is_index_valid(f)
         });
         let bitmap_idx_info = self.config.index_files.iter().find(|f| {
             f.index_category == "scalar"

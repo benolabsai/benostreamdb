@@ -86,6 +86,7 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.1.0"
+          method: "network"
 
       - name: Prep CUDA Stubs
         run: |
@@ -260,7 +261,7 @@ jobs:
       - name: Install Ecosystem Dependencies
         run: |
           # Install everything together so pip can resolve version constraints
-          pip install pytest pyspark trino dbt-core adbc-driver-flightsql pyarrow -e dbt-benostreamdb/
+          pip install pytest pyspark trino dbt-core adbc-driver-flightsql pyarrow -e . -e dbt-benostreamdb/
 
       - name: Build Flight SQL server
         run: cargo build -p benostreamdb-flight
