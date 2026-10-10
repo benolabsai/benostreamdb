@@ -40,14 +40,14 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Response {
+    if is_public_path(&cfg, req.method(), req.uri().path()) {
+        return next.run(req).await;
+    }
+
     if !cfg.enabled() {
         if cfg.required() {
             return (StatusCode::UNAUTHORIZED, "authentication required").into_response();
         }
-        return next.run(req).await;
-    }
-
-    if is_public_path(&cfg, req.method(), req.uri().path()) {
         return next.run(req).await;
     }
 
@@ -70,21 +70,11 @@ pub async fn auth_middleware(
     match token {
         Some(t) => match cfg.verify(&t) {
             Ok(claims) => {
-                let is_write = match req.method().as_str() {
-                    "PUT" | "DELETE" | "PATCH" => true,
-                    "POST" => {
-                        let path = req.uri().path();
-                        !(path.ends_with("_search") 
-                          || path.ends_with("/search") 
-                          || path.ends_with("/scroll") 
-                          || path.ends_with("/count") 
-                          || path.ends_with("/_msearch")
-                          || path.ends_with("/_mget"))
-                    },
-                    _ => false,
-                };
-                if is_write && !claims.roles.iter().any(|r| r == "admin") {
-                    return (StatusCode::FORBIDDEN, "admin role required for writes").into_response();
+                if is_write_request(req.method(), req.uri().path())
+                    && !claims.roles.iter().any(|r| r == "admin")
+                {
+                    return (StatusCode::FORBIDDEN, "admin role required for writes")
+                        .into_response();
                 }
                 req.extensions_mut().insert(claims);
                 next.run(req).await
@@ -95,5 +85,65 @@ pub async fn auth_middleware(
             }
         },
         None => (StatusCode::UNAUTHORIZED, "missing bearer token").into_response(),
+    }
+}
+
+/// Whether a request mutates state (and therefore requires the `admin` role).
+///
+/// `POST` is a write *except* for the read-shaped search endpoints, which both
+/// the Elasticsearch and Qdrant APIs express as POSTs.
+fn is_write_request(method: &Method, path: &str) -> bool {
+    match method.as_str() {
+        "PUT" | "DELETE" | "PATCH" => true,
+        "POST" => {
+            !(path.ends_with("_search")
+                || path.ends_with("/search")
+                || path.ends_with("/scroll")
+                || path.ends_with("_count")
+                || path.ends_with("/count")
+                || path.ends_with("/_msearch")
+                || path.ends_with("/_mget"))
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_paths_are_public() {
+        let cfg = AuthConfig::default();
+        for p in ["/_health", "/_cluster/health", "/_cat/health", "/healthz", "/readyz", "/livez"] {
+            assert!(is_public_path(&cfg, &Method::GET, p), "{p} should be public");
+        }
+        assert!(!is_public_path(&cfg, &Method::GET, "/my-index/_search"));
+        assert!(!is_public_path(&cfg, &Method::POST, "/my-index/_doc"));
+    }
+
+    #[test]
+    fn metrics_public_only_when_configured() {
+        let private = AuthConfig::default();
+        assert!(!is_public_path(&private, &Method::GET, "/metrics"));
+        let public = AuthConfig::default().with_metrics_public(true);
+        assert!(is_public_path(&public, &Method::GET, "/metrics"));
+    }
+
+    #[test]
+    fn write_detection_matches_api_semantics() {
+        // Mutations.
+        assert!(is_write_request(&Method::PUT, "/idx/_doc/1"));
+        assert!(is_write_request(&Method::DELETE, "/idx"));
+        assert!(is_write_request(&Method::PATCH, "/idx/_doc/1"));
+        assert!(is_write_request(&Method::POST, "/idx/_doc"));
+        assert!(is_write_request(&Method::POST, "/collections/points"));
+        // Read-shaped POSTs.
+        assert!(!is_write_request(&Method::POST, "/idx/_search"));
+        assert!(!is_write_request(&Method::POST, "/collections/points/search"));
+        assert!(!is_write_request(&Method::POST, "/idx/_msearch"));
+        assert!(!is_write_request(&Method::POST, "/idx/_count"));
+        // Reads.
+        assert!(!is_write_request(&Method::GET, "/idx/_search"));
     }
 }

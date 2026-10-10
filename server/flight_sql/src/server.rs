@@ -105,9 +105,12 @@ impl BenoStreamFlightSqlService {
         &self,
         sql: &str,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, Status> {
-        if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
-            if self.session.is_ddl(sql).await.unwrap_or(false)
-                || self.session.is_dml(sql).await.unwrap_or(false)
+        let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if read_only {
+            if self.session.is_ddl(sql).await.unwrap_or(true)
+                || self.session.is_dml(sql).await.unwrap_or(true)
             {
                 return Err(Status::permission_denied("Server is in read-only mode"));
             }
@@ -123,11 +126,19 @@ impl BenoStreamFlightSqlService {
             .parse::<usize>()
             .unwrap_or(100000);
             
-        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
-        df.collect()
+        let batches = df
+            .collect()
             .await
-            .map_err(|e| Status::internal(format!("Error collecting execution result: {}", e)))
+            .map_err(|e| Status::internal(format!("Error collecting execution result: {}", e)))?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        if total_rows > max_rows {
+            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+        }
+        
+        Ok(batches)
     }
 }
 
@@ -294,10 +305,13 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         // FlightInfo with no endpoints: ADBC's ExecuteQuery cancels the
         // follow-up DoGet when the schema is empty, so the statement would
         // otherwise never run.
-        if self.session.is_ddl(&sql).await.unwrap_or(false)
-            || self.session.is_dml(&sql).await.unwrap_or(false)
+        if self.session.is_ddl(&sql).await.unwrap_or(true)
+            || self.session.is_dml(&sql).await.unwrap_or(true)
         {
-            if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if read_only {
                 return Err(Status::permission_denied("Server is in read-only mode"));
             }
             self.execute_statement(&sql).await?;
@@ -366,10 +380,13 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         // FlightInfo with no endpoints: ADBC's ExecuteQuery cancels the
         // follow-up DoGet when the schema is empty, so the statement would
         // otherwise never run.
-        if self.session.is_ddl(&sql).await.unwrap_or(false)
-            || self.session.is_dml(&sql).await.unwrap_or(false)
+        if self.session.is_ddl(&sql).await.unwrap_or(true)
+            || self.session.is_dml(&sql).await.unwrap_or(true)
         {
-            if std::env::var("BSDB_FLIGHT_READ_ONLY").is_ok() {
+            let read_only = std::env::var("BSDB_FLIGHT_READ_ONLY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if read_only {
                 return Err(Status::permission_denied("Server is in read-only mode"));
             }
             self.execute_statement(&sql).await?;
@@ -577,12 +594,17 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .parse::<usize>()
             .unwrap_or(100000);
             
-        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
             .await
             .map_err(|e| Status::internal(format!("Error collecting batches: {}", e)))?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        if total_rows > max_rows {
+            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+        }
 
         let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -609,12 +631,17 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .parse::<usize>()
             .unwrap_or(100000);
             
-        df = df.limit(0, Some(max_rows)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
             .await
             .map_err(|e| Status::internal(format!("Error collecting batches: {}", e)))?;
+
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        if total_rows > max_rows {
+            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+        }
         let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
             .map_err(|e| Status::internal(e.to_string()))?;
         let output_stream = futures::stream::iter(flight_data_stream.into_iter().map(Ok));
@@ -1041,7 +1068,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             }
             let batch = arrow_flight::utils::flight_data_to_arrow_batch(
                 &data,
-                schema.clone().expect("schema set above"),
+                schema.clone().ok_or_else(|| Status::internal("schema not set"))?,
                 &std::collections::HashMap::new(),
             )
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -1057,7 +1084,7 @@ impl FlightSqlService for BenoStreamFlightSqlService {
         let staging = format!("__ingest_{}", ticket.table);
         let ctx = self.session.get_ctx();
         let mem = datafusion::datasource::MemTable::try_new(
-            schema.expect("schema set above"),
+            schema.ok_or_else(|| Status::internal("schema not set"))?,
             vec![batches],
         )
         .map_err(|e| Status::internal(e.to_string()))?;

@@ -1,0 +1,25 @@
+{
+  "engine": "tantivy",
+  "dataset": "nfcorpus",
+  "workload": "lexical_bm25",
+  "backend": "cpu",
+  "queries": 323,
+  "k": 10,
+  "build_s": 0.17,
+  "index_mb": 6.2,
+  "recall_at_k": 0.1441,
+  "ndcg_at_k": 0.2997,
+  "mrr_at_k": 0.5091,
+  "qps": 11310.4,
+  "p50_ms": 0.051,
+  "p99_ms": 0.187,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

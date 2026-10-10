@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 use arrow_flight::flight_service_server::FlightServiceServer;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -79,10 +81,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Flight SQL authentication disabled — bind to a private interface or front with a proxy"
         );
     }
-    let interceptor = tonic::service::interceptor::InterceptorLayer::new(AuthInterceptor { auth });
+    let interceptor = tonic::service::interceptor::InterceptorLayer::new(AuthInterceptor { auth: auth.clone() });
 
     // Default to loopback; expose externally only via an explicit bind.
     let bind = std::env::var("BSDB_FLIGHT_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let is_loopback = |b: &str| b == "127.0.0.1" || b == "::1" || b == "localhost";
+    if !is_loopback(&bind) && !auth.enabled() {
+        tracing::error!("Network-exposed bind address without authentication credentials! Set BSDB_API_KEY or JWT config.");
+        std::process::exit(1);
+    }
+
     let port: u16 = std::env::var("BSDB_FLIGHT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -94,7 +102,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(interceptor)
         .add_service(svc)
         .serve_with_shutdown(addr, async {
-            tokio::signal::ctrl_c().await.ok();
+            #[cfg(unix)]
+            {
+                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .unwrap_or_else(|e| panic!("Failed to bind SIGTERM: {}", e));
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                tokio::signal::ctrl_c().await.ok();
+            }
         })
         .await?;
 

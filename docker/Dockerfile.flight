@@ -62,7 +62,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r benostream && useradd -r -g benostream benostream
+RUN groupadd -r benostream && useradd -r -m -g benostream benostream
+RUN mkdir -p /home/benostream/.benostreamdb && chown -R benostream:benostream /home/benostream
 
 WORKDIR /app
 
@@ -73,7 +74,7 @@ EXPOSE 50051
 
 # gRPC health check via curl to gRPC reflection (fallback: TCP check)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -sf http://localhost:50051/ || exit 1
+    CMD curl -sf http://localhost:9090/health || exit 1
 
 USER benostream
 

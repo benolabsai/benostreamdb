@@ -91,18 +91,19 @@ RUN mkdir -p /home/benostream/.benostreamdb/search \
 # ES 7.10 API + Qdrant API + Flight SQL gRPC + Prometheus metrics
 EXPOSE 9200 6333 50051 9090
 
-# Health check against ES cluster health endpoint
+# Health check against ES cluster health endpoint AND flight observability endpoint
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:9200/_cluster/health || exit 1
+    CMD curl -f http://localhost:9200/_cluster/health && curl -sf http://localhost:9090/health || exit 1
 
 USER benostream
 
 # Default environment
-ENV BENOSEARCH_BIND=0.0.0.0
-ENV BENOSEARCH_PORT=9200
-ENV QDRANT_BIND=0.0.0.0
-ENV QDRANT_PORT=6333
-ENV BENOSEARCH_AUTO_REFRESH_SECS=5
+ENV BSDB_SEARCH_BIND=127.0.0.1
+ENV BSDB_SEARCH_PORT=9200
+ENV BSDB_QDRANT_BIND=127.0.0.1
+ENV BSDB_QDRANT_PORT=6333
+ENV BSDB_FLIGHT_BIND=127.0.0.1
+ENV BSDB_SEARCH_AUTO_REFRESH_SECS=5
 ENV RUST_LOG=info
 
 ENTRYPOINT ["quickstart-entrypoint.sh"]

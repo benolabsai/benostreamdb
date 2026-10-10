@@ -83,6 +83,12 @@ impl AuthConfig {
         self.metrics_public
     }
 
+    /// Override whether `/metrics` is exempt from auth (builder form).
+    pub fn with_metrics_public(mut self, public: bool) -> Self {
+        self.metrics_public = public;
+        self
+    }
+
     /// Verify a bearer token (API key or JWT). Returns the claims on success.
     pub fn verify(&self, token: &str) -> Result<AuthClaims, String> {
         // API key first (constant-time).

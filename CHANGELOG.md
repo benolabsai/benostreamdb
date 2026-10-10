@@ -368,6 +368,39 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   reject unauthenticated requests by default (see `src/core/auth.rs`).
 
 ### Fixed
+- **Inner-product vector search returned the *least* similar results** — the IVF
+  coarse search computes cluster distances via `gpu::compute_distance`, whose
+  CPU fallback returned `+dot` for `InnerProduct` while the explicit fallback and
+  the flat scan use `-dot` (smaller = more similar). A query was therefore routed
+  to the *least* similar clusters. Fixed in `compute_cpu` and in the CUDA, Metal,
+  and WGSL `inner_product_kernel`s (all now negate). On `lastfm-64-dot`
+  BenoStreamDB's recall@10 went from **0.065 → 0.712**.
+- **`DistDot` did not normalize** — the HNSW inner-product distance was
+  `(1 - dot).max(0)`, which is not a metric, so the hnswlib-style
+  neighbour-selection heuristic built a graph dominated by high-norm hubs and
+  recall collapsed on unnormalized vectors. It now computes `1 - cosine`
+  (inner product on L2-normalized vectors), which is what the `hnsw_rs` crate's
+  `DistDot` expects.
+- **`DistL2` scalar fallbacks returned the squared distance** — the `f64`/`i32`/
+  `u32`/`u16`/`u8` impls omitted the `.sqrt()` the `f32` impl has, so the
+  reported distance was inconsistent across element types.
+- **IVF centroid routing used L2 for the Cosine metric** — `find_closest_centroid`
+  mapped `L2 | Cosine => l2_distance_squared`, but the engine does not
+  L2-normalize on insert, so cosine queries were routed by L2 while the HNSW
+  graph used true cosine. Cosine now routes by `cosine_distance`.
+- **The search gateway treated the ES `_count` endpoint as a write** — the
+  read-shaped-POST allowlist matched `/count` but not `_count`, so a read
+  required the `admin` role. Extracted into a tested `is_write_request` helper.
+- **ClickHouse could not load nullable Parquet columns** — the SQL adapter built
+  non-nullable ClickHouse types from the Parquet schema, so a nullable column
+  (e.g. NYC TLC's `passenger_count`) failed with "Unable to create native array".
+  Nullable Parquet fields now map to `Nullable(...)`.
+- **Quickstart container had an unsafe default network posture** — the search
+  images defaulted `BSDB_QDRANT_BIND=0.0.0.0` and the quickstart compose
+  published `9200`/`6333`/`50051` on all host interfaces with no credentials
+  (the server fails closed, so it would exit rather than serve). The image
+  defaults are now loopback, the quickstart publishes on `127.0.0.1` only, and
+  it sets a local dev `BSDB_API_KEY`.
 - **`CREATE INDEX ... USING <algorithm>` silently ignored most algorithms** —
   the engine's parser accepts `CREATE INDEX` but **drops the `USING` clause**
   (`ci.using` is always `None`), and the mapped set was only `hnsw*`/`bm25`, so
@@ -608,6 +641,15 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   asserting the visible id set matches an independent model after every step.
 
 ### Benchmarks
+- **Full plan dataset matrix.** The benchmark suite now covers the datasets the
+  plan calls for, all under the shared Docker envelope: vector — all eight
+  ANN-Benchmarks sets (`sift`, `gist`, `fashion-mnist`, `mnist`, `glove-100`,
+  `glove-200`, `nytimes`, `lastfm`); lexical — BEIR `scifact`, `nfcorpus`,
+  `arguana` (plus the `scifact` hybrid RRF run); graph — SNAP `web-Google`,
+  `roadNet-CA`, `com-LiveJournal` (500k-edge slices) against NetworkX and Neo4j
+  GDS; SQL — ClickBench, TPC-H `lineitem`, and NYC TLC. `docker_bench.sh` gained
+  `--datasets` (vector), `--graph-edges-host` (real edge lists), and
+  `--sql-parquet-host`/`--sql-query`/`--sql-dataset` (real Parquet + query).
 - **BEIR lexical/hybrid comparisons now run under the same Docker envelope.**
   The BEIR harness (`benchmarks/beir/run.py`, `run_hybrid.py`) is wired into the
   shared-envelope matrix as `docker_bench.sh --workload beir`: BenoStreamDB,

@@ -11,9 +11,9 @@
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.37s | 3.3 MB | **422.9** | **2.22 ms** | 3.77 ms | 0.7909 | 0.6617 |
-| **tantivy** | `cpu` | ✅ Pass | 0.16s | 8.3 MB | **3520.2** | **0.23 ms** | 0.53 ms | 0.7812 | 0.6517 |
-| **opensearch** | `cpu` | ✅ Pass | 0.85s | 6.6 MB | **507.9** | **1.72 ms** | 4.03 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **417.6** | **2.25 ms** | 3.85 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 1.92s | 8.0 MB | **4026.4** | **0.20 ms** | 0.49 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 2.56s | 6.7 MB | **814.1** | **1.13 ms** | 2.43 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 

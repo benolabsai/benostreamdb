@@ -7,9 +7,9 @@ set -e
 
 echo "============================================="
 echo "  BenoStreamDB Quickstart"
-echo "  ES 7.10 API:     http://0.0.0.0:9200"
-echo "  Qdrant API:      http://0.0.0.0:6333"
-echo "  Flight SQL gRPC: grpc://0.0.0.0:50051"
+echo "  ES 7.10 API:     http://${BSDB_SEARCH_BIND:-127.0.0.1}:${BSDB_SEARCH_PORT:-9200}"
+echo "  Qdrant API:      http://${BSDB_QDRANT_BIND:-127.0.0.1}:${BSDB_QDRANT_PORT:-6333}"
+echo "  Flight SQL gRPC: grpc://${BSDB_FLIGHT_BIND:-127.0.0.1}:${BSDB_FLIGHT_PORT:-50051}"
 echo "============================================="
 
 # Launch Flight SQL server in background

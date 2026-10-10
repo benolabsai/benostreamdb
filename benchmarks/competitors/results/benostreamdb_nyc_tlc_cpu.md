@@ -1,0 +1,12 @@
+# Competitor: benostreamdb / sql
+
+| Metric | Value |
+|---|---|
+| engine | benostreamdb |
+| workload | sql |
+| available | True |
+| sql | SELECT count(*) AS n, avg(trip_distance) AS avg_dist, sum(total_amount) AS total FROM t |
+| ingest_seconds | 1.714 |
+| seconds | 0.054 |
+| rows | 1 |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=32, ram_gb=121.4, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

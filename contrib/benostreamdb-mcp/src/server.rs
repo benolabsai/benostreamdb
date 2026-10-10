@@ -17,10 +17,10 @@ const SCRATCH_SCHEMA: &str = "scratch";
 /// `scratch` schema; reads (SELECT, COPY ... TO, DESCRIBE, …) are unrestricted.
 fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
     use sqlparser::ast::{ObjectName, ObjectType, Statement, TableFactor};
-    use sqlparser::dialect::PostgreSqlDialect;
+    use sqlparser::dialect::GenericDialect;
     use sqlparser::parser::Parser;
 
-    let dialect = PostgreSqlDialect {};
+    let dialect = GenericDialect {};
     let statements = Parser::parse_sql(&dialect, query)
         .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
@@ -59,7 +59,16 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
             Statement::CreateSchema { .. } | Statement::CreateDatabase { .. } => {
                 anyhow::bail!("MCP may not create schemas or databases");
             }
-            Statement::CreateTable(cmd) => check_scratch(&cmd.name)?,
+            Statement::CreateTable(cmd) => {
+                if cmd.location.is_some() {
+                    anyhow::bail!("MCP may not use LOCATION in CREATE TABLE");
+                }
+                check_scratch(&cmd.name)?;
+            }
+            Statement::CreateView { name, .. } => check_scratch(&name)?,
+            Statement::Copy { .. } => {
+                anyhow::bail!("MCP may not use COPY");
+            }
             Statement::CreateIndex(cmd) => check_scratch(&cmd.table_name)?,
             Statement::AlterTable { name, .. } => check_scratch(&name)?,
             Statement::AlterIndex { name, .. } => check_scratch(&name)?,
@@ -104,7 +113,7 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
                 }
             }
             _ => {
-                // other statements (like SELECT, COPY, DESCRIBE) are unrestricted reads
+                // other statements (like SELECT, DESCRIBE) are unrestricted reads
             }
         }
     }
@@ -534,11 +543,11 @@ impl McpServer {
                                         let mut writer =
                                             arrow_json::LineDelimitedWriter::new(&mut buf);
                                         for batch in &batches {
-                                            writer.write(batch).unwrap();
+                                            let _ = writer.write(batch);
                                         }
-                                        writer.finish().unwrap();
+                                        let _ = writer.finish();
                                     }
-                                    text_output = String::from_utf8(buf).unwrap();
+                                    text_output = String::from_utf8(buf).unwrap_or_default();
                                 }
                                 if text_output.is_empty() {
                                     text_output = "Success (no rows returned).".to_string();
@@ -616,8 +625,8 @@ impl McpServer {
                                 .map(|d| d.as_nanos())
                                 .unwrap_or(0)
                         ));
-                        std::fs::create_dir_all(&scratch_dir).unwrap();
-                        let scratch_path = scratch_dir.to_str().unwrap().replace("\\", "/");
+                        let _ = std::fs::create_dir_all(&scratch_dir);
+                        let scratch_path = scratch_dir.to_str().unwrap_or("").replace("\\", "/");
 
                         let query = format!(
                             "CREATE TABLE {} ({}) LOCATION '{}'",
@@ -682,13 +691,13 @@ impl McpServer {
                                     let _ = writer.flush();
 
                                     let path =
-                                        temp_file.path().to_str().unwrap().replace("\\", "/");
+                                        temp_file.path().to_str().unwrap_or("").replace("\\", "/");
                                     let temp_import_name = format!(
                                         "{}.temp_import_{}",
                                         SCRATCH_SCHEMA,
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap()
+                                            .unwrap_or_default()
                                             .as_nanos()
                                     );
 
@@ -850,11 +859,11 @@ impl McpServer {
                                         let mut writer =
                                             arrow_json::LineDelimitedWriter::new(&mut buf);
                                         for batch in &batches {
-                                            writer.write(batch).unwrap();
+                                            let _ = writer.write(batch);
                                         }
-                                        writer.finish().unwrap();
+                                        let _ = writer.finish();
                                     }
-                                    text_output = String::from_utf8(buf).unwrap();
+                                    text_output = String::from_utf8(buf).unwrap_or_default();
                                 }
                                 if text_output.is_empty() {
                                     text_output = "No events (nothing committed in this process during the wait window).".to_string();

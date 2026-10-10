@@ -97,15 +97,23 @@ services:
     image: benostreamdb/quickstart:latest
     container_name: bsdb-server
     restart: unless-stopped
+    # Bind the host ports to loopback only: the quickstart is for local
+    # development, not for exposing the database on a network. Use
+    # docker-compose.production.yml (which requires auth) for anything else.
     ports:
-      - "9200:9200"    # Elasticsearch 7.10 REST
-      - "6333:6333"    # Qdrant REST
-      - "50051:50051"  # Arrow Flight SQL gRPC
+      - "127.0.0.1:9200:9200"    # Elasticsearch 7.10 REST
+      - "127.0.0.1:6333:6333"    # Qdrant REST
+      - "127.0.0.1:50051:50051"  # Arrow Flight SQL gRPC
     environment:
+      # The container must bind 0.0.0.0 for the port mapping to work, and the
+      # server fails closed on a non-loopback bind without credentials — so the
+      # quickstart sets a local dev key. Override BSDB_API_KEY for anything
+      # beyond local development.
       - BSDB_SEARCH_BIND=0.0.0.0
       - BSDB_SEARCH_PORT=9200
       - BSDB_QDRANT_BIND=0.0.0.0
       - BSDB_QDRANT_PORT=6333
+      - BSDB_API_KEY=${BSDB_API_KEY:-bsdb-quickstart-local}
       - BSDB_SEARCH_STORAGE_URI=s3://benostream/
       - BSDB_SEARCH_AUTO_REFRESH_SECS=5
       - AWS_ACCESS_KEY_ID=rustfsadmin

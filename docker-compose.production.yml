@@ -28,6 +28,7 @@ services:
       - BSDB_QDRANT_BIND=0.0.0.0
       - BSDB_QDRANT_PORT=6333
       - BSDB_AUTH_REQUIRED=1
+      - BSDB_API_KEY=${BSDB_API_KEY:-}
       - BSDB_SEARCH_STORAGE_URI=${BSDB_SEARCH_STORAGE_URI:-s3://benostream/}
       - BSDB_SEARCH_AUTO_REFRESH_SECS=${BSDB_SEARCH_AUTO_REFRESH_SECS:-5}
       # Resource limits are derived from the container's cgroup memory limit
@@ -83,6 +84,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - BSDB_AUTH_REQUIRED=1
+      - BSDB_API_KEY=${BSDB_API_KEY:-}
       - BSDB_FLIGHT_BIND=0.0.0.0
       - AWS_ENDPOINT=${AWS_ENDPOINT:-}
       - AWS_ALLOW_HTTP=${AWS_ALLOW_HTTP:-false}
@@ -93,7 +95,7 @@ services:
       - BSDB_INDEX_BUILD_CONCURRENCY=${BSDB_INDEX_BUILD_CONCURRENCY:-}
       - BSDB_MIN_FREE_DISK_GB=${BSDB_MIN_FREE_DISK_GB:-}
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:50051/ || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:9090/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
