@@ -294,6 +294,12 @@ async fn main() {
         ));
 
     let qdrant_bind = std::env::var("BSDB_QDRANT_BIND").unwrap_or_else(|_| bind.clone());
+    let is_loopback = |b: &str| b == "127.0.0.1" || b == "::1" || b == "localhost";
+    if (!is_loopback(&bind) || !is_loopback(&qdrant_bind)) && !auth.enabled() {
+        tracing::error!("Network-exposed bind address without authentication credentials! Set BSDB_API_KEY or JWT config.");
+        std::process::exit(1);
+    }
+
     let qdrant_port: u16 = std::env::var("BSDB_QDRANT_PORT")
         .ok()
         .and_then(|v| v.parse().ok())

@@ -1,3 +1,5 @@
+#![deny(clippy::unwrap_used, clippy::expect_used)]
+
 mod protocol;
 mod server;
 
@@ -13,7 +15,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .with_max_level(Level::DEBUG)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    let _ = tracing::subscriber::set_global_default(subscriber);
 
     info!("BenoStreamDB MCP Server initializing...");
 
@@ -22,11 +24,11 @@ async fn main() -> Result<()> {
             "benostreamdb_mcp_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_nanos()
         ));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        std::env::set_var("BSDB_WAREHOUSE", temp_dir.to_str().unwrap());
+        let _ = std::fs::create_dir_all(&temp_dir);
+        std::env::set_var("BSDB_WAREHOUSE", temp_dir.to_str().unwrap_or(""));
         info!("Set BSDB_WAREHOUSE to temporary directory: {:?}", temp_dir);
     }
 

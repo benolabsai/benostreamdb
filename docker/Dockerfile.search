@@ -62,7 +62,8 @@ RUN apt-get update && apt-get install -y \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r benostream && useradd -r -g benostream benostream
+RUN groupadd -r benostream && useradd -r -m -g benostream benostream
+RUN mkdir -p /home/benostream/.benostreamdb && chown -R benostream:benostream /home/benostream
 
 WORKDIR /app
 
@@ -80,7 +81,10 @@ USER benostream
 # Default: bind to 0.0.0.0 for container networking
 ENV BSDB_SEARCH_BIND=0.0.0.0
 ENV BSDB_SEARCH_PORT=9200
-ENV BSDB_QDRANT_BIND=0.0.0.0
+# Safe default: loopback. A container that needs to be reachable via a port
+# mapping must override this to 0.0.0.0 AND set BSDB_API_KEY (the server fails
+# closed on a non-loopback bind without credentials).
+ENV BSDB_QDRANT_BIND=127.0.0.1
 ENV BSDB_QDRANT_PORT=6333
 ENV RUST_LOG=info
 

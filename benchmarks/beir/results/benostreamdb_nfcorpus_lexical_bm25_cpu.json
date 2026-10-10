@@ -1,0 +1,25 @@
+{
+  "engine": "benostreamdb",
+  "dataset": "nfcorpus",
+  "workload": "lexical_bm25",
+  "backend": "cpu",
+  "queries": 323,
+  "k": 10,
+  "build_s": 0.277,
+  "index_mb": 2.46,
+  "recall_at_k": 0.1491,
+  "ndcg_at_k": 0.3067,
+  "mrr_at_k": 0.5151,
+  "qps": 1041.6,
+  "p50_ms": 0.725,
+  "p99_ms": 1.69,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

@@ -1113,33 +1113,39 @@ def _sql_clickhouse(args) -> dict:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        def _ch_type(t) -> str:
+        def _ch_type(t, nullable: bool) -> str:
             if pa.types.is_int64(t):
-                return "Int64"
-            if pa.types.is_int32(t):
-                return "Int32"
-            if pa.types.is_int16(t):
-                return "Int16"
-            if pa.types.is_float64(t):
-                return "Float64"
-            if pa.types.is_float32(t):
-                return "Float32"
-            if pa.types.is_boolean(t):
-                return "UInt8"
-            if pa.types.is_date32(t):
-                return "Date32"
-            if pa.types.is_date64(t):
-                return "Date"
-            if pa.types.is_timestamp(t):
-                return "DateTime64(6)"
-            if pa.types.is_decimal(t):
-                return f"Decimal({t.precision},{t.scale})"
-            return "String"
+                base = "Int64"
+            elif pa.types.is_int32(t):
+                base = "Int32"
+            elif pa.types.is_int16(t):
+                base = "Int16"
+            elif pa.types.is_float64(t):
+                base = "Float64"
+            elif pa.types.is_float32(t):
+                base = "Float32"
+            elif pa.types.is_boolean(t):
+                base = "UInt8"
+            elif pa.types.is_date32(t):
+                base = "Date32"
+            elif pa.types.is_date64(t):
+                base = "Date"
+            elif pa.types.is_timestamp(t):
+                base = "DateTime64(6)"
+            elif pa.types.is_decimal(t):
+                base = f"Decimal({t.precision},{t.scale})"
+            else:
+                base = "String"
+            # A nullable Parquet column (e.g. NYC TLC's `passenger_count`) must
+            # map to a Nullable ClickHouse type, or the client cannot build the
+            # native array for the NULL values.
+            return f"Nullable({base})" if nullable else base
 
         tbl = pq.read_table(args.parquet)
         cols = tbl.schema.names
         col_defs = ", ".join(
-            f"`{c}` {_ch_type(tbl.schema.field(c).type)}" for c in cols
+            f"`{c}` {_ch_type(tbl.schema.field(c).type, tbl.schema.field(c).nullable)}"
+            for c in cols
         )
         client.command("DROP TABLE IF EXISTS t")
         client.command(f"CREATE TABLE t ({col_defs}) ENGINE = MergeTree ORDER BY tuple()")

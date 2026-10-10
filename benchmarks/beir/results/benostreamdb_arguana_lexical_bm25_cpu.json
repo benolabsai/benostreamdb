@@ -1,0 +1,25 @@
+{
+  "engine": "benostreamdb",
+  "dataset": "arguana",
+  "workload": "lexical_bm25",
+  "backend": "cpu",
+  "queries": 1406,
+  "k": 10,
+  "build_s": 0.458,
+  "index_mb": 4.08,
+  "recall_at_k": 0.655,
+  "ndcg_at_k": 0.3084,
+  "mrr_at_k": 0.1994,
+  "qps": 56.2,
+  "p50_ms": 17.074,
+  "p99_ms": 30.681,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

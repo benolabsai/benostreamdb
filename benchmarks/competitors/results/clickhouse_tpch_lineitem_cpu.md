@@ -1,0 +1,11 @@
+# Competitor: clickhouse / sql
+
+| Metric | Value |
+|---|---|
+| engine | clickhouse |
+| workload | sql |
+| available | True |
+| sql | SELECT l_returnflag, l_linestatus, sum(l_quantity) AS sum_qty, count(*) AS count_order FROM t GROUP BY l_returnflag, l_linestatus ORDER BY l_returnflag, l_linestatus |
+| seconds | 0.008 |
+| rows | 4 |
+| env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=32, ram_gb=121.4, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

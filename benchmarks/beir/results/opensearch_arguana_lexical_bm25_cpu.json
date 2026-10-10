@@ -1,0 +1,25 @@
+{
+  "engine": "opensearch",
+  "dataset": "arguana",
+  "workload": "lexical_bm25",
+  "backend": "cpu",
+  "queries": 1406,
+  "k": 10,
+  "build_s": 0.847,
+  "index_mb": 7.9,
+  "recall_at_k": 0.7461,
+  "ndcg_at_k": 0.3557,
+  "mrr_at_k": 0.233,
+  "qps": 131.3,
+  "p50_ms": 6.647,
+  "p99_ms": 24.44,
+  "env": {
+    "cpu_model": "x86_64",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

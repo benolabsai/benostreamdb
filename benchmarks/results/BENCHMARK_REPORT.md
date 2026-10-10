@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-09 21:09:25 UTC
+- **Generated At**: 2026-10-10 04:09:51 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.43
 - **Python**: 3.14.4
 
@@ -105,6 +105,21 @@
 - BenoStreamDB / NetworkX: `benchmarks/graph/run.py` (10k/50k synthetic graph).
 - Neo4j: `benchmarks/competitors/run_competitor.py --engine neo4j` against Neo4j 5.26 + GDS (`gds.pageRank.stream`, `gds.wcc.stream`); load and algorithm timed separately.
 
+### Results from `graph_snap_web_google.md`
+
+# Graph Benchmark Results
+
+- **Graph Nodes**: 158,508
+- **Graph Edges**: 500,000
+- **Source Dataset**: `snap-web-google_500000.tsv`
+
+| Algorithm | Engine | Status | Build (s) | Execution Latency (ms) | Result Size | Speedup vs NetworkX |
+|---|---|---|---|---|---|---|
+| pagerank | benostreamdb | ✅ Pass | 1.352s | 290.56 ms | 158508 | 1.48x |
+| pagerank | networkx | ✅ Pass | 0.842s | 430.71 ms | 158508 | 1.00x (baseline) |
+| connected_components | benostreamdb | ✅ Pass | 1.266s | 54.30 ms | 1383 | 1.93x |
+| connected_components | networkx | ✅ Pass | 0.719s | 104.60 ms | 1383 | 1.00x (baseline) |
+
 ### Results from `graph_synth_10k.md`
 
 # Graph Benchmark Results
@@ -163,11 +178,67 @@
 
 | Engine | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| benostreamdb | cpu | hybrid_rrf | scifact | 0.846 | 0.6915 | 0.6466 | 184.4 | 5.278 | 6.787 | 0.601 | 6.62 |
-| benostreamdb | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 422.9 | 2.225 | 3.767 | 0.366 | 3.31 |
-| lancedb | cpu | hybrid_rrf | scifact | 0.8338 | 0.6759 | 0.6327 | 205.5 | 4.48 | 5.775 | 0.849 | 14.39 |
-| opensearch | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 507.9 | 1.723 | 4.032 | 0.85 | 6.62 |
-| tantivy | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3520.2 | 0.233 | 0.534 | 0.159 | 8.34 |
+| benostreamdb | cpu | lexical_bm25 | arguana | 0.655 | 0.3084 | 0.1994 | 56.2 | 17.074 | 30.681 | 0.458 | 4.08 |
+| benostreamdb | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3067 | 0.5151 | 1041.6 | 0.725 | 1.69 | 0.277 | 2.46 |
+| benostreamdb | cpu | hybrid_rrf | scifact | 0.8493 | 0.6961 | 0.6511 | 168.1 | 5.76 | 7.714 | 0.557 | 6.63 |
+| benostreamdb | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 417.6 | 2.25 | 3.846 | 0.356 | 3.31 |
+| lancedb | cpu | hybrid_rrf | scifact | 0.8284 | 0.6658 | 0.6193 | 189.3 | 4.807 | 7.402 | 1.212 | 14.37 |
+| opensearch | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 131.3 | 6.647 | 24.44 | 0.847 | 7.9 |
+| opensearch | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1466.7 | 0.704 | 0.955 | 0.528 | 4.85 |
+| opensearch | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 814.1 | 1.127 | 2.429 | 2.563 | 6.71 |
+| tantivy | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 373.8 | 2.552 | 5.426 | 0.177 | 10.4 |
+| tantivy | cpu | lexical_bm25 | nfcorpus | 0.1441 | 0.2997 | 0.5091 | 11310.4 | 0.051 | 0.187 | 0.17 | 6.2 |
+| tantivy | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 4026.4 | 0.196 | 0.492 | 1.922 | 8.01 |
+
+### Results from `arguana_bm25_competitors_cpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `arguana`
+- **Corpus Documents**: 8,674
+- **Evaluated Queries**: 1,406
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.46s | 4.1 MB | **56.2** | **17.07 ms** | 30.68 ms | 0.6550 | 0.3084 |
+| **tantivy** | `cpu` | ✅ Pass | 0.18s | 10.4 MB | **373.8** | **2.55 ms** | 5.43 ms | 0.6700 | 0.3226 |
+| **opensearch** | `cpu` | ✅ Pass | 0.85s | 7.9 MB | **131.3** | **6.65 ms** | 24.44 ms | 0.7461 | 0.3557 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **65.8%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **55.9%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
+
+### Results from `nfcorpus_bm25_competitors_cpu.md`
+
+# BEIR Lexical / BM25 Benchmark Results
+
+- **Dataset**: `nfcorpus`
+- **Corpus Documents**: 3,633
+- **Evaluated Queries**: 323
+- **Top-K**: 10
+- **Host**: x86_64 (Linux)
+- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
+- **GPUs**: none (CPU-only host)
+- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
+
+| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
+|---|---|---|---|---|---|---|---|---|---|
+| **benostreamdb** | `cpu` | ✅ Pass | 0.28s | 2.5 MB | **1041.6** | **0.73 ms** | 1.69 ms | 0.1491 | 0.3067 |
+| **tantivy** | `cpu` | ✅ Pass | 0.17s | 6.2 MB | **11310.4** | **0.05 ms** | 0.19 ms | 0.1441 | 0.2997 |
+| **opensearch** | `cpu` | ✅ Pass | 0.53s | 4.8 MB | **1466.7** | **0.70 ms** | 0.96 ms | 0.1532 | 0.3215 |
+
+### Differential Oracle & Result Agreement
+
+- **Top-10 Jaccard Overlap vs tantivy**: **92.3%**.
+- **Top-10 Jaccard Overlap vs opensearch**: **61.9%**.
+- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
 ### Results from `scifact_bm25_competitors_cpu.md`
 
@@ -184,38 +255,14 @@
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.37s | 3.3 MB | **422.9** | **2.22 ms** | 3.77 ms | 0.7909 | 0.6617 |
-| **tantivy** | `cpu` | ✅ Pass | 0.16s | 8.3 MB | **3520.2** | **0.23 ms** | 0.53 ms | 0.7812 | 0.6517 |
-| **opensearch** | `cpu` | ✅ Pass | 0.85s | 6.6 MB | **507.9** | **1.72 ms** | 4.03 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **417.6** | **2.25 ms** | 3.85 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 1.92s | 8.0 MB | **4026.4** | **0.20 ms** | 0.49 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 2.56s | 6.7 MB | **814.1** | **1.13 ms** | 2.43 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 
 - **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
 - **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
-- High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
-
-### Results from `scifact_bm25_competitors_gpu.md`
-
-# BEIR Lexical / BM25 Benchmark Results
-
-- **Dataset**: `scifact`
-- **Corpus Documents**: 5,183
-- **Evaluated Queries**: 300
-- **Top-K**: 10
-- **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB
-- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
-
-| Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
-|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.38s | 3.3 MB | **425.0** | **2.22 ms** | 3.88 ms | 0.7909 | 0.6617 |
-| **tantivy** | `cpu` | ✅ Pass | 0.21s | 8.3 MB | **2476.3** | **0.32 ms** | 0.94 ms | 0.7812 | 0.6517 |
-| **opensearch** | - | ❌ Failed (index build failed: AuthorizationException(403, 'index_create_block_exception', 'blocked by: [FORBIDDEN/10/cluster create-index blocked (api)];')) | - | - | - | - | - | - | - |
-
-### Differential Oracle & Result Agreement
-
-- **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
 ### Results from `scifact_hybrid_cpu.md`
@@ -238,8 +285,8 @@
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.4** | **5.73 ms** | 8.63 ms | **0.8527** | **0.6964** | 0.6509 |
-| **lancedb** | `cpu` | ✅ Pass | 0.87s | 14.4 MB | **201.8** | **4.59 ms** | 5.47 ms | **0.8291** | **0.6668** | 0.6184 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.1** | **5.76 ms** | 7.71 ms | **0.8493** | **0.6961** | 0.6511 |
+| **lancedb** | `cpu` | ✅ Pass | 1.21s | 14.4 MB | **189.3** | **4.81 ms** | 7.40 ms | **0.8284** | **0.6658** | 0.6193 |
 
 ### Differential Oracle & Result Agreement
 
@@ -250,45 +297,9 @@
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 405.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1193.3 | 0.71 ms | 0.7833 | 0.6458 | 0.6057 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.4 | 5.73 ms | **0.8527** | **0.6964** | **0.6509** |
-
-### Results from `scifact_hybrid_gpu.md`
-
-# BEIR Hybrid Search Benchmark Results: BenoStreamDB vs Competitor
-
-- **Dataset**: `scifact`
-- **Corpus Documents**: 5,183
-- **Evaluated Queries**: 300
-- **Dense Embedding Model**: `all-MiniLM-L6-v2` (384-d)
-- **Lexical Algorithm**: Okapi BM25 (`k1=1.2, b=0.75`)
-- **Fusion Algorithm**: Reciprocal Rank Fusion (RRF, `k=60`)
-- **Top-K**: 10
-- **Host**: x86_64 (Linux)
-- **Resource Envelope**: 8 CPUs, 16g RAM (containerized)
-- **GPUs**: NVIDIA GeForce RTX 5070 Ti, 16303 MiB
-- **Methodology**: every engine runs in a Docker container under the same `--cpus`/`--memory` envelope (see `benchmarks/competitors/docker_bench.sh --workload beir`), so no participant gets more cores or RAM than another.
-
-### Competitor Comparison (Hybrid Dense + Sparse RRF)
-
-| Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.60s | 6.6 MB | **184.4** | **5.28 ms** | 6.79 ms | **0.8460** | **0.6915** | 0.6466 |
-| **lancedb** | `cpu` | ✅ Pass | 0.85s | 14.4 MB | **205.5** | **4.48 ms** | 5.78 ms | **0.8338** | **0.6759** | 0.6327 |
-
-### Differential Oracle & Result Agreement
-
-- **Top-10 Jaccard Overlap**: **46.5%** between BenoStreamDB Hybrid and LanceDB Hybrid.
-- High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
-
-### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
-
-| Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
-|---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 412.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1306.3 | 0.66 ms | 0.7733 | 0.6414 | 0.6030 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 184.4 | 5.28 ms | **0.8460** | **0.6915** | **0.6466** |
+| **Sparse (BM25 Only)** | 6.6 MB | 398.9 | 2.38 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1216.0 | 0.71 ms | 0.7767 | 0.6437 | 0.6047 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.1 | 5.76 ms | **0.8493** | **0.6961** | **0.6511** |
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -474,12 +485,15 @@
 
 ## 9. Docker Competitor Matrix (shared hardware envelope)
 
-# Benchmark rollup (2026-10-09T17:09:06-04:00)
+# Benchmark rollup (2026-10-10T00:09:27-04:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 
 | Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|
-| (no results) | | | | | | | | |
+| benostreamdb | - | - | - | - | - | - | - | - |
+| clickhouse | - | - | - | - | - | - | - | - |
+| datafusion | - | - | - | - | - | - | - | - |
+| duckdb | - | - | - | - | - | - | - | - |
 
 

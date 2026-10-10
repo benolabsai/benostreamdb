@@ -16,8 +16,8 @@
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.4** | **5.73 ms** | 8.63 ms | **0.8527** | **0.6964** | 0.6509 |
-| **lancedb** | `cpu` | ✅ Pass | 0.87s | 14.4 MB | **201.8** | **4.59 ms** | 5.47 ms | **0.8291** | **0.6668** | 0.6184 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.1** | **5.76 ms** | 7.71 ms | **0.8493** | **0.6961** | 0.6511 |
+| **lancedb** | `cpu` | ✅ Pass | 1.21s | 14.4 MB | **189.3** | **4.81 ms** | 7.40 ms | **0.8284** | **0.6658** | 0.6193 |
 
 ### Differential Oracle & Result Agreement
 
@@ -28,6 +28,6 @@
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 405.9 | 2.28 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1193.3 | 0.71 ms | 0.7833 | 0.6458 | 0.6057 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.4 | 5.73 ms | **0.8527** | **0.6964** | **0.6509** |
+| **Sparse (BM25 Only)** | 6.6 MB | 398.9 | 2.38 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1216.0 | 0.71 ms | 0.7767 | 0.6437 | 0.6047 |
+| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.1 | 5.76 ms | **0.8493** | **0.6961** | **0.6511** |
