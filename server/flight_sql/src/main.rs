@@ -81,7 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Flight SQL authentication disabled — bind to a private interface or front with a proxy"
         );
     }
-    let interceptor = tonic::service::interceptor::InterceptorLayer::new(AuthInterceptor { auth: auth.clone() });
+    let interceptor =
+        tonic::service::interceptor::InterceptorLayer::new(AuthInterceptor { auth: auth.clone() });
 
     // Default to loopback; expose externally only via an explicit bind.
     let bind = std::env::var("BSDB_FLIGHT_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -103,12 +104,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(svc)
         .serve_with_shutdown(addr, async {
             #[cfg(unix)]
-            {
-                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .unwrap_or_else(|e| panic!("Failed to bind SIGTERM: {}", e));
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = sigterm.recv() => {}
+                if let Ok(mut sigterm) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = sigterm.recv() => {}
+                    }
+                } else {
+                    tokio::signal::ctrl_c().await.ok();
                 }
             }
             #[cfg(not(unix))]
