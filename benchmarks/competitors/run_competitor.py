@@ -1057,6 +1057,13 @@ def _graph_memgraph(args, edges) -> dict:
     try:
         with driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n").consume()
+            # Index the id property first: without it, each unmatched MERGE does
+            # a full label scan, so the load is O(n^2) and pegs a core for
+            # minutes on a 500k-edge graph.
+            try:
+                session.run("CREATE INDEX ON :Node(id)").consume()
+            except Exception:
+                pass
             rows = [(int(a), int(b)) for a, b in edges]
             t_load = time.time()
             for i in range(0, len(rows), 10000):

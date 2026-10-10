@@ -8,7 +8,7 @@
 | algorithm | pagerank |
 | nodes | 158508 |
 | edges | 401423 |
-| seconds | 0.792 |
+| seconds | 0.806 |
 | result_size | 158508 |
 | dataset | snap-web-google_500000 |
 | layer | embedded (in-process Python) |
