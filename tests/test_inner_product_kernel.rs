@@ -23,23 +23,23 @@ fn test_inner_product_cpu() -> Result<()> {
 
     assert_eq!(distances.len(), 4);
     assert!(
-        (distances[0] - 14.0).abs() < 1e-5,
-        "Expected 14.0, got {}",
+        (distances[0] - (-14.0)).abs() < 1e-5,
+        "Expected -14.0, got {}",
         distances[0]
     );
     assert!(
-        (distances[1] - 1.0).abs() < 1e-5,
-        "Expected 1.0, got {}",
+        (distances[1] - (-1.0)).abs() < 1e-5,
+        "Expected -1.0, got {}",
         distances[1]
     );
     assert!(
-        (distances[2] - 2.0).abs() < 1e-5,
-        "Expected 2.0, got {}",
+        (distances[2] - (-2.0)).abs() < 1e-5,
+        "Expected -2.0, got {}",
         distances[2]
     );
     assert!(
-        (distances[3] - 3.0).abs() < 1e-5,
-        "Expected 3.0, got {}",
+        (distances[3] - (-3.0)).abs() < 1e-5,
+        "Expected -3.0, got {}",
         distances[3]
     );
 
@@ -69,23 +69,23 @@ fn test_inner_product_cuda() -> Result<()> {
 
     assert_eq!(distances.len(), 4);
     assert!(
-        (distances[0] - 14.0).abs() < 1e-5,
-        "Expected 14.0, got {}",
+        (distances[0] - (-14.0)).abs() < 1e-5,
+        "Expected -14.0, got {}",
         distances[0]
     );
     assert!(
-        (distances[1] - 1.0).abs() < 1e-5,
-        "Expected 1.0, got {}",
+        (distances[1] - (-1.0)).abs() < 1e-5,
+        "Expected -1.0, got {}",
         distances[1]
     );
     assert!(
-        (distances[2] - 2.0).abs() < 1e-5,
-        "Expected 2.0, got {}",
+        (distances[2] - (-2.0)).abs() < 1e-5,
+        "Expected -2.0, got {}",
         distances[2]
     );
     assert!(
-        (distances[3] - 3.0).abs() < 1e-5,
-        "Expected 3.0, got {}",
+        (distances[3] - (-3.0)).abs() < 1e-5,
+        "Expected -3.0, got {}",
         distances[3]
     );
 
