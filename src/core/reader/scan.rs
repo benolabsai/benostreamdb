@@ -1156,12 +1156,17 @@ impl HybridReader {
             .filter(|f| seen.insert((f.file_path.clone(), f.algorithm.clone())))
             .cloned()
             .collect();
+        // Prefer full precision: when a column somehow carries more than one
+        // vector index, rank the float HNSW first and the quantized variants
+        // last. (Previously the compressed TQ/PQ variants ranked *first*, so a
+        // column with both a float and a TQ8 index silently served TQ8.)
         let algo_rank = |f: &crate::core::manifest::IndexFile| -> u8 {
             match f.blob_type.as_deref() {
-                Some("hnsw_tq8") | Some("hnsw_tq4") => 0,
-                Some("hnsw_pq") => 1,
-                Some("hnsw_ivf") => 2,
-                _ => 3,
+                Some("hnsw") | Some("hnsw_f32") => 0,
+                Some("hnsw_ivf") => 1,
+                Some("hnsw_pq") => 2,
+                Some("hnsw_tq8") | Some("hnsw_tq4") => 3,
+                _ => 4,
             }
         };
         let best_rank = vector_indices.iter().map(algo_rank).min().unwrap_or(4);

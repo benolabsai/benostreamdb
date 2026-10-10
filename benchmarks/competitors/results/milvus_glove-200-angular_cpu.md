@@ -11,10 +11,10 @@
 | index | m=16, ef_construction=200, ef_search=200, metric=cosine |
 | queries | 500 |
 | k | 10 |
-| build_s | 1.598 |
-| index_mb | 0.0 |
+| build_s | 2.094 |
+| index_mb | 16.0 |
 | recall_at_k | 0.1646 |
 | qps | 3.4 |
-| p50_ms | 200.835 |
-| p99_ms | 400.98 |
+| p50_ms | 200.656 |
+| p99_ms | 400.742 |
 | env | cpu_model=AMD Ryzen 9 5900XT 16-Core Processor, cores=8.0, ram_gb=16.0, host_cores=32, host_ram_gb=121.4, os=Linux-7.0.0-34-generic-x86_64-with-glibc2.41, python=3.12.15, containerized=True, gpus=[] |

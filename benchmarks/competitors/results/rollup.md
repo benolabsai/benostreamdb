@@ -1,14 +1,70 @@
-# Benchmark rollup (2026-10-10T15:44:06-04:00)
+# Benchmark rollup (2026-10-10T17:00:20-04:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 
 | Engine | Device | Dataset | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
 |---|---|---|---|---|---|---|---|---|
-| pgvector | cpu | fashion-mnist-784-euclidean | 1.0 | 835.8 | 1.158 | 1.725 | 11.249 | 166.35 |
-| pgvector | cpu | gist-960-euclidean | 0.9988 | 340.4 | 2.98 | 3.95 | 26.002 | 247.29 |
-| pgvector | cpu | glove-100-angular | 0.462 | 762.9 | 1.311 | 1.991 | 6.216 | 24.85 |
-| pgvector | cpu | glove-200-angular | 0.1758 | 586.0 | 1.685 | 2.851 | 8.615 | 42.27 |
-| pgvector | cpu | lastfm-64-dot | 0.996 | 1221.8 | 0.802 | 1.261 | 6.803 | 18.51 |
-| pgvector | cpu | mnist-784-euclidean | 1.0 | 746.5 | 1.318 | 2.262 | 13.644 | 166.36 |
-| pgvector | cpu | nytimes-256-angular | 0.0908 | 521.3 | 1.875 | 3.236 | 10.346 | 50.91 |
-| pgvector | cpu | sift-128-euclidean | 1.0 | 1016.4 | 0.969 | 1.333 | 4.125 | 29.21 |
+| benostreamdb | cpu | fashion-mnist-784-euclidean | 0.9866 | 1170.5 | 0.851 | 1.072 | 2.16 | 191.34 |
+| benostreamdb | cpu | gist-960-euclidean | 0.932 | 675.0 | 1.444 | 2.338 | 3.317 | 233.4 |
+| benostreamdb | cpu | glove-100-angular | 0.4516 | 1555.5 | 0.639 | 0.94 | 0.897 | 28.0 |
+| benostreamdb | cpu | glove-200-angular | 0.1756 | 1249.1 | 0.792 | 1.228 | 1.202 | 52.32 |
+| benostreamdb | cpu | lastfm-64-dot | 0.785 | 4437.2 | 0.221 | 0.311 | 1.459 | 17.64 |
+| benostreamdb | cpu | mnist-784-euclidean | 0.9828 | 1016.4 | 0.978 | 1.281 | 2.285 | 191.62 |
+| benostreamdb | cpu | nytimes-256-angular | 0.0844 | 1053.9 | 0.941 | 1.25 | 1.189 | 66.28 |
+| benostreamdb | cpu | sift-128-euclidean | 0.9852 | 2481.6 | 0.396 | 0.543 | 0.698 | 33.84 |
+| benostreamdb | cpu | fashion-mnist-784-euclidean | 0.1524 | 925.5 | 1.067 | 1.563 | 2.252 | 138.35 |
+| benostreamdb | cpu | gist-960-euclidean | 0.0434 | 851.9 | 1.17 | 1.591 | 3.033 | 166.38 |
+| benostreamdb | cpu | glove-100-angular | 0.2954 | 2503.7 | 0.398 | 0.528 | 0.674 | 19.47 |
+| benostreamdb | cpu | glove-200-angular | 0.1838 | 1615.3 | 0.617 | 0.929 | 0.972 | 36.46 |
+| benostreamdb | cpu | lastfm-64-dot | 0.25 | 4917.5 | 0.2 | 0.259 | 0.719 | 13.12 |
+| benostreamdb | cpu | mnist-784-euclidean | 0.6192 | 621.9 | 1.596 | 2.018 | 2.288 | 139.13 |
+| benostreamdb | cpu | nytimes-256-angular | 0.2252 | 1179.7 | 0.843 | 1.111 | 1.047 | 47.18 |
+| benostreamdb | cpu | sift-128-euclidean | 0.535 | 2407.0 | 0.416 | 0.526 | 0.627 | 25.02 |
+| benostreamdb | cpu | fashion-mnist-784-euclidean | 0.9314 | 1825.7 | 0.535 | 0.777 | 2.256 | 149.1 |
+| benostreamdb | cpu | gist-960-euclidean | 0.8228 | 1451.5 | 0.667 | 1.067 | 2.776 | 177.15 |
+| benostreamdb | cpu | glove-100-angular | 0.3494 | 2637.4 | 0.371 | 0.555 | 0.641 | 20.66 |
+| benostreamdb | cpu | glove-200-angular | 0.2118 | 3301.2 | 0.303 | 0.418 | 1.192 | 38.92 |
+| benostreamdb | cpu | lastfm-64-dot | 0.7534 | 5185.0 | 0.19 | 0.264 | 1.145 | 15.28 |
+| benostreamdb | cpu | mnist-784-euclidean | 0.9608 | 1829.3 | 0.526 | 0.782 | 2.175 | 149.38 |
+| benostreamdb | cpu | nytimes-256-angular | 0.3154 | 2271.8 | 0.437 | 0.588 | 1.031 | 49.8 |
+| benostreamdb | cpu | sift-128-euclidean | 0.9548 | 2870.1 | 0.344 | 0.5 | 0.642 | 26.19 |
+| faiss | cpu | fashion-mnist-784-euclidean | 1.0 | 4009.4 | 0.242 | 0.397 | 0.781 | 65.6 |
+| faiss | cpu | gist-960-euclidean | 0.9916 | 1771.6 | 0.527 | 1.203 | 1.613 | 79.68 |
+| faiss | cpu | glove-100-angular | 0.9826 | 6789.9 | 0.143 | 0.245 | 0.443 | 10.88 |
+| faiss | cpu | glove-200-angular | 0.9494 | 4511.8 | 0.209 | 0.469 | 0.608 | 18.88 |
+| faiss | cpu | lastfm-64-dot | 0.9964 | 14687.8 | 0.066 | 0.102 | 0.21 | 8.08 |
+| faiss | cpu | mnist-784-euclidean | 0.9998 | 3460.3 | 0.284 | 0.452 | 1.063 | 65.6 |
+| faiss | cpu | nytimes-256-angular | 0.0922 | 3983.8 | 0.246 | 0.342 | 0.711 | 23.36 |
+| faiss | cpu | sift-128-euclidean | 1.0 | 6238.6 | 0.103 | 0.201 | 0.349 | 13.12 |
+| hnswlib | cpu | fashion-mnist-784-euclidean | 1.0 | 3672.2 | 0.265 | 0.426 | 1.673 | 65.69 |
+| hnswlib | cpu | gist-960-euclidean | 0.9918 | 1750.5 | 0.572 | 0.98 | 4.173 | 79.77 |
+| hnswlib | cpu | glove-100-angular | 0.4618 | 8438.8 | 0.118 | 0.218 | 0.6 | 10.97 |
+| hnswlib | cpu | glove-200-angular | 0.1756 | 5159.7 | 0.184 | 0.377 | 0.947 | 18.97 |
+| hnswlib | cpu | lastfm-64-dot | 0.9916 | 19446.2 | 0.05 | 0.079 | 0.255 | 8.17 |
+| hnswlib | cpu | mnist-784-euclidean | 1.0 | 3091.2 | 0.329 | 0.502 | 2.389 | 65.69 |
+| hnswlib | cpu | nytimes-256-angular | 0.0908 | 4061.6 | 0.239 | 0.393 | 1.252 | 23.45 |
+| hnswlib | cpu | sift-128-euclidean | 1.0 | 10761.9 | 0.09 | 0.202 | 0.47 | 13.21 |
+| milvus | cpu | fashion-mnist-784-euclidean | 0.9984 | 3.4 | 200.835 | 400.913 | 2.752 | 62.72 |
+| milvus | cpu | gist-960-euclidean | 0.8864 | 3.4 | 200.75 | 400.793 | 3.136 | 76.8 |
+| milvus | cpu | glove-100-angular | 0.4408 | 3.4 | 200.838 | 400.886 | 1.621 | 8.0 |
+| milvus | cpu | glove-200-angular | 0.1646 | 3.4 | 200.656 | 400.742 | 2.094 | 16.0 |
+| milvus | cpu | lastfm-64-dot | 0.9756 | 3.4 | 200.584 | 400.897 | 1.361 | 5.2 |
+| milvus | cpu | mnist-784-euclidean | 0.9914 | 3.5 | 200.467 | 400.969 | 3.33 | 62.72 |
+| milvus | cpu | nytimes-256-angular | 0.0854 | 3.4 | 200.888 | 400.912 | 2.347 | 20.48 |
+| milvus | cpu | sift-128-euclidean | 0.9754 | 3.4 | 200.573 | 400.756 | 1.9 | 10.24 |
+| opensearch | cpu | fashion-mnist-784-euclidean | 0.975 | 674.8 | 1.411 | 2.472 | 8.076 | 153.72 |
+| opensearch | cpu | gist-960-euclidean | 0.8478 | 279.2 | 3.389 | 5.515 | 19.359 | 352.95 |
+| opensearch | cpu | glove-100-angular | 0.4356 | 641.8 | 1.543 | 2.134 | 8.61 | 47.06 |
+| opensearch | cpu | glove-200-angular | 0.1662 | 309.1 | 3.197 | 5.014 | 13.341 | 149.96 |
+| opensearch | cpu | lastfm-64-dot | 0.5742 | 1013.8 | 0.966 | 1.326 | 3.53 | 32.26 |
+| opensearch | cpu | mnist-784-euclidean | 0.9556 | 678.5 | 1.46 | 1.88 | 8.784 | 137.31 |
+| opensearch | cpu | nytimes-256-angular | 0.0798 | 191.5 | 4.025 | 32.055 | 15.526 | 217.96 |
+| opensearch | cpu | sift-128-euclidean | 0.9506 | 1112.7 | 0.882 | 1.337 | 3.932 | 1.13 |
+| weaviate | cpu | fashion-mnist-784-euclidean | 0.9998 | 1061.3 | 0.917 | 1.435 | 5.658 | 62.72 |
+| weaviate | cpu | gist-960-euclidean | 0.978 | 779.1 | 1.167 | 2.355 | 8.205 | 76.8 |
+| weaviate | cpu | glove-100-angular | 0.461 | 1036.2 | 0.932 | 1.488 | 4.391 | 8.0 |
+| weaviate | cpu | glove-200-angular | 0.1788 | 991.9 | 0.996 | 1.39 | 5.075 | 16.0 |
+| weaviate | cpu | lastfm-64-dot | 0.9818 | 1441.2 | 0.665 | 1.328 | 3.895 | 5.2 |
+| weaviate | cpu | mnist-784-euclidean | 0.9988 | 1001.3 | 0.957 | 1.68 | 6.218 | 62.72 |
+| weaviate | cpu | nytimes-256-angular | 0.0908 | 910.1 | 1.078 | 1.568 | 5.404 | 20.48 |
+| weaviate | cpu | sift-128-euclidean | 0.999 | 1128.0 | 0.826 | 1.392 | 4.194 | 10.24 |

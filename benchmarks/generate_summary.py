@@ -123,6 +123,31 @@ def generate_summary():
         "`benchmarks/ann_benchmarks/results/`."
     )
     sections.append("")
+    sections.append("### TurboQuant trade-off (pros and cons)")
+    sections.append("")
+    sections.append(
+        "- **Pro — smaller index / less memory.** TurboQuant quantizes the stored "
+        "vectors: `hnsw_tq8` (8-bit) is ≈4× smaller than float32 and `hnsw_tq4` "
+        "(4-bit) ≈8× smaller, so more vectors fit per node and the working set "
+        "(and on-disk sidecar) shrinks accordingly.\n"
+        "- **Pro — cheaper distances / lower latency.** Comparing 1-byte codes is "
+        "faster than 4-byte floats, so the quantized indexes typically serve lower "
+        "p50 latency and higher QPS at a fixed `ef_search`.\n"
+        "- **Pro — same HNSW graph / API.** The graph and query surface are "
+        "unchanged; only the stored codes differ, so no schema/DDL difference.\n"
+        "- **Con — lower recall.** Quantization is lossy: the stored codes no "
+        "longer rank the exact neighbours, so recall@k drops (recovers only "
+        "partially by raising `ef_search`, at a latency cost).\n"
+        "- **Con — approximate distances for reranking.** Scores are approximate, "
+        "so use the index for candidate discovery and rerank from the float "
+        "payload where exactness matters.\n"
+        "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/`hnsw_tq4`/"
+        "`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. "
+        "§9 reports `benostreamdb` (float) beside `benostreamdb_tq8`/`_tq4` so the "
+        "trade-off is explicit; holding several precisions on one column and "
+        "selecting per query is on the roadmap (Theme 6)."
+    )
+    sections.append("")
 
     # 2. Graph Analytics Benchmarks
     #
