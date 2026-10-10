@@ -1363,6 +1363,9 @@ pub async fn create_collection(
     Json(req): Json<CreateCollectionRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = AppState::validate_index_name(&collection_name) {
+        return qerr(QErr::bad(e.to_string()), start);
+    }
     if collection_exists(&state, &collection_name).await {
         return qerr(QErr::bad("Collection already exists"), start);
     }
@@ -1430,6 +1433,9 @@ pub async fn update_collection(
     Json(req): Json<UpdateCollectionRequest>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = AppState::validate_index_name(&collection_name) {
+        return qerr(QErr::bad(e.to_string()), start);
+    }
     if !collection_exists(&state, &collection_name).await {
         return qerr(QErr::not_found("Collection not found"), start);
     }
@@ -1449,6 +1455,9 @@ pub async fn delete_collection(
     Path(collection_name): Path<String>,
 ) -> Response {
     let start = Instant::now();
+    if let Err(e) = AppState::validate_index_name(&collection_name) {
+        return qerr(QErr::bad(e.to_string()), start);
+    }
     let name = resolve(&state, &collection_name).await;
     if !collection_exists(&state, &name).await {
         return qerr(QErr::not_found("Collection not found"), start);
@@ -2289,12 +2298,18 @@ pub async fn update_aliases(
     for action in req.actions {
         match action {
             AliasAction::Create { create_alias } => {
+                if let Err(e) = AppState::validate_index_name(&create_alias.alias_name) {
+                    return qerr(QErr::bad(e.to_string()), start);
+                }
                 aliases.insert(create_alias.alias_name, create_alias.collection_name);
             }
             AliasAction::Delete { delete_alias } => {
                 aliases.remove(&delete_alias.alias_name);
             }
             AliasAction::Rename { rename_alias } => {
+                if let Err(e) = AppState::validate_index_name(&rename_alias.new_alias_name) {
+                    return qerr(QErr::bad(e.to_string()), start);
+                }
                 if let Some(target) = aliases.remove(&rename_alias.old_alias_name) {
                     aliases.insert(rename_alias.new_alias_name, target);
                 }

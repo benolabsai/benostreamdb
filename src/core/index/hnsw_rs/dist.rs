@@ -62,12 +62,27 @@ impl Distance<f32> for DistCosine {
     }
 }
 
-/// Dot product distance (1.0 - dot)
+/// Dot product distance (1.0 - cosine), i.e. inner product on L2-normalized
+/// vectors.
+///
+/// Inner product is **not a metric**, so HNSW's neighbour-selection heuristic
+/// (which assumes the triangle inequality) builds a graph dominated by
+/// high-norm hubs when the vectors are unnormalized — recall collapses (e.g.
+/// `lastfm-64-dot`: ~0.10 vs ~0.75 for the cosine path on the same data, whose
+/// ground truth is identical). Normalizing here is the standard "maximum inner
+/// product on unit vectors" setup and is what the `hnsw_rs` crate's `DistDot`
+/// expects (see `annhdf5.rs`). The result is also non-negative, as the
+/// neighbour-selection heuristic requires.
 #[derive(Default, Clone, Copy)]
 pub struct DistDot;
 impl Distance<f32> for DistDot {
     fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
-        (1.0 - distance::dot_product(va, vb)).max(0.0)
+        let na = va.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let nb = vb.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if na == 0.0 || nb == 0.0 {
+            return 1.0;
+        }
+        (1.0 - distance::dot_product(va, vb) / (na * nb)).max(0.0)
     }
 }
 
@@ -107,21 +122,37 @@ implement_scalar!(DistL1, u32, |(a, b)| (*a as i64 - *b as i64).abs() as f32);
 implement_scalar!(DistL1, u16, |(a, b)| (*a as i32 - *b as i32).abs() as f32);
 implement_scalar!(DistL1, u8, |(a, b)| (*a as i32 - *b as i32).abs() as f32);
 
-// DistL2 for other types
-implement_scalar!(DistL2, f64, |(a, b)| ((a - b) * (a - b)) as f32);
-implement_scalar!(DistL2, i32, |(a, b)| {
+// DistL2 for other types. These must return the *distance* (sqrt of the sum of
+// squares), matching the f32 impl above — returning the squared value would make
+// the reported distance inconsistent across element types.
+macro_rules! implement_l2_scalar (
+    ($ty:ty, $conv:expr) => (
+        impl Distance<$ty> for DistL2 {
+            fn eval(&self, va: &[$ty], vb: &[$ty]) -> f32 {
+                va.iter()
+                    .zip(vb.iter())
+                    .map($conv)
+                    .sum::<f32>()
+                    .sqrt()
+            }
+        }
+    )
+);
+
+implement_l2_scalar!(f64, |(a, b)| ((a - b) * (a - b)) as f32);
+implement_l2_scalar!(i32, |(a, b)| {
     let d = (a - b) as f32;
     d * d
 });
-implement_scalar!(DistL2, u32, |(a, b)| {
+implement_l2_scalar!(u32, |(a, b)| {
     let d = (*a as i64 - *b as i64) as f32;
     d * d
 });
-implement_scalar!(DistL2, u16, |(a, b)| {
+implement_l2_scalar!(u16, |(a, b)| {
     let d = (*a as i32 - *b as i32) as f32;
     d * d
 });
-implement_scalar!(DistL2, u8, |(a, b)| {
+implement_l2_scalar!(u8, |(a, b)| {
     let d = (*a as i32 - *b as i32) as f32;
     d * d
 });
@@ -249,5 +280,35 @@ impl<T: Send + Sync, U: Send + Sync> Distance<T> for DistPtr<T, U> {
 impl<T: Send + Sync, U: Send + Sync> Default for DistPtr<T, U> {
     fn default() -> Self {
         panic!("DistPtr has no default");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dist_dot_is_cosine_on_normalized_vectors() {
+        // Same direction, different magnitude -> cosine distance 0.
+        let a = [3.0f32, 4.0];
+        let b = [6.0f32, 8.0];
+        assert!(DistDot.eval(&a, &b).abs() < 1e-6);
+        // Orthogonal -> distance 1.
+        let c = [-4.0f32, 3.0];
+        assert!((DistDot.eval(&a, &c) - 1.0).abs() < 1e-6);
+        // Opposite -> distance 2.
+        let d = [-3.0f32, -4.0];
+        assert!((DistDot.eval(&a, &d) - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dist_l2_scalar_matches_f32() {
+        let a = [1.0f64, 2.0, 3.0];
+        let b = [4.0f64, 6.0, 3.0];
+        // sqrt(9 + 16 + 0) = 5
+        assert!((DistL2.eval(&a, &b) - 5.0).abs() < 1e-6);
+        let ai = [1i32, 2, 3];
+        let bi = [4i32, 6, 3];
+        assert!((DistL2.eval(&ai, &bi) - 5.0).abs() < 1e-6);
     }
 }

@@ -35,6 +35,9 @@ extern "C" __global__ void inner_product_kernel(
     // 3. Write result to global memory (only thread 0)
     // Inner product is just the dot product (no normalization)
     if (threadIdx.x == 0) {
-        distances[row] = sdata[0];
+        // Negate: inner product is a similarity, so "smaller is more similar"
+        // (matches the flat scan and the HNSW graph). Without this the IVF
+        // coarse search routes a query to the least similar clusters.
+        distances[row] = -sdata[0];
     }
 }

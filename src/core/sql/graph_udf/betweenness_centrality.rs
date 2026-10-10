@@ -150,7 +150,9 @@ impl Accumulator for BetweennessCentralityAccumulator {
                     if d[&w] == d[&v] + 1 {
                         let new_sigma = sigma[&w] + sigma[&v];
                         sigma.insert(w, new_sigma);
-                        p.get_mut(&w).unwrap().push(v);
+                        if let Some(w_p) = p.get_mut(&w) {
+                            w_p.push(v);
+                        }
                     }
                 }
             }
@@ -191,13 +193,13 @@ impl Accumulator for BetweennessCentralityAccumulator {
 
         for &node in &all_nodes {
             sb.field_builder::<UInt64Builder>(0)
-                .unwrap()
+                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 0".into()))?
                 .append_value(node);
             // Nodes that never appear as an intermediate vertex have no entry
             // in `cb`; indexing the map directly panicked with "no entry found
             // for key" (NO_PANIC_POLICY violation).
             sb.field_builder::<Float64Builder>(1)
-                .unwrap()
+                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 1".into()))?
                 .append_value(cb.get(&node).copied().unwrap_or(0.0));
             sb.append(true);
         }

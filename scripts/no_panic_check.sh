@@ -89,6 +89,12 @@ total=$((total + COUNT))
 run_clippy "benostreamdb-search (lib):" -p benostreamdb-search --lib
 total=$((total + COUNT))
 
+run_clippy "benostreamdb-flight (bin):" -p benostreamdb-flight --bin benostreamdb-flight
+total=$((total + COUNT))
+
+run_clippy "benostreamdb-mcp (bin):" -p benostreamdb-mcp --bin benostreamdb-mcp
+total=$((total + COUNT))
+
 # NOTE: binary targets are intentionally not counted here. `cargo clippy --bin
 # <name>` re-lints the same-package lib (so the count duplicates the `--lib`
 # line) and does not reliably emit the bin's own diagnostics. Bin sources are

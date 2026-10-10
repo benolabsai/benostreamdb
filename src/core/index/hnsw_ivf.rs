@@ -349,9 +349,11 @@ fn find_closest_centroid(vec: &[f32], centroids: &[Vec<f32>], metric: VectorMetr
     let mut best_cluster = 0;
     for (i, c) in centroids.iter().enumerate() {
         let dist = match metric {
-            VectorMetric::L2 | VectorMetric::Cosine => {
-                crate::core::index::distance::l2_distance_squared(vec, c)
-            }
+            VectorMetric::L2 => crate::core::index::distance::l2_distance_squared(vec, c),
+            // Cosine must route by cosine distance, not L2: the engine does not
+            // L2-normalize on insert, so L2 and cosine rank differently for
+            // unnormalized vectors (the HNSW graph itself uses true cosine).
+            VectorMetric::Cosine => crate::core::index::distance::cosine_distance(vec, c),
             VectorMetric::InnerProduct => -crate::core::index::distance::dot_product(vec, c),
             VectorMetric::L1 => crate::core::index::distance::l1_distance(vec, c),
             VectorMetric::Hamming => crate::core::index::distance::hamming_distance(vec, c),
@@ -1070,8 +1072,57 @@ impl HnswIvfIndex {
 
         // Pre-quantize query if needed for faster graph traversal (SDC)
         let effective_query = match self.quantizer {
-            Some(QuantizerImpl::TurboQuant(ref q)) => VectorValue::Binary(q.encode(query_f32)),
-            Some(QuantizerImpl::Pq(ref q)) => VectorValue::Binary(q.encode(query_f32)),
+            Some(QuantizerImpl::TurboQuant(ref q)) => {
+                let mut q_vec = query_f32.to_vec();
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                    // SDC suffers from clamping if the query norm vastly exceeds the quantizer's trained range.
+                    // For IP/Cosine, query magnitude doesn't affect ranking. We scale the query
+                    // to perfectly fit the quantizer's valid range in the FWHT domain to maximize precision.
+                    let mut rotated = q_vec.clone();
+                    if !rotated.len().is_power_of_two() {
+                        rotated.resize(rotated.len().next_power_of_two(), 0.0);
+                    }
+                    crate::core::index::turboquant::fwht(&mut rotated);
+                    
+                    let mut q_min = f32::MAX;
+                    let mut q_max = f32::MIN;
+                    for &v in &rotated {
+                        if v < q_min { q_min = v; }
+                        if v > q_max { q_max = v; }
+                    }
+                    
+                    let quantizer_min = q.offset;
+                    let quantizer_max = q.offset + ((1 << q.bits()) - 1) as f32 / q.scale;
+                    
+                    let mut c = f32::MAX;
+                    if q_min < -1e-6 && quantizer_min <= 0.0 {
+                        c = c.min(quantizer_min / q_min);
+                    }
+                    if q_max > 1e-6 && quantizer_max >= 0.0 {
+                        c = c.min(quantizer_max / q_max);
+                    }
+                    if c != f32::MAX && c > 0.0 {
+                        c *= 0.99; // Safety margin
+                        for v in &mut q_vec {
+                            *v *= c;
+                        }
+                    }
+                }
+                VectorValue::Binary(q.encode(&q_vec))
+            },
+            Some(QuantizerImpl::Pq(ref q)) => {
+                let mut q_vec = query_f32.to_vec();
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                    let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
+                    if norm > 1e-6 {
+                        let inv = 1.0 / norm;
+                        for v in &mut q_vec {
+                            *v *= inv;
+                        }
+                    }
+                }
+                VectorValue::Binary(q.encode(&q_vec))
+            },
             _ => query.clone(),
         };
 

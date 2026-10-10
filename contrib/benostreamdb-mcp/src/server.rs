@@ -16,84 +16,97 @@ const SCRATCH_SCHEMA: &str = "scratch";
 /// mutate the main catalog. Every write statement's target table must be in the
 /// `scratch` schema; reads (SELECT, COPY ... TO, DESCRIBE, …) are unrestricted.
 fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
-    let collapsed = query
-        .to_ascii_uppercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    use sqlparser::ast::{ObjectName, ObjectType, Statement, TableFactor};
+    use sqlparser::dialect::PostgreSqlDialect;
+    use sqlparser::parser::Parser;
 
-    if collapsed.contains("CREATE SCHEMA") || collapsed.contains("CREATE DATABASE") {
-        anyhow::bail!("MCP may not create schemas or databases");
-    }
+    let dialect = PostgreSqlDialect {};
+    let statements = Parser::parse_sql(&dialect, query)
+        .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
-    // (keyword, the table name follows it after any IF [NOT] EXISTS).
-    let write_stmts = [
-        "CREATE EXTERNAL TABLE",
-        "CREATE TABLE",
-        "INSERT INTO",
-        "UPDATE",
-        "DELETE FROM",
-        "DROP TABLE",
-        "ALTER TABLE",
-        "TRUNCATE TABLE",
-        "OPTIMIZE TABLE",
-        "VACUUM",
-    ];
-    for kw in write_stmts {
-        if let Some(pos) = collapsed.find(kw) {
-            let rest = collapsed[pos + kw.len()..].trim_start();
-            let rest = rest.strip_prefix("IF NOT EXISTS ").unwrap_or(rest);
-            let rest = rest.strip_prefix("IF EXISTS ").unwrap_or(rest);
-            let name = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches(|c| c == '"' || c == '`' || c == '(');
-            let schema = name
-                .split('.')
-                .rev()
-                .nth(1)
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if schema != SCRATCH_SCHEMA {
-                anyhow::bail!(
-                    "MCP may only write to the '{}' scratch schema (got '{}')",
-                    SCRATCH_SCHEMA,
-                    name
-                );
+    let check_scratch = |name: &ObjectName| -> anyhow::Result<()> {
+        if name.0.is_empty() {
+            return Ok(());
+        }
+        let schema = if name.0.len() >= 2 {
+            if let Some(ident) = name.0[name.0.len() - 2].as_ident() {
+                ident.value.to_ascii_lowercase()
+            } else {
+                "".to_string()
+            }
+        } else {
+            "".to_string()
+        };
+        if schema != SCRATCH_SCHEMA {
+            anyhow::bail!(
+                "MCP may only write to the '{}' scratch schema (got '{}')",
+                SCRATCH_SCHEMA,
+                name
+            );
+        }
+        Ok(())
+    };
+
+    let check_table_factor = |tf: &TableFactor| -> anyhow::Result<()> {
+        if let TableFactor::Table { name, .. } = tf {
+            check_scratch(name)?;
+        }
+        Ok(())
+    };
+
+    for stmt in statements {
+        match stmt {
+            Statement::CreateSchema { .. } | Statement::CreateDatabase { .. } => {
+                anyhow::bail!("MCP may not create schemas or databases");
+            }
+            Statement::CreateTable(cmd) => check_scratch(&cmd.name)?,
+            Statement::CreateIndex(cmd) => check_scratch(&cmd.table_name)?,
+            Statement::AlterTable { name, .. } => check_scratch(&name)?,
+            Statement::AlterIndex { name, .. } => check_scratch(&name)?,
+            Statement::Truncate { table_names, .. } => {
+                for target in &table_names {
+                    check_scratch(&target.name)?;
+                }
+            }
+            Statement::Insert(cmd) => {
+                match &cmd.table {
+                    sqlparser::ast::TableObject::TableName(name) => check_scratch(name)?,
+                    _ => {}
+                }
+            }
+            Statement::Update { table, .. } => check_table_factor(&table.relation)?,
+            Statement::Delete(cmd) => {
+                for name in &cmd.tables {
+                    check_scratch(name)?;
+                }
+                match &cmd.from {
+                    sqlparser::ast::FromTable::WithFromKeyword(tables) => {
+                        for t in tables { check_table_factor(&t.relation)?; }
+                    }
+                    sqlparser::ast::FromTable::WithoutKeyword(tables) => {
+                        for t in tables { check_table_factor(&t.relation)?; }
+                    }
+                }
+            }
+            Statement::Merge { table, .. } => check_table_factor(&table)?,
+            Statement::Drop { object_type, names, .. } => {
+                if object_type == ObjectType::Index
+                    || object_type == ObjectType::Table
+                    || object_type == ObjectType::View
+                {
+                    for name in &names {
+                        check_scratch(name)?;
+                    }
+                } else if object_type == ObjectType::Schema
+                    || object_type == ObjectType::Database
+                {
+                    anyhow::bail!("MCP may not drop schemas or databases");
+                }
+            }
+            _ => {
+                // other statements (like SELECT, COPY, DESCRIBE) are unrestricted reads
             }
         }
-    }
-
-    // `CREATE INDEX <name> ON <table>` — the target follows ` ON `. Indexes may
-    // only be created on scratch tables (the main catalog is read-only).
-    if let Some(pos) = collapsed.find("CREATE INDEX") {
-        if let Some(on) = collapsed[pos..].find(" ON ") {
-            let rest = collapsed[pos + on + 4..].trim_start();
-            let name = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches(|c| c == '"' || c == '`' || c == '(');
-            let schema = name
-                .split('.')
-                .rev()
-                .nth(1)
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if schema != SCRATCH_SCHEMA {
-                anyhow::bail!(
-                    "MCP may only create indexes on the '{}' scratch schema (got '{}')",
-                    SCRATCH_SCHEMA,
-                    name
-                );
-            }
-        }
-    }
-    // `DROP INDEX <name>` does not name a table, so it cannot be verified as
-    // scratch — reject it (use `ALTER TABLE scratch.t DROP INDEX` instead).
-    if collapsed.contains("DROP INDEX") {
-        anyhow::bail!("MCP may not drop indexes directly; use ALTER TABLE scratch.t DROP INDEX");
     }
     Ok(())
 }

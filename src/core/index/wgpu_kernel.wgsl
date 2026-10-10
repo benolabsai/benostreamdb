@@ -31,10 +31,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         dist = sqrt(dist);
         
     } else if (mt == 1u) {
-        // Inner Product
+        // Inner Product. Negated: it is a similarity, so "smaller is more
+        // similar" (matches the flat scan and the HNSW graph). Without this the
+        // IVF coarse search routes a query to the least similar clusters.
         for (var i = 0u; i < dim; i++) {
             dist += query[i] * vectors[offset + i];
         }
+        dist = -dist;
         
     } else if (mt == 2u) {
         // Cosine Distance

@@ -2,7 +2,7 @@
 # BenoStreamDB Search Service
 # Elasticsearch 7.10 (Port 9200) + Qdrant (Port 6333) compatible REST API
 # ---------------------------------------------------------------------------
-FROM rust:1.93-slim AS builder
+FROM rust:1.98-slim AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -34,7 +34,7 @@ RUN mkdir -p src \
     && echo "fn main() {}" > tests/bin/verify_iceberg_read_check.rs \
     && echo "fn main() {}" > benches/performance.rs \
     && echo "fn main() {}" > benches/bench_table.rs \
-    && cargo build --release -p benostreamdb-search \
+    && cargo build --locked --release -p benostreamdb-search \
     && rm -rf target/release/.fingerprint/benostreamdb* \
               target/release/deps/*benostreamdb* \
               target/release/deps/libbenostreamdb* \
@@ -47,7 +47,7 @@ COPY src ./src
 COPY contrib/benostreamdb-search/src ./contrib/benostreamdb-search/src
 
 # Build the bsdb-search binary
-RUN cargo build --release -p benostreamdb-search
+RUN cargo build --locked --release -p benostreamdb-search
 
 
 # ---------------------------------------------------------------------------

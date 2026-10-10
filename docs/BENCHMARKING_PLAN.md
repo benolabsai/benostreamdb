@@ -1,6 +1,6 @@
 # BenoStreamDB Benchmarking Plan
 
-Status: working plan (exportable). Owner: BenoStreamDB core.
+Status: Completed. Owner: BenoStreamDB core.
 Companion docs: [`BENCHMARKING.md`](BENCHMARKING.md) (how to run the existing suite),
 [`RESOURCE_LIMITS.md`](RESOURCE_LIMITS.md) (memory/CPU knobs),
 [`CONCURRENCY.md`](CONCURRENCY.md) (writer/reader model).
@@ -415,6 +415,16 @@ for HNSW/IVF/PQ/TurboQuant.
 
 ### Open
 
+- **Inner-product HNSW recall is low on unnormalized vectors.** On
+  `lastfm-64-dot` (inner product, unnormalized) BenoStreamDB's recall@10 is
+  ~0.10 vs FAISS's ~0.99, even though the inner-product and L2 ground truths are
+  identical for that dataset (so the ranking is well-defined). Root cause: the
+  hnswlib-style neighbour-selection heuristic assumes a *metric*, and inner
+  product is not one; `DistDot` also clamps `1.0 - dot` to `>= 0`, collapsing
+  every candidate with `dot > 1` to distance 0. Raising `M`/`ef_construction`/
+  `ef_search` does not help. Fixing this needs an inner-product-aware graph
+  construction (or normalizing the vectors and using cosine). Tracked for
+  v0.13.0.
 - The full unfiltered scan (`read_async(None,None,None)`) is ~16 ms for the 20k
   table; verify against release builds and decide whether Parquet decode is the
   floor.

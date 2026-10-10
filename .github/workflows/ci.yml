@@ -27,7 +27,7 @@ jobs:
   #########################
   lint:
     name: Rust Lint & Format
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
         run: |
@@ -68,7 +68,7 @@ jobs:
   #########################
   test:
     name: Rust Tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
         run: |
@@ -141,7 +141,7 @@ jobs:
   #########################
   pytest:
     name: Python Tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
         run: |
@@ -188,18 +188,18 @@ jobs:
   #########################
   audit:
     name: Cargo Audit
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@1.98.0
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
 
-      - name: Run cargo audit
-        run: cargo audit --ignore RUSTSEC-2026-0258 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2025-0134 --ignore RUSTSEC-2026-0190 --ignore RUSTSEC-2026-0221 --ignore RUSTSEC-2026-0204
+      - name: Run cargo deny
+        run: cargo deny check
 
   #########################
   # No-panic ratchet for production code paths
@@ -208,7 +208,7 @@ jobs:
   # grow relative to scripts/no_panic_baseline.txt. See NO_PANIC_POLICY.md.
   no-panic:
     name: No-Panic Ratchet
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - name: Maximize build space
         run: |
@@ -240,7 +240,7 @@ jobs:
   #########################
   ecosystem:
     name: Ecosystem Integrations
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
@@ -259,9 +259,8 @@ jobs:
 
       - name: Install Ecosystem Dependencies
         run: |
-          pip install pytest pyspark trino dbt-core adbc-driver-flightsql pyarrow
-          # Install the local dbt adapter
-          pip install -e dbt-benostreamdb/
+          # Install everything together so pip can resolve version constraints
+          pip install pytest pyspark trino dbt-core adbc-driver-flightsql pyarrow -e dbt-benostreamdb/
 
       - name: Build Flight SQL server
         run: cargo build -p benostreamdb-flight

@@ -31,6 +31,8 @@ pub(crate) async fn create_index_core(
     index: &str,
     body: Option<&Value>,
 ) -> Result<Value, BenoStreamError> {
+    AppState::validate_index_name(index)?;
+
     if state.index_exists(index).await {
         return Err(BenoStreamError::PrimaryKeyViolation {
             key: format!("index '{index}' already exists"),
@@ -150,6 +152,8 @@ pub(crate) async fn delete_index_core(
     state: &AppState,
     index: &str,
 ) -> Result<Value, BenoStreamError> {
+    AppState::validate_index_name(index)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),
@@ -196,6 +200,7 @@ pub(crate) async fn post_aliases_core(
                     reason: "add action missing 'alias'".into(),
                 }
             })?;
+            AppState::validate_index_name(alias)?;
             aliases.insert(alias.to_string(), index.to_string());
         } else if let Some(remove) = act.get("remove") {
             let alias = remove.get("alias").and_then(Value::as_str).ok_or_else(|| {
@@ -278,6 +283,8 @@ pub(crate) async fn put_single_alias_core(
     index: &str,
     alias: &str,
 ) -> Result<Value, BenoStreamError> {
+    AppState::validate_index_name(alias)?;
+
     if !state.index_exists(index).await {
         return Err(BenoStreamError::TableNotFound {
             namespace: String::new(),

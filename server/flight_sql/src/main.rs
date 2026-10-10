@@ -48,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     session.register_catalog(&name, Arc::from(catalog)).await;
                     println!("Registered external catalog as '{}'", name);
                 }
-                Err(e) => eprintln!("Failed to create external catalog: {}", e),
+                Err(e) => {
+                    eprintln!("Failed to create external catalog: {}", e);
+                    return Err(e.into());
+                }
             }
         }
         Err(e) => {
@@ -90,7 +93,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Server::builder()
         .layer(interceptor)
         .add_service(svc)
-        .serve(addr)
+        .serve_with_shutdown(addr, async {
+            tokio::signal::ctrl_c().await.ok();
+        })
         .await?;
 
     Ok(())

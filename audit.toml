@@ -12,33 +12,24 @@
 # date) lives in `docs/DEPENDENCY_RISK.md`. Add an entry there for every ID
 # added here.
 ignore = [
-    # Transitive dependencies & existing ignores
-    "RUSTSEC-2026-0104", # rustls-webpki: CRL panic
-    "RUSTSEC-2026-0099", # rustls-webpki: wildcard name constraints
-    "RUSTSEC-2026-0098", # rustls-webpki: URI name constraints
-    "RUSTSEC-2026-0097", # rand: unsound with custom logger
-    "RUSTSEC-2024-0437", # protobuf: uncontrolled recursion
-    "RUSTSEC-2026-0177", # pyo3: missing Sync bound
-    "RUSTSEC-2026-0176", # pyo3: out-of-bounds read in iterator
-    "RUSTSEC-2023-0071", # rsa: Marvin attack
-    "RUSTSEC-2026-0258", # h2: unbounded empty DATA frames (DoS vulnerability). Acceptable risk for a backend DB as we assume deployment behind a mitigating reverse proxy.
-    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace allocation. Only reachable in the offline `ingest_wikipedia.rs` utility, not in the production database paths.
-    "RUSTSEC-2026-0194", # quick-xml: quadratic run time in duplicate attribute check. Only reachable in the offline `ingest_wikipedia.rs` utility.
-    "RUSTSEC-2025-0134", # rustls-pemfile: unmaintained advisory
-    "RUSTSEC-2026-0190", # anyhow: Error::downcast_mut unsoundness
-    "RUSTSEC-2026-0221", # event-listener: !Send tags across thread boundaries
-    "RUSTSEC-2026-0204", # crossbeam-epoch: pointer dereference
-    "RUSTSEC-2026-0234", # rkyv: hash table out of bounds
-    "RUSTSEC-2026-0233", # rkyv: use-after-free
-    "RUSTSEC-2026-0235", # rkyv: Rc/Arc out of bounds
-    # `paste` is unmaintained (RUSTSEC-2024-0436), pulled in transitively by
-    # datafusion-common 52.x (`cargo tree -i paste`). It is a compile-time
-    # proc-macro with no runtime surface and cannot be removed without forking
-    # DataFusion. Mirrored in deny.toml. See docs/DEPENDENCY_RISK.md.
+    "RUSTSEC-2026-0104",
+    "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0098",
+    "RUSTSEC-2026-0097",
+    "RUSTSEC-2024-0437",
+    "RUSTSEC-2026-0177",
+    "RUSTSEC-2026-0176",
+    "RUSTSEC-2023-0071",
+    "RUSTSEC-2026-0258",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2025-0134",
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0221",
+    "RUSTSEC-2026-0204",
+    "RUSTSEC-2026-0234",
+    "RUSTSEC-2026-0233",
+    "RUSTSEC-2026-0235",
     "RUSTSEC-2024-0436",
-    # `bincode` 2.0.1 is unmaintained (RUSTSEC-2025-0141). It is a *direct*
-    # dependency, used only for HNSW point-vector dump/load in
-    # src/core/index/hnsw_rs/hnswio.rs. Migration path (postcard/rmp-serde/
-    # ciborium + format-version bump) is tracked in docs/DEPENDENCY_RISK.md.
     "RUSTSEC-2025-0141",
 ]

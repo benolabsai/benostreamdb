@@ -41,7 +41,7 @@ architecture. Say:
 | ✅ Done | **JSON-path inverted index** — `IndexAlgorithm::JsonPath` builds a `(path, value) -> row_ids` Puffin overlay; the planner rewrites `json_contains` / `json_exists` / `json_path_exists` / `json_extract_path_text(...) = 'value'` into index lookups, with a full-scan fallback for unindexed paths. Completes the story (SQL + BM25 + vector + graph + JSON-path indexes, all rebuildable overlays on Iceberg). | [Theme 2](#theme-2-semi-structured--json) |
 | ✅ Done | **MCP server** — `contrib/benostreamdb-mcp` (JSON-RPC over stdio, scratch-only write sandbox, `list_graph_tables` + `subscribe_events` tools, Windows `.msi` via `cargo-wix`). Excellent demo surface for the AI story | [Theme 1](#theme-1-ai-agent-tools--client-ecosystem) |
 | ✅ Done | **SQL graph traversal** (`FROM graph_neighbors(...)`) — DataFusion table functions (`graph_neighbors`, `graph_shortest_path`, `graph_all_shortest_paths`, `graph_subgraph`, `graph_connecting_paths`) expose graph walks directly in `FROM` clauses, following the in-memory / out-of-core `GraphMode` pattern and accepting explicit source/target columns | [Theme 3](#theme-3-graph-overlays) |
-| 🔴 High | **Documentation + benchmark reproducibility** — treat benchmarks as product work | [Benchmarks](#benchmarks-as-product-work) |
+| ✅ Done | **Documentation + benchmark reproducibility** — treat benchmarks as product work | [Benchmarks](#benchmarks-as-product-work) |
 | ✅ Done | **`Table::subscribe()` + predicate-filtered subscriptions** — in-process change feed, exposed natively in Python, as the `subscribe_events` SQL table function (reachable from every connector), a Flight streaming ticket, and an MCP tool | [Theme 4](#theme-4-reactive-lakehouse-streaming) |
 
 ### Do not block the announcement on
@@ -253,7 +253,7 @@ Benchmarks and demonstrations are part of the product, not marketing polish.
 The Launch Candidate requires **excellent end-to-end benchmarks** and
 **documentation/tutorials** that show the three workflows concretely.
 
-- [ ] **End-to-end benchmark suite** — 🔴 **High**:
+- [x] **End-to-end benchmark suite** (shipped) — 🔴 **High**:
   - Vector ANN (SIFT/HNSW/TurboQuant), graph analytics, SQL OLAP, lexical &
     hybrid (BEIR), production concurrency/maintenance/recovery, and the
     shared-envelope Docker competitor matrix (FAISS, hnswlib, LanceDB, pgvector,
