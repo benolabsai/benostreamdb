@@ -1,107 +1,63 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-10 19:45:32 UTC
+- **Generated At**: 2026-10-10 19:59:39 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.41
 - **Python**: 3.12.15
 
 ---
 
-## 1. Vector ANN Performance (SIFT / HNSW / TurboQuant)
+## 1. Vector ANN Performance (BenoStreamDB internal characterization)
 
-### Results from `sift_20k_competitors.md`
-
-# ANN-Benchmarks Competitor Comparison: sift-128-euclidean (20k vectors)
-
-- **Dataset**: `sift-128-euclidean` (128-dim, L2 distance)
-- **Train Vectors**: 20,000
-- **Test Queries**: 1,000
-- **Top-K**: 10
-- **Parameters**: `M=16, ef_construction=200, ef_search=200`
-- **Device**: CPU (all engines)
-- **Host**: AMD Ryzen 9 5900XT 16-Core Processor (Linux)
-
-### Competitor Comparison Table
-
-| Engine | Storage / Engine Architecture | Build Time | Index Size | Recall@10 | Throughput (QPS) | p50 Latency | p99 Latency |
-|---|---|---|---|---|---|---|---|
-| **hnswlib** | In-Memory C++ HNSW | 0.15s | RAM | **0.9999** | **12,308.2** | **0.08 ms** | 0.15 ms |
-| **faiss** | In-Memory IndexHNSWFlat | 0.68s | RAM | **0.9999** | **9,219.4** | **0.10 ms** | 0.19 ms |
-| **benostreamdb (hnsw_tq8)** | Iceberg + TQ8 Index | 0.90s | 26.2 MB | **0.9568** | **2,071.0** | **0.44 ms** | 0.64 ms |
-| **benostreamdb (hnsw)** | Iceberg + HNSW Index | 1.00s | 33.9 MB | **0.9838** | **1,876.2** | **0.48 ms** | 0.67 ms |
-| **lancedb (HNSW-SQ)** | Columnar Lance Table + HNSW (scalar-quantized) | 0.43s | 16.2 MB | 0.9319 | 601.9 | 1.61 ms | 2.09 ms |
-
-*(Note: BenoStreamDB pure-index search without the Parquet row-payload fetch achieves **2,719.1 QPS** / **0.37 ms** p50 for TQ8 and **2,487.4 QPS** / **0.40 ms** p50 for HNSW).*
-
-### Key Findings
-1. **vs Columnar Embedded Competitor (LanceDB, HNSW-SQ)**: BenoStreamDB is **3.4x faster** (2,071.0 vs 601.9 QPS) with higher recall (0.9568/0.9838 vs 0.9319) under the same HNSW parameters. LanceDB has no plain-float HNSW, so its closest index (scalar-quantized HNSW) is used; its default IVF-PQ index scores far lower (recall 0.6704) and is not an apples-to-apples comparison.
-2. **vs Dedicated In-Memory C++ Libraries (FAISS / Hnswlib)**: These hold raw float arrays entirely in unmanaged RAM and reach ~0.9999 recall at 9–12k QPS. BenoStreamDB maintains full transactional Iceberg tables with aligned overlay indexes while sustaining sub-millisecond query latencies (0.37–0.48 ms p50) and 0.96–0.98 recall.
-3. **Quantization trade-off**: TQ8 cuts index size 23% (26.2 vs 33.9 MB) and raises QPS ~10% at a ~2.7-point recall cost versus full HNSW.
-
-### Methodology
-- Competitor numbers: `benchmarks/competitors/run_competitor.py` (faiss/hnswlib/lancedb adapters), same `M=16, ef_construction=200, ef_search=200`, 1,000 queries, k=10.
-- BenoStreamDB numbers: `benchmarks/ann_benchmarks/run.py --limit 20000`, same parameters.
-- All engines ran on CPU under the same host; recall is measured against exact L2 ground truth.
-- LanceDB is configured with `HnswSq` (its closest HNSW-family index) rather than the default `IvfPq`, so the comparison is HNSW-vs-HNSW.
-
-### Results from `sift_20k_tq8.md`
-
-# ANN-Benchmarks: sift-128-euclidean
-
-| Metric | Value |
-|---|---|
-| Dataset | sift-128-euclidean |
-| Train | 20000 x 128 |
-| Queries | 1000 |
-| k | 10 |
-| Metric | l2 |
-| Index | hnsw_tq8 |
-| M (complexity) | 16 |
-| ef_construction (quality) | 200 |
-| ef_search | 200 |
-| recall@10 | 0.9518 |
-| QPS | 2146.9 |
-| Build time | 2.2s |
-| Index size | 26.2 MB |
-| p50 latency | 0.42 ms |
-| p99 latency | 0.60 ms |
-| Pure Index QPS | 2894.4 |
-| Pure Index p50 latency | 0.35 ms |
-| Pure Index p99 latency | 0.42 ms |
-
+Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant `hnsw_tq8`/`hnsw_tq4`, IVF-PQ) with **no competitor**. Head-to-head vector comparison is in **§9**; raw results are under `benchmarks/ann_benchmarks/results/`.
 
 ## 2. Graph Analytics Performance (BenoStreamDB vs NetworkX vs Neo4j + GDS)
 
-# Graph Competitor Comparison: BenoStreamDB vs NetworkX vs Neo4j+GDS
+# Graph Competitor Comparison: BenoStreamDB vs NetworkX vs Neo4j + GDS (+ Memgraph, Kùzu, cuGraph)
 
 - **Graph**: 10,000 nodes / 49,975 edges (Barabási–Albert scale-free)
 - **Algorithms**: PageRank (damping 0.85, 30 iters), weakly-connected components, shortest path
-- **Device**: CPU
+- **Device**: CPU — shared Docker envelope (8 CPU / 16 GiB)
 - **Host**: AMD Ryzen 9 5900XT 16-Core Processor (Linux)
 
-### Algorithm Latency (ms) — excludes ingestion/load
+The authoritative per-engine numbers are the **matrix rendered below** (aggregated
+from the per-engine JSON records). This page describes how to read it.
 
-| Algorithm | BenoStreamDB (Rust CSR) | NetworkX (Python) | Neo4j + GDS |
-|---|---|---|---|
-| **PageRank** | **16.15 ms** | 70.25 ms | 210 ms |
-| **Connected components** | **4.53 ms** | 4.62 ms | 200 ms |
-| **Shortest path** | 1.69 ms | **0.39 ms** | n/a (source-tree only) |
+### Engine roles and measurement layer
 
-### Setup / load time (one-time, excluded above)
-
-| Engine | Load + index/projection |
-|---|---|
-| BenoStreamDB | 0.13 s (Parquet write + CSR build) |
-| NetworkX | 0.06 s (in-memory graph build) |
-| Neo4j + GDS | **105.9 s** (Cypher `MERGE` load + `gds.graph.project`) |
+| Engine | Role | Measurement layer |
+|---|---|---|
+| BenoStreamDB | CSR graph, pure Rust | embedded (in-process Rust) |
+| NetworkX | correctness oracle (not a perf baseline) | embedded (in-process Python) |
+| Neo4j 5.26 + GDS | real graph database, credible perf competitor | native GDS in the Neo4j JVM (`gds.*.mutate`; shortest path via `gds.shortestPath.dijkstra.stream`) |
+| Memgraph (MAGE) | native in-memory graph engine | native engine (`pagerank.get` / `weakly_connected_components.get`) |
+| Kùzu | embedded columnar graph DB | embedded (`page_rank` / `weakly_connected_components` on a projected graph) |
+| cuGraph | GPU graph analytics library | embedded (in-process GPU) |
 
 ### Notes
-- **NetworkX** is a pure-Python in-memory reference — its role is a **correctness oracle**, not a performance baseline. It is trivially slow for PageRank but competitive on the tiny CC/shortest-path workloads.
-- **Neo4j + GDS** is a real graph database with optimized algorithms, so it is the credible **performance** competitor. Its algorithm latency includes Bolt round-trips + Cypher planning; GDS runs on an in-memory projection (`gds.graph.project`). The 105.9 s load is the Cypher `MERGE` ingestion, not query time.
-- BenoStreamDB's graph algorithms are pure Rust over the CSR index (CPU); there is no GPU graph path. cugraph is a competitor-only baseline, not an internal engine.
+
+- **Neo4j + GDS supports all three algorithms, including shortest path**
+  (`gds.shortestPath.dijkstra.stream`, `gds.bfs`). It is not limited to a
+  source tree — the previous "n/a (source-tree only)" was incorrect.
+- **Latency is the server-side algorithm execution** for Neo4j and Memgraph:
+  the GDS/MAGE procedure runs inside the engine and returns a summary row, so the
+  number excludes Bolt result transfer. Timing `.stream` from Python (the old
+  approach) measured the driver marshalling 100k+ records, not the database; the
+  per-record `layer` field records how each engine is measured.
+- **Load / projection time** is reported per engine in the matrix; it is one-time
+  setup and is excluded from the execution latency.
+- **NetworkX** is a pure-Python in-memory reference used for **correctness**, not
+  performance. **cuGraph** is a competitor-only GPU baseline, not an internal
+  engine; BenoStreamDB's graph path is CPU/Rust.
 
 ### Methodology
-- BenoStreamDB / NetworkX: `benchmarks/graph/run.py` (10k/50k synthetic graph).
-- Neo4j: `benchmarks/competitors/run_competitor.py --engine neo4j` against Neo4j 5.26 + GDS (`gds.pageRank.stream`, `gds.wcc.stream`); load and algorithm timed separately.
+
+- All engines: `benchmarks/competitors/run_competitor.py` under the shared Docker
+  envelope (see `benchmarks/competitors/docker-compose.bench.yml`), one container
+  and the same `--cpus`/`--mem` per participant.
+- Neo4j: `gds.graph.project` + `gds.pageRank.mutate` / `gds.wcc.mutate` /
+  `gds.shortestPath.dijkstra.stream`; load and algorithm timed separately.
+- Memgraph: MAGE query modules over bolt; Kùzu: `algo` extension on a projected
+  graph; cuGraph: `cugraph.pagerank` on GPU.
 
 ### Graph — `snap-com-livejournal_500000` (pagerank)
 
@@ -143,6 +99,13 @@
 | kuzu | embedded (in-process C++) | cpu | 9.692 | 0.091 | 10000 |
 | cugraph | embedded (in-process GPU) | cpu | 0.142 | 0.124 | 10000 |
 | networkx | embedded (in-process Python) | cpu | - | 0.674 | 10000 |
+
+### Graph — `synth_10000_50000` (shortest_path)
+
+| Engine | Layer | Device | Load (s) | Execution (s) | Result size |
+|---|---|---|---|---|---|
+| networkx | embedded (in-process Python) | cpu | - | 0.016 | 10000 |
+| neo4j | neo4j GDS (native JVM) | cpu | 1.992 | 0.091 | 1 |
 
 
 ## 3. SQL OLAP Performance (ClickBench Q0–Q9: BenoStreamDB vs DuckDB vs DataFusion)

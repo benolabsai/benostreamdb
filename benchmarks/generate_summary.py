@@ -109,18 +109,19 @@ def generate_summary():
     ]
 
     # 1. Vector ANN Benchmarks
-    sections.append("## 1. Vector ANN Performance (SIFT / HNSW / TurboQuant)")
+    #
+    # These are BenoStreamDB's *own* index variants (HNSW / TurboQuant TQ8/TQ4 /
+    # PQ) with no competitor, so they are not a head-to-head comparison — the
+    # competitor matrix is §9. Keep only a pointer so the comparison report does
+    # not duplicate raw self-benchmarks.
+    sections.append("## 1. Vector ANN Performance (BenoStreamDB internal characterization)")
     sections.append("")
-    ann_files = glob.glob(os.path.join(BASE_DIR, "ann_benchmarks", "results", "*.md"))
-    if ann_files:
-        for f in sorted(ann_files):
-            sections.append(f"### Results from `{os.path.basename(f)}`")
-            sections.append("")
-            with open(f, encoding="utf-8") as fh:
-                sections.append(fh.read().strip())
-            sections.append("")
-    else:
-        sections.append("*No vector ANN results found.*")
+    sections.append(
+        "Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant "
+        "`hnsw_tq8`/`hnsw_tq4`, IVF-PQ) with **no competitor**. Head-to-head vector "
+        "comparison is in **§9**; raw results are under "
+        "`benchmarks/ann_benchmarks/results/`."
+    )
     sections.append("")
 
     # 2. Graph Analytics Benchmarks

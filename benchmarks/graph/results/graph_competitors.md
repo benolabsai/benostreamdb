@@ -1,31 +1,46 @@
-# Graph Competitor Comparison: BenoStreamDB vs NetworkX vs Neo4j+GDS
+# Graph Competitor Comparison: BenoStreamDB vs NetworkX vs Neo4j + GDS (+ Memgraph, Kùzu, cuGraph)
 
 - **Graph**: 10,000 nodes / 49,975 edges (Barabási–Albert scale-free)
 - **Algorithms**: PageRank (damping 0.85, 30 iters), weakly-connected components, shortest path
-- **Device**: CPU
+- **Device**: CPU — shared Docker envelope (8 CPU / 16 GiB)
 - **Host**: AMD Ryzen 9 5900XT 16-Core Processor (Linux)
 
-### Algorithm Latency (ms) — excludes ingestion/load
+The authoritative per-engine numbers are the **matrix rendered below** (aggregated
+from the per-engine JSON records). This page describes how to read it.
 
-| Algorithm | BenoStreamDB (Rust CSR) | NetworkX (Python) | Neo4j + GDS |
-|---|---|---|---|
-| **PageRank** | **16.15 ms** | 70.25 ms | 210 ms |
-| **Connected components** | **4.53 ms** | 4.62 ms | 200 ms |
-| **Shortest path** | 1.69 ms | **0.39 ms** | n/a (source-tree only) |
+### Engine roles and measurement layer
 
-### Setup / load time (one-time, excluded above)
-
-| Engine | Load + index/projection |
-|---|---|
-| BenoStreamDB | 0.13 s (Parquet write + CSR build) |
-| NetworkX | 0.06 s (in-memory graph build) |
-| Neo4j + GDS | **105.9 s** (Cypher `MERGE` load + `gds.graph.project`) |
+| Engine | Role | Measurement layer |
+|---|---|---|
+| BenoStreamDB | CSR graph, pure Rust | embedded (in-process Rust) |
+| NetworkX | correctness oracle (not a perf baseline) | embedded (in-process Python) |
+| Neo4j 5.26 + GDS | real graph database, credible perf competitor | native GDS in the Neo4j JVM (`gds.*.mutate`; shortest path via `gds.shortestPath.dijkstra.stream`) |
+| Memgraph (MAGE) | native in-memory graph engine | native engine (`pagerank.get` / `weakly_connected_components.get`) |
+| Kùzu | embedded columnar graph DB | embedded (`page_rank` / `weakly_connected_components` on a projected graph) |
+| cuGraph | GPU graph analytics library | embedded (in-process GPU) |
 
 ### Notes
-- **NetworkX** is a pure-Python in-memory reference — its role is a **correctness oracle**, not a performance baseline. It is trivially slow for PageRank but competitive on the tiny CC/shortest-path workloads.
-- **Neo4j + GDS** is a real graph database with optimized algorithms, so it is the credible **performance** competitor. Its algorithm latency includes Bolt round-trips + Cypher planning; GDS runs on an in-memory projection (`gds.graph.project`). The 105.9 s load is the Cypher `MERGE` ingestion, not query time.
-- BenoStreamDB's graph algorithms are pure Rust over the CSR index (CPU); there is no GPU graph path. cugraph is a competitor-only baseline, not an internal engine.
+
+- **Neo4j + GDS supports all three algorithms, including shortest path**
+  (`gds.shortestPath.dijkstra.stream`, `gds.bfs`). It is not limited to a
+  source tree — the previous "n/a (source-tree only)" was incorrect.
+- **Latency is the server-side algorithm execution** for Neo4j and Memgraph:
+  the GDS/MAGE procedure runs inside the engine and returns a summary row, so the
+  number excludes Bolt result transfer. Timing `.stream` from Python (the old
+  approach) measured the driver marshalling 100k+ records, not the database; the
+  per-record `layer` field records how each engine is measured.
+- **Load / projection time** is reported per engine in the matrix; it is one-time
+  setup and is excluded from the execution latency.
+- **NetworkX** is a pure-Python in-memory reference used for **correctness**, not
+  performance. **cuGraph** is a competitor-only GPU baseline, not an internal
+  engine; BenoStreamDB's graph path is CPU/Rust.
 
 ### Methodology
-- BenoStreamDB / NetworkX: `benchmarks/graph/run.py` (10k/50k synthetic graph).
-- Neo4j: `benchmarks/competitors/run_competitor.py --engine neo4j` against Neo4j 5.26 + GDS (`gds.pageRank.stream`, `gds.wcc.stream`); load and algorithm timed separately.
+
+- All engines: `benchmarks/competitors/run_competitor.py` under the shared Docker
+  envelope (see `benchmarks/competitors/docker-compose.bench.yml`), one container
+  and the same `--cpus`/`--mem` per participant.
+- Neo4j: `gds.graph.project` + `gds.pageRank.mutate` / `gds.wcc.mutate` /
+  `gds.shortestPath.dijkstra.stream`; load and algorithm timed separately.
+- Memgraph: MAGE query modules over bolt; Kùzu: `algo` extension on a projected
+  graph; cuGraph: `cugraph.pagerank` on GPU.
