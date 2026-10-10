@@ -19,11 +19,11 @@ RUN apt-get update \
 # Core numerics + ANN-Benchmarks I/O.
 RUN pip install numpy h5py pandas pyarrow
 
-# Competitor clients. faiss-cpu/hnswlib/lancedb/duckdb are embedded;
-# psycopg/opensearch-py/neo4j/clickhouse-connect are clients for the compose
-# services. tantivy is the embedded Rust IR library used by the BEIR lexical
-# and hybrid baselines.
-RUN pip install faiss-cpu hnswlib lancedb duckdb datafusion "psycopg[binary]" opensearch-py neo4j clickhouse-connect trino deltalake networkx scipy tantivy
+# Competitor clients. faiss-cpu/hnswlib/lancedb/duckdb/kuzu are embedded;
+# psycopg/opensearch-py/qdrant-client/pymilvus/weaviate-client/neo4j/
+# clickhouse-connect are clients for the compose services. tantivy is the
+# embedded Rust IR library used by the BEIR lexical and hybrid baselines.
+RUN pip install faiss-cpu hnswlib lancedb duckdb datafusion "psycopg[binary]" opensearch-py qdrant-client pymilvus weaviate-client kuzu neo4j clickhouse-connect trino deltalake networkx scipy tantivy
 
 WORKDIR /opt/bench
 COPY benchmarks/competitors/run_competitor.py /opt/bench/run_competitor.py

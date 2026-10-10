@@ -206,7 +206,12 @@ class HnswlibAdapter(VectorAdapter):
     def build(self, train, params, ctx):
         import hnswlib
 
-        space = "cosine" if params.get("metric") == "cosine" else "l2"
+        # hnswlib supports l2/cosine/ip; map the workload metric directly so a
+        # dot-product dataset is not silently built and queried in L2 space.
+        space = {
+            "cosine": "cosine",
+            "inner_product": "ip",
+        }.get(params.get("metric"), "l2")
         index = hnswlib.Index(space=space, dim=train.shape[1])
         index.init_index(
             max_elements=train.shape[0],
@@ -249,6 +254,8 @@ class PgvectorAdapter(VectorAdapter):
         with cur.copy("COPY bsdb_bench (id, embedding) FROM STDIN") as copy:
             for i, row in enumerate(train):
                 copy.write_row((int(i), _vec_literal(row)))
+        # HNSW build is memory-bound; the Postgres default (64MB) throttles it.
+        cur.execute("SET maintenance_work_mem = '2GB'")
         # DDL cannot take bind parameters, so inline the (validated) integers.
         cur.execute(
             f"CREATE INDEX ON bsdb_bench USING hnsw (embedding {opclass}) "
@@ -257,11 +264,14 @@ class PgvectorAdapter(VectorAdapter):
         return conn
 
     def search(self, handle, queries, k, ef_search, metric):
+        # pgvector operators: `<->` is L2, `<=>` is cosine, `<#>` is (negative)
+        # inner product. The operator MUST match the index opclass, or Postgres
+        # cannot use the HNSW index and silently falls back to a sequential scan.
         op = {
-            "l2": "<=>",
+            "l2": "<->",
             "cosine": "<=>",
             "inner_product": "<#>",
-        }.get(metric, "<=>")
+        }.get(metric, "<->")
         cur = handle.cursor()
         cur.execute(f"SET hnsw.ef_search = {int(ef_search)}")
         out = []
@@ -313,7 +323,12 @@ class LanceDbAdapter(VectorAdapter):
             }
         )
         t = db.create_table("bench", data=tbl, mode="overwrite")
-        metric = "cosine" if params.get("metric") == "cosine" else "l2"
+        # LanceDB distance types are l2 / cosine / dot. A dot-product dataset
+        # must use "dot" (not l2), or the ranking uses the wrong metric.
+        metric = {
+            "cosine": "cosine",
+            "inner_product": "dot",
+        }.get(params.get("metric"), "l2")
         # New unified API: the first positional arg is the vector column name.
         if self.index_type == "hnsw_sq":
             from lancedb.index import HnswSq
@@ -340,7 +355,18 @@ class LanceDbAdapter(VectorAdapter):
         for q in queries:
             # Project only `id`: the other engines return ids only, so fetching
             # the vector payload here would make LanceDB do strictly more work.
-            rows = t.search(q.tolist()).select(["id"]).limit(int(k)).to_list()
+            qb = t.search(q.tolist()).select(["id"]).limit(int(k))
+            # Apply the same recall knob the other engines get: the HNSW index
+            # uses `ef`, IVF_PQ uses `nprobes`. Guarded so a client without
+            # either method still runs instead of failing the whole engine.
+            try:
+                if self.index_type == "hnsw_sq":
+                    qb = qb.ef(int(ef_search))
+                else:
+                    qb = qb.nprobes(max(1, int(ef_search) // 10))
+            except (AttributeError, TypeError):
+                pass
+            rows = qb.to_list()
             out.append([int(r["id"]) for r in rows])
         return np.array(out)
 
@@ -443,6 +469,208 @@ class OpenSearchAdapter(VectorAdapter):
             return 0
 
 
+class QdrantAdapter(VectorAdapter):
+    """Qdrant (dense-vector collection + HNSW) via the qdrant-client."""
+
+    def __init__(self) -> None:
+        super().__init__(name="qdrant", module="qdrant_client", server_side=True)
+
+    def build(self, train, params, ctx):
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, HnswConfigDiff, PointStruct, VectorParams
+
+        url = ctx.get("host") or os.environ.get("QDRANT_URL") or "http://localhost:6333"
+        client = QdrantClient(url=url, timeout=300)
+        metric = params.get("metric", "l2")
+        distance = {
+            "cosine": Distance.COSINE,
+            "inner_product": Distance.DOT,
+        }.get(metric, Distance.EUCLID)
+        client.recreate_collection(
+            collection_name="bsdb_bench",
+            vectors_config=VectorParams(size=int(train.shape[1]), distance=distance),
+            hnsw_config=HnswConfigDiff(
+                m=int(params["m"]),
+                ef_construct=int(params["ef_construction"]),
+            ),
+        )
+        batch = 2048
+        for start in range(0, len(train), batch):
+            end = min(start + batch, len(train))
+            client.upsert(
+                collection_name="bsdb_bench",
+                points=[
+                    PointStruct(id=int(i), vector=train[i].tolist())
+                    for i in range(start, end)
+                ],
+                wait=True,
+            )
+        return client
+
+    def search(self, handle, queries, k, ef_search, metric):
+        from qdrant_client.models import SearchParams
+
+        search_params = SearchParams(hnsw_ef=int(ef_search), exact=False)
+        out = []
+        for q in queries:
+            vec = q.tolist()
+            try:  # qdrant-client >= 1.10
+                res = handle.query_points(
+                    collection_name="bsdb_bench",
+                    query=vec,
+                    limit=int(k),
+                    search_params=search_params,
+                ).points
+            except AttributeError:  # older qdrant-client
+                res = handle.search(
+                    collection_name="bsdb_bench",
+                    query_vector=vec,
+                    limit=int(k),
+                    search_params=search_params,
+                )
+            out.append([int(p.id) for p in res])
+        return np.array(out)
+
+    def index_bytes(self, handle):
+        try:
+            info = handle.get_collection("bsdb_bench")
+            dim = int(info.config.params.vectors.size)
+            return dim * int(info.points_count or 0) * 4
+        except Exception:
+            return 0
+
+
+class MilvusAdapter(VectorAdapter):
+    """Milvus (dense collection + HNSW) via pymilvus."""
+
+    def __init__(self) -> None:
+        super().__init__(name="milvus", module="pymilvus", server_side=True)
+
+    def build(self, train, params, ctx):
+        from pymilvus import MilvusClient
+
+        uri = ctx.get("host") or os.environ.get("MILVUS_URI") or "http://localhost:19530"
+        client = MilvusClient(uri=uri)
+        metric = {
+            "cosine": "COSINE",
+            "inner_product": "IP",
+        }.get(params.get("metric"), "L2")
+        name = "bsdb_bench"
+        if client.has_collection(name):
+            client.drop_collection(name)
+        client.create_collection(
+            collection_name=name,
+            dimension=int(train.shape[1]),
+            metric_type=metric,
+            auto_id=False,
+            # `Bounded` (the default) can answer a search before it sees the
+            # just-inserted rows (reads as recall 0); `Strong` makes the
+            # build-then-search sequence deterministic.
+            consistency_level="Strong",
+            index_params={
+                "index_type": "HNSW",
+                "metric_type": metric,
+                "params": {
+                    "M": int(params["m"]),
+                    "efConstruction": int(params["ef_construction"]),
+                },
+            },
+        )
+        batch = 2048
+        for start in range(0, len(train), batch):
+            end = min(start + batch, len(train))
+            client.insert(
+                collection_name=name,
+                data=[{"id": int(i), "vector": train[i].tolist()} for i in range(start, end)],
+            )
+        client.load_collection(name)
+        return (client, name, metric)
+
+    def search(self, handle, queries, k, ef_search, metric):
+        client, name, mtype = handle
+        out = []
+        for q in queries:
+            hits = client.search(
+                collection_name=name,
+                data=[q.tolist()],
+                limit=int(k),
+                search_params={"metric_type": mtype, "params": {"ef": int(ef_search)}},
+            )
+            out.append([int(h["id"]) for h in hits[0]])
+        return np.array(out)
+
+    def index_bytes(self, handle):
+        return 0
+
+
+class WeaviateAdapter(VectorAdapter):
+    """Weaviate (HNSW) via the v4 weaviate-client."""
+
+    def __init__(self) -> None:
+        super().__init__(name="weaviate", module="weaviate", server_side=True)
+
+    def build(self, train, params, ctx):
+        import weaviate
+        from weaviate.classes.config import Configure, DataType, Property, VectorDistances
+
+        url = ctx.get("host") or os.environ.get("WEAVIATE_URL") or "http://localhost:8080"
+        url = url.replace("http://", "").replace("https://", "").rstrip("/")
+        host, _, port = url.partition(":")
+        client = weaviate.connect_to_custom(
+            http_host=host or "localhost",
+            http_port=int(port or 8080),
+            http_secure=False,
+            grpc_host=host or "localhost",
+            grpc_port=50051,
+            grpc_secure=False,
+        )
+        dist = {
+            "cosine": VectorDistances.COSINE,
+            "inner_product": VectorDistances.DOT,
+        }.get(params.get("metric"), VectorDistances.L2_SQUARED)
+        name = "BsdbBench"
+        if client.collections.exists(name):
+            client.collections.delete(name)
+        client.collections.create(
+            name=name,
+            vectorizer_config=Configure.Vectorizer.none(),
+            vector_index_config=Configure.VectorIndex.hnsw(
+                distance_metric=dist,
+                ef_construction=int(params["ef_construction"]),
+                max_connections=int(params["m"]),
+            ),
+            properties=[Property(name="rid", data_type=DataType.INT)],
+        )
+        coll = client.collections.get(name)
+        with coll.batch.dynamic() as batch:
+            for i in range(len(train)):
+                batch.add_object(properties={"rid": int(i)}, vector=train[i].tolist())
+        return (client, coll)
+
+    def search(self, handle, queries, k, ef_search, metric):
+        _client, coll = handle
+        out = []
+        for q in queries:
+            try:
+                res = coll.query.near_vector(
+                    near_vector=q.tolist(),
+                    limit=int(k),
+                    return_properties=["rid"],
+                    ef=int(ef_search),
+                )
+            except TypeError:  # client without a per-query `ef`
+                res = coll.query.near_vector(
+                    near_vector=q.tolist(),
+                    limit=int(k),
+                    return_properties=["rid"],
+                )
+            out.append([int(o.properties["rid"]) for o in res.objects])
+        return np.array(out)
+
+    def index_bytes(self, handle):
+        return 0
+
+
 def vector_adapters() -> dict[str, VectorAdapter]:
     return {
         "faiss": FaissAdapter(),
@@ -453,6 +681,9 @@ def vector_adapters() -> dict[str, VectorAdapter]:
         "lancedb": LanceDbAdapter("ivf_pq"),
         "lancedb_hnsw": LanceDbAdapter("hnsw_sq"),
         "opensearch": OpenSearchAdapter(),
+        "qdrant": QdrantAdapter(),
+        "milvus": MilvusAdapter(),
+        "weaviate": WeaviateAdapter(),
     }
 
 
@@ -588,55 +819,89 @@ def _graph_neo4j(args, edges) -> dict:
     password = args.password or os.environ.get("NEO4J_PASSWORD") or "neo4j"
     driver = GraphDatabase.driver(uri, auth=(user, password))
 
-    procs = {
-        "pagerank": "gds.pageRank.stream",
-        "connected_components": "gds.wcc.stream",
-        "shortest_path": "gds.shortestPath.dijkstra.stream",
+    algo = args.algorithm
+    # Run the algorithm *inside the Neo4j JVM* via GDS `.mutate`, which returns a
+    # single summary row, instead of `.stream`, which returns one row per node.
+    # Timing `.stream` from Python measures the neo4j driver marshalling 100k+
+    # Bolt records (PageRank on web-Google read as ~3.7 s) rather than the graph
+    # algorithm (~0.1 s of JVM compute). `.mutate` writes the result to an
+    # in-memory property and returns computeMillis / nodePropertiesWritten /
+    # componentCount, so `seconds` is the native GDS execution time.
+    mutate_procs = {
+        "pagerank": "gds.pageRank.mutate",
+        "connected_components": "gds.wcc.mutate",
     }
-    proc = procs.get(args.algorithm)
-    if proc is None:
-        raise RuntimeError(f"unknown algorithm {args.algorithm}")
+    if algo in mutate_procs:
+        graph_call = f"CALL {mutate_procs[algo]}('bench', {{mutateProperty: 'bench_score'}})"
+        params: dict = {}
+    elif algo == "shortest_path":
+        graph_call = (
+            "CALL gds.shortestPath.dijkstra.stream('bench', "
+            "{sourceNode: $src, targetNode: $tgt})"
+        )
+        src = int(args.source)
+        params = {"src": src, "tgt": int(args.target) if args.target is not None else src}
+    else:
+        return {
+            "engine": "neo4j",
+            "workload": "graph",
+            "available": False,
+            "error": f"unknown algorithm {algo}",
+        }
 
-    # Load + project are setup, not query time. Time them separately so the
-    # reported `seconds` is the algorithm only (comparable to the other
-    # engines, which also exclude ingestion).
-    t_load = time.time()
-    with driver.session() as session:
-        session.run("MATCH (n) DETACH DELETE n")
-        session.run("DROP CONSTRAINT node_id IF EXISTS")
-        session.run("CREATE CONSTRAINT node_id FOR (n:Node) REQUIRE n.id IS UNIQUE")
-        edges_list = [(int(a), int(b)) for a, b in edges]
-        batch_size = 10000
-        for i in range(0, len(edges_list), batch_size):
-            session.run(
-                "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
-                "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
-                rows=edges_list[i:i + batch_size],
-            )
-        session.run("CALL gds.graph.drop('bench', false)").consume()
-        session.run("CALL gds.graph.project('bench', 'Node', 'E')").consume()
-    load_s = time.time() - t_load
+    # Load + project are setup, not query time. Teardown + constraint are harness
+    # hygiene, kept out of `load_s` so a stale prior graph cannot inflate it.
+    try:
+        with driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n").consume()
+            session.run("DROP CONSTRAINT node_id IF EXISTS").consume()
+            session.run("CREATE CONSTRAINT node_id FOR (n:Node) REQUIRE n.id IS UNIQUE").consume()
 
-    t0 = time.time()
-    with driver.session() as session:
-        if args.algorithm == "shortest_path":
-            res = session.run(
-                f"CALL {proc}('bench', {{sourceNode: $src}})",
-                src=int(args.source),
-            )
-        else:
-            res = session.run(f"CALL {proc}('bench')")
-        rows = list(res)
-    return {
-        "engine": "neo4j",
-        "workload": "graph",
-        "available": True,
-        "algorithm": args.algorithm,
-        "edges": len(edges),
-        "load_s": round(load_s, 3),
-        "seconds": round(time.time() - t0, 3),
-        "result_size": len(rows),
-    }
+            t_load = time.time()
+            edges_list = [(int(a), int(b)) for a, b in edges]
+            batch_size = 10000
+            for i in range(0, len(edges_list), batch_size):
+                session.run(
+                    "UNWIND $rows AS r MERGE (a:Node {id: r[0]}) "
+                    "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
+                    rows=edges_list[i:i + batch_size],
+                ).consume()
+            session.run("CALL gds.graph.drop('bench', false)").consume()
+            session.run("CALL gds.graph.project('bench', 'Node', 'E')").consume()
+            load_s = time.time() - t_load
+
+            t0 = time.time()
+            if algo == "shortest_path":
+                out_rows = list(session.run(graph_call, **params))
+                n_out = len(out_rows)
+                compute_ms = None
+            else:
+                summary = session.run(graph_call, **params).single()
+                data = dict(summary) if summary is not None else {}
+                compute_ms = data.get("computeMillis")
+                n_out = (
+                    data.get("componentCount")
+                    if algo == "connected_components"
+                    else data.get("nodePropertiesWritten")
+                )
+            seconds = time.time() - t0
+
+        return {
+            "engine": "neo4j",
+            "workload": "graph",
+            "available": True,
+            "algorithm": algo,
+            "edges": len(edges),
+            "load_s": round(load_s, 3),
+            "seconds": round(seconds, 3),
+            "compute_ms": compute_ms,
+            "result_size": n_out,
+            "layer": "neo4j GDS (native JVM)",
+        }
+    except Exception as exc:  # server unreachable / GDS missing
+        return {"engine": "neo4j", "workload": "graph", "available": False, "error": str(exc)[:200]}
+    finally:
+        driver.close()
 
 
 def _graph_benostreamdb(args, edges) -> dict:
@@ -766,11 +1031,165 @@ def _graph_cugraph(args, edges) -> dict:
     }
 
 
+def _graph_memgraph(args, edges) -> dict:
+    """Memgraph via its MAGE query modules (bolt; native C++ engine, no JVM).
+
+    Like Neo4j, the algorithm runs server-side, so we wrap the procedure in an
+    aggregate and return only the summary — the Python driver never marshals the
+    per-node result.
+    """
+    from neo4j import GraphDatabase
+
+    uri = os.environ.get("MEMGRAPH_URI", "bolt://localhost:7687")
+    driver = GraphDatabase.driver(uri)
+    algo = args.algorithm
+    calls = {
+        "pagerank":
+            "CALL pagerank.get() YIELD node, rank RETURN count(node) AS n",
+        "connected_components":
+            "CALL weakly_connected_components.get() YIELD node, component_id "
+            "RETURN count(DISTINCT component_id) AS n",
+    }
+    call = calls.get(algo)
+    if call is None:
+        return {"engine": "memgraph", "workload": "graph", "available": False,
+                "error": f"unsupported algorithm {algo}"}
+    try:
+        with driver.session() as session:
+            session.run("MATCH (n) DETACH DELETE n").consume()
+            rows = [(int(a), int(b)) for a, b in edges]
+            t_load = time.time()
+            for i in range(0, len(rows), 10000):
+                session.run(
+                    "UNWIND $rs AS r MERGE (a:Node {id: r[0]}) "
+                    "MERGE (b:Node {id: r[1]}) MERGE (a)-[:E]->(b)",
+                    rs=rows[i:i + 10000],
+                ).consume()
+            load_s = time.time() - t_load
+            t0 = time.time()
+            rec = session.run(call).single()
+            seconds = time.time() - t0
+        return {
+            "engine": "memgraph",
+            "workload": "graph",
+            "available": True,
+            "algorithm": algo,
+            "edges": len(edges),
+            "load_s": round(load_s, 3),
+            "seconds": round(seconds, 3),
+            "result_size": int(rec["n"]) if rec is not None else None,
+            "layer": "memgraph MAGE (native engine)",
+        }
+    except Exception as exc:
+        return {"engine": "memgraph", "workload": "graph", "available": False,
+                "error": str(exc)[:200]}
+    finally:
+        driver.close()
+
+
+def _graph_kuzu(args, edges) -> dict:
+    """Kùzu (embedded columnar graph DB) graph algorithms via the `algo` extension."""
+    try:
+        import kuzu
+    except Exception:
+        return {"engine": "kuzu", "workload": "graph", "available": False,
+                "error": "pip install kuzu"}
+    import shutil
+    import tempfile
+
+    algo = args.algorithm
+    if algo not in ("pagerank", "connected_components"):
+        return {"engine": "kuzu", "workload": "graph", "available": False,
+                "error": f"unsupported algorithm {algo}"}
+    tmpdir = tempfile.mkdtemp(prefix="kuzu_bench_")
+    try:
+        # Kùzu expects a database *file* path, and sizes its buffer pool / DB
+        # from host RAM by default (mmap fails under the cgroup cap), so cap both
+        # to the shared envelope.
+        ram_gb = float(getattr(args, "ram_gb", 0) or 8)
+        db = kuzu.Database(
+            os.path.join(tmpdir, "g.kuzu"),
+            buffer_pool_size=int(ram_gb * 1024**3 / 2),
+            max_db_size=2 * 1024**3,
+            max_num_threads=max(1, int(getattr(args, "cores", 0) or 1)),
+        )
+        conn = kuzu.Connection(db)
+        t_load = time.time()
+        conn.execute("CREATE NODE TABLE Node(id INT64, PRIMARY KEY(id))")
+        conn.execute("CREATE REL TABLE E(FROM Node TO Node)")
+        # Kùzu binds a list of lists (not tuples), and indexes lists 1-based.
+        rows = [[int(a), int(b)] for a, b in edges]
+        for i in range(0, len(rows), 10000):
+            conn.execute(
+                "UNWIND $rs AS r MERGE (a:Node {id: r[1]}) "
+                "MERGE (b:Node {id: r[2]}) MERGE (a)-[:E]->(b)",
+                {"rs": rows[i:i + 10000]},
+            )
+        load_s = time.time() - t_load
+        # Kùzu 0.11 ships `algo` statically; algorithms run on a projected graph
+        # and PageRank's procedure is `page_rank`.
+        conn.execute("CALL project_graph('g', ['Node'], ['E'])")
+        t0 = time.time()
+        if algo == "pagerank":
+            res = conn.execute("CALL page_rank('g') RETURN count(*) AS n")
+        else:
+            res = None
+            for col in ("component_id", "component"):
+                try:
+                    res = conn.execute(
+                        f"CALL weakly_connected_components('g') "
+                        f"RETURN count(DISTINCT {col}) AS n"
+                    )
+                    break
+                except Exception:
+                    res = None
+            if res is None:
+                res = conn.execute(
+                    "CALL weakly_connected_components('g') RETURN count(*) AS n"
+                )
+        n_out = None
+        while res.has_next():
+            n_out = res.get_next()[0]
+        seconds = time.time() - t0
+        return {
+            "engine": "kuzu",
+            "workload": "graph",
+            "available": True,
+            "algorithm": algo,
+            "edges": len(edges),
+            "load_s": round(load_s, 3),
+            "seconds": round(seconds, 3),
+            "result_size": n_out,
+            "layer": "embedded (in-process C++)",
+        }
+    except Exception as exc:
+        return {"engine": "kuzu", "workload": "graph", "available": False,
+                "error": str(exc)[:200]}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# How each engine's graph latency is measured, so the report can state that
+# Neo4j/Memgraph run the algorithm server-side in a native engine, while the
+# others are in-process libraries.
+_GRAPH_LAYER = {
+    "neo4j": "neo4j GDS (native JVM)",
+    "memgraph": "memgraph MAGE (native engine)",
+    "benostreamdb": "embedded (in-process Rust)",
+    "bsdb": "embedded (in-process Rust)",
+    "networkx": "embedded (in-process Python)",
+    "kuzu": "embedded (in-process C++)",
+    "cugraph": "embedded (in-process GPU)",
+}
+
+
 def run_graph(args) -> dict:
-    """Dispatch a graph engine, tagging the record with the dataset label."""
+    """Dispatch a graph engine, tagging the record with dataset + measurement layer."""
     res = _graph_dispatch(args)
     if isinstance(res, dict):
         res.setdefault("dataset", getattr(args, "dataset", None) or "graph")
+        if res.get("available"):
+            res.setdefault("layer", _GRAPH_LAYER.get(res.get("engine", ""), "unknown"))
     return res
 
 
@@ -787,6 +1206,10 @@ def _graph_dispatch(args) -> dict:
         return _graph_benostreamdb(args, edges)
     if engine == "cugraph":
         return _graph_cugraph(args, edges)
+    if engine == "memgraph":
+        return _graph_memgraph(args, edges)
+    if engine == "kuzu":
+        return _graph_kuzu(args, edges)
     if engine == "neo4j":
         if not importlib.util.find_spec("neo4j"):
             return {
@@ -1026,6 +1449,12 @@ def _sql_duckdb(args) -> dict:
             f"FROM read_parquet('{args.parquet}')"
         )
     con = duckdb.connect()
+    # Match the shared envelope. DuckDB otherwise defaults to every host core
+    # and ~80% of host RAM, over-subscribing next to the cgroup-limited engines.
+    if getattr(args, "cores", 0):
+        con.execute(f"SET threads = {int(args.cores)}")
+    if getattr(args, "ram_gb", 0.0):
+        con.execute(f"SET memory_limit = '{float(args.ram_gb)}GB'")
     if args.parquet and "from t" in sql.lower() and "read_parquet" not in sql.lower():
         con.execute(f"CREATE VIEW t AS SELECT * FROM read_parquet('{args.parquet}')")
     t0 = time.time()
@@ -1050,7 +1479,15 @@ def _sql_datafusion(args) -> dict:
         }
     import datafusion
 
+    # Match the shared envelope: DataFusion defaults to one partition per host
+    # core, which over-subscribes inside the cgroup-limited runner.
     ctx = datafusion.SessionContext()
+    if getattr(args, "cores", 0):
+        try:
+            cfg = datafusion.SessionConfig().with_target_partitions(int(args.cores))
+            ctx = datafusion.SessionContext(cfg)
+        except Exception:
+            pass
     sql = args.sql
     if not sql:
         if not args.parquet:
@@ -1355,6 +1792,41 @@ def _total_ram_gb() -> Optional[float]:
         return None
 
 
+def _cgroup_mem_gb() -> Optional[float]:
+    """Container memory limit from cgroup v2/v1 (None when unconstrained)."""
+    for path in ("/sys/fs/cgroup/memory.max",
+                 "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read().strip()
+            if raw and raw != "max" and int(raw) < (1 << 62):
+                return round(int(raw) / 1024**3, 1)
+        except Exception:
+            continue
+    return None
+
+
+def _cgroup_cpus() -> Optional[float]:
+    """Container CPU limit from cgroup v2 ``cpu.max`` / v1 quota (None if none)."""
+    try:
+        with open("/sys/fs/cgroup/cpu.max", encoding="utf-8") as f:
+            quota, period = f.read().split()
+        if quota != "max":
+            return round(int(quota) / int(period), 2)
+    except Exception:
+        pass
+    try:
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", encoding="utf-8") as f:
+            quota = int(f.read().strip())
+        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us", encoding="utf-8") as f:
+            period = int(f.read().strip())
+        if quota > 0 and period > 0:
+            return round(quota / period, 2)
+    except Exception:
+        pass
+    return None
+
+
 def _gpu_info() -> list[str]:
     """Visible NVIDIA GPUs (empty in a CPU-only run)."""
     try:
@@ -1380,8 +1852,11 @@ def emit(record: dict, out: Optional[str]) -> None:
     """
     record.setdefault("env", {})
     record["env"].setdefault("cpu_model", _cpu_model())
-    record["env"].setdefault("cores", os.cpu_count())
-    record["env"].setdefault("ram_gb", _total_ram_gb())
+    # Report the *cgroup* envelope the engine actually saw, not the host totals.
+    record["env"].setdefault("cores", _cgroup_cpus() or os.cpu_count())
+    record["env"].setdefault("ram_gb", _cgroup_mem_gb() or _total_ram_gb())
+    record["env"].setdefault("host_cores", os.cpu_count())
+    record["env"].setdefault("host_ram_gb", _total_ram_gb())
     record["env"].setdefault("os", platform.platform())
     record["env"].setdefault("python", platform.python_version())
     record["env"].setdefault("containerized", os.path.exists("/.dockerenv"))
@@ -1454,7 +1929,7 @@ def main() -> None:
         if args.workload == "sql" or args.engine in ("duckdb", "datafusion", "clickhouse", "trino") or (args.engine in ("benostreamdb", "bsdb") and (args.sql or (args.parquet and not args.dataset))):
             emit(run_sql(args), args.out)
             return
-        if args.workload == "graph" or args.engine in ("networkx", "neo4j", "cugraph") or (args.engine in ("benostreamdb", "bsdb") and args.graph_edges):
+        if args.workload == "graph" or args.engine in ("networkx", "neo4j", "memgraph", "kuzu", "cugraph") or (args.engine in ("benostreamdb", "bsdb") and args.graph_edges):
             emit(run_graph(args), args.out)
             return
         if args.workload == "lexical" or args.engine == "tantivy" or (args.engine == "opensearch" and args.beir_corpus):

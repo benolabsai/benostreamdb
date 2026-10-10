@@ -43,17 +43,17 @@ EFS=200
 # `lancedb` is LanceDB's default disk-ANN index (IVF_PQ); `lancedb_hnsw` is its
 # scalar-quantized HNSW variant. Both are run so the comparison covers each
 # family rather than only the HNSW-shaped one.
-CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch benostreamdb"
+CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch qdrant milvus weaviate benostreamdb"
 # The GPU pass runs EVERY engine, not just the GPU-capable ones: the CPU-only
 # competitors run on CPU inside the GPU container (same envelope), which makes
 # the comparison show that BenoStreamDB (and FAISS) can use the GPU while the
 # others cannot. Override with --gpu-engines to restrict it.
 GPU_ENGINES="$CPU_ENGINES"
-UP_ENGINES="pgvector opensearch neo4j clickhouse trino"
+UP_ENGINES="pgvector opensearch qdrant milvus weaviate neo4j memgraph clickhouse trino"
 # Workload families. `vector` is the default; `graph` and `sql` reuse the same
 # runner image and envelope but dispatch to the graph/SQL adapters.
 WORKLOAD=vector
-GRAPH_ENGINES="networkx neo4j cugraph benostreamdb"
+GRAPH_ENGINES="networkx neo4j memgraph kuzu cugraph benostreamdb"
 SQL_ENGINES="duckdb datafusion clickhouse trino benostreamdb"
 ALGORITHM=pagerank
 GRAPH_NODES=10000
