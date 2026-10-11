@@ -39,7 +39,11 @@ pub struct CudaBackend {
 #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
 impl CudaBackend {
     pub fn new(id: usize) -> Result<Self> {
-        let device = CudaDevice::new(id)?;
+        let device = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaDevice::new(id))) {
+            Ok(Ok(dev)) => dev,
+            Ok(Err(e)) => anyhow::bail!("CUDA device initialization failed: {:?}", e),
+            Err(_) => anyhow::bail!("CUDA driver shared library not available or failed to load"),
+        };
 
         macro_rules! compile_and_load {
             ($device:expr, $src:expr, $mod_name:expr, $kernel_name:expr) => {

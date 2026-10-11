@@ -22,8 +22,10 @@ fn get_active_backends() -> Vec<Box<dyn GpuBackend>> {
 
     #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
     {
-        if let Ok(b) = benostream_gpu_ann::backend::cuda::CudaBackend::new(0) {
-            backends.push(Box::new(b));
+        if std::env::var("SKIP_GPU_TESTS").is_err() {
+            if let Ok(b) = benostream_gpu_ann::backend::cuda::CudaBackend::new(0) {
+                backends.push(Box::new(b));
+            }
         }
     }
 
