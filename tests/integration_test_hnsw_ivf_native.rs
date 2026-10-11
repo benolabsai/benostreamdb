@@ -199,7 +199,7 @@ async fn test_tq8_index_loaded_via_multifile_not_puffin() -> Result<()> {
     let index = HnswIvfIndex::build(
         vectors.clone(),
         VectorMetric::L2,
-        Some(4),
+        Some(1),
         Some(16),
         &algo,
         0,
