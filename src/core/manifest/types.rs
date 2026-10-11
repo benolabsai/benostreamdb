@@ -1266,7 +1266,7 @@ mod index_algorithm_name_tests {
         // Physical categories the manifest uses map to the right family.
         assert_eq!(
             IndexAlgorithm::from_name("vector").map(|a| a.name()),
-            Some("hnsw_tq8")
+            Some("hnsw")
         );
         assert_eq!(
             IndexAlgorithm::from_name("lexical").map(|a| a.name()),

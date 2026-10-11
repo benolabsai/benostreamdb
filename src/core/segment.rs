@@ -1358,7 +1358,7 @@ mod tests {
             "Puffin bundle should contain the vector centroids (has {types:?})"
         );
         assert!(
-            types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW_TQ8),
+            types.contains(&crate::core::puffin::PUFFIN_BLOB_VECTOR_HNSW),
             "Puffin bundle should contain the vector HNSW graph (has {types:?})"
         );
 
