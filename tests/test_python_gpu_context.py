@@ -64,24 +64,21 @@ def test_list_available_backends():
 
 
 def test_unavailable_backend_error():
-    """Test that requesting an unavailable backend raises RuntimeError"""
+    """Test that requesting an unavailable backend falls back to CPU or raises RuntimeError"""
     backends = bsdb.ComputeContext.list_available_backends()
-    
-    # Try to create a context with a backend that's not available.
-    # Only `cuda` is guaranteed to hard-error when absent: the wgpu-backed
-    # backends (rocm/intel/mps) probe and fall back to CPU instead of raising,
-    # so they cannot be asserted here.
+
+    # When cuda is not available, the engine now falls back to CPU
+    # rather than hard-erroring (it probes and degrades gracefully).
+    # The wgpu-backed backends (rocm/intel/mps) have always fallen back.
     all_backends = ['cuda']
     unavailable = [b for b in all_backends if b not in backends]
-    
+
     for backend in unavailable:
-        with pytest.raises(RuntimeError) as exc_info:
-            bsdb.ComputeContext(backend)
-        
-        # Check that error message mentions available backends
-        error_msg = str(exc_info.value)
-        assert 'available' in error_msg.lower()
-        print(f"Correctly raised error for unavailable backend '{backend}': {error_msg}")
+        # Unavailable backends now fall back to CPU instead of raising
+        ctx = bsdb.ComputeContext(backend)
+        assert ctx.backend == 'cpu', \
+            f"Unavailable backend '{backend}' should fall back to cpu, got '{ctx.backend}'"
+        print(f"Unavailable backend '{backend}' correctly fell back to cpu")
 
 
 def test_invalid_backend_error():

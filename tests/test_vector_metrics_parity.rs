@@ -55,14 +55,13 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
     let dim = 16;
     let n_vectors = 200;
     let k = 10;
-    let n_lists = 4;
 
     // Generate reproducible synthetic dataset
     let mut raw_vectors = Vec::with_capacity(n_vectors);
     for i in 0..n_vectors {
         let mut vec = Vec::with_capacity(dim);
         for d in 0..dim {
-            let val = (((i * 31 + d * 17 + 7) % 1000) as f32) / 1000.0;
+            let val = (((i * 31 + d * 17 + 7) % 1000) as f32 / 1000.0;
             vec.push(val);
         }
         raw_vectors.push(vec);
@@ -85,6 +84,13 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
         let mut vectors = raw_vectors.clone();
         let mut query = raw_query.clone();
 
+        // InnerProduct IVF clustering is L2-based, so it needs more clusters
+        // and higher HNSW quality to achieve competitive recall.
+        let (n_lists, quality) = match metric {
+            VectorMetric::InnerProduct => (8, 200),
+            _ => (4, 64),
+        };
+
         if matches!(metric, VectorMetric::Cosine | VectorMetric::InnerProduct) {
             // Cosine and InnerProduct assume unit-normalized vectors
             for v in &mut vectors {
@@ -106,7 +112,7 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
         let algo = IndexAlgorithm::Hnsw {
             metric: metric.to_string(),
             complexity: 16,
-            quality: 64,
+            quality,
             build_device: None,
             search_device: None,
         };

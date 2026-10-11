@@ -47,17 +47,11 @@ def test_context_backend_property(backend, device_id):
         assert ctx.device_id == device_id, \
             f"Expected device_id {device_id}, got {ctx.device_id}"
     else:
-        # Backend is not available. `cuda` hard-errors on creation; the
-        # wgpu-backed backends (rocm/intel/mps) probe and fall back to CPU
-        # instead of raising, so only assert the raise for `cuda`.
-        if backend == 'cuda':
-            with pytest.raises(RuntimeError) as exc_info:
-                bsdb.ComputeContext(backend, index=device_id)
-            error_msg = str(exc_info.value)
-            assert 'available' in error_msg.lower() or 'unsupported' in error_msg.lower()
-        else:
-            ctx = bsdb.ComputeContext(backend, index=device_id)
-            assert ctx.backend == 'cpu'
+        # Backend is not available. All backends now probe and fall back to
+        # CPU instead of raising RuntimeError.
+        ctx = bsdb.ComputeContext(backend, index=device_id)
+        assert ctx.backend == 'cpu', \
+            f"Unavailable backend '{backend}' should fall back to cpu, got '{ctx.backend}'"
 
 
 @settings(deadline=None)

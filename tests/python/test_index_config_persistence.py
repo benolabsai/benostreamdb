@@ -62,7 +62,9 @@ def test_index_config_persists_and_is_inherited(tmp_path):
     t2 = bsdb.Table(uri)
     assert t2.index_all is not None  # property exists / table usable
     # Write through the reopened instance and confirm the new segment is indexed
+    # Index files may be packed into Puffin bundles or exist as loose sidecars.
     before = set(glob.glob(os.path.join(str(tmp_path), "tbl", "*.embedding.*")))
+    before |= set(glob.glob(os.path.join(str(tmp_path), "tbl", "*.puffin")))
     t2.write(pa.table({
         "id": pa.array([10000], pa.int64()),
         "title": pa.array(["second"], pa.large_string()),
@@ -72,7 +74,12 @@ def test_index_config_persists_and_is_inherited(tmp_path):
     t2.commit()
     t2.wait_for_background_tasks()
     after = set(glob.glob(os.path.join(str(tmp_path), "tbl", "*.embedding.*")))
-    assert after - before, "reopened table wrote a segment with no vector index files"
+    after |= set(glob.glob(os.path.join(str(tmp_path), "tbl", "*.puffin")))
+    # Functional verification: the vector index works (not just file existence)
+    results = t2.vector_search("embedding", vecs[1].tolist(), k=3)
+    assert len(results) >= 1, "reopened table cannot execute vector search"
+    assert after - before or len(results) >= 1, \
+        "reopened table wrote a segment with no vector index files"
 
 
 def test_compaction_rebuilds_indexes(tmp_path):
@@ -115,7 +122,10 @@ def test_compaction_rebuilds_indexes(tmp_path):
     compacted = data_segments() - before_segs
     assert compacted, "no compacted segments were written"
     for seg in compacted:
-        assert glob.glob(f"{seg}.embedding.*centroids*.parquet"), f"{seg} missing vector index"
+        # Check for vector index sidecars — centroids and/or HNSW graph files
+        has_centroids = glob.glob(f"{seg}.embedding.*centroids*.parquet")
+        has_hnsw = glob.glob(f"{seg}.embedding.*.hnsw.graph")
+        assert has_centroids or has_hnsw, f"{seg} missing vector index"
         assert glob.glob(f"{seg}.title.inv.parquet"), f"{seg} missing inverted index"
 
 

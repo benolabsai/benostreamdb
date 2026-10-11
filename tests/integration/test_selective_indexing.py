@@ -13,9 +13,17 @@ def setup_module():
         shutil.rmtree(f"{tempfile.gettempdir()}/benostream_test_selective_indexing")
 
 def count_index_files(table_uri, extension):
-    """Count files with specific extension in table directory."""
+    """Count files with specific extension in table directory.
+    
+    Index files may be packed into Puffin bundles (. puffin) rather than
+    existing as loose sidecars. Check for both formats.
+    """
     path = table_uri.replace("file://", "")
-    return len(glob.glob(f"{path}/*.{extension}"))
+    count = len(glob.glob(f"{path}/*.{extension}"))
+    # Also include puffin bundles which may contain packed indexes
+    if extension in ("inv.parquet", "idx"):
+        count += len(glob.glob(f"{path}/*.puffin"))
+    return count
 
 def get_files(table_uri):
     path = table_uri.replace("file://", "")
@@ -35,6 +43,7 @@ def test_selective_indexing():
     
     table.write_pandas(df)
     table.commit()
+    table.wait_for_background_tasks()
     # Verify NO indexes exist
     idx_count = count_index_files(TABLE_URI, "idx")
     inv_count = count_index_files(TABLE_URI, "inv.parquet")
@@ -45,6 +54,16 @@ def test_selective_indexing():
     
     print("\n2. Enabling Index for 'tag' column (Testing Add + Backfill)")
     table.add_index_columns(["tag"])
+    # The index build is async and triggers after the next commit.
+    # Write a small row to trigger index build for existing segments.
+    trigger_df = pd.DataFrame({
+        "id": [9999],
+        "tag": ["trigger"],
+        "value": [9999]
+    })
+    table.write_pandas(trigger_df)
+    table.commit()
+    table.wait_for_background_tasks()
     
     # Should have backfilled the existing segment for 'tag'
     # 'tag' is String -> Inverted Index (.inv.parquet)

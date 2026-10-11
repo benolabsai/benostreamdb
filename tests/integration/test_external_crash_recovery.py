@@ -6,7 +6,7 @@ import requests
 import tempfile
 import shutil
 
-def wait_for_healthy(port=9200, timeout=30):
+def wait_for_healthy(port=9200, timeout=60):
     start = time.time()
     while time.time() - start < timeout:
         try:

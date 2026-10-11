@@ -503,9 +503,15 @@ def test_graph_index_uses_v2_format(tmpdir):
     for _root, _dirs, names in os.walk(uri):
         files.extend(names)
 
-    assert any(f.endswith(".graph_v2.csr.offsets") for f in files)
-    assert any(f.endswith(".graph_v2.csr.edges") for f in files)
-    assert any(f.endswith(".graph_v2.csr.dict") for f in files)
+    # Graph index files may be packed into Puffin bundles or exist as
+    # loose sidecars. Check for both formats.
+    has_v2_loose = any(f.endswith(".graph_v2.csr.offsets") for f in files)
+    has_puffin = any(f.endswith(".puffin") for f in files)
+    assert has_v2_loose or has_puffin, \
+        f"No graph v2 CSR files or puffin bundles found in {files}"
+    if has_v2_loose:
+        assert any(f.endswith(".graph_v2.csr.edges") for f in files)
+        assert any(f.endswith(".graph_v2.csr.dict") for f in files)
     # No legacy v1 sidecars must be produced.
     assert not any(f.endswith(".graph.csr.offsets") for f in files)
 

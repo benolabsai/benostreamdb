@@ -50,21 +50,22 @@ class TestSparkCompatibility:
         """Test Spark can read BenoStreamDB table"""
         if shutil.which("spark-submit") is None or importlib.util.find_spec("pyspark") is None:
             pytest.skip("pyspark/spark-submit not available")
-        spark_script = f"""
+        import textwrap
+        spark_script = textwrap.dedent(f"""\
         from pyspark.sql import SparkSession
-        
+
         spark = SparkSession.builder \\
             .appName("BenoStreamDB Compat Test") \\
             .config("spark.sql.catalog.local", "org.apache.iceberg.spark.SparkCatalog") \\
             .config("spark.sql.catalog.local.type", "hadoop") \\
             .config("spark.sql.catalog.local.warehouse", "{self.table_path}") \\
             .getOrCreate()
-        
+
         df = spark.read.format("iceberg").load("{self.table_path}")
         assert df.count() == 1000
         print("✅ Spark read successful")
-        """
-        
+        """)
+
         # Run Spark script via a temporary file
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(spark_script)
