@@ -77,6 +77,10 @@ fn test_cagra_filter() {
 
 #[test]
 fn test_cagra_gpu_accelerated_recall() {
+    if std::env::var("SKIP_GPU_TESTS").is_ok() {
+        eprintln!("Skipping test_cagra_gpu_accelerated_recall (SKIP_GPU_TESTS is set)");
+        return;
+    }
     let dim = 32;
     let n_vectors = 800;
     let mut rng = ChaCha8Rng::seed_from_u64(606);

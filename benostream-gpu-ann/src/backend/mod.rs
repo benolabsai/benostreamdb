@@ -61,11 +61,15 @@ impl ComputeContext {
     pub fn auto_detect() -> Self {
         #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
         {
-            if let Ok(b) = cuda::CudaBackend::new(0) {
-                tracing::info!("benostream-gpu-ann: selected hardware backend: CUDA");
-                return Self {
-                    backend: Arc::new(b),
-                };
+            if std::env::var("SKIP_GPU_TESTS").is_err() {
+                if let Ok(Ok(b)) =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cuda::CudaBackend::new(0)))
+                {
+                    tracing::info!("benostream-gpu-ann: selected hardware backend: CUDA");
+                    return Self {
+                        backend: Arc::new(b),
+                    };
+                }
             }
         }
 
