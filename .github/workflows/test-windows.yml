@@ -1,0 +1,83 @@
+name: Test Windows Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'benostream-gpu-ann/**'
+      - '.github/workflows/test-windows.yml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  windows:
+    name: Windows Test & Build
+    runs-on: windows-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        target: [x86_64]
+        python-version: ["3.10"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "windows-${{ matrix.target }}-${{ matrix.python-version }}"
+          cache-targets: false
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
+        id: cuda-toolkit
+        with:
+          cuda: "13.0.2"
+          method: "network"
+          sub-packages: '["nvcc", "cudart"]'
+
+      - name: Test CUDA discovery on Windows
+        env:
+          SKIP_GPU_TESTS: "1"
+        run: cargo test -p benostream-gpu-ann --features cuda -- --nocapture
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter --features "python"
+          sccache: "false"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+
+      - name: Build Windows binaries and MSI
+        run: |
+          cargo build --release --workspace
+          cargo wix --nocapture
+
+      - name: Upload Windows MSI and Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-binaries
+          path: |
+            target/wix/*.msi
+            target/release/*.exe

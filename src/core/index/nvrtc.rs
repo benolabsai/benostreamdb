@@ -100,11 +100,13 @@ fn nvidia_lib_dirs(site_packages: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// `site-packages` containing this shared object, found via `dladdr`.
+/// `site-packages` containing this shared object, found via `dladdr` on Unix
+/// or `GetModuleHandleExW` on Windows.
 ///
 /// Works without the GIL, so it covers the Python case even when the
 /// `#[pymodule]` init never ran, and any layout where the extension sits under
 /// a `site-packages` directory.
+#[cfg(unix)]
 fn self_site_packages() -> Option<PathBuf> {
     #[repr(C)]
     struct DlInfo {
@@ -137,6 +139,59 @@ fn self_site_packages() -> Option<PathBuf> {
             return Some(p);
         }
     }
+    None
+}
+
+#[cfg(windows)]
+fn self_site_packages() -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+
+    extern "system" {
+        fn GetModuleHandleExW(
+            dwFlags: u32,
+            lpModuleName: *const u16,
+            phModule: *mut *mut c_void,
+        ) -> c_int;
+        fn GetModuleFileNameW(
+            hModule: *mut c_void,
+            lpFilename: *mut u16,
+            nSize: u32,
+        ) -> u32;
+    }
+
+    const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x00000004;
+    const GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT: u32 = 0x00000002;
+
+    let mut h_module: *mut c_void = std::ptr::null_mut();
+    let ret = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            self_site_packages as *const u16,
+            &mut h_module,
+        )
+    };
+    if ret == 0 || h_module.is_null() {
+        return None;
+    }
+
+    let mut buf = vec![0u16; 1024];
+    let len = unsafe { GetModuleFileNameW(h_module, buf.as_mut_ptr(), buf.len() as u32) };
+    if len == 0 || len >= buf.len() as u32 {
+        return None;
+    }
+    buf.truncate(len as usize);
+    let os_str = std::ffi::OsString::from_wide(&buf);
+    let mut p = PathBuf::from(os_str);
+    while p.pop() {
+        if p.file_name().map(|n| n == "site-packages" || n == "Lib").unwrap_or(false) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(not(any(unix, windows)))]
+fn self_site_packages() -> Option<PathBuf> {
     None
 }
 
@@ -189,6 +244,7 @@ fn candidate_dirs() -> Vec<PathBuf> {
     for var in ["CUDA_HOME", "CUDA_PATH", "CUDA_ROOT"] {
         if let Some(root) = std::env::var_os(var) {
             let root = PathBuf::from(root);
+            dirs.push(root.join("bin"));
             dirs.push(root.join("lib64"));
             dirs.push(root.join("lib"));
             dirs.push(root.join("targets/x86_64-linux/lib"));
@@ -205,9 +261,13 @@ fn candidate_dirs() -> Vec<PathBuf> {
         }
     }
 
-    // 5. LD_LIBRARY_PATH.
+    // 5. LD_LIBRARY_PATH / PATH.
     if let Some(ld) = std::env::var_os("LD_LIBRARY_PATH") {
         dirs.extend(std::env::split_paths(&ld));
+    }
+    #[cfg(windows)]
+    if let Some(path_var) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path_var));
     }
 
     // 6. System multiarch / default.
