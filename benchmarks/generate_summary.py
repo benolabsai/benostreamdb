@@ -362,17 +362,19 @@ def generate_summary():
     sql = [r for r in records if r.get("workload") == "sql" and "seconds" in r]
 
     if vector:
+        # One table per dataset with CPU and GPU rows mixed; the Backend column
+        # says which the algorithm actually ran on.
         groups = {}
         for r in vector:
-            groups.setdefault((r.get("dataset", "-"), r.get("device", "cpu")), []).append(r)
-        for (ds, dev) in sorted(groups):
-            sections.append(f"### Vector — `{ds}` ({dev})")
+            groups.setdefault(r.get("dataset", "-"), []).append(r)
+        for ds in sorted(groups):
+            sections.append(f"### Vector — `{ds}`")
             sections.append("")
             sections.append(
                 "| Engine | Index | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
             )
             sections.append("|---|---|---|---|---|---|---|---|---|")
-            for r in sorted(groups[(ds, dev)], key=lambda x: -(x.get("qps") or 0)):
+            for r in sorted(groups[ds], key=lambda x: -(x.get("qps") or 0)):
                 iv = r.get("index")
                 idx = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
                 sections.append(
