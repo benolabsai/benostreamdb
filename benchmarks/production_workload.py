@@ -31,7 +31,7 @@ except ImportError:
 
 
 def create_benchmark_table(db_path: str, n_rows: int = 20000, dim: int = 128) -> None:
-    """Creates a temporary benchmark table with HNSW-TQ8 index."""
+    """Creates a temporary benchmark table with a full-precision HNSW index."""
     schema = pa.schema([
         ("id", pa.int64()),
         ("embedding", pa.list_(pa.float32(), dim)),
@@ -39,7 +39,10 @@ def create_benchmark_table(db_path: str, n_rows: int = 20000, dim: int = 128) ->
     table = benostreamdb.Table.create(f"file://{db_path}", schema)
     table.add_index(
         "embedding",
-        {"type": "hnsw_tq8", "complexity": 16, "quality": 200, "metric": "l2"},
+        # Full precision by default (matches the engine default); the quantized
+        # TQ8/TQ4/PQ variants are opt-in and reported separately by the
+        # competitor matrix.
+        {"type": "hnsw", "complexity": 16, "quality": 200, "metric": "l2"},
     )
 
     chunk_size = 5000

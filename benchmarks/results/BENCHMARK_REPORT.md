@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-11 00:12:24 UTC
+- **Generated At**: 2026-10-11 00:19:59 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.41
 - **Python**: 3.12.15
 
@@ -159,9 +159,9 @@ from the per-engine JSON records). This page describes how to read it.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | benostreamdb | cpu | lexical_bm25 | arguana | 0.655 | 0.3084 | 0.1994 | 56.2 | 17.074 | 30.681 | 0.458 | 4.08 |
 | benostreamdb | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3067 | 0.5151 | 1041.6 | 0.725 | 1.69 | 0.277 | 2.46 |
-| benostreamdb | cpu | hybrid_rrf | scifact | 0.8493 | 0.6961 | 0.6511 | 168.1 | 5.76 | 7.714 | 0.557 | 6.63 |
+| benostreamdb | cpu | hybrid_rrf | scifact | 0.851 | 0.6935 | 0.6487 | 180.2 | 5.426 | 7.087 | 0.501 | 11.68 |
 | benostreamdb | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 417.6 | 2.25 | 3.846 | 0.356 | 3.31 |
-| lancedb | cpu | hybrid_rrf | scifact | 0.8284 | 0.6658 | 0.6193 | 189.3 | 4.807 | 7.402 | 1.212 | 14.37 |
+| lancedb | cpu | hybrid_rrf | scifact | 0.8199 | 0.6677 | 0.6239 | 195.9 | 4.681 | 7.054 | 0.897 | 14.41 |
 | opensearch | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 131.3 | 6.647 | 24.44 | 0.847 | 7.9 |
 | opensearch | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1466.7 | 0.704 | 0.955 | 0.528 | 4.85 |
 | opensearch | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 814.1 | 1.127 | 2.429 | 2.563 | 6.71 |
@@ -264,21 +264,21 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.1** | **5.76 ms** | 7.71 ms | **0.8493** | **0.6961** | 0.6511 |
-| **lancedb** | `cpu` | ✅ Pass | 1.21s | 14.4 MB | **189.3** | **4.81 ms** | 7.40 ms | **0.8284** | **0.6658** | 0.6193 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.50s | 11.7 MB | **180.2** | **5.43 ms** | 7.09 ms | **0.8510** | **0.6935** | 0.6487 |
+| **lancedb** | `cpu` | ✅ Pass | 0.90s | 14.4 MB | **195.9** | **4.68 ms** | 7.05 ms | **0.8199** | **0.6677** | 0.6239 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **46.7%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **46.5%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 398.9 | 2.38 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1216.0 | 0.71 ms | 0.7767 | 0.6437 | 0.6047 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.1 | 5.76 ms | **0.8493** | **0.6961** | **0.6511** |
+| **Sparse (BM25 Only)** | 11.7 MB | 424.2 | 2.23 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1222.3 | 0.71 ms | 0.7900 | 0.6451 | 0.6036 |
+| **Hybrid (Dense + BM25 RRF)** | 11.7 MB | 180.2 | 5.43 ms | **0.8510** | **0.6935** | **0.6487** |
 
 
 ## 5. Production Workload & Concurrency Performance
@@ -292,12 +292,12 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Concurrency (Threads) | Throughput (QPS) | Scaling Speedup | p50 Latency | p90 Latency | p99 Latency |
 |---|---|---|---|---|---|
-| **1** | **1251.7** | **1.00x** | 0.77 ms | 0.85 ms | 1.03 ms |
-| **2** | **2492.7** | **1.99x** | 0.77 ms | 0.85 ms | 0.98 ms |
-| **4** | **3285.4** | **2.62x** | 1.16 ms | 1.41 ms | 1.72 ms |
-| **8** | **2828.3** | **2.26x** | 2.69 ms | 3.49 ms | 4.60 ms |
-| **16** | **2620.5** | **2.09x** | 5.18 ms | 7.69 ms | 9.89 ms |
-| **32** | **2407.1** | **1.92x** | 7.70 ms | 15.55 ms | 22.33 ms |
+| **1** | **1132.2** | **1.00x** | 0.85 ms | 0.96 ms | 1.22 ms |
+| **2** | **2108.0** | **1.86x** | 0.90 ms | 1.06 ms | 1.30 ms |
+| **4** | **2792.7** | **2.47x** | 1.37 ms | 1.71 ms | 2.03 ms |
+| **8** | **2512.3** | **2.22x** | 3.03 ms | 3.98 ms | 5.08 ms |
+| **16** | **2318.6** | **2.05x** | 4.38 ms | 7.76 ms | 10.77 ms |
+| **32** | **2059.3** | **1.82x** | 4.59 ms | 11.02 ms | 19.62 ms |
 
 # Production Crash Injection & Recovery Benchmark
 
@@ -352,10 +352,10 @@ from the per-engine JSON records). This page describes how to read it.
 | engine | benostreamdb |
 | workload | maintenance_saturation |
 | concurrency | 8 |
-| baseline_p99_ms | 1608.21 |
-| maintenance_p99_ms | 1053.9 |
-| inflation_factor | 0.66 |
-| queries_during_compaction | 250 |
+| baseline_p99_ms | 1361.68 |
+| maintenance_p99_ms | 1245.83 |
+| inflation_factor | 0.91 |
+| queries_during_compaction | 199 |
 
 # Multi-Writer Concurrency Correctness Benchmark (§7.7)
 

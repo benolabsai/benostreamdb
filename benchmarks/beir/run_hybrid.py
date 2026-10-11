@@ -374,7 +374,8 @@ def run_benostreamdb_hybrid(
         ])
         table = bsdb.Table.create(tmpdir, schema)
         table.add_index("text", {"type": "bm25", "k1": 1.2, "b": 0.75})
-        table.add_index("embedding", {"type": "hnsw_tq8", "m": 32, "ef_construction": 200, "ef_search": 100})
+        # Full precision (the engine default); quantized variants are opt-in.
+        table.add_index("embedding", {"type": "hnsw", "m": 32, "ef_construction": 200, "ef_search": 100})
 
         arr_id = pa.array([c[0] for c in corpus], type=pa.string())
         arr_text = pa.array([c[1] for c in corpus], type=pa.string())
