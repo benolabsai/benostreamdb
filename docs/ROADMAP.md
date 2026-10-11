@@ -76,7 +76,7 @@ substantial engineering for little initial marketing benefit:
 | ✅ **Production Ready** | **Lakehouse Connectors** | Native Apache Spark connector (`spark-benostreamdb`), Trino connector (`trino-benostreamdb`), Official dbt adapter (`dbt-benostreamdb`). Full engine function-surface parity across Python/dbt/Spark/Trino, guarded by `tests/python/test_function_parity.py`. |
 | ✅ **Production Ready** | **Ecosystem Interfaces** | Optional Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`: OpenSearch 7.10 & Qdrant REST). |
 | ✅ **Production Ready** | **AI-Native & Search Extensions** | MCP server (`contrib/benostreamdb-mcp`), SQL graph traversal (`FROM graph_neighbors(...)`), `Table::subscribe()` change feed + predicate-filtered subscriptions. |
-| 📋 **Deferred** | **Breadth** | Arrow Flight subscriptions, typed global URNs, tokenizer suite, LangChain/LlamaIndex, broker adapters, Iceberg v3 `variant`. |
+| 📋 **Deferred** | **Breadth** | Arrow Flight subscriptions, typed global URNs, tokenizer suite, LangChain/LlamaIndex, broker adapters, Iceberg v3 `variant`, overlay indexes on read-only Delta / Hudi (native Rust metadata translator). |
 ---
 
 ## 🏛️ Architectural Foundations (Completed)
@@ -266,6 +266,52 @@ Themes are ordered by Launch Candidate priority.
     `vector_search_index`/`vector_search_index_raw`/`vector_search_scored` and
     the Python/SQL surfaces; (3) defining precedence when no selector is given
     (full precision first).
+
+### Theme 7: Overlay Indexes on Read-Only Delta & Hudi (Native Rust Translator)
+*Attach the overlay indexes to existing Delta / Hudi tables — writing only indexes, never data.* — 🟢 **Deferred**
+
+> **Current state.** Delta and Hudi tables are Parquet under the hood, and the
+> overlay index engine already treats any Parquet file as data. The authoritative
+> data files and the advisory index overlays are stored completely separately
+> (`s3://my-index-bucket/overlays/`), so the upstream table does not even need to
+> know BenoStreamDB exists. The existing
+> `Table.register_external(overlay_uri, iceberg_metadata_uri)` path already
+> attaches an overlay to an external, read-only Iceberg table without write
+> permission on the upstream storage or catalog.
+>
+> **Scope: index-only writes, via a metadata translation layer.** The glue is a
+> translator that emits Iceberg metadata over the Delta/Hudi Parquet files. Both
+> existing options are JVM-based — **Apache XTable** (Java) and **Delta UniForm**
+> (Scala/Java, a Delta Lake feature) — so the preferred path is a **native Rust
+> translator** (a Rust port of the XTable concept) with no JVM runtime
+> dependency. BenoStreamDB then reads that Iceberg metadata, builds the overlays
+> (HNSW/BM25/CSR) over the client's existing Parquet, and writes only the sidecar
+> indexes into its own bucket. No core search kernel changes, no data ingestion,
+> and no writes to the upstream table — the index engines treat the foreign
+> Parquet exactly like any other Parquet.
+
+- [ ] **Native Rust metadata translator (Rust port of XTable)** — 🟠 **High**:
+  - Read the Delta `_delta_log` / Hudi `.hoodie` timeline and emit Iceberg
+    metadata (schema, partition spec, data files, position deletes) over the
+    existing Parquet, so `register_external` can attach the overlay with no JVM
+    dependency. (XTable is Java; UniForm is Scala/Java — both JVM.)
+- [ ] **Document + verify the `register_external` + translator path** — 🟠 **High**:
+  - A worked example: point `register_external` at translator-generated Iceberg
+    metadata over a read-only Delta/Hudi table, `add_index(...)`, and query.
+    Confirm the index engines treat the foreign Parquet identically and that the
+    overlay lands in the separate index bucket.
+- [ ] **Out-of-band append handling** — 🟠 **High**:
+  - When the upstream writer (Databricks, Flink, Hudi tooling) appends files,
+    the metadata crawler notes the new files; the planner searches the existing
+    HNSW/BM25 index for the old data and falls back to a Parquet scan for the
+    newly appended files until the background index build catches up — 100%
+    snapshot correctness at all times (the Overlay Invariant).
+- [ ] **Scheduled vs incremental index builds** — 🟢 **Deferred**:
+  - Decide the default: nightly batch GPU index builds, or incremental hooks
+    into the upstream stream writes to continuously update the graph sidecars.
+- [ ] **Out-of-core caching for large sidecars** — 🟢 **Deferred**:
+  - `BSDB_DISK_CACHE_DIR` behaviour when the sidecar graph sizes dwarf host
+    memory on the client's isolated instances.
 
 ---
 
