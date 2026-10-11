@@ -93,6 +93,12 @@ COMPETITOR_CONFIG = [
 ]
 
 
+def _eng_label(engine) -> str:
+    """Bold BenoStreamDB rows so they stand out in every table."""
+    name = str(engine)
+    return f"**{name}**" if name.startswith("benostreamdb") else name
+
+
 def generate_summary():
     os.makedirs(RESULTS_DIR, exist_ok=True)
     report_path = os.path.join(RESULTS_DIR, "BENCHMARK_REPORT.md")
@@ -188,7 +194,7 @@ def generate_summary():
             for r in sorted(groups[(ds, algo)], key=lambda x: (x.get("seconds") or 0)):
                 load = r.get("load_s", r.get("build_seconds", "-"))
                 sections.append(
-                    f"| {r.get('engine')} | {r.get('layer', '-')} | {r.get('device', 'cpu')} | "
+                    f"| {_eng_label(r.get('engine'))} | {r.get('layer', '-')} | {r.get('device', 'cpu')} | "
                     f"{load} | {r.get('seconds')} | {r.get('result_size')} |"
                 )
             sections.append("")
@@ -378,7 +384,7 @@ def generate_summary():
                 iv = r.get("index")
                 idx = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
                 sections.append(
-                    f"| {r.get('engine')} | {idx} | {r.get('device', 'cpu')} | "
+                    f"| {_eng_label(r.get('engine'))} | {idx} | {r.get('device', 'cpu')} | "
                     f"{r.get('recall_at_k')} | {r.get('qps')} | "
                     f"{r.get('p50_ms')} | {r.get('p99_ms')} | {r.get('build_s')} | {r.get('index_mb')} |"
                 )
@@ -398,7 +404,7 @@ def generate_summary():
         sections.append("|---|---|---|---|---|")
         for r in sorted(sql, key=lambda x: (x.get("dataset", ""), x.get("seconds") or 0)):
             sections.append(
-                f"| {r.get('engine')} | {r.get('dataset', '-')} | {r.get('device', 'cpu')} | "
+                f"| {_eng_label(r.get('engine'))} | {r.get('dataset', '-')} | {r.get('device', 'cpu')} | "
                 f"{r.get('seconds')} | {r.get('rows')} |"
             )
         sections.append("")

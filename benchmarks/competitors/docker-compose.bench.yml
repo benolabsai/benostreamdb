@@ -251,6 +251,11 @@ services:
       dockerfile: benchmarks/competitors/Dockerfile.bench
     image: bsdb-bench-runner:latest
     profiles: ["run"]
+    # The maintenance/workload benchmarks saturate reads while compaction
+    # rewrites segments; the default `nofile=1024` is far too low and surfaces
+    # as "Too many open files (os error 24)". Raise it for the runner.
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
     networks: [bench]
     environment: *bench-env
     volumes:

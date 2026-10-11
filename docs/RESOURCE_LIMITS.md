@@ -13,6 +13,23 @@ an unset environment variable means "use the memory-derived default", not
 "disable the guard". This is what lets the same binary run safely in a 4 GB
 container and scale up to a large host.
 
+## File descriptors (`nofile`)
+
+The reader opens Parquet segment files on demand, and background compaction can
+rewrite segments while reads are saturated, so the transient open-file count is
+`read_concurrency × segment_files` plus compaction handles. The process default
+(`ulimit -n`, often 1024 in containers) is too low and surfaces as
+`Too many open files (os error 24)` — a failed query.
+
+- **Requirement:** raise the descriptor limit to **≥ 65536** for the process
+  running BenoStreamDB (`LimitNOFILE=65536` in the systemd unit, `ulimit -n 65536`
+  in a shell, or the container `nofile` ulimit). The benchmark runner sets this
+  (`benchmarks/competitors/docker-compose.bench.yml`).
+- **Engine behaviour:** a transient EMFILE during a segment read is retried with
+  a short exponential backoff (see `HybridReader::parquet_reader`) instead of
+  failing the query outright — but the limit should still be raised; the backoff
+  is a safety net, not a substitute for the ulimit.
+
 ## How the memory knobs interact
 
 All memory limits are derived from one number — the memory actually available to
