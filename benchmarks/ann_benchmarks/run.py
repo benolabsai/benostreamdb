@@ -149,7 +149,8 @@ def main() -> None:
     ap.add_argument("--k", type=int, default=10)
     ap.add_argument("--queries", type=int, default=1000, help="number of test queries")
     ap.add_argument("--limit", type=int, default=0, help="cap the train set size (0 = all)")
-    ap.add_argument("--index", default="hnsw_tq8", help="index type (hnsw, hnsw_tq8, hnsw_tq4, hnsw_pq)")
+    ap.add_argument("--index", default="hnsw", help="index type (hnsw, hnsw_tq8, hnsw_tq4, hnsw_pq)")
+    ap.add_argument("--engine", default="benostreamdb", help="engine label written to the record (e.g. benostreamdb_tq8)")
     ap.add_argument("--m", type=int, default=16, help="HNSW M (complexity)")
     ap.add_argument("--ef-construction", type=int, default=200, help="HNSW ef_construction (quality)")
     ap.add_argument("--ef-search", type=int, default=200, help="HNSW ef_search (query beam width)")
@@ -307,7 +308,8 @@ def main() -> None:
     )
 
     record = {
-        "engine": "benostreamdb",
+        "engine": args.engine,
+        "index_type": args.index,
         "dataset": args.dataset,
         "workload": "vector_ann",
         "device": args.device,

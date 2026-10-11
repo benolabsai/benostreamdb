@@ -1,0 +1,36 @@
+{
+  "engine": "benostreamdb_tq8",
+  "index_type": "hnsw_tq8",
+  "dataset": "lastfm-64-dot",
+  "workload": "vector_ann",
+  "device": "gpu",
+  "n": 20000,
+  "dim": 65,
+  "index": {
+    "type": "hnsw_tq8",
+    "m": 16,
+    "ef_construction": 200,
+    "ef_search": 200,
+    "metric": "inner_product"
+  },
+  "queries": 500,
+  "k": 10,
+  "build_s": 1.23,
+  "index_mb": 15.29,
+  "recall_at_k": 0.753,
+  "qps": 2074.9,
+  "p50_ms": 0.401,
+  "p99_ms": 0.559,
+  "pure_index_qps": 5175.6,
+  "pure_p50_ms": 0.192,
+  "pure_p99_ms": 0.243,
+  "env": {
+    "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}

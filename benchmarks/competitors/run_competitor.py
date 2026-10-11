@@ -179,11 +179,15 @@ class FaissAdapter(VectorAdapter):
         if metric == "cosine":
             faiss.normalize_L2(data)
         index.add(data)
+        # Track whether the index actually landed on the GPU so the record's
+        # `device` reflects where the algorithm ran, not the pass it was in.
+        self._used_gpu = False
         if ctx.get("device") == "gpu":
             # Requires faiss-gpu; falls back to the CPU index when unavailable.
             try:
                 res = faiss.StandardGpuResources()
                 index = faiss.index_cpu_to_gpu(res, 0, index)
+                self._used_gpu = True
             except Exception as exc:
                 print(f"faiss: GPU unavailable, using CPU index ({exc})", flush=True)
         return index
@@ -719,6 +723,21 @@ def vector_adapters() -> dict[str, VectorAdapter]:
     }
 
 
+# Engines with a real GPU execution path. The recorded `device` must reflect
+# where the algorithm actually ran, not which container launched the run: only
+# these use the GPU when the run's device is "gpu"; every other engine (pgvector,
+# OpenSearch, Qdrant, Milvus, Weaviate, LanceDB, hnswlib, ...) is CPU-only.
+def _vector_backend(adapter: "VectorAdapter", device: str) -> str:
+    if device != "gpu":
+        return "cpu"
+    name = getattr(adapter, "name", "")
+    if name == "faiss":
+        return "gpu" if getattr(adapter, "_used_gpu", False) else "cpu"
+    if name in ("benostreamdb", "bsdb"):
+        return "gpu"
+    return "cpu"
+
+
 # --------------------------------------------------------------------------- #
 # Vector workload
 # --------------------------------------------------------------------------- #
@@ -797,7 +816,7 @@ def run_vector(adapter: VectorAdapter, args) -> dict:
         "engine": adapter.name,
         "dataset": args.dataset,
         "workload": "vector_ann",
-        "device": args.device,
+        "device": _vector_backend(adapter, args.device),
         "n": int(n),
         "dim": int(dim),
         "index": params,
@@ -1223,10 +1242,13 @@ _GRAPH_LAYER = {
 
 
 def run_graph(args) -> dict:
-    """Dispatch a graph engine, tagging the record with dataset + measurement layer."""
+    """Dispatch a graph engine, tagging dataset + measurement layer + backend."""
     res = _graph_dispatch(args)
     if isinstance(res, dict):
         res.setdefault("dataset", getattr(args, "dataset", None) or "graph")
+        # Only cuGraph executes on the GPU; the other graph engines are CPU
+        # regardless of which container launched the run.
+        res.setdefault("device", "gpu" if res.get("engine") == "cugraph" else "cpu")
         if res.get("available"):
             res.setdefault("layer", _GRAPH_LAYER.get(res.get("engine", ""), "unknown"))
     return res

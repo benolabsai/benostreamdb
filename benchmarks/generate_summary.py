@@ -349,6 +349,15 @@ def generate_summary():
         records.append(r)
 
     vector = [r for r in records if "recall_at_k" in r]
+    # Collapse accidental duplicates (the same engine/dataset/device measured by
+    # more than one pass, e.g. a GPU-pass engine that fell back to CPU), keeping
+    # the best run.
+    _best: dict = {}
+    for r in vector:
+        key = (r.get("engine"), r.get("dataset"), r.get("device"))
+        if key not in _best or (r.get("qps") or 0) > (_best[key].get("qps") or 0):
+            _best[key] = r
+    vector = list(_best.values())
     graph = [r for r in records if r.get("workload") == "graph" and "seconds" in r]
     sql = [r for r in records if r.get("workload") == "sql" and "seconds" in r]
 
@@ -359,11 +368,16 @@ def generate_summary():
         for (ds, dev) in sorted(groups):
             sections.append(f"### Vector — `{ds}` ({dev})")
             sections.append("")
-            sections.append("| Engine | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |")
-            sections.append("|---|---|---|---|---|---|---|")
+            sections.append(
+                "| Engine | Index | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
+            )
+            sections.append("|---|---|---|---|---|---|---|---|---|")
             for r in sorted(groups[(ds, dev)], key=lambda x: -(x.get("qps") or 0)):
+                iv = r.get("index")
+                idx = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
                 sections.append(
-                    f"| {r.get('engine')} | {r.get('recall_at_k')} | {r.get('qps')} | "
+                    f"| {r.get('engine')} | {idx} | {r.get('device', 'cpu')} | "
+                    f"{r.get('recall_at_k')} | {r.get('qps')} | "
                     f"{r.get('p50_ms')} | {r.get('p99_ms')} | {r.get('build_s')} | {r.get('index_mb')} |"
                 )
             sections.append("")

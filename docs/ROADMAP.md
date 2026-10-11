@@ -77,7 +77,6 @@ substantial engineering for little initial marketing benefit:
 | ✅ **Production Ready** | **Ecosystem Interfaces** | Optional Arrow Flight SQL server (`server/flight_sql`), Contrib Search Gateway (`contrib/benostreamdb-search`: OpenSearch 7.10 & Qdrant REST). |
 | ✅ **Production Ready** | **AI-Native & Search Extensions** | MCP server (`contrib/benostreamdb-mcp`), SQL graph traversal (`FROM graph_neighbors(...)`), `Table::subscribe()` change feed + predicate-filtered subscriptions. |
 | 📋 **Deferred** | **Breadth** | Arrow Flight subscriptions, typed global URNs, tokenizer suite, LangChain/LlamaIndex, broker adapters, Iceberg v3 `variant`. |
-| 🏢 **Business Plan** | **Enterprise Control Plane** | Auth/RBAC/RLS, audit, autonomous maintenance, observability, HA/DR, and CMEK. |
 ---
 
 ## 🏛️ Architectural Foundations (Completed)
