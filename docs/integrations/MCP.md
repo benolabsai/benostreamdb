@@ -14,21 +14,56 @@ The MCP server allows LLMs and autonomous AI agents (such as Claude Desktop, Cur
 
 ---
 
-## Building and Installing
+---
 
-Build the server binary via Cargo:
+## Installation & Running
+
+### Recommended: Run via `uvx` (No Installation Required)
+
+You can launch `benostreamdb-mcp` instantly with [`uvx`](https://github.com/astral-sh/uv), which automatically downloads the prebuilt native binary from PyPI:
+
+```bash
+uvx benostreamdb-mcp
+```
+
+### Alternative: Install via Pip
+
+```bash
+pip install benostreamdb-mcp
+benostreamdb-mcp
+```
+
+### From Source via Cargo
 
 ```bash
 cargo build --release -p benostreamdb-mcp
 ```
-
 The compiled binary will be placed at `target/release/benostreamdb-mcp`.
 
 ---
 
 ## Configuration with AI Clients
 
-Add the server to your MCP client configuration (e.g., `claude_desktop_config.json` or your IDE's MCP settings):
+Add the server to your MCP client configuration (e.g., `claude_desktop_config.json`, Cursor, or Antigravity):
+
+### With `uvx` (Recommended)
+
+```json
+{
+  "mcpServers": {
+    "benostreamdb": {
+      "command": "uvx",
+      "args": ["benostreamdb-mcp"],
+      "env": {
+        "BSDB_WAREHOUSE": "/path/to/warehouse",
+        "BSDB_GPU_DEVICE": "auto"
+      }
+    }
+  }
+}
+```
+
+### With Prebuilt Binary / Source Build
 
 ```json
 {

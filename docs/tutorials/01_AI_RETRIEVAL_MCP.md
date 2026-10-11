@@ -32,9 +32,22 @@ LIMIT 2;
 
 ## 3. The agent workflow via MCP
 
-Build the server and register it with your MCP client (Claude Desktop, Cursor,
-Antigravity):
+Register it with your MCP client (Claude Desktop, Cursor, Antigravity) using `uvx` (recommended) or from source:
 
+#### Option A: Run via `uvx` (No build required)
+```json
+{
+  "mcpServers": {
+    "benostreamdb": {
+      "command": "uvx",
+      "args": ["benostreamdb-mcp"],
+      "env": { "BSDB_WAREHOUSE": "/tmp/bsdb_warehouse", "BSDB_GPU_DEVICE": "auto" }
+    }
+  }
+}
+```
+
+#### Option B: Build from Source
 ```bash
 cargo build --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml
 ```
