@@ -5,6 +5,20 @@
 # BenoStreamDB
 **Serverless Index-Streaming Database with Overlay Indexing**
 
+> ⚠️ **Developer Preview (v0.12.0)**  
+> BenoStreamDB is an early-stage database engine intended for evaluation, benchmarking, and community feedback. 
+> - **API & Storage Mutability:** APIs, configuration schemas, and secondary index sidecar on-disk layouts may evolve between preview releases.
+> - **Workload Suitability:** Not yet recommended for irreplaceable production data or mission-critical workloads requiring enterprise high-availability SLAs. Always back up authoritative data and pin versions.
+> - **Integrity Invariant:** Operations will not silently corrupt state or lose acknowledged writes. If an advisory index sidecar is missing or damaged, queries gracefully fall back to direct Parquet scans while the overlay rebuilds.
+
+### 📋 Feature Classification & Preview Scope
+
+| Tier | Capabilities | Status |
+| :--- | :--- | :--- |
+| **Preview-Ready** | Embedded Python & Rust engine, Apache Iceberg (V2/V3) Parquet read/write, HNSW (Float32) vector search, in-process CSR graph analytics (PageRank, shortest path), DuckDB/DataFusion SQL compatibility, Puffin sidecar management | ✅ Fully supported & tested for evaluation |
+| **Experimental** | 8-bit TurboQuant (TQ8), OpenSearch 7.10 & Qdrant REST gateway compatibility, Arrow Flight SQL server | ⚠️ Functional; APIs and performance tuning are actively evolving |
+| **Deliberately Deferred** | Distributed multi-node clustering, automatic failover / HA, enterprise multi-tenant RBAC / RLS | ❌ Not in Developer Preview (planned for post-v1.0 / Enterprise edition) |
+
 > **Serverless by default.** BenoStreamDB runs directly against object storage and does not require a database server or always-on cluster. For applications that prefer a network-accessible database endpoint, BenoStreamDB also provides an optional Arrow Flight SQL server interface.
 >
 > **Flight SQL currently provides single-process server access. Distributed/clustered execution is not implied by Flight support.**
