@@ -5,6 +5,7 @@ import time
 import requests
 import tempfile
 import shutil
+import pytest
 
 def wait_for_healthy(port=9200, timeout=60):
     start = time.time()
@@ -19,6 +20,11 @@ def wait_for_healthy(port=9200, timeout=60):
     return False
 
 def test_process_kill_recovery():
+    # Skip in CI where the bsdb-search binary is not pre-built and
+    # compiling from source via `cargo run --release` exceeds the
+    # health-check timeout.
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        pytest.skip("bsdb-search binary not pre-built in CI")
     print("="*60)
     print("Testing External Crash Recovery (SIGKILL)")
     print("="*60)
