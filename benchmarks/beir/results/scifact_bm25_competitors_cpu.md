@@ -11,12 +11,12 @@
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **417.6** | **2.25 ms** | 3.85 ms | 0.7909 | 0.6617 |
-| **tantivy** | `cpu` | ✅ Pass | 1.92s | 8.0 MB | **4026.4** | **0.20 ms** | 0.49 ms | 0.7812 | 0.6517 |
-| **opensearch** | `cpu` | ✅ Pass | 2.56s | 6.7 MB | **814.1** | **1.13 ms** | 2.43 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **422.6** | **2.24 ms** | 3.94 ms | 0.7909 | 0.6617 |
+| **tantivy** | `cpu` | ✅ Pass | 0.19s | 8.3 MB | **3750.4** | **0.22 ms** | 0.50 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.66s | 6.6 MB | **1218.2** | **0.81 ms** | 1.13 ms | 0.8196 | 0.6821 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
+- **Top-10 Jaccard Overlap vs tantivy**: **81.4%**.
 - **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.

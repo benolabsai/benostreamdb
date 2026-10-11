@@ -207,6 +207,9 @@ def write_json_records(
             continue
         record = {
             "engine": r["engine"],
+            # The retrieval "index" makes the precision/algorithm explicit and
+            # matches the column the vector/SQL tables expose.
+            "index": "bm25" if workload == "lexical_bm25" else "bm25+hnsw",
             "dataset": dataset,
             "workload": workload,
             "backend": algo_backend,

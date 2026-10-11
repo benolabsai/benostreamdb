@@ -15,6 +15,7 @@ import glob
 import json
 import os
 import platform
+import re
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +98,47 @@ def _eng_label(engine) -> str:
     """Bold BenoStreamDB rows so they stand out in every table."""
     name = str(engine)
     return f"**{name}**" if name.startswith("benostreamdb") else name
+
+
+_SEP_ROW = re.compile(r"^\s*\|[\s:\-|]+\|\s*$")
+
+
+def _sort_tables_by_qps(text: str) -> str:
+    """Sort every Markdown table that has a QPS column by QPS descending.
+
+    Applied to the whole report so tables produced by the sibling harnesses
+    (BEIR lexical/hybrid, SQL, production) are ordered the same way as the
+    generated §2/§9 tables. Tables without a QPS column are left untouched.
+    """
+    lines = text.split("\n")
+    out: list = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if line.lstrip().startswith("|") and i + 1 < n and _SEP_ROW.match(lines[i + 1]):
+            header, sep = lines[i], lines[i + 1]
+            cols = [c.strip().strip("*") for c in header.strip().strip("|").split("|")]
+            qps_idx = next((k for k, c in enumerate(cols) if c.upper() == "QPS"), None)
+            j = i + 2
+            while j < n and lines[j].lstrip().startswith("|"):
+                j += 1
+            rows = lines[i + 2:j]
+            if qps_idx is not None and rows:
+                def _q(row: str) -> float:
+                    cells = [c.strip().replace("*", "") for c in row.strip().strip("|").split("|")]
+                    try:
+                        return float(cells[qps_idx])
+                    except (IndexError, ValueError):
+                        return float("-inf")
+
+                rows = sorted(rows, key=_q, reverse=True)
+            out.extend([header, sep, *rows])
+            i = j
+            continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
 
 
 def generate_summary():
@@ -228,9 +270,9 @@ def generate_summary():
         sections.append("### Rolled-up results (JSON)")
         sections.append("")
         sections.append(
-            "| Engine | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
+            "| Engine | Index | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
         )
-        sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for f in sorted(beir_json):
             try:
                 with open(f, encoding="utf-8") as fh:
@@ -238,7 +280,8 @@ def generate_summary():
             except (OSError, ValueError):
                 continue
             sections.append(
-                f"| {r.get('engine')} | {r.get('backend', '-')} | {r.get('workload')} | "
+                f"| {_eng_label(r.get('engine'))} | {r.get('index', '-')} | {r.get('backend', '-')} | "
+                f"{r.get('workload')} | "
                 f"{r.get('dataset')} | "
                 f"{r.get('recall_at_k')} | {r.get('ndcg_at_k')} | {r.get('mrr_at_k')} | "
                 f"{r.get('qps')} | {r.get('p50_ms')} | {r.get('p99_ms')} | "
@@ -428,7 +471,7 @@ def generate_summary():
         sections.append(f"| {wl} | {engine} | {config} | {layer} |")
     sections.append("")
 
-    content = "\n".join(sections) + "\n"
+    content = _sort_tables_by_qps("\n".join(sections)) + "\n"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(content)
 
