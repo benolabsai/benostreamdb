@@ -1813,21 +1813,26 @@ def _sql_benostreamdb(args) -> dict:
 def run_sql(args) -> dict:
     engine = args.engine
     if engine == "duckdb":
-        return _sql_duckdb(args)
-    if engine == "datafusion":
-        return _sql_datafusion(args)
-    if engine == "clickhouse":
-        return _sql_clickhouse(args)
-    if engine == "trino":
-        return _sql_trino(args)
-    if engine in ("benostreamdb", "bsdb"):
-        return _sql_benostreamdb(args)
-    return {
-        "engine": engine,
-        "workload": "sql",
-        "available": False,
-        "error": f"unknown sql engine '{engine}'",
-    }
+        rec = _sql_duckdb(args)
+    elif engine == "datafusion":
+        rec = _sql_datafusion(args)
+    elif engine == "clickhouse":
+        rec = _sql_clickhouse(args)
+    elif engine == "trino":
+        rec = _sql_trino(args)
+    elif engine in ("benostreamdb", "bsdb"):
+        rec = _sql_benostreamdb(args)
+    else:
+        return {
+            "engine": engine,
+            "workload": "sql",
+            "available": False,
+            "error": f"unknown sql engine '{engine}'",
+        }
+    # The per-engine helpers do not know the dataset name; carry it through so
+    # the report can group SQL rows by dataset (synth_500000, tpch_lineitem, …).
+    rec.setdefault("dataset", getattr(args, "dataset", None))
+    return rec
 
 
 # --------------------------------------------------------------------------- #

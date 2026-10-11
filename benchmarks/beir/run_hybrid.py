@@ -196,8 +196,9 @@ def write_json_records(
         ab = algo_backend if algo_backend is not None else _engine_backend(r["engine"])
         record = {
             "engine": r["engine"],
-            # Hybrid = sparse BM25 + a full-precision HNSW dense index.
-            "index": "bm25+hnsw",
+            # `index` is the *vector quantization* of the dense half (the column
+            # the vector tables expose): full-precision HNSW here.
+            "index": "hnsw",
             "dataset": dataset,
             "workload": workload,
             "backend": ab,

@@ -95,9 +95,46 @@ COMPETITOR_CONFIG = [
 
 
 def _eng_label(engine) -> str:
-    """Bold BenoStreamDB rows so they stand out in every table."""
+    """Bold BenoStreamDB rows so they stand out in every table.
+
+    The vector quantization suffix (`_tq8`/`_tq4`/`_pq`) is dropped from the
+    engine name because the Index Precision column already carries it, so the
+    quantized variants read as plain `benostreamdb`.
+    """
     name = str(engine)
+    for suffix in ("_tq8", "_tq4", "_pq"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     return f"**{name}**" if name.startswith("benostreamdb") else name
+
+
+def _quant_label(idx, default: str = "-") -> str:
+    """The vector *quantization* behind an index: f32 / tq8 / tq4 / pq.
+
+    The Index Precision column reports the precision, not the algorithm name,
+    so a full-precision HNSW index reads `f32` and the TurboQuant/PQ variants
+    read `tq8`/`tq4`/`pq`. Lexical-only indexes (BM25) have no vector component
+    and read `-`; a hybrid `bm25+hnsw` index is full-precision `f32`. When the
+    record carries no index information the caller picks the fallback: `f32`
+    in the vector tables (competitors run full precision) and `-` in the
+    lexical tables.
+    """
+    s = str(idx or "").strip().lower()
+    if s in ("", "-", "none"):
+        return default
+    if "tq8" in s:
+        return "tq8"
+    if "tq4" in s:
+        return "tq4"
+    if "pq" in s:
+        return "pq"
+    # Lexical-only (BM25) has no vector index; hybrid (bm25+hnsw) is f32.
+    if "hnsw" in s or "vector" in s or "dense" in s:
+        return "f32"
+    if "bm25" in s or "lexical" in s or "sparse" in s:
+        return "-"
+    return "f32"
 
 
 _SEP_ROW = re.compile(r"^\s*\|[\s:\-|]+\|\s*$")
@@ -108,7 +145,10 @@ def _sort_tables_by_qps(text: str) -> str:
 
     Applied to the whole report so tables produced by the sibling harnesses
     (BEIR lexical/hybrid, SQL, production) are ordered the same way as the
-    generated §2/§9 tables. Tables without a QPS column are left untouched.
+    generated §2/§9 tables. When a table also has a Dataset column the rows
+    are grouped by dataset first (ascending) and then by QPS descending, so
+    multi-dataset tables (e.g. §4 BEIR) read dataset-by-dataset. Tables
+    without a QPS column are left untouched.
     """
     lines = text.split("\n")
     out: list = []
@@ -120,25 +160,52 @@ def _sort_tables_by_qps(text: str) -> str:
             header, sep = lines[i], lines[i + 1]
             cols = [c.strip().strip("*") for c in header.strip().strip("|").split("|")]
             qps_idx = next((k for k, c in enumerate(cols) if c.upper() == "QPS"), None)
+            ds_idx = next((k for k, c in enumerate(cols) if c.upper() == "DATASET"), None)
             j = i + 2
             while j < n and lines[j].lstrip().startswith("|"):
                 j += 1
             rows = lines[i + 2:j]
             if qps_idx is not None and rows:
+                def _cells(row: str) -> list:
+                    return [c.strip().replace("*", "") for c in row.strip().strip("|").split("|")]
+
                 def _q(row: str) -> float:
-                    cells = [c.strip().replace("*", "") for c in row.strip().strip("|").split("|")]
                     try:
-                        return float(cells[qps_idx])
+                        return float(_cells(row)[qps_idx])
                     except (IndexError, ValueError):
                         return float("-inf")
 
-                rows = sorted(rows, key=_q, reverse=True)
+                def _ds(row: str) -> str:
+                    if ds_idx is None:
+                        return ""
+                    try:
+                        return _cells(row)[ds_idx]
+                    except IndexError:
+                        return ""
+
+                rows = sorted(rows, key=lambda r: (_ds(r), -_q(r)))
             out.extend([header, sep, *rows])
             i = j
             continue
         out.append(line)
         i += 1
     return "\n".join(out)
+
+
+def _dataset_from_filename(path: str) -> str | None:
+    """Recover the dataset name from a competitor result filename.
+
+    The SQL harness historically dropped the ``--dataset`` it was given, so the
+    JSON records carry no dataset. The filename still encodes it as
+    ``<engine>_<dataset>_<device>.json``; the synthetic ClickBench table is
+    written as either ``sql`` or ``synth_500000`` and normalises to the latter.
+    """
+    base = os.path.basename(path)
+    m = re.match(r"^[a-z0-9]+_(.+)_(cpu|gpu)\.json$", base)
+    if not m:
+        return None
+    tok = m.group(1)
+    return "synth_500000" if tok in ("sql", "synth_500000") else tok
 
 
 def generate_summary():
@@ -191,9 +258,10 @@ def generate_summary():
         "payload where exactness matters.\n"
         "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/`hnsw_tq4`/"
         "`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. "
-        "§9 reports `benostreamdb` (float) beside `benostreamdb_tq8`/`_tq4` so the "
-        "trade-off is explicit; holding several precisions on one column and "
-        "selecting per query is on the roadmap (Theme 6)."
+        "§9 reports the `benostreamdb` engine once per precision, with the "
+        "**Index Precision** column (`f32`/`tq8`/`tq4`/`pq`) making the trade-off "
+        "explicit; holding several precisions on one column and selecting per query "
+        "is on the roadmap (Theme 6)."
     )
     sections.append("")
 
@@ -270,7 +338,7 @@ def generate_summary():
         sections.append("### Rolled-up results (JSON)")
         sections.append("")
         sections.append(
-            "| Engine | Index | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
+            "| Engine | Index Precision | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
         )
         sections.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
         for f in sorted(beir_json):
@@ -280,7 +348,7 @@ def generate_summary():
             except (OSError, ValueError):
                 continue
             sections.append(
-                f"| {_eng_label(r.get('engine'))} | {r.get('index', '-')} | {r.get('backend', '-')} | "
+                f"| {_eng_label(r.get('engine'))} | {_quant_label(r.get('index'))} | {r.get('backend', '-')} | "
                 f"{r.get('workload')} | "
                 f"{r.get('dataset')} | "
                 f"{r.get('recall_at_k')} | {r.get('ndcg_at_k')} | {r.get('mrr_at_k')} | "
@@ -395,6 +463,10 @@ def generate_summary():
             continue
         if r.get("available") is False:
             continue
+        # The SQL harness historically dropped the dataset name; recover it from
+        # the filename so the SQL table can group rows by dataset.
+        if r.get("workload") == "sql" and not r.get("dataset"):
+            r["dataset"] = _dataset_from_filename(f)
         records.append(r)
 
     vector = [r for r in records if "recall_at_k" in r]
@@ -409,6 +481,14 @@ def generate_summary():
     vector = list(_best.values())
     graph = [r for r in records if r.get("workload") == "graph" and "seconds" in r]
     sql = [r for r in records if r.get("workload") == "sql" and "seconds" in r]
+    # Collapse duplicate SQL runs (e.g. the same synthetic table measured as both
+    # `sql` and `synth_500000`), keeping the fastest run per engine/dataset/device.
+    _best_sql: dict = {}
+    for r in sql:
+        key = (r.get("engine"), r.get("dataset"), r.get("device"))
+        if key not in _best_sql or (r.get("seconds") or 1e9) < (_best_sql[key].get("seconds") or 1e9):
+            _best_sql[key] = r
+    sql = list(_best_sql.values())
 
     if vector:
         # One table per dataset with CPU and GPU rows mixed; the Backend column
@@ -420,12 +500,13 @@ def generate_summary():
             sections.append(f"### Vector — `{ds}`")
             sections.append("")
             sections.append(
-                "| Engine | Index | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
+                "| Engine | Index Precision | Backend | Recall@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |"
             )
             sections.append("|---|---|---|---|---|---|---|---|---|")
             for r in sorted(groups[ds], key=lambda x: -(x.get("qps") or 0)):
                 iv = r.get("index")
-                idx = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
+                raw = r.get("index_type") or (iv.get("type") if isinstance(iv, dict) else iv) or "-"
+                idx = _quant_label(raw, default="f32")
                 sections.append(
                     f"| {_eng_label(r.get('engine'))} | {idx} | {r.get('device', 'cpu')} | "
                     f"{r.get('recall_at_k')} | {r.get('qps')} | "
