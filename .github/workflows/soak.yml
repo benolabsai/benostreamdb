@@ -51,7 +51,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "pytest"
+          shared-key: "ci-v2"
 
       - name: Install Vulkan
         run: |
@@ -85,7 +85,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "test"
+          shared-key: "ci-v2"
 
       - name: Run the ignored soak test
         env:

@@ -226,7 +226,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "test"
+          shared-key: "ci-v2"
       - name: Randomized differential workload (model oracle)
         env:
           SKIP_GPU_TESTS: "1"
