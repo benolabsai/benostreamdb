@@ -115,8 +115,18 @@ mod tests {
     #[test]
     fn health_paths_are_public() {
         let cfg = AuthConfig::default();
-        for p in ["/_health", "/_cluster/health", "/_cat/health", "/healthz", "/readyz", "/livez"] {
-            assert!(is_public_path(&cfg, &Method::GET, p), "{p} should be public");
+        for p in [
+            "/_health",
+            "/_cluster/health",
+            "/_cat/health",
+            "/healthz",
+            "/readyz",
+            "/livez",
+        ] {
+            assert!(
+                is_public_path(&cfg, &Method::GET, p),
+                "{p} should be public"
+            );
         }
         assert!(!is_public_path(&cfg, &Method::GET, "/my-index/_search"));
         assert!(!is_public_path(&cfg, &Method::POST, "/my-index/_doc"));
@@ -140,7 +150,10 @@ mod tests {
         assert!(is_write_request(&Method::POST, "/collections/points"));
         // Read-shaped POSTs.
         assert!(!is_write_request(&Method::POST, "/idx/_search"));
-        assert!(!is_write_request(&Method::POST, "/collections/points/search"));
+        assert!(!is_write_request(
+            &Method::POST,
+            "/collections/points/search"
+        ));
         assert!(!is_write_request(&Method::POST, "/idx/_msearch"));
         assert!(!is_write_request(&Method::POST, "/idx/_count"));
         // Reads.

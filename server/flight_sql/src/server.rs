@@ -120,13 +120,15 @@ impl BenoStreamFlightSqlService {
             .sql_to_df(sql)
             .await
             .map_err(|e| Status::internal(format!("Error executing statement: {}", e)))?;
-            
+
         let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
             .unwrap_or_else(|_| "100000".to_string())
             .parse::<usize>()
             .unwrap_or(100000);
-            
-        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+
+        df = df
+            .limit(0, Some(max_rows + 1))
+            .map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
@@ -135,9 +137,12 @@ impl BenoStreamFlightSqlService {
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         if total_rows > max_rows {
-            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+            return Err(Status::resource_exhausted(format!(
+                "Query exceeded row limit of {}",
+                max_rows
+            )));
         }
-        
+
         Ok(batches)
     }
 }
@@ -588,13 +593,15 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .map_err(|e| Status::internal(format!("Error planning query: {}", e)))?;
 
         let schema = df.schema().inner().clone();
-        
+
         let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
             .unwrap_or_else(|_| "100000".to_string())
             .parse::<usize>()
             .unwrap_or(100000);
-            
-        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+
+        df = df
+            .limit(0, Some(max_rows + 1))
+            .map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
@@ -603,7 +610,10 @@ impl FlightSqlService for BenoStreamFlightSqlService {
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         if total_rows > max_rows {
-            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+            return Err(Status::resource_exhausted(format!(
+                "Query exceeded row limit of {}",
+                max_rows
+            )));
         }
 
         let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
@@ -625,13 +635,15 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             .await
             .map_err(|e| Status::internal(format!("Error planning query: {}", e)))?;
         let schema = df.schema().inner().clone();
-        
+
         let max_rows = std::env::var("BSDB_FLIGHT_MAX_ROWS")
             .unwrap_or_else(|_| "100000".to_string())
             .parse::<usize>()
             .unwrap_or(100000);
-            
-        df = df.limit(0, Some(max_rows + 1)).map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
+
+        df = df
+            .limit(0, Some(max_rows + 1))
+            .map_err(|e| Status::internal(format!("Error setting limit: {}", e)))?;
 
         let batches = df
             .collect()
@@ -640,7 +652,10 @@ impl FlightSqlService for BenoStreamFlightSqlService {
 
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         if total_rows > max_rows {
-            return Err(Status::resource_exhausted(format!("Query exceeded row limit of {}", max_rows)));
+            return Err(Status::resource_exhausted(format!(
+                "Query exceeded row limit of {}",
+                max_rows
+            )));
         }
         let flight_data_stream = arrow_flight::utils::batches_to_flight_data(&schema, batches)
             .map_err(|e| Status::internal(e.to_string()))?;
@@ -1068,7 +1083,9 @@ impl FlightSqlService for BenoStreamFlightSqlService {
             }
             let batch = arrow_flight::utils::flight_data_to_arrow_batch(
                 &data,
-                schema.clone().ok_or_else(|| Status::internal("schema not set"))?,
+                schema
+                    .clone()
+                    .ok_or_else(|| Status::internal("schema not set"))?,
                 &std::collections::HashMap::new(),
             )
             .map_err(|e| Status::internal(e.to_string()))?;

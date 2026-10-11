@@ -108,7 +108,8 @@ impl HybridReader {
                     }
                     Err(e) => {
                         let msg = e.to_string();
-                        let emfile = msg.contains("Too many open files") || msg.contains("os error 24");
+                        let emfile =
+                            msg.contains("Too many open files") || msg.contains("os error 24");
                         if emfile && attempt < 6 {
                             attempt += 1;
                             tokio::time::sleep(delay).await;

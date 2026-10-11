@@ -9,26 +9,26 @@ def test_connector_apis():
     print("Testing Connector APIs...")
     
     # Setup
-    uri = "file:///tmp/test_connector_api_table"
-    if os.path.exists(f"{tempfile.gettempdir()}/test_connector_api_table"):
-        shutil.rmtree(f"{tempfile.gettempdir()}/test_connector_api_table")
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        uri = f"file://{tmp_dir}/test_connector_api_table"
+        table = bsdb.Table(uri)
         
-    table = bsdb.Table(uri)
-    
-    # Create test data
-    df = pd.DataFrame({
-        "id": range(1000),
-        "name": [f"user_{i}" for i in range(1000)],
-        "age": [i % 50 for i in range(1000)],
-        "category": ["A" if i % 2 == 0 else "B" for i in range(1000)]
-    })
-    
-    # Index 'age' and 'category'
-    table.add_index_columns(["age", "category"])
-    
-    print("- Writing data...")
-    table.write_pandas(df)
-    table.wait_for_indexes()
+        # Create test data
+        df = pd.DataFrame({
+            "id": range(1000),
+            "name": [f"user_{i}" for i in range(1000)],
+            "age": [i % 50 for i in range(1000)],
+            "category": ["A" if i % 2 == 0 else "B" for i in range(1000)]
+        })
+        
+        # Index 'age' and 'category'
+        table.add_index_columns(["age", "category"])
+        
+        print("- Writing data...")
+        table.write_pandas(df)
+        table.commit()
+        table.wait_for_indexes()
     
     print("- Compacting and Backfilling Indexes...")
     table.compact(min_file_size_bytes=1024)
@@ -105,6 +105,8 @@ def test_connector_apis():
     assert "age" in stats.index_coverage.scalar_indexed_columns
     
     print("\n✅ All Connector API tests passed!")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     test_connector_apis()

@@ -193,13 +193,17 @@ impl Accumulator for BetweennessCentralityAccumulator {
 
         for &node in &all_nodes {
             sb.field_builder::<UInt64Builder>(0)
-                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 0".into()))?
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution("missing field 0".into())
+                })?
                 .append_value(node);
             // Nodes that never appear as an intermediate vertex have no entry
             // in `cb`; indexing the map directly panicked with "no entry found
             // for key" (NO_PANIC_POLICY violation).
             sb.field_builder::<Float64Builder>(1)
-                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 1".into()))?
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution("missing field 1".into())
+                })?
                 .append_value(cb.get(&node).copied().unwrap_or(0.0));
             sb.append(true);
         }

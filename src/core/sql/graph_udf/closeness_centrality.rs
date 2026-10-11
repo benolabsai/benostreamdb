@@ -148,10 +148,14 @@ impl Accumulator for ClosenessCentralityAccumulator {
 
             let sb = list_builder.values();
             sb.field_builder::<UInt64Builder>(0)
-                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 0".into()))?
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution("missing field 0".into())
+                })?
                 .append_value(u);
             sb.field_builder::<Float64Builder>(1)
-                .ok_or_else(|| datafusion::error::DataFusionError::Execution("missing field 1".into()))?
+                .ok_or_else(|| {
+                    datafusion::error::DataFusionError::Execution("missing field 1".into())
+                })?
                 .append_value(score);
             sb.append(true);
         }

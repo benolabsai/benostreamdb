@@ -77,12 +77,10 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
                     check_scratch(&target.name)?;
                 }
             }
-            Statement::Insert(cmd) => {
-                match &cmd.table {
-                    sqlparser::ast::TableObject::TableName(name) => check_scratch(name)?,
-                    _ => {}
-                }
-            }
+            Statement::Insert(cmd) => match &cmd.table {
+                sqlparser::ast::TableObject::TableName(name) => check_scratch(name)?,
+                _ => {}
+            },
             Statement::Update { table, .. } => check_table_factor(&table.relation)?,
             Statement::Delete(cmd) => {
                 for name in &cmd.tables {
@@ -90,15 +88,21 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
                 }
                 match &cmd.from {
                     sqlparser::ast::FromTable::WithFromKeyword(tables) => {
-                        for t in tables { check_table_factor(&t.relation)?; }
+                        for t in tables {
+                            check_table_factor(&t.relation)?;
+                        }
                     }
                     sqlparser::ast::FromTable::WithoutKeyword(tables) => {
-                        for t in tables { check_table_factor(&t.relation)?; }
+                        for t in tables {
+                            check_table_factor(&t.relation)?;
+                        }
                     }
                 }
             }
             Statement::Merge { table, .. } => check_table_factor(&table)?,
-            Statement::Drop { object_type, names, .. } => {
+            Statement::Drop {
+                object_type, names, ..
+            } => {
                 if object_type == ObjectType::Index
                     || object_type == ObjectType::Table
                     || object_type == ObjectType::View
@@ -106,9 +110,7 @@ fn guard_scratch_only(query: &str) -> anyhow::Result<()> {
                     for name in &names {
                         check_scratch(name)?;
                     }
-                } else if object_type == ObjectType::Schema
-                    || object_type == ObjectType::Database
-                {
+                } else if object_type == ObjectType::Schema || object_type == ObjectType::Database {
                     anyhow::bail!("MCP may not drop schemas or databases");
                 }
             }

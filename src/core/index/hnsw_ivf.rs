@@ -1074,7 +1074,8 @@ impl HnswIvfIndex {
         let effective_query = match self.quantizer {
             Some(QuantizerImpl::TurboQuant(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
+                {
                     // SDC suffers from clamping if the query norm vastly exceeds the quantizer's trained range.
                     // For IP/Cosine, query magnitude doesn't affect ranking. We scale the query
                     // to perfectly fit the quantizer's valid range in the FWHT domain to maximize precision.
@@ -1083,17 +1084,21 @@ impl HnswIvfIndex {
                         rotated.resize(rotated.len().next_power_of_two(), 0.0);
                     }
                     crate::core::index::turboquant::fwht(&mut rotated);
-                    
+
                     let mut q_min = f32::MAX;
                     let mut q_max = f32::MIN;
                     for &v in &rotated {
-                        if v < q_min { q_min = v; }
-                        if v > q_max { q_max = v; }
+                        if v < q_min {
+                            q_min = v;
+                        }
+                        if v > q_max {
+                            q_max = v;
+                        }
                     }
-                    
+
                     let quantizer_min = q.offset;
                     let quantizer_max = q.offset + ((1 << q.bits()) - 1) as f32 / q.scale;
-                    
+
                     let mut c = f32::MAX;
                     if q_min < -1e-6 && quantizer_min <= 0.0 {
                         c = c.min(quantizer_min / q_min);
@@ -1109,10 +1114,11 @@ impl HnswIvfIndex {
                     }
                 }
                 VectorValue::Binary(q.encode(&q_vec))
-            },
+            }
             Some(QuantizerImpl::Pq(ref q)) => {
                 let mut q_vec = query_f32.to_vec();
-                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine {
+                if self.metric == VectorMetric::InnerProduct || self.metric == VectorMetric::Cosine
+                {
                     let norm = q_vec.iter().map(|x| x * x).sum::<f32>().sqrt();
                     if norm > 1e-6 {
                         let inv = 1.0 / norm;
@@ -1122,7 +1128,7 @@ impl HnswIvfIndex {
                     }
                 }
                 VectorValue::Binary(q.encode(&q_vec))
-            },
+            }
             _ => query.clone(),
         };
 

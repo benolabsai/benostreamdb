@@ -177,8 +177,12 @@ impl AuthConfig {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        
-        let exp = claims.get("exp").and_then(|v| v.as_f64()).map(|f| f as u64).ok_or_else(|| "JWT missing exp claim".to_string())?;
+
+        let exp = claims
+            .get("exp")
+            .and_then(|v| v.as_f64())
+            .map(|f| f as u64)
+            .ok_or_else(|| "JWT missing exp claim".to_string())?;
         if now >= exp {
             return Err("JWT expired".to_string());
         }

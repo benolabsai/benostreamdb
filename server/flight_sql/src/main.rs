@@ -104,7 +104,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(svc)
         .serve_with_shutdown(addr, async {
             #[cfg(unix)]
-                if let Ok(mut sigterm) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            {
+                if let Ok(mut sigterm) =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                {
                     tokio::select! {
                         _ = tokio::signal::ctrl_c() => {}
                         _ = sigterm.recv() => {}

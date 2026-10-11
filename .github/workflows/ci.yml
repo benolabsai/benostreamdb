@@ -85,7 +85,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          cuda: "12.1.0"
+          cuda: "13.0.2"
           method: "network"
 
       - name: Prep CUDA Stubs
@@ -143,6 +143,7 @@ jobs:
   pytest:
     name: Python Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Maximize build space
         run: |
