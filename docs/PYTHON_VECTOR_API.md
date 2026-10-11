@@ -161,7 +161,8 @@ print(f"Using backend: {ctx.backend}")
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
-# Compute distances on GPU (10x+ faster for large databases)
+# Compute distances using GPU batch acceleration for large matrices
+# (CPU SIMD is recommended for single-vector queries to avoid PCIe transfer overhead)
 distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Find top-k nearest neighbors
@@ -278,7 +279,7 @@ jaccard_distance_batch(query, database, context=None) -> np.ndarray
 
 **Returns:** `np.ndarray` - 1D array of distances (shape: `[n_vectors]`)
 
-**Performance:** GPU acceleration provides 10x+ speedup for databases with 100,000+ vectors
+**Performance:** GPU offloading accelerates high-throughput batch evaluations over large matrices ($N \ge 100,000$). For smaller corpora or single queries, CPU SIMD is faster due to avoiding PCIe transfer and kernel launch overheads.
 
 #### Sparse Distance Functions
 

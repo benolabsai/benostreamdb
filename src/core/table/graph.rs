@@ -880,7 +880,7 @@ impl Table {
 
     /// Execute regional DRIFT search around query `seeds` over this edge table.
     ///
-    /// Uses [`GraphMode::Auto`]: the in-memory graph when the regional
+    /// Uses `GraphMode::Auto`: the in-memory graph when the regional
     /// subgraph fits the DRIFT memory budget, else the out-of-core CSR.
     pub async fn regional_drift(
         &self,
@@ -903,7 +903,7 @@ impl Table {
         .await
     }
 
-    /// Resolve a [`GraphMode`] into a concrete graph view mode.
+    /// Resolve a `GraphMode` into a concrete graph view mode.
     /// `Auto` estimates the regional subgraph and picks
     /// `InMemory` when it fits the DRIFT memory budget, else `OutOfCore`.
     pub async fn resolve_graph_mode(
@@ -969,7 +969,7 @@ impl Table {
         }
     }
 
-    /// Construct a [`GraphView`] according to the given mode, seeds, and hops.
+    /// Construct a `GraphView` according to the given mode, seeds, and hops.
     ///
     /// Source/target columns are auto-detected; use
     /// [`Table::graph_view_with_columns`] to name them explicitly.

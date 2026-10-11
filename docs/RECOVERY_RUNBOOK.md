@@ -79,8 +79,10 @@ Because BenoStreamDB writes valid Iceberg metadata files (`v1.metadata.json`, `v
 1. Inspect the `metadata/` directory in your object store.
 2. Identify the highest numbered metadata file (e.g., `v42.metadata.json`).
 3. Manually register this table in your new/restored catalog using the Iceberg REST API or catalog-specific CLI:
-   ```json
-   POST /v1/namespaces/default/register
+   ```http
+   POST /v1/namespaces/default/register HTTP/1.1
+   Content-Type: application/json
+
    {
      "name": "my-table",
      "metadata-location": "s3://my-bucket/my-table/metadata/v42.metadata.json"

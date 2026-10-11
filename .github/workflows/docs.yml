@@ -59,15 +59,26 @@ jobs:
 
       - name: Prepare Sphinx Guides
         run: |
-          # Expose every docs/*.md to Sphinx under docs/source/guides/ using
-          # consistent lowercase names — the toctree in docs/source/index.rst
-          # references these names. Symlinks avoid duplicating content.
-          mkdir -p docs/source/guides
+          mkdir -p docs/source/guides docs/source/integrations docs/source/tutorials
           for f in docs/*.md; do
+            [ -f "$f" ] || continue
             name="$(basename "$f" .md | tr '[:upper:]' '[:lower:]')"
             [ "$name" = "index" ] && continue
             ln -sf "../../$(basename "$f")" "docs/source/guides/$name.md"
           done
+          for f in docs/integrations/*.md; do
+            [ -f "$f" ] || continue
+            name="$(basename "$f" .md | tr '[:upper:]' '[:lower:]')"
+            [ "$name" = "readme" ] && continue
+            ln -sf "../../integrations/$(basename "$f")" "docs/source/integrations/$name.md"
+          done
+          for f in docs/tutorials/*.md; do
+            [ -f "$f" ] || continue
+            name="$(basename "$f" .md | tr '[:upper:]' '[:lower:]')"
+            ln -sf "../../tutorials/$(basename "$f")" "docs/source/tutorials/$name.md"
+          done
+          ln -sf "../../architecture/ADR_001_TIGHTENED_INDEX_OVERLAY_CONTRACT.md" "docs/source/guides/adr_001.md"
+          ln -sf "../../PRODUCTION_READINESS_ASSESSMENT.md" "docs/source/guides/production_readiness.md"
 
       - name: Build Sphinx Documentation
         run: |

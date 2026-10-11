@@ -1,0 +1,1 @@
+../../integrations/SEARCH_GATEWAY.md

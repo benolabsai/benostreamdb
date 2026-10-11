@@ -42,7 +42,7 @@ pub trait GraphView: Send + Sync {
     ///
     /// This is the allocation-free traversal primitive. Hot algorithms keep one
     /// scratch `Vec<u64>` and reuse it across every hop instead of receiving a
-    /// freshly heap-allocated `Vec` from [`get_neighbors`] per visit. Backings
+    /// freshly heap-allocated `Vec` from [`Self::get_neighbors`] per visit. Backings
     /// that own a contiguous adjacency override this to copy straight into
     /// `out`; the default forwards to `get_neighbors`. The method takes no
     /// generic parameters, so it stays object-safe for `dyn GraphView`.
@@ -55,7 +55,7 @@ pub trait GraphView: Send + Sync {
     /// Backings that own a contiguous adjacency (`SimpleGraph`) or cache
     /// neighbor lists (`CachingGraph`) return an `Arc` clone, so a traversal can
     /// hold the list without copying it. The default allocates once from
-    /// [`get_neighbors`]. Object-safe (no generics), so `dyn GraphView` works.
+    /// [`Self::get_neighbors`]. Object-safe (no generics), so `dyn GraphView` works.
     fn get_neighbors_shared(&self, node: u64) -> Arc<[u64]> {
         Arc::from(self.get_neighbors(node))
     }

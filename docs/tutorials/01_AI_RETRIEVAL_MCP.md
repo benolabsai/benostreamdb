@@ -85,7 +85,7 @@ ORDER BY vector_distance(embedding, ARRAY[1.0, 0.0, 0.0, 0.0]) LIMIT 2;
 
 **dbt** (a model):
 
-```sql
+```sql+jinja
 {{ config(materialized='table') }}
 SELECT id, title FROM {{ ref('docs') }}
 ORDER BY vector_distance(embedding, [1.0, 0.0, 0.0, 0.0]) LIMIT 2

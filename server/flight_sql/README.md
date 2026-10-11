@@ -102,7 +102,7 @@ The server exposes an HTTP observability surface on
 | `GET /health` | Liveness (`200 ok`). |
 | `GET /readyz` | Readiness (`200 ok`). |
 
-See [docs/monitoring.md](../../docs/monitoring.md) for the full metric catalog.
+See [docs/MONITORING.md](../../docs/MONITORING.md) for the full metric catalog.
 
 ## Connecting with Python (ADBC Flight SQL)
 

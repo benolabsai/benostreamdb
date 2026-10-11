@@ -69,48 +69,73 @@ catalog = bsdb.create_catalog_from_config("/path/to/my_config.toml")
 
 See [examples/configs/](../../examples/configs/) for example configuration files for each catalog type.
 
-### Writing Data
+### Table Operations (Writing and Reading)
+
+BenoStreamDB centers around the `Table` class, which manages underlying Apache Iceberg Parquet files and rebuildable index overlays.
 
 ```python
-import benostreamdb as benostream
+import benostreamdb as bsdb
 import pandas as pd
+import numpy as np
 
-# Create a writer
-writer = benostream.Writer("s3://my-bucket/dataset")
+# Open or initialize a table directly from object storage or local path
+table = bsdb.Table("s3://my-bucket/dataset")
 
-# Create a dataframe
+# Prepare data
 df = pd.DataFrame({
     "id": [1, 2, 3],
     "text": ["hello", "world", "benostream"],
-    "vector": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+    "vector": [[0.1, 0.2, 0.3], [0.3, 0.4, 0.5], [0.5, 0.6, 0.7]]
 })
 
-# Write the segment
-writer.write_dataframe(df)
-writer.commit()
+# Append rows (accepts pandas DataFrame or pyarrow Table/RecordBatch)
+table.append(df)
+table.commit()
+
+# Read data back into Arrow or Pandas
+arrow_table = table.to_arrow()
+pdf = table.to_pandas()
 ```
 
-### Reading Data (with Predicate Pushdown)
+### Vector Search & Index Overlays
+
+You can configure vector, full-text (BM25), or bitmap indexes over table columns and perform similarity searches:
 
 ```python
-reader = benostream.Reader("s3://my-bucket/dataset")
+# Add an HNSW vector index on the 'vector' column
+# Index algorithms: "hnsw" (default float32), "hnsw_tq8", "hnsw_tq4", "bm25", "bitmap"
+table.add_index(["vector"], index_type="hnsw")
+table.build_indexes()
 
-# Filter logic is pushed down to Rust and uses Inverted Indexes
-# Only relevant rows are materialized into Pandas
-df = reader.query(
-    filter="id > 1 AND text LIKE '%world%'",
-    columns=["id", "text", "vector"]
-)
+# Top-k vector search
+query_vector = [0.1, 0.2, 0.3]
+results = table.vector_search(query_vector, column="vector", k=10)
+```
 
-print(df)
+### SQL Analytics & Filtering
+
+Execute ANSI SQL queries with pgvector distance operators directly through `Table.sql()` or an engine `Session`:
+
+```python
+# Ad-hoc query on the table (referenced as 'self' or table name)
+matches = table.sql("SELECT id, text FROM self WHERE id > 1 AND text LIKE '%world%'")
+print(matches.to_pandas())
+
+# Full DataFusion session across multiple tables
+session = bsdb.Session()
+session.register_table("documents", table)
+res = session.sql("""
+    SELECT id, text, embedding <-> '[0.1, 0.2, 0.3]'::vector AS dist
+    FROM documents
+    ORDER BY dist ASC
+    LIMIT 5
+""")
+print(res.to_arrow())
 ```
 
 ### Live Subscriptions (change feed)
 
-`Table.subscribe()` returns a live subscription to the table's committed
-changes. `recv()` blocks (with an optional timeout); `try_recv()` is
-non-blocking. `subscribe_filtered("age > 30")` yields only matching rows.
-`close()` (or dropping the object / using it as a context manager) unsubscribes.
+`Table.subscribe()` returns a live subscription to the table's committed changes. `recv()` blocks (with an optional timeout); `try_recv()` is non-blocking. `subscribe_filtered("age > 30")` yields only matching rows. `close()` (or dropping the object / using it as a context manager) unsubscribes.
 
 ```python
 sub = table.subscribe()                 # or table.subscribe_filtered("age > 30")
@@ -122,18 +147,25 @@ with table.subscribe() as sub:          # context manager
     ...
 ```
 
-The change feed is **in-process**: it observes commits made by writers in the
-same process. The same primitive is available as the `subscribe_events` SQL
-table function (reachable from every connector) and as a Flight SQL streaming
-ticket.
+The change feed is **in-process**: it observes commits made by writers in the same process. The same primitive is available as the `subscribe_events` SQL table function (reachable from every connector) and as a Flight SQL streaming ticket.
 
-### GPU Device
+### Compute Device Configuration
 
-`benostreamdb.set_gpu_device("cuda:1")` pins the process GPU device
-(`auto` | `cpu` | `cuda[:N]` | `mps` | `intel` | `rocm`); `benostreamdb.gpu_device()`
-returns the active backend. This is the same mapping the Spark/Trino JNI
-bridges and the Flight/MCP servers use.
+BenoStreamDB provides dynamic hardware acceleration via the `Device` class, with automatic detection and graceful CPU fallback:
+
+```python
+# Auto-detect best available device (CUDA, Apple Silicon Metal, or CPU)
+device = bsdb.Device("auto")
+print(f"Active backend: {device.backend}")
+
+# Explicit device selection
+device = bsdb.Device("cuda")   # NVIDIA GPU (or AMD ROCm via HIP alignment)
+device = bsdb.Device("mps")    # Apple Silicon Metal
+device = bsdb.Device("cpu")    # CPU fallback
+```
+
+For stand-alone batch vector distance computations outside tables, see the [Python Vector API Guide](python_vector_api.md).
 
 ## Architecture
 
-The Python binding is a thin wrapper around the Rust core. It uses **Arrow C Data Interface** to transfer data between Rust (Apache Arrow) and Python (Pandas/PyArrow) with **zero-copy**. This ensures that reading data in Python is as fast as reading it in Rust.
+The Python binding is built with PyO3. It leverages the **Arrow C Data Interface** to exchange data between the Rust engine and Python runtimes (PyArrow/Pandas) with **zero-copy** memory sharing wherever possible, avoiding unnecessary serialization overhead.

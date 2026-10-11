@@ -224,7 +224,7 @@ On Spark 4.x, manage BenoStreamDB indexes and primary keys directly through nati
 -- Add an index to a column: algorithm is one of
 --   hnsw | hnsw_pq | hnsw_tq4 | hnsw_tq8 | bm25 | bloom | bitmap |
 --   composite_bitmap | csr_graph | json_path
--- (defaults to the TurboQuant-8 vector index)
+-- (defaults to full-precision hnsw; hnsw_tq8 and hnsw_tq4 are opt-in)
 CALL benostream.system.add_index('spark_catalog.default.users', 'embedding', 'hnsw');
 
 -- Build offline index files for all segments

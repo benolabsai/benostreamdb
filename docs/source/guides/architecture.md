@@ -1,1 +1,1 @@
-../../architecture.md
+../../ARCHITECTURE.md
