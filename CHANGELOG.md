@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0]
 
 ### Benchmarks
+- **Report: "Index Precision" column** — the vector tables now report the
+  quantization (`f32`/`tq8`/`tq4`/`pq`) rather than the algorithm name, and the
+  `_tq8`/`_tq4`/`_pq` suffix is dropped from the Engine column (the precision
+  column carries it). The §4 BEIR table is sorted by dataset then QPS, with
+  lexical BM25 rows reading `-` (no vector index) and hybrid `f32`. The SQL
+  harness now carries the dataset name (recovered from the filename for older
+  records) and duplicate SQL runs are collapsed.
 - **Competitor matrix expanded** — added **Qdrant**, **Milvus** and **Weaviate**
   (vector) and **Memgraph** (MAGE) and **Kùzu** (embedded) graph engines, all
   under the shared Docker envelope. The report gains a **§10 "Competitor
@@ -43,8 +50,6 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   first (500k-edge load: minutes/hang → ~5 s). Kùzu's default 8 TB `max_db_size`
   and host-sized buffer pool also failed to mmap under the cgroup cap; both are
   now sized from the envelope.
-
-## [0.12.0]
 
 ### Added
 - **Workflow tutorials** — one runnable tutorial per core workflow: AI/semantic
