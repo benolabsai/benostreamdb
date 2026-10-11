@@ -3,7 +3,7 @@ Date: 2026-10-03
 Scope: Full codebase audit of architecture, testing, operations, and security posture
 Current Version: 0.12.0
 
-Status: **Completed** (All blockers resolved).
+Status: **Developer Preview** (all workstreams passed; pending real-world usage).
 
 This assessment evaluates the current production readiness of BenoStreamDB based on the resolution of identified workstreams (WS1-WS5) and the end-to-end benchmark suite.
 
@@ -21,9 +21,9 @@ This assessment evaluates the current production readiness of BenoStreamDB based
 | Testing infrastructure | **Hardened** (WS1-WS5 differential harnesses and soak tests active) |
 | Crash/recovery confidence | **High** (survives randomized WS2 crash-injection sweep) |
 | Multi-writer production deployment | **Ready** (survives WS3 concurrency harness with object-store faults) |
-| Security | Early (auth/RBAC controls still deferred) |
+| Security | **Shipped** (API key + JWT auth on search gateway and Flight SQL; OAuth2 for catalogs; RBAC roles in JWT claims) |
 | Operational tooling | Progressing (observability plan in motion) |
-| **Overall** | **Highly Viable DBMS / Ready for Production Workloads** |
+| **Overall** | **Developer Preview Ready** |
 
 ### ✅ Resolved Blocker: `lastfm-64-dot` Vector Recall Anomaly
 During the execution of the end-to-end benchmark suite, an anomaly was discovered where vector recall dropped to **~6%** specifically on the `lastfm-64-dot` dataset for `hnsw_tq8`. 
@@ -83,8 +83,36 @@ All five workstreams testing the storage/transaction/recovery boundaries have be
 
 ---
 
-## 4. Final Exit Criteria
+## 4. Security Posture
+
+Authentication is implemented as a shared, stateless module (`src/core/auth.rs`)
+used by both the search gateway and the Flight SQL server:
+
+- **API key** — constant-time comparison against `BSDB_API_KEY`.
+- **JWT** — HS256 (`BSDB_JWT_SECRET`) or RS256 (`BSDB_JWT_PUBLIC_KEY`); claims
+  extraction for subject, roles, audience, issuer, and expiry.
+- **RBAC** — roles extracted from JWT claims (`roles` array); available to
+  authorization logic.
+- **Search gateway** (`contrib/benostreamdb-search/src/auth.rs`) — Axum
+  middleware accepting `Authorization: Bearer <jwt>`, `Authorization: ApiKey
+  <key>`, and `api-key: <key>` (Qdrant convention). Public-path exemption for
+  health checks; fail-closed when `required()` is set.
+- **Flight SQL** (`server/flight_sql/src/main.rs`) — Tonic interceptor using the
+  same `AuthConfig`; `authorization` metadata header.
+- **Fail-closed on network exposure** — both servers refuse to bind to a
+  non-loopback address without credentials (`process::exit(1)`).
+- **Catalog authentication** — OAuth2 client-credentials grant with token
+  caching and expiry (`src/core/catalog/rest.rs`); Bearer token support; SSRF
+  guard on catalog URLs (`src/core/catalog/mod.rs`).
+- **SQL session hardening** — `ALLOWED_SESSION_SETTINGS` prevents SQL `SET`
+  from rewriting environment variables (credentials, endpoints).
+
+Remaining gaps: no built-in user database (identity is delegated to an external
+IdP or a shared secret); no per-table or per-column access control; no audit
+logging of authentication events.
+
+## 5. Final Exit Criteria
 
 With the completion of WS1-WS5 and the resolution of the quantization boundary anomaly, the core storage engine has survived millions of operations (insert/update/delete/predicate/vector/snapshot/commit/compaction/index-rebuild) with injected failures without divergence between indexed and full-scan execution.
 
-The system meets the exit criteria for a **Public multi-tenant service** (pending security and operational tooling maturity).
+The system meets the exit criteria for a **Developer Preview** (pending real-world usage and operational tooling maturity).

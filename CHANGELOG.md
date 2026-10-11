@@ -1,4 +1,4 @@
-# Changelog
+s, t# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -11,7 +11,7 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 ### Benchmarks
 - **Report: "Index Precision" column** — the vector tables now report the
   quantization (`f32`/`tq8`/`tq4`/`pq`) rather than the algorithm name, and the
-  `_tq8`/`_tq4`/`_pq` suffix is dropped from the Engine column (the precision
+  `_tq8`/`_pq` suffix is dropped from the Engine column (the precision
   column carries it). The §4 BEIR table is sorted by dataset then QPS, with
   lexical BM25 rows reading `-` (no vector index) and hybrid `f32`. The SQL
   harness now carries the dataset name (recovered from the filename for older

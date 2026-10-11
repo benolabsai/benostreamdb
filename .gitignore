@@ -105,6 +105,7 @@ bench_*.py
 
 # ── Private / commercial planning (not part of the public repo) ─────────────
 business_plan/
+benolabs/
 target-jni/
 
 # ── Unintended large files / test artifacts ────────────────────────
