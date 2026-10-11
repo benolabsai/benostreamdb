@@ -1,6 +1,6 @@
 # BenoStreamDB Comprehensive Benchmark Report
 
-- **Generated At**: 2026-10-11 00:26:32 UTC
+- **Generated At**: 2026-10-11 00:33:53 UTC
 - **Platform**: Linux-7.0.0-34-generic-x86_64-with-glibc2.41
 - **Python**: 3.12.15
 
@@ -155,19 +155,19 @@ from the per-engine JSON records). This page describes how to read it.
 
 ### Rolled-up results (JSON)
 
-| Engine | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| benostreamdb | cpu | lexical_bm25 | arguana | 0.655 | 0.3084 | 0.1994 | 56.2 | 17.074 | 30.681 | 0.458 | 4.08 |
-| benostreamdb | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3067 | 0.5151 | 1041.6 | 0.725 | 1.69 | 0.277 | 2.46 |
-| benostreamdb | cpu | hybrid_rrf | scifact | 0.851 | 0.6935 | 0.6487 | 180.2 | 5.426 | 7.087 | 0.501 | 11.68 |
-| benostreamdb | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 417.6 | 2.25 | 3.846 | 0.356 | 3.31 |
-| lancedb | cpu | hybrid_rrf | scifact | 0.8199 | 0.6677 | 0.6239 | 195.9 | 4.681 | 7.054 | 0.897 | 14.41 |
-| opensearch | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 131.3 | 6.647 | 24.44 | 0.847 | 7.9 |
-| opensearch | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1466.7 | 0.704 | 0.955 | 0.528 | 4.85 |
-| opensearch | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 814.1 | 1.127 | 2.429 | 2.563 | 6.71 |
-| tantivy | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 373.8 | 2.552 | 5.426 | 0.177 | 10.4 |
-| tantivy | cpu | lexical_bm25 | nfcorpus | 0.1441 | 0.2997 | 0.5091 | 11310.4 | 0.051 | 0.187 | 0.17 | 6.2 |
-| tantivy | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 4026.4 | 0.196 | 0.492 | 1.922 | 8.01 |
+| Engine | Index | Backend | Workload | Dataset | Recall@k | nDCG@k | MRR@k | QPS | p50 (ms) | p99 (ms) | Build (s) | Index (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| tantivy | bm25 | cpu | lexical_bm25 | nfcorpus | 0.1452 | 0.3001 | 0.5096 | 8180.4 | 0.071 | 0.344 | 0.137 | 6.21 |
+| tantivy | bm25 | cpu | lexical_bm25 | scifact | 0.7812 | 0.6517 | 0.615 | 3750.4 | 0.218 | 0.497 | 0.189 | 8.34 |
+| opensearch | bm25 | cpu | lexical_bm25 | nfcorpus | 0.1532 | 0.3215 | 0.5187 | 1495.3 | 0.687 | 0.906 | 0.522 | 4.85 |
+| opensearch | bm25 | cpu | lexical_bm25 | scifact | 0.8196 | 0.6821 | 0.6431 | 1218.2 | 0.805 | 1.134 | 0.661 | 6.62 |
+| **benostreamdb** | bm25 | cpu | lexical_bm25 | nfcorpus | 0.1491 | 0.3069 | 0.5151 | 1059.9 | 0.706 | 1.654 | 0.282 | 2.46 |
+| **benostreamdb** | bm25 | cpu | lexical_bm25 | scifact | 0.7909 | 0.6617 | 0.6276 | 422.6 | 2.239 | 3.94 | 0.364 | 3.31 |
+| tantivy | bm25 | cpu | lexical_bm25 | arguana | 0.67 | 0.3226 | 0.2137 | 381.6 | 2.486 | 5.285 | 0.202 | 10.44 |
+| lancedb | bm25+hnsw | cpu | hybrid_rrf | scifact | 0.8201 | 0.6626 | 0.6186 | 195.9 | 4.744 | 5.956 | 0.865 | 14.34 |
+| **benostreamdb** | bm25+hnsw | cpu | hybrid_rrf | scifact | 0.8493 | 0.69 | 0.6437 | 178.2 | 5.482 | 7.363 | 0.547 | 11.68 |
+| opensearch | bm25 | cpu | lexical_bm25 | arguana | 0.7461 | 0.3557 | 0.233 | 136.4 | 6.432 | 22.422 | 0.852 | 7.9 |
+| **benostreamdb** | bm25 | cpu | lexical_bm25 | arguana | 0.6558 | 0.3086 | 0.1995 | 58.0 | 16.525 | 29.505 | 0.459 | 4.08 |
 
 ### Results from `arguana_bm25_competitors_cpu.md`
 
@@ -184,9 +184,9 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.46s | 4.1 MB | **56.2** | **17.07 ms** | 30.68 ms | 0.6550 | 0.3084 |
-| **tantivy** | `cpu` | ✅ Pass | 0.18s | 10.4 MB | **373.8** | **2.55 ms** | 5.43 ms | 0.6700 | 0.3226 |
-| **opensearch** | `cpu` | ✅ Pass | 0.85s | 7.9 MB | **131.3** | **6.65 ms** | 24.44 ms | 0.7461 | 0.3557 |
+| **tantivy** | `cpu` | ✅ Pass | 0.20s | 10.4 MB | **381.6** | **2.49 ms** | 5.28 ms | 0.6700 | 0.3226 |
+| **opensearch** | `cpu` | ✅ Pass | 0.85s | 7.9 MB | **136.4** | **6.43 ms** | 22.42 ms | 0.7461 | 0.3557 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.46s | 4.1 MB | **58.0** | **16.53 ms** | 29.50 ms | 0.6558 | 0.3086 |
 
 ### Differential Oracle & Result Agreement
 
@@ -209,13 +209,13 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.28s | 2.5 MB | **1041.6** | **0.73 ms** | 1.69 ms | 0.1491 | 0.3067 |
-| **tantivy** | `cpu` | ✅ Pass | 0.17s | 6.2 MB | **11310.4** | **0.05 ms** | 0.19 ms | 0.1441 | 0.2997 |
-| **opensearch** | `cpu` | ✅ Pass | 0.53s | 4.8 MB | **1466.7** | **0.70 ms** | 0.96 ms | 0.1532 | 0.3215 |
+| **tantivy** | `cpu` | ✅ Pass | 0.14s | 6.2 MB | **8180.4** | **0.07 ms** | 0.34 ms | 0.1452 | 0.3001 |
+| **opensearch** | `cpu` | ✅ Pass | 0.52s | 4.8 MB | **1495.3** | **0.69 ms** | 0.91 ms | 0.1532 | 0.3215 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.28s | 2.5 MB | **1059.9** | **0.71 ms** | 1.65 ms | 0.1491 | 0.3069 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap vs tantivy**: **92.3%**.
+- **Top-10 Jaccard Overlap vs tantivy**: **92.1%**.
 - **Top-10 Jaccard Overlap vs opensearch**: **61.9%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
@@ -234,13 +234,13 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Backend | Status | Build Time | Index Size | QPS | p50 Latency | p99 Latency | Recall@10 | nDCG@10 |
 |---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **417.6** | **2.25 ms** | 3.85 ms | 0.7909 | 0.6617 |
-| **tantivy** | `cpu` | ✅ Pass | 1.92s | 8.0 MB | **4026.4** | **0.20 ms** | 0.49 ms | 0.7812 | 0.6517 |
-| **opensearch** | `cpu` | ✅ Pass | 2.56s | 6.7 MB | **814.1** | **1.13 ms** | 2.43 ms | 0.8196 | 0.6821 |
+| **tantivy** | `cpu` | ✅ Pass | 0.19s | 8.3 MB | **3750.4** | **0.22 ms** | 0.50 ms | 0.7812 | 0.6517 |
+| **opensearch** | `cpu` | ✅ Pass | 0.66s | 6.6 MB | **1218.2** | **0.81 ms** | 1.13 ms | 0.8196 | 0.6821 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.36s | 3.3 MB | **422.6** | **2.24 ms** | 3.94 ms | 0.7909 | 0.6617 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap vs tantivy**: **81.5%**.
+- **Top-10 Jaccard Overlap vs tantivy**: **81.4%**.
 - **Top-10 Jaccard Overlap vs opensearch**: **53.1%**.
 - High ranking agreement validates correct Okapi BM25 implementation across vocabulary, inverted postings, and document length normalization sidecars.
 
@@ -264,21 +264,21 @@ from the per-engine JSON records). This page describes how to read it.
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.50s | 11.7 MB | **180.2** | **5.43 ms** | 7.09 ms | **0.8510** | **0.6935** | 0.6487 |
-| **lancedb** | `cpu` | ✅ Pass | 0.90s | 14.4 MB | **195.9** | **4.68 ms** | 7.05 ms | **0.8199** | **0.6677** | 0.6239 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.55s | 11.7 MB | **178.2** | **5.48 ms** | 7.36 ms | **0.8493** | **0.6900** | 0.6437 |
+| **lancedb** | `cpu` | ✅ Pass | 0.86s | 14.3 MB | **195.9** | **4.74 ms** | 5.96 ms | **0.8201** | **0.6626** | 0.6186 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **46.5%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **47.6%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 11.7 MB | 424.2 | 2.23 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1222.3 | 0.71 ms | 0.7900 | 0.6451 | 0.6036 |
-| **Hybrid (Dense + BM25 RRF)** | 11.7 MB | 180.2 | 5.43 ms | **0.8510** | **0.6935** | **0.6487** |
+| **Dense (Vector Only)** | 0.0 MB | 1132.4 | 0.76 ms | 0.7767 | 0.6383 | 0.5982 |
+| **Sparse (BM25 Only)** | 11.7 MB | 417.3 | 2.27 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Hybrid (Dense + BM25 RRF)** | 11.7 MB | 178.2 | 5.48 ms | **0.8493** | **0.6900** | **0.6437** |
 
 
 ## 5. Production Workload & Concurrency Performance

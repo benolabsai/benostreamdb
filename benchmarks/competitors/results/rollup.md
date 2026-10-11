@@ -1,4 +1,4 @@
-# Benchmark rollup (2026-10-10T20:19:40-04:00)
+# Benchmark rollup (2026-10-10T20:33:53-04:00)
 
 Hardware profile: cpus=8 mem=16g — see hardware_profile.txt
 

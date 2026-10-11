@@ -1,5 +1,5 @@
 # Hardware profile
-date: 2026-10-10T20:19:29-04:00
+date: 2026-10-10T20:33:40-04:00
 envelope_cpus: 8
 envelope_mem: 16g
 cpu_model: AMD Ryzen 9 5900XT 16-Core Processor
