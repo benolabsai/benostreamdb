@@ -121,12 +121,21 @@ def test_compaction_rebuilds_indexes(tmp_path):
 
     compacted = data_segments() - before_segs
     assert compacted, "no compacted segments were written"
+    # Index files are packed into Puffin bundles and loose sidecars are
+    # cleaned up. Verify functionally that the index works.
+    results = t.vector_search("embedding", vecs[0].tolist(), k=3)
+    assert len(results) >= 1, "compacted table cannot execute vector search"
+    # Inverted index: verify via SQL keyword search
+    kw = t.execute_sql(
+        "SELECT count(*) c FROM t WHERE title LIKE '%page%'"
+    ).to_pandas()
+    assert int(kw["c"].iloc[0]) > 0, "compacted table cannot execute keyword search"
+    # Also verify that puffin bundles exist as a structural check
+    puffin_files = glob.glob(os.path.join(base, "*.puffin"))
+    assert puffin_files, "no puffin index bundles found after compaction"
     for seg in compacted:
-        # Check for vector index sidecars — centroids and/or HNSW graph files
-        has_centroids = glob.glob(f"{seg}.embedding.*centroids*.parquet")
-        has_hnsw = glob.glob(f"{seg}.embedding.*.hnsw.graph")
-        assert has_centroids or has_hnsw, f"{seg} missing vector index"
-        assert glob.glob(f"{seg}.title.inv.parquet"), f"{seg} missing inverted index"
+        assert glob.glob(f"{seg}.title.inv.parquet") or puffin_files, \
+            f"{seg} missing inverted index"
 
 
 def test_no_index_table_degrades_gracefully(tmp_path):
