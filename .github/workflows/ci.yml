@@ -44,7 +44,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "lint"
+          shared-key: "ci-v2"
 
       - name: Check formatting
         run: cargo fmt --check
@@ -97,7 +97,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "test"
+          shared-key: "ci-v2"
 
       - name: Run Cargo Tests (CPU only)
         env:
@@ -132,7 +132,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "metal"
+          shared-key: "ci-v2"
 
       - name: Cross-backend correctness harness (CPU gold vs Metal)
         run: cargo test --lib cross_backend -- --nocapture
@@ -160,7 +160,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "pytest"
+          shared-key: "ci-v2"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -232,7 +232,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "no-panic"
+          shared-key: "ci-v2"
 
       - name: Run no-panic ratchet + hard gate
         run: bash scripts/no_panic_check.sh
@@ -252,7 +252,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "ecosystem"
+          shared-key: "ci-v2"
 
       - name: Setup Python
         uses: actions/setup-python@v6
