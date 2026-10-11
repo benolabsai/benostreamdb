@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'src/**'
       - 'benostream-gpu-ann/**'
       - '.github/workflows/test-windows.yml'
 

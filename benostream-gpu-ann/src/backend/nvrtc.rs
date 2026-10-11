@@ -152,11 +152,7 @@ fn self_site_packages() -> Option<PathBuf> {
             lpModuleName: *const u16,
             phModule: *mut *mut c_void,
         ) -> c_int;
-        fn GetModuleFileNameW(
-            hModule: *mut c_void,
-            lpFilename: *mut u16,
-            nSize: u32,
-        ) -> u32;
+        fn GetModuleFileNameW(hModule: *mut c_void, lpFilename: *mut u16, nSize: u32) -> u32;
     }
 
     const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x00000004;
@@ -183,7 +179,10 @@ fn self_site_packages() -> Option<PathBuf> {
     let os_str = std::ffi::OsString::from_wide(&buf);
     let mut p = PathBuf::from(os_str);
     while p.pop() {
-        if p.file_name().map(|n| n == "site-packages" || n == "Lib").unwrap_or(false) {
+        if p.file_name()
+            .map(|n| n == "site-packages" || n == "Lib")
+            .unwrap_or(false)
+        {
             return Some(p);
         }
     }
