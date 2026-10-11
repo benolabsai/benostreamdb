@@ -44,7 +44,7 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.36
         id: cuda-toolkit
         with:
-          cuda: "12.1.0"
+          cuda: "13.0.2"
           method: "network"
           # We only need compilation, not the full driver
           sub-packages: '["nvcc", "cudart-dev"]'
@@ -138,9 +138,9 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.36
         id: cuda-toolkit
         with:
-          cuda: "12.1.0"
+          cuda: "13.0.2"
           method: "network"
-          sub-packages: '["nvcc", "cudart-dev"]'
+          sub-packages: '["nvcc", "cudart"]'
       - name: Test CUDA discovery on Windows
         env:
           SKIP_GPU_TESTS: "1"
