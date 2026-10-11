@@ -17,6 +17,7 @@ import pandas as pd
 import pytest
 from pathlib import Path
 import importlib.util
+import os
 import shutil
 import subprocess
 import json
@@ -64,13 +65,20 @@ class TestSparkCompatibility:
         print("✅ Spark read successful")
         """
         
-        # Run Spark script
-        result = subprocess.run(
-            ["spark-submit", "--master", "local[*]", "-"],
-            input=spark_script.encode(),
-            capture_output=True
-        )
-        assert result.returncode == 0
+        # Run Spark script via a temporary file
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(spark_script)
+            script_path = f.name
+        try:
+            result = subprocess.run(
+                ["spark-submit", "--master", "local[*]", script_path],
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode == 0, f"Spark submit failed:\n{result.stderr}\n{result.stdout}"
+        finally:
+            if os.path.exists(script_path):
+                os.remove(script_path)
     
     def test_spark_read_v3_metadata(self):
         """Test Spark can read V3 metadata columns"""
