@@ -44,16 +44,16 @@ EFS=200
 # scalar-quantized HNSW variant. Both are run so the comparison covers each
 # family rather than only the HNSW-shaped one.
 # `benostreamdb` is full-precision HNSW (parity with the other float HNSW
-# engines); `benostreamdb_tq8`/`_tq4` are the TurboQuant-compressed variants, so
+# engines); `benostreamdb_tq8` is the TurboQuant-compressed variant, so
 # the recall/size trade-off is visible rather than conflated.
-CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch qdrant milvus weaviate benostreamdb benostreamdb_tq8 benostreamdb_tq4 benostreamdb_pq"
+CPU_ENGINES="faiss hnswlib lancedb lancedb_hnsw pgvector opensearch qdrant milvus weaviate benostreamdb benostreamdb_tq8 benostreamdb_pq"
 # The GPU pass runs only engines with a *working* GPU execution path. CPU-only
 # competitors run on the CPU inside the GPU container and now correctly report
 # device=cpu (per-engine backend), so re-measuring them adds nothing — the CPU
 # pass already covers every engine once. FAISS is excluded because faiss-gpu-cu12
 # has no Blackwell (sm_120) kernels on this class of GPU (`faiss.get_num_gpus()`
 # returns 0), so it silently falls back to CPU. Override with --gpu-engines.
-GPU_ENGINES="benostreamdb benostreamdb_tq8 benostreamdb_tq4 benostreamdb_pq"
+GPU_ENGINES="benostreamdb benostreamdb_tq8 benostreamdb_pq"
 UP_ENGINES="pgvector opensearch qdrant milvus weaviate neo4j memgraph clickhouse trino"
 # Workload families. `vector` is the default; `graph` and `sql` reuse the same
 # runner image and envelope but dispatch to the graph/SQL adapters.

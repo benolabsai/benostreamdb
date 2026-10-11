@@ -40,7 +40,7 @@ def create_benchmark_table(db_path: str, n_rows: int = 20000, dim: int = 128) ->
     table.add_index(
         "embedding",
         # Full precision by default (matches the engine default); the quantized
-        # TQ8/TQ4/PQ variants are opt-in and reported separately by the
+        # TQ8/PQ variants are opt-in and reported separately by the
         # competitor matrix.
         {"type": "hnsw", "complexity": 16, "quality": 200, "metric": "l2"},
     )

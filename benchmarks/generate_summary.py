@@ -97,12 +97,12 @@ COMPETITOR_CONFIG = [
 def _eng_label(engine) -> str:
     """Bold BenoStreamDB rows so they stand out in every table.
 
-    The vector quantization suffix (`_tq8`/`_tq4`/`_pq`) is dropped from the
+    The vector quantization suffix (`_tq8`/`_pq`) is dropped from the
     engine name because the Index Precision column already carries it, so the
     quantized variants read as plain `benostreamdb`.
     """
     name = str(engine)
-    for suffix in ("_tq8", "_tq4", "_pq"):
+    for suffix in ("_tq8", "_pq"):
         if name.endswith(suffix):
             name = name[: -len(suffix)]
             break
@@ -110,11 +110,11 @@ def _eng_label(engine) -> str:
 
 
 def _quant_label(idx, default: str = "-") -> str:
-    """The vector *quantization* behind an index: f32 / tq8 / tq4 / pq.
+    """The vector *quantization* behind an index: f32 / tq8 / pq.
 
     The Index Precision column reports the precision, not the algorithm name,
     so a full-precision HNSW index reads `f32` and the TurboQuant/PQ variants
-    read `tq8`/`tq4`/`pq`. Lexical-only indexes (BM25) have no vector component
+    read `tq8`/`pq`. Lexical-only indexes (BM25) have no vector component
     and read `-`; a hybrid `bm25+hnsw` index is full-precision `f32`. When the
     record carries no index information the caller picks the fallback: `f32`
     in the vector tables (competitors run full precision) and `-` in the
@@ -125,8 +125,6 @@ def _quant_label(idx, default: str = "-") -> str:
         return default
     if "tq8" in s:
         return "tq8"
-    if "tq4" in s:
-        return "tq4"
     if "pq" in s:
         return "pq"
     # Lexical-only (BM25) has no vector index; hybrid (bm25+hnsw) is f32.
@@ -225,7 +223,7 @@ def generate_summary():
 
     # 1. Vector ANN Benchmarks
     #
-    # These are BenoStreamDB's *own* index variants (HNSW / TurboQuant TQ8/TQ4 /
+    # These are BenoStreamDB's *own* index variants (HNSW / TurboQuant TQ8 /
     # PQ) with no competitor, so they are not a head-to-head comparison — the
     # competitor matrix is §9. Keep only a pointer so the comparison report does
     # not duplicate raw self-benchmarks.
@@ -233,7 +231,7 @@ def generate_summary():
     sections.append("")
     sections.append(
         "Index-variant characterization for BenoStreamDB itself (HNSW, TurboQuant "
-        "`hnsw_tq8`/`hnsw_tq4`, IVF-PQ) with **no competitor**. Head-to-head vector "
+        "`hnsw_tq8`, IVF-PQ) with **no competitor**. Head-to-head vector "
         "comparison is in **§9**; raw results are under "
         "`benchmarks/ann_benchmarks/results/`."
     )
@@ -242,8 +240,8 @@ def generate_summary():
     sections.append("")
     sections.append(
         "- **Pro — smaller index / less memory.** TurboQuant quantizes the stored "
-        "vectors: `hnsw_tq8` (8-bit) is ≈4× smaller than float32 and `hnsw_tq4` "
-        "(4-bit) ≈8× smaller, so more vectors fit per node and the working set "
+        "vectors: `hnsw_tq8` (8-bit) is ≈4× smaller than float32, "
+        "so more vectors fit per node and the working set "
         "(and on-disk sidecar) shrinks accordingly.\n"
         "- **Pro — cheaper distances / lower latency.** Comparing 1-byte codes is "
         "faster than 4-byte floats, so the quantized indexes typically serve lower "
@@ -256,10 +254,10 @@ def generate_summary():
         "- **Con — approximate distances for reranking.** Scores are approximate, "
         "so use the index for candidate discovery and rerank from the float "
         "payload where exactness matters.\n"
-        "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/`hnsw_tq4`/"
+        "- **Default.** Full-precision `hnsw` is the default; `hnsw_tq8`/"
         "`hnsw_pq` are opt-in for workloads that will trade recall for size/latency. "
         "§9 reports the `benostreamdb` engine once per precision, with the "
-        "**Index Precision** column (`f32`/`tq8`/`tq4`/`pq`) making the trade-off "
+        "**Index Precision** column (`f32`/`tq8`/`pq`) making the trade-off "
         "explicit; holding several precisions on one column and selecting per query "
         "is on the roadmap (Theme 6)."
     )
