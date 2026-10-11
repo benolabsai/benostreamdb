@@ -186,7 +186,7 @@ impl DiskCache {
         // MADV_RANDOM disables readahead so only the pages actually touched
         // are faulted in — this is what makes mmap-backed (out-of-core)
         // vector/graph search cache-efficient on memory-constrained hosts.
-        // Advice is a hint; ignore failure on platforms that reject it.
+        #[cfg(unix)]
         let _ = mmap.advise(memmap2::Advice::Random);
         Ok(Arc::new(mmap))
     }
