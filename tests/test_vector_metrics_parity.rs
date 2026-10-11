@@ -61,7 +61,7 @@ fn test_all_vector_metrics_against_brute_force() -> Result<()> {
     for i in 0..n_vectors {
         let mut vec = Vec::with_capacity(dim);
         for d in 0..dim {
-            let val = (((i * 31 + d * 17 + 7) % 1000) as f32 / 1000.0;
+            let val = (((i * 31 + d * 17 + 7) % 1000) as f32) / 1000.0;
             vec.push(val);
         }
         raw_vectors.push(vec);
