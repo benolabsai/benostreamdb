@@ -16,18 +16,18 @@
 
 | Engine | Backend | Status | Build Time | Total Size on Disk | Throughput (QPS) | p50 Latency | p99 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| **benostreamdb** | `cpu` | ✅ Pass | 0.56s | 6.6 MB | **168.1** | **5.76 ms** | 7.71 ms | **0.8493** | **0.6961** | 0.6511 |
-| **lancedb** | `cpu` | ✅ Pass | 1.21s | 14.4 MB | **189.3** | **4.81 ms** | 7.40 ms | **0.8284** | **0.6658** | 0.6193 |
+| **benostreamdb** | `cpu` | ✅ Pass | 0.50s | 11.7 MB | **180.2** | **5.43 ms** | 7.09 ms | **0.8510** | **0.6935** | 0.6487 |
+| **lancedb** | `cpu` | ✅ Pass | 0.90s | 14.4 MB | **195.9** | **4.68 ms** | 7.05 ms | **0.8199** | **0.6677** | 0.6239 |
 
 ### Differential Oracle & Result Agreement
 
-- **Top-10 Jaccard Overlap**: **46.7%** between BenoStreamDB Hybrid and LanceDB Hybrid.
+- **Top-10 Jaccard Overlap**: **46.5%** between BenoStreamDB Hybrid and LanceDB Hybrid.
 - High ranking agreement validates correct multi-modal retrieval and reciprocal rank fusion mathematics against an established embedded vector database.
 
 ### BenoStreamDB Single-Modality vs Hybrid Lift Breakdown
 
 | Search Mode | Index Size | QPS | p50 Latency | Recall@10 | nDCG@10 | MRR@10 |
 |---|---|---|---|---|---|---|
-| **Sparse (BM25 Only)** | 6.6 MB | 398.9 | 2.38 ms | 0.7909 | 0.6617 | 0.6276 |
-| **Dense (Vector Only)** | 0.0 MB | 1216.0 | 0.71 ms | 0.7767 | 0.6437 | 0.6047 |
-| **Hybrid (Dense + BM25 RRF)** | 6.6 MB | 168.1 | 5.76 ms | **0.8493** | **0.6961** | **0.6511** |
+| **Sparse (BM25 Only)** | 11.7 MB | 424.2 | 2.23 ms | 0.7909 | 0.6617 | 0.6276 |
+| **Dense (Vector Only)** | 0.0 MB | 1222.3 | 0.71 ms | 0.7900 | 0.6451 | 0.6036 |
+| **Hybrid (Dense + BM25 RRF)** | 11.7 MB | 180.2 | 5.43 ms | **0.8510** | **0.6935** | **0.6487** |
