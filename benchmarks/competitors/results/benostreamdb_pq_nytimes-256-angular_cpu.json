@@ -1,0 +1,36 @@
+{
+  "engine": "benostreamdb_pq",
+  "index_type": "hnsw_pq",
+  "dataset": "nytimes-256-angular",
+  "workload": "vector_ann",
+  "device": "cpu",
+  "n": 20000,
+  "dim": 256,
+  "index": {
+    "type": "hnsw_pq",
+    "m": 16,
+    "ef_construction": 200,
+    "ef_search": 200,
+    "metric": "cosine"
+  },
+  "queries": 500,
+  "k": 10,
+  "build_s": 1.677,
+  "index_mb": 46.39,
+  "recall_at_k": 0.425,
+  "qps": 906.1,
+  "p50_ms": 0.813,
+  "p99_ms": 1.213,
+  "pure_index_qps": 1678.3,
+  "pure_p50_ms": 0.592,
+  "pure_p99_ms": 0.772,
+  "env": {
+    "cpu_model": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "cores": 32,
+    "ram_gb": 121.4,
+    "os": "Linux-7.0.0-34-generic-x86_64-with-glibc2.41",
+    "python": "3.12.15",
+    "containerized": true,
+    "gpus": []
+  }
+}
