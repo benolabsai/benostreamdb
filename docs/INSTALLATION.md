@@ -23,11 +23,11 @@ maturin develop --features cuda
 ## ⚠️ Deployment Security
 
 **BenoStreamDB's network servers are not hardened for untrusted networks.**
-`benostreamdb-flight`, `bsdb-search`, the gateway, and the Iceberg REST binary
-ship with **no authentication, no authorization, and no TLS**. Run them on a
-**trusted internal network**, bound to `127.0.0.1` or an internal interface,
-behind a gateway/reverse proxy that terminates TLS and enforces authentication.
-Do **not** expose them directly to the public internet.
+The network servers (`benostreamdb-flight`, `bsdb-search`, and `contrib/benostreamdb-mcp`)
+ship with **no native TLS**. While they support **stateless authentication** (via
+`BSDB_API_KEY` or JWT tokens), they should be deployed on a **trusted internal network**
+or bound to `127.0.0.1` behind a reverse proxy that terminates TLS. Do **not** expose
+them directly to the public internet without an authenticating, TLS-terminating gateway.
 
 Recommended topology:
 
@@ -229,7 +229,7 @@ print(f"Using GPU backend: {ctx.backend}")
 query = np.random.randn(768).astype(np.float32)
 database = np.random.randn(100000, 768).astype(np.float32)
 
-# Compute distances on GPU (10x+ faster for large databases)
+# Compute distances with batch GPU acceleration (CPU SIMD recommended for single queries)
 distances = bsdb.l2_distance_batch(query, database, context=ctx)
 
 # Find top-k nearest neighbors

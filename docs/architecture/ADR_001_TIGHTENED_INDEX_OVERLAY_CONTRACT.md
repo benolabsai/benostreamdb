@@ -5,7 +5,7 @@
 - **Authors**: BenoStreamDB Core Team
 - **Target Version**: v0.13.0+
 - **Companion Documents**:
-  - [`docs/architecture.md`](../architecture.md) (Lakehouse Storage Architecture)
+  - [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) (Lakehouse Storage Architecture)
   - [`docs/ICEBERG_COMPATIBILITY.md`](../ICEBERG_COMPATIBILITY.md) (Iceberg Specification Conformance)
   - [`docs/CONCURRENCY.md`](../CONCURRENCY.md) (Multi-Writer Transaction Model)
   - [`docs/BENCHMARKING_PLAN.md`](../BENCHMARKING_PLAN.md) (Production Verification Framework)

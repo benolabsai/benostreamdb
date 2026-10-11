@@ -1,1 +1,1 @@
-../../catalog_usage.md
+../../CATALOG_USAGE.md

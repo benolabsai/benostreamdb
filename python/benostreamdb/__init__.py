@@ -3777,6 +3777,14 @@ class Table:
         Args:
             columns: List of column names to index.
             tokenizer: Optional tokenizer name from the registry.
+                Available options include:
+                  - "default" (or "standard"): The default tokenizer. Splits on any non-alphanumeric 
+                    character and lowercases tokens. Good for general English text, but not 
+                    optimal for specialized corpora like code repos (destroys camelCase/symbols), 
+                    legal documents (strips exact punctuation), or CJK languages (no spaces).
+                  - "whitespace": Splits only on whitespace characters.
+                  - "identity": Returns the exact string as a single token (useful for exact/category matching).
+                  - "analyzer:english": Standard tokenization plus English stop-word removal.
         """
         return self._inner.add_index_columns(columns, tokenizer)
 

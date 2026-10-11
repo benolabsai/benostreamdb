@@ -11,41 +11,45 @@ BenoStreamDB supports GPU acceleration for vector distance computations across m
 - **Apple Metal (MPS)** - For Apple Silicon Macs
 - **Intel XPU** - For Intel integrated and discrete GPUs (Native Linux via WGPU)
 
-GPU acceleration provides 10x+ speedup for batch distance operations on large vector databases (100,000+ vectors).
+GPU acceleration offloads compute-heavy batch vector distance kernels to hardware accelerators.
+
+> **Important Workload Guidance:** 
+> - **Single-Query Searches (Batch = 1):** For individual point queries and sequential HNSW graph traversals, **CPU execution (with AVX2 / AVX-512 / ARM NEON SIMD) is generally faster than GPU**. Fixed host-to-device PCIe transfer latencies and kernel launch overheads dominate single-vector calculations on datasets under 100k vectors.
+> - **Batch-Parallel Workloads:** GPU acceleration is primarily advantageous for **dense batch operations** (e.g. evaluating large query batches simultaneously against high-dimensional vector matrices, or brute-force flat scoring) where massive parallelism outweighs PCIe transfer latency.
+> - **Future Full-GPU Workloads:** End-to-end resident GPU vector search (keeping index graphs and candidate queues on-device) is on the roadmap to enable GPU query speedups for live lakehouse tables.
 
 ## Installation
 
 ### Unified Binary (PyPI)
 
-BenoStreamDB provides a single, unified binary package that includes support for all major GPU backends. You no longer need to choose between "standard" and "CUDA" builds. High-performance runtime detection automatically activates the appropriate backend for your hardware.
+BenoStreamDB provides a unified binary package with support for major compute backends. Runtime detection automatically activates available hardware drivers, safely falling back to CPU if drivers are unavailable.
 
 ```bash
 pip install benostreamdb
 ```
 
 > **Hardware Requirements:** 
-> - **NVIDIA**: Requires NVIDIA drivers (`libcuda.so` on Linux, `nvcuda.dll` on Windows).
+> - **NVIDIA**: Requires NVIDIA driver (`libcuda.so` on Linux, `nvcuda.dll` on Windows).
 > - **AMD**: Requires ROCm/Vulkan drivers.
 > - **Intel**: Requires Level Zero/Vulkan drivers.
-> - **Apple**: Requires macOS 12.3+ (Built-in).
+> - **Apple**: Requires macOS 12.3+ (Built-in Metal).
 
 ```python
 import benostreamdb as bsdb
 
-# Auto-detect and use best available GPU backend
+# Auto-detect and use best available compute backend
 device = bsdb.Device("auto")
 print(f"Using backend: {device.backend}")
 
 # Pick a specific backend (Torch-aligned strings)
 device = bsdb.Device("cuda")    # NVIDIA or AMD ROCm (Torch standard)
 device = bsdb.Device("xpu")     # Intel XPU (Torch standard)
-device = bsdb.Device("mps")     # Apple Silicon
+device = bsdb.Device("mps")     # Apple Silicon Metal
 device = bsdb.Device("cpu")     # CPU fallback (always available)
 
 # Check availability
 print(bsdb.Device.is_available("cuda"))  # True if NVIDIA or AMD ROCm present
 print(bsdb.Device.is_available("xpu"))   # True if Intel hardware present
-```
 ```
 
 ## NVIDIA CUDA Setup
@@ -434,21 +438,16 @@ sudo apt-get install --only-upgrade nvidia-driver-535
 sudo ubuntu-drivers autoinstall
 ```
 
-## Performance Benchmarks
+## Performance & Workload Characteristics
 
-Expected speedups for batch operations (100,000 vectors, 768 dimensions):
+In empirical competitor benchmarks, GPU speedup is **workload-dependent**:
 
-| Backend | Hardware | Speedup vs CPU |
-|---------|----------|----------------|
-| CUDA | RTX 3090 | 15-20x |
-| CUDA | RTX 4090 | 20-30x |
-| CUDA | A100 | 25-35x |
-| ROCm | RX 7900 XTX | 12-18x |
-| Metal | M1 Max | 8-12x |
-| Metal | M2-M5 Pro/Max/Ultra | 15-30x |
-| XPU | Arc A770 | 6-10x |
+- **Point Queries & HNSW Search:** Single-query ANN lookups (sequential graph walks) are dominated by pointer traversals and latency rather than arithmetic throughput. Under single-stream query workloads (batch = 1), optimized CPU SIMD execution (AVX2/AVX-512) delivers lower p50 latency and higher QPS than GPU due to PCIe transfer and kernel dispatch overheads.
+- **Dense Batch Matrix Operations:** Standalone distance kernels (`l2_distance_batch`, `cosine_distance_batch`) running large batches ($N \ge 100,000$ vectors, batch size $\ge 1,000$) effectively saturate GPU warps and achieve high throughput.
+- **Index Construction:** Background IVF clustering and k-means centroid assignments benefit from GPU acceleration during offline index generation.
+- **Full GPU Workloads (Roadmap):** True query speedups for lakehouse vector search require resident GPU index caching and batched search queues, which are actively tracked on the roadmap.
 
-*Benchmarks measured with float32 data, L2 distance metric*
+See the [Benchmarking Guide](BENCHMARKING.md) for reproducible competitor comparison numbers under identical container envelopes.
 
 ## Best Practices
 

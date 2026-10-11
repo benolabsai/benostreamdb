@@ -630,7 +630,7 @@ impl Table {
     /// Rebuild the position-aware inverted index for `column` on every segment
     /// that already carries an inverted index for it.
     ///
-    /// This is a *targeted* reindex. Unlike [`Self::backfill_indexes_async`] —
+    /// This is a *targeted* reindex. Unlike `backfill_indexes_async` —
     /// which rebuilds every configured index for a segment (including the HNSW
     /// vector indexes, tens of GB at Wikipedia scale) and skips segments that
     /// already carry an `inverted` index — this rebuilds only the

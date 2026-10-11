@@ -1,1 +1,1 @@
-../../graph_rag_edge_tables.md
+../../GRAPH_RAG_EDGE_TABLES.md

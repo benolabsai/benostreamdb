@@ -1474,7 +1474,7 @@ pub fn set_gpu_device_pool_from_str(devices: &str) {
 /// Retrieve the current GPU context.
 ///
 /// Resolution order: an explicit per-thread override, then a lazily-assigned
-/// device from [`GPU_DEVICE_POOL`] (multi-GPU), then the process-wide context.
+/// device from `GPU_DEVICE_POOL` (multi-GPU), then the process-wide context.
 pub fn get_thread_gpu_context() -> Option<ComputeContext> {
     // 1. Explicit per-thread override.
     if let Some(ctx) = THREAD_GPU_CONTEXT.with(|c| c.borrow().clone()) {
