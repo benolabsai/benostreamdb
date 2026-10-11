@@ -88,12 +88,35 @@ impl HybridReader {
             if let Some(bytes) = crate::core::cache::PARQUET_BYTES_CACHE.get(&key).await {
                 return Box::new(BytesReader { bytes });
             }
-            if let Ok(res) = store.get(path).await {
-                if let Ok(bytes) = res.bytes().await {
-                    crate::core::cache::PARQUET_BYTES_CACHE
-                        .insert(key, bytes.clone())
-                        .await;
-                    return Box::new(BytesReader { bytes });
+            // Retry briefly on EMFILE ("Too many open files"). Under heavy
+            // concurrency (background compaction rewriting segments while reads
+            // are saturated) the process can transiently exceed its
+            // file-descriptor limit; a short backoff lets other readers release
+            // their handles instead of failing the query with `os error 24`.
+            let mut attempt = 0u32;
+            let mut delay = std::time::Duration::from_millis(5);
+            loop {
+                match store.get(path).await {
+                    Ok(res) => {
+                        if let Ok(bytes) = res.bytes().await {
+                            crate::core::cache::PARQUET_BYTES_CACHE
+                                .insert(key, bytes.clone())
+                                .await;
+                            return Box::new(BytesReader { bytes });
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        let msg = e.to_string();
+                        let emfile = msg.contains("Too many open files") || msg.contains("os error 24");
+                        if emfile && attempt < 6 {
+                            attempt += 1;
+                            tokio::time::sleep(delay).await;
+                            delay = (delay * 2).min(std::time::Duration::from_millis(200));
+                        } else {
+                            break;
+                        }
+                    }
                 }
             }
         }
