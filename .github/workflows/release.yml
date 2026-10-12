@@ -125,7 +125,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        target: [x86_64]  # aarch64 not yet supported on Windows — no aarch64 Python interpreter available
         python-version: ["3.10"] # ABI3 Universal Wheels
     steps:
       - uses: actions/checkout@v5
@@ -134,9 +134,6 @@ jobs:
         with:
           shared-key: "windows-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
-      - name: Add Rust ARM64 target
-        if: matrix.target == 'aarch64'
-        run: rustup target add aarch64-pc-windows-msvc
       - name: Install CUDA Toolkit
         if: matrix.target == 'x86_64'
         uses: Jimver/cuda-toolkit@v0.2.36
