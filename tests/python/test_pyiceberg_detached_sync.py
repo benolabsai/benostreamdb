@@ -1,10 +1,22 @@
 import os
+import random
 import shutil
 import tempfile
 import pyarrow as pa
 import pytest
 from pyiceberg.catalog.sql import SqlCatalog
 import benostreamdb as bsdb
+
+CATEGORIES = ["database", "vector", "graph", "lakehouse", "search", "streaming"]
+WORDS = [
+    "indexing", "compaction", "snapshot", "arrow", "parquet",
+    "retrieval", "clustering", "overlay", "lineage", "durability"
+]
+
+def _make_title(rng, id_val):
+    w1 = rng.choice(WORDS)
+    w2 = rng.choice(WORDS)
+    return f"Doc {id_val} about {w1} and {w2}"
 
 def test_pyiceberg_transformation_and_detached_sync():
     tmp = tempfile.mkdtemp(prefix="bsdb_test_detached_")
@@ -82,6 +94,138 @@ def test_pyiceberg_transformation_and_detached_sync():
         q2 = bsdb_table.sql("SELECT id, title, category FROM t WHERE id = 5")
         assert q2.num_rows == 1
         assert q2.column("title")[0].as_py() == "Autonomous AI Agents"
+
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.mark.parametrize("seed", [42, 123])
+def test_pyiceberg_randomized_actions_workload(seed):
+    """Randomized differential workload comparing external PyIceberg writes + BenoStreamDB detached syncs
+
+    against an in-memory ground-truth oracle model.
+    """
+    rng = random.Random(seed)
+    steps = 20
+
+    tmp = tempfile.mkdtemp(prefix=f"bsdb_rand_test_{seed}_")
+    warehouse = os.path.join(tmp, "warehouse")
+    catalog_db = os.path.join(tmp, "catalog.db")
+    overlay_dir = os.path.join(tmp, "overlay")
+    os.makedirs(warehouse, exist_ok=True)
+    os.makedirs(overlay_dir, exist_ok=True)
+
+    try:
+        catalog = SqlCatalog(
+            f"rand_catalog_{seed}",
+            uri=f"sqlite:///{catalog_db}",
+            warehouse=f"file://{warehouse}",
+        )
+        catalog.create_namespace("default")
+
+        schema = pa.schema([
+            ("id", pa.int64()),
+            ("title", pa.string()),
+            ("category", pa.string()),
+        ])
+
+        table_name = "default.random_articles"
+        iceberg_table = catalog.create_table(table_name, schema=schema)
+
+        # Ground truth in-memory oracle model
+        model = {}
+        next_id = 1
+        pending_upstream_commits = 0
+
+        # Initial seed append in PyIceberg
+        initial_count = 3
+        init_ids = list(range(next_id, next_id + initial_count))
+        next_id += initial_count
+        init_titles = [_make_title(rng, i) for i in init_ids]
+        init_cats = [rng.choice(CATEGORIES) for _ in init_ids]
+
+        for i, t, c in zip(init_ids, init_titles, init_cats):
+            model[i] = {"id": i, "title": t, "category": c}
+
+        batch0 = pa.Table.from_pydict({
+            "id": init_ids,
+            "title": init_titles,
+            "category": init_cats,
+        })
+        iceberg_table.append(batch0)
+
+        # Mount in BenoStreamDB
+        bsdb_table = bsdb.Table.mount_external_iceberg(
+            table_uri=f"file://{warehouse}/default/random_articles",
+            overlay_storage_uri=f"file://{overlay_dir}"
+        )
+        bsdb_table.set_primary_key(["id"])
+        bsdb_table.add_index("title", "bm25")
+
+        for step in range(1, steps + 1):
+            action = rng.choice(["append", "append", "sync", "sync_and_assert", "assert"])
+
+            if action == "append":
+                batch_size = rng.randint(1, 5)
+                batch_ids = list(range(next_id, next_id + batch_size))
+                next_id += batch_size
+                batch_titles = [_make_title(rng, i) for i in batch_ids]
+                batch_cats = [rng.choice(CATEGORIES) for _ in batch_ids]
+
+                for i, t, c in zip(batch_ids, batch_titles, batch_cats):
+                    model[i] = {"id": i, "title": t, "category": c}
+
+                batch = pa.Table.from_pydict({
+                    "id": batch_ids,
+                    "title": batch_titles,
+                    "category": batch_cats,
+                })
+                iceberg_table.append(batch)
+                pending_upstream_commits += 1
+
+            elif action in ("sync", "sync_and_assert"):
+                synced = bsdb_table.sync_detached_overlay()
+                if pending_upstream_commits > 0:
+                    assert synced is True, f"Step {step}: expected sync to detect pending snapshot"
+                    pending_upstream_commits = 0
+                else:
+                    assert synced is False, f"Step {step}: expected no-op sync when no upstream commits"
+
+            if action in ("assert", "sync_and_assert") and pending_upstream_commits == 0:
+                # 1. Total row count assertion
+                all_data = bsdb_table.to_arrow()
+                assert all_data.num_rows == len(model), (
+                    f"Step {step}: Row count mismatch. BenoStreamDB={all_data.num_rows}, Model={len(model)}"
+                )
+
+                # 2. Point lookup assertion (existing key)
+                picked_id = rng.choice(list(model.keys()))
+                expected = model[picked_id]
+                res = bsdb_table.sql(f"SELECT id, title, category FROM t WHERE id = {picked_id}")
+                assert res.num_rows == 1, f"Step {step}: point lookup id={picked_id} returned {res.num_rows} rows"
+                assert res.column("title")[0].as_py() == expected["title"]
+                assert res.column("category")[0].as_py() == expected["category"]
+
+                # 3. Non-existent point lookup assertion
+                ghost_id = next_id + 9999
+                ghost_res = bsdb_table.sql(f"SELECT id FROM t WHERE id = {ghost_id}")
+                assert ghost_res.num_rows == 0, f"Step {step}: phantom row returned for non-existent id={ghost_id}"
+
+                # 4. Scalar predicate category filter assertion
+                test_cat = rng.choice(CATEGORIES)
+                expected_ids = sorted([k for k, v in model.items() if v["category"] == test_cat])
+                cat_res = bsdb_table.sql(f"SELECT id FROM t WHERE category = '{test_cat}'")
+                got_ids = sorted(cat_res.column("id").to_pylist()) if cat_res.num_rows > 0 else []
+                assert got_ids == expected_ids, (
+                    f"Step {step}: Category '{test_cat}' filter diverged. Got={got_ids}, Expected={expected_ids}"
+                )
+
+        # Final reconciliation assertion
+        if pending_upstream_commits > 0:
+            bsdb_table.sync_detached_overlay()
+
+        final_data = bsdb_table.to_arrow()
+        assert final_data.num_rows == len(model)
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
