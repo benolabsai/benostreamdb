@@ -718,6 +718,13 @@ class Table:
         return cls(uri, inner_table=_RustTable.register_external(uri, iceberg_metadata_uri), device=device)
 
     @classmethod
+    def mount_external_iceberg(cls, table_uri: str, overlay_storage_uri: str, device: Optional[Any] = None) -> 'Table':
+        """Mount an external, read-only Iceberg table with a detached overlay index catalog."""
+        table_uri = _resolve_uri(table_uri)
+        overlay_storage_uri = _resolve_uri(overlay_storage_uri)
+        return cls(overlay_storage_uri, inner_table=_RustTable.mount_external_iceberg(table_uri, overlay_storage_uri), device=device)
+
+    @classmethod
     def from_arrow(cls, uri: str, table: 'pa.Table', device: Optional[Any] = None) -> 'Table':
         """
         Create (and commit) a table at `uri` from a pyarrow Table, inferring the
@@ -3957,6 +3964,20 @@ class Table:
         """
         return self._inner.drop_index(column)
 
+    def set_primary_key(self, columns: Union[str, List[str]]):
+        """
+        Set or replace the table's primary key columns.
+        """
+        if isinstance(columns, str):
+            columns = [columns]
+        return self._inner.set_primary_key(list(columns))
+
+    def get_primary_key(self) -> List[str]:
+        """
+        Get the table's primary key columns.
+        """
+        return list(self._inner.get_primary_key())
+
     def add_primary_key(self, column: str):
         """
         Atomically add a column to the primary key.
@@ -3970,6 +3991,33 @@ class Table:
         Atomically remove a column from the primary key.
         """
         return self._inner.drop_primary_key(column)
+
+    def sync_detached_overlay(self) -> bool:
+        """
+        Synchronize this detached overlay with the upstream Iceberg table.
+        Returns True when a new upstream snapshot was imported, False otherwise.
+        """
+        return self._inner.sync_detached_overlay()
+
+    def start_detached_sync_worker(self, interval_seconds: int = 60) -> None:
+        """
+        Start a background worker that periodically syncs the detached overlay
+        with the upstream Iceberg table.
+        """
+        self._inner.start_detached_sync_worker(interval_seconds)
+
+    def detached_catalog(self) -> Optional[Dict[str, Any]]:
+        """
+        Return the detached overlay catalog metadata as a dict, or None if not an overlay.
+        """
+        return self._inner.detached_catalog()
+
+    def recover_indexes(self) -> int:
+        """
+        Re-indexes data files that are missing overlay index sidecars.
+        Returns the count of data files indexed.
+        """
+        return self._inner.recover_indexes()
 
     def add_column(self, name: str, data_type: Union[str, Any]):
         """

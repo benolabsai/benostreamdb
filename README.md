@@ -60,7 +60,78 @@ BenoStreamDB runs in two distinct modes depending on who owns the lakehouse stor
 
 ---
 
-### Working with External Iceberg Tables (Detached Overlay Mode)
+### Working with Tables: Authoritative Mode (Full Read / Write)
+
+In Authoritative Mode, BenoStreamDB acts as the primary lakehouse database. It owns the table lifecycle: writing Parquet data files, committing ACID metadata snapshots, logging streaming writes to the WAL, and running background compaction.
+
+```text
+┌───────────────────────────────────────────────────────────┐
+│              BenoStreamDB Table Storage Prefix             │
+│                      (Read + Write)                       │
+├───────────────────────────────────────────────────────────┤
+│ • metadata/v1.metadata.json, snap-*.avro, *-m0.avro       │
+│ • data/00001.parquet + data/00001.bsdb_idx (HNSW / BM25)  │
+│ • _wal/ (Write-Ahead Log for streaming durability)        │
+│ • _staging/ (Buffered memory chunks before commit)        │
+└───────────────────────────────────────────────────────────┘
+```
+
+#### Step 1: Create or Open an Authoritative Table
+```python
+import pyarrow as pa
+import benostreamdb as bsdb
+
+schema = pa.schema([
+    ("id", pa.int64()),
+    ("title", pa.string()),
+    ("embedding", pa.list_(pa.float32(), 128)),
+    ("status", pa.string()),
+])
+
+# Create a new table in object storage
+table = bsdb.Table.create("s3://my-warehouse/tables/articles", schema)
+
+# Or open an existing table
+table = bsdb.Table.open("s3://my-warehouse/tables/articles")
+```
+
+#### Step 2: Declare Primary Key & Secondary Indexes
+```python
+# Declare primary key for uniqueness validation and O(1) point lookups
+table.set_primary_key(["id"])
+
+# Declare vector ANN index (TurboQuant 8-bit quantized or full Float32)
+table.add_index("embedding", "hnsw_tq8")
+
+# Declare full-text BM25 Okapi inverted index
+table.add_index("title", "bm25")
+
+# Declare scalar Roaring Bitmap index
+table.add_index("status", "bitmap")
+```
+
+#### Step 3: Insert & Ingest Data
+```python
+# Batch or streaming insert (buffered in RAM/WAL, committed to Iceberg)
+table.insert(arrow_batch)
+table.commit()
+
+# Or bulk cluster-free ingestion from existing Arrow datasets or Parquet
+table.ingest(arrow_table)
+```
+
+#### Step 4: Maintenance & Compaction
+```python
+# Merge small Parquet files into target file sizes (default 128MB)
+table.compact()
+
+# Prune unreferenced snapshots and orphan files
+table.vacuum(retention_hours=24)
+```
+
+---
+
+### Working with External Iceberg Tables: Detached Overlay Mode (Read-Only)
 
 If your data already lives in an Apache Iceberg table created by Spark, Flink, Trino, Snowflake, or Databricks, **you do not need to migrate or copy that data**. BenoStreamDB attaches to it in read-only mode, extracts the schema, and builds rebuildable secondary index overlays in a separate, isolated storage prefix.
 

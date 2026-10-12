@@ -336,6 +336,8 @@ impl Table {
         if let Some(snapshot_id) = current_snapshot {
             self.import_iceberg_snapshot(snapshot_id, &iceberg_meta, meta_store)
                 .await?;
+            // Automatically build index overlays for any newly added or compacted files
+            let _ = self.recover_indexes_async().await;
         }
 
         catalog.upstream_metadata_uri = metadata_uri;

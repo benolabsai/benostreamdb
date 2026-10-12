@@ -269,6 +269,12 @@ impl PyTable {
         }
     }
 
+    /// Re-indexes data files that are missing overlay index sidecars.
+    fn recover_indexes(&self, py: Python<'_>) -> PyResult<usize> {
+        py.allow_threads(|| TOKIO_RUNTIME.block_on(self.table.recover_indexes_async()))
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Override parallel readers for vector search (disables auto-detection)
     ///
     /// By default, parallelism is AUTO-DETECTED based on:
