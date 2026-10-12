@@ -861,6 +861,29 @@ df = bsdb.Table("s3://bucket/table").query().execute()
 # Or using traditional API: df = bsdb.Table("s3://bucket/table").to_pandas()
 ```
 
+### Snowflake (Untested / Developer Preview)
+
+> ⚠️ **Untested:** The Snowflake integration is in developer preview based on the open Iceberg REST and External Volume specifications. Live production certification is in progress.
+
+BenoStreamDB can mount and index **Snowflake Iceberg Tables** residing on customer-managed External Volumes (Amazon S3, GCS, or Azure Blob) in Detached Overlay Mode with zero data duplication and zero Snowflake compute credits:
+
+```python
+import benostreamdb as bsdb
+
+# Mount external Snowflake Iceberg table in read-only mode
+table = bsdb.Table.mount_external_iceberg(
+    table_uri="s3://customer-lakehouse/snowflake_warehouse/events/",
+    overlay_storage_uri="s3://my-index-overlays/events/"
+)
+table.set_primary_key(["event_id"])
+table.add_index("embedding", "hnsw_tq8")
+table.add_index("transcript", "bm25")
+
+# Keep synchronized when Snowflake commits new data
+table.start_detached_sync_worker(interval_seconds=60)
+```
+See the [Snowflake Integration Guide](docs/integrations/SNOWFLAKE.md) for full configuration and External Volume walkthrough.
+
 ## 🔨 Building Connectors
 
 The Spark and Trino connectors require building shaded "fat" JARs that bundle the native Rust core.
