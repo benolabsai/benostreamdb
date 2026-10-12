@@ -47,7 +47,11 @@ impl PyDevice {
         let backend_enum = match backend_str.to_lowercase().as_str() {
             "cpu" => ComputeBackend::Cpu,
             "cuda" => {
-                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                #[cfg(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                ))]
                 {
                     let b = ComputeBackend::Cuda;
                     if !(ComputeContext {
@@ -64,7 +68,11 @@ impl PyDevice {
                     }
                     b
                 }
-                #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
+                #[cfg(not(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                )))]
                 {
                     return Err(pyo3::exceptions::PyRuntimeError::new_err(
                         "CUDA backend not available (enable the 'cuda' feature).",

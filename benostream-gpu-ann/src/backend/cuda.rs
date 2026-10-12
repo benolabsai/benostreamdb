@@ -1,42 +1,106 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 // Licensed under MIT OR Apache-2.0.
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use super::GpuBackend;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use crate::metric::Metric;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use anyhow::Result;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use cudarc::driver::{CudaDevice, LaunchAsync, LaunchConfig};
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use std::sync::Arc;
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_L2: &str = include_str!("../kernels/cuda/l2_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_COSINE: &str = include_str!("../kernels/cuda/cosine_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_INNER_PRODUCT: &str = include_str!("../kernels/cuda/inner_product.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_L1: &str = include_str!("../kernels/cuda/l1_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_HAMMING: &str = include_str!("../kernels/cuda/hamming_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_JACCARD: &str = include_str!("../kernels/cuda/jaccard_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_HAMMING_PACKED: &str = include_str!("../kernels/cuda/hamming_packed.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_JACCARD_PACKED: &str = include_str!("../kernels/cuda/jaccard_packed.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 const CUDA_SRC_KMEANS: &str = include_str!("../kernels/cuda/kmeans_assignment.cu");
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 pub struct CudaBackend {
     device: Arc<CudaDevice>,
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 impl CudaBackend {
     pub fn new(id: usize) -> Result<Self> {
         let device = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -101,7 +165,11 @@ impl CudaBackend {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 impl GpuBackend for CudaBackend {
     fn name(&self) -> &str {
         "CUDA"

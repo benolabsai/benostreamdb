@@ -13,7 +13,11 @@ pub mod hnsw_rs;
 pub mod ivf;
 pub mod json_path;
 pub mod memory;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 pub mod nvrtc;
 pub mod pq;
 pub mod tokenizer;

@@ -20,7 +20,11 @@ fn get_active_backends() -> Vec<Box<dyn GpuBackend>> {
     #[allow(unused_mut)]
     let mut backends: Vec<Box<dyn GpuBackend>> = vec![Box::new(CpuBackend::new())];
 
-    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(all(target_os = "windows", target_arch = "aarch64")),
+        feature = "cuda"
+    ))]
     {
         if std::env::var("SKIP_GPU_TESTS").is_err() {
             if let Ok(b) = benostream_gpu_ann::backend::cuda::CudaBackend::new(0) {

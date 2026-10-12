@@ -125,7 +125,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        target: [x86_64]
+        target: [x86_64, aarch64]
         python-version: ["3.10"] # ABI3 Universal Wheels
     steps:
       - uses: actions/checkout@v5
@@ -134,7 +134,11 @@ jobs:
         with:
           shared-key: "windows-${{ matrix.target }}-${{ matrix.python-version }}"
           cache-targets: false
+      - name: Add Rust ARM64 target
+        if: matrix.target == 'aarch64'
+        run: rustup target add aarch64-pc-windows-msvc
       - name: Install CUDA Toolkit
+        if: matrix.target == 'x86_64'
         uses: Jimver/cuda-toolkit@v0.2.36
         id: cuda-toolkit
         with:
@@ -142,6 +146,7 @@ jobs:
           method: "network"
           sub-packages: '["nvcc", "cudart"]'
       - name: Test CUDA discovery on Windows
+        if: matrix.target == 'x86_64'
         env:
           SKIP_GPU_TESTS: "1"
         run: cargo test -p benostream-gpu-ann --features cuda -- --nocapture

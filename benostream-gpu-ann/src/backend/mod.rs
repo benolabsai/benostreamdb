@@ -2,11 +2,19 @@
 // Licensed under MIT OR Apache-2.0.
 
 pub mod cpu;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 pub mod cuda;
 #[cfg(target_os = "macos")]
 pub mod metal;
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 pub mod nvrtc;
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
@@ -59,7 +67,11 @@ impl ComputeContext {
     /// 3. WGPU (Vulkan / AMD / Intel)
     /// 4. CPU (Rayon/SIMD fallback)
     pub fn auto_detect() -> Self {
-        #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(all(target_os = "windows", target_arch = "aarch64")),
+            feature = "cuda"
+        ))]
         {
             if std::env::var("SKIP_GPU_TESTS").is_err() {
                 if let Ok(Ok(b)) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -107,7 +119,11 @@ impl ComputeContext {
     }
 
     /// Force CUDA execution on a specific device index.
-    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(all(target_os = "windows", target_arch = "aarch64")),
+        feature = "cuda"
+    ))]
     pub fn cuda(device_id: usize) -> Result<Self> {
         let b = cuda::CudaBackend::new(device_id)?;
         Ok(Self {

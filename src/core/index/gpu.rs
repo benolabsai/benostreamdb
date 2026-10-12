@@ -12,7 +12,11 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use std::sync::Arc;
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 
 // The global context to ensure PTX modules and device memory are not duplicated per thread.
@@ -122,35 +126,79 @@ static MSL_JACCARD_PACKED: &str = include_str!("mps/jaccard_packed.metal");
 
 // CUDA kernels: embed .cu source at compile-time, JIT-compile at runtime via nvrtc.
 // This eliminates the need for nvcc at build time — only libcuda.so is required at runtime.
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_KMEANS: &str = include_str!("cuda/kmeans_assignment.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_L2: &str = include_str!("cuda/l2_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_COSINE: &str = include_str!("cuda/cosine_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_INNER_PRODUCT: &str = include_str!("cuda/inner_product.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_L1: &str = include_str!("cuda/l1_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_HAMMING: &str = include_str!("cuda/hamming_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_JACCARD: &str = include_str!("cuda/jaccard_distance.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_HAMMING_PACKED: &str = include_str!("cuda/hamming_packed.cu");
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 static CUDA_SRC_JACCARD_PACKED: &str = include_str!("cuda/jaccard_packed.cu");
 
 // Backend Implementations
 // ============================================================================
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 #[derive(Debug)]
 pub struct CudaBackend {
     device: Arc<cudarc::driver::CudaDevice>,
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 impl CudaBackend {
     pub fn new(id: usize) -> Result<Self> {
         // Loader-safe probe first: a missing or version-conflicting nvrtc must
@@ -217,7 +265,11 @@ impl CudaBackend {
     }
 }
 
-#[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+#[cfg(all(
+    not(target_os = "macos"),
+    not(all(target_os = "windows", target_arch = "aarch64")),
+    feature = "cuda"
+))]
 impl GpuBackend for CudaBackend {
     fn name(&self) -> &str {
         "CUDA"
@@ -974,7 +1026,11 @@ impl ComputeContext {
         let imp: Option<std::sync::Arc<dyn GpuBackend>> = match backend {
             ComputeBackend::Cpu => Some(std::sync::Arc::new(CpuBackend)),
             ComputeBackend::Cuda => {
-                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                #[cfg(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                ))]
                 {
                     let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         CudaBackend::new(device_id)
@@ -987,7 +1043,11 @@ impl ComputeContext {
                     .map_err(|e| anyhow::anyhow!("CUDA error: {}", e))?;
                     Some(std::sync::Arc::new(b))
                 }
-                #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
+                #[cfg(not(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                )))]
                 {
                     anyhow::bail!("CUDA not enabled (enable the 'cuda' feature)")
                 }
@@ -1060,7 +1120,11 @@ impl ComputeContext {
     }
 
     fn do_auto_detect() -> Self {
-        #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(all(target_os = "windows", target_arch = "aarch64")),
+            feature = "cuda"
+        ))]
         if let Ok(Ok(b)) =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| CudaBackend::new(0)))
         {
@@ -1159,7 +1223,11 @@ impl ComputeContext {
         match self.backend {
             ComputeBackend::Cpu => true,
             ComputeBackend::Cuda => {
-                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                #[cfg(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                ))]
                 {
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         CudaBackend::new(self.device_id as usize).is_ok()
@@ -1169,7 +1237,11 @@ impl ComputeContext {
                     }))
                     .unwrap_or(false)
                 }
-                #[cfg(not(all(not(target_os = "macos"), feature = "cuda")))]
+                #[cfg(not(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                )))]
                 {
                     false
                 }
@@ -1212,7 +1284,11 @@ impl ComputeContext {
         match self.backend {
             ComputeBackend::Cpu => benostream_gpu_ann::ComputeContext::cpu(),
             ComputeBackend::Cuda => {
-                #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+                #[cfg(all(
+                    not(target_os = "macos"),
+                    not(all(target_os = "windows", target_arch = "aarch64")),
+                    feature = "cuda"
+                ))]
                 {
                     benostream_gpu_ann::ComputeContext::cuda(self.device_id.max(0) as usize)
                         .unwrap_or_else(|_| benostream_gpu_ann::ComputeContext::auto_detect())
@@ -1557,7 +1633,11 @@ mod tests {
     /// Regression test for the CUDA 13 nvrtc discovery bug: on a machine with a
     /// CUDA device, the JIT must actually compile (cudarc's fixed candidate list
     /// missed `libnvrtc.so.13`, so this used to panic into a CPU fallback).
-    #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+    #[cfg(all(
+        not(target_os = "macos"),
+        not(all(target_os = "windows", target_arch = "aarch64")),
+        feature = "cuda"
+    ))]
     #[test]
     fn cuda_backend_jit_compiles_when_a_device_is_present() {
         // Require a *real* NVIDIA device node. CI installs CUDA stubs
@@ -1626,7 +1706,11 @@ mod tests {
     fn available_backends() -> Vec<(&'static str, Arc<dyn GpuBackend>)> {
         #[allow(unused_mut)]
         let mut out: Vec<(&'static str, Arc<dyn GpuBackend>)> = vec![("cpu", Arc::new(CpuBackend))];
-        #[cfg(all(not(target_os = "macos"), feature = "cuda"))]
+        #[cfg(all(
+            not(target_os = "macos"),
+            not(all(target_os = "windows", target_arch = "aarch64")),
+            feature = "cuda"
+        ))]
         {
             // Under `cargo test` the interpreter's site-packages isn't reported,
             // so point the resolver at a repo-local venv if one exists.
