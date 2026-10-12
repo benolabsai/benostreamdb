@@ -49,11 +49,108 @@ An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructib
 > 
 > *Note on TLS:* The network servers do not terminate TLS natively within the Rust binaries. When deploying over untrusted networks or the public internet, you must deploy BenoStreamDB behind a reverse proxy (like NGINX, Envoy, or an AWS ALB) that terminates TLS. See [SECURITY.md](SECURITY.md) for the full posture.
 
-It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table it does not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
+## 🔄 Operating Modes: Authoritative vs. External Iceberg Tables
+
+BenoStreamDB runs in two distinct modes depending on who owns the lakehouse storage:
+
+| Mode | Who Owns the Parquet Data? | Who Runs Writes & Compaction? | Upstream IAM Required | Where Indexes Live |
+| :--- | :--- | :--- | :--- | :--- |
+| **Authoritative Mode** | BenoStreamDB | BenoStreamDB (`insert`, `compact`) | Read + Write | Inside the table storage prefix |
+| **Detached Overlay Mode** | External (Spark, Flink, Databricks) | External engine | **Read-Only** (`s3:GetObject`) | Separate writable overlay bucket |
+
+---
+
+### Working with External Iceberg Tables (Detached Overlay Mode)
+
+If your data already lives in an Apache Iceberg table created by Spark, Flink, Trino, Snowflake, or Databricks, **you do not need to migrate or copy that data**. BenoStreamDB attaches to it in read-only mode, extracts the schema, and builds rebuildable secondary index overlays in a separate, isolated storage prefix.
+
+```text
+┌─────────────────────────────────────────┐          ┌─────────────────────────────────────────┐
+│     Upstream Customer Lakehouse         │          │     BenoStreamDB Overlay Prefix         │
+│         (Strictly Read-Only)            │          │         (Writable Sidecars)             │
+├─────────────────────────────────────────┤          ├─────────────────────────────────────────┤
+│ • metadata/v1.metadata.json             │          │ • detached_catalog.json (lineage/sync)  │
+│ • data/00001.parquet                    │◀─────────┤ • manifest.json (PK & index definitions)│
+│ • data/00002.parquet                    │          │ • data/00001.bsdb_idx (HNSW / BM25)     │
+│ (Managed & compacted by upstream Spark) │          │ • data/00002.bsdb_idx (HNSW / BM25)     │
+└─────────────────────────────────────────┘          └─────────────────────────────────────────┘
+```
+
+#### Step 1: Mount the External Table
+Call `Table.mount_external_iceberg()`. Provide the upstream table URI (where the customer's Iceberg metadata and Parquet files live) and your separate overlay storage URI (where BenoStreamDB writes its index sidecars):
+
+```python
+import benostreamdb as bsdb
+
+# Mount external Iceberg table in read-only mode
+table = bsdb.Table.mount_external_iceberg(
+    table_uri="s3://customer-lakehouse/warehouse/events/",      # Upstream (Read-Only)
+    overlay_storage_uri="s3://my-managed-indexes/events/"       # Overlay Bucket (Writable)
+)
+```
+* **Storage Invariant**: BenoStreamDB creates an object store client with read-only access to `table_uri`. It physically cannot rewrite, delete, or alter the customer's Parquet files.
+
+#### Step 2: Declare the Primary Key (`table.set_primary_key`)
+External Iceberg tables often lack explicit primary key constraints in their metadata. On a mounted table, you declare the business entity key:
+
+```python
+# Specify the primary key for entity lookups and search result mapping
+table.set_primary_key(["event_id"])
+```
+* **Where is this stored?** It is saved in the **overlay manifest** (`s3://my-managed-indexes/events/manifest.json`), **never** touching the upstream Iceberg metadata.
+* **Why specify a primary key?**
+  1. **Direct Entity Mapping**: Vector search and BM25 index hits map directly back to the business ID (`event_id` or `uuid`) so queries return entity identifiers without extra Parquet lookups.
+  2. **Sub-Millisecond Point Lookups**: Enables $O(1)$ point queries (`SELECT * FROM table WHERE event_id = '...'`) using the primary key index in the overlay to bypass full Parquet scans.
+
+#### Step 3: Declare Secondary Indexes (`table.add_index`)
+Specify which columns you want to accelerate:
+
+```python
+# Build vector ANN index (TurboQuant 8-bit quantized or full Float32)
+table.add_index("embedding", "hnsw_tq8")
+
+# Build full-text BM25 Okapi inverted index
+table.add_index("document_text", "bm25")
+
+# Build scalar Roaring Bitmap index
+table.add_index("status", "bitmap")
+```
+* **Where are the indexes stored?** The engine reads the external Parquet files, computes the graphs/postings, and writes `.bsdb_idx` sidecars exclusively into `s3://my-managed-indexes/events/`. Zero bytes are added to the customer's bucket.
+
+#### Step 4: Keep Indexes in Sync with Upstream Mutations & Compactions
+When the upstream engine (Spark, Flink, or Databricks) writes new rows or runs table compaction (`rewriteDataFiles`):
+1. **Zero-Cost Change Detection**: Iceberg commits a new `v{N+1}.metadata.json` file. BenoStreamDB's `DetachedOverlayCatalog` tails the root metadata pointer with a single lightweight HTTP `GET` (zero S3 `LIST` calls).
+2. **Differential Indexing**: When an upstream snapshot advances, only newly added or newly compacted Parquet files are indexed. Surviving Parquet files keep their existing overlays.
+3. **Automated Background Sync**:
+   ```python
+   # Start background poller (checks upstream snapshot log every 60s)
+   table.start_detached_sync_worker(interval_seconds=60)
+
+   # Or trigger an immediate sync on demand (e.g. from an S3 event or webhook)
+   table.sync_detached_overlay()
+   ```
+4. **Correctness Invariant (Checksum Lineage)**: If a customer compacts data and a query runs before the new index is built, the engine verifies the `source_data_checksum`, safely skips stale index sidecars, and falls back to a direct Parquet scan. **Queries never return stale, duplicate, or corrupted rows.**
+
+#### Step 5: Querying
+Query the mounted table using standard SQL, vector search, or hybrid retrieval:
+
+```python
+# 1. Sub-millisecond Vector Search
+results = table.vector_search("embedding", query_vector, k=10)
+
+# 2. Unified DataFusion SQL (with pgvector syntax and hybrid filters)
+df = table.sql("""
+    SELECT event_id, document_text, embedding <-> [0.1, 0.2, 0.3] AS distance
+    FROM events
+    WHERE status = 'active'
+    ORDER BY distance ASC
+    LIMIT 10
+""")
+```
 
 ## 🎯 Architecture: The Indexed Lakehouse
 
-BenoStreamDB implements an indexed, compute-disaggregated lakehouse architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer. The indexes are **overlays**: they attach to data files as sidecar artifacts and can be layered onto tables BenoStreamDB did not create (see [Layered Indexing](#layered-indexing-existing-iceberg-tables) below).
+BenoStreamDB implements an indexed, compute-disaggregated lakehouse architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer. The indexes are **overlays**: they attach to data files as sidecar artifacts and can be layered onto tables BenoStreamDB did not create.
 
 ```text
                Iceberg Table
