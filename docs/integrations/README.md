@@ -16,6 +16,7 @@ BenoStreamDB provides native connectors, API bindings, and network gateways acro
 | **Search Gateway** | HTTP REST Gateway | Drop-in REST compatibility for OpenSearch / ES 7.10 (port 9200) and Qdrant v1.x (port 6333) | [Search Gateway Guide](SEARCH_GATEWAY.md) |
 | **Model Context Protocol** | AI Agent Tool Server | JSON-RPC tool server for LLMs and autonomous agents (Claude Desktop, Cursor, Antigravity) | [MCP Guide](MCP.md) |
 | **Java JNI Bridge** | JVM Native Interface | High-performance Arrow C Data Interface bridge powering JVM query engines | [Java JNI Guide](JAVA_JNI.md) |
+| **Snowflake** | Detached Overlay / REST Catalog | In-place indexing over Snowflake Iceberg tables on External Volumes (S3/GCS/Azure) | [Snowflake Guide](SNOWFLAKE.md) |
 
 ---
 
