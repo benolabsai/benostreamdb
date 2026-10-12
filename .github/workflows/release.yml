@@ -171,7 +171,7 @@ jobs:
           name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
       - name: Install cargo-wix
-        run: cargo install cargo-wix
+        uses: taiki-e/install-action@cargo-wix
       - name: Build Windows binaries and MSI
         run: |
           cargo build --release --workspace
