@@ -49,6 +49,81 @@ An **index-overlay engine for the lakehouse**. BenoStreamDB layers reconstructib
 > 
 > *Note on TLS:* The network servers do not terminate TLS natively within the Rust binaries. When deploying over untrusted networks or the public internet, you must deploy BenoStreamDB behind a reverse proxy (like NGINX, Envoy, or an AWS ALB) that terminates TLS. See [SECURITY.md](SECURITY.md) for the full posture.
 
+It is not a storage engine you have to migrate into. You can either write through it, or point it at an **existing Apache Iceberg table it does not own** and build indexes over that data in place. The authoritative Parquet files and the advisory index overlays are stored separately, so indexing never rewrites or duplicates your data.
+
+## 🎯 Architecture: The Indexed Lakehouse
+
+BenoStreamDB implements an indexed, compute-disaggregated lakehouse architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer. The indexes are **overlays**: they attach to data files as sidecar artifacts and can be layered onto tables BenoStreamDB did not create (see [Operating Modes](#-operating-modes-authoritative-vs-external-iceberg-tables) below).
+
+```text
+               Iceberg Table
+                     │
+       ┌─────────────┴──────────────┐
+       │                            │
+Authoritative Storage        Advisory Index Overlay
+       │                            │
+  Parquet Files              Scalar Bitmap / BM25 / HNSW / IVF / TQ / CSR Graph
+```
+
+> ### Core Architecture Invariants
+> 1. **The Overlay Invariant**: Index files are derived, reconstructible state. They may be absent, stale, or deleted without compromising snapshot correctness. Queries may degrade to Parquet scanning or background recovery, but never return incorrect results.
+> 2. **Publication Invariant**: A published manifest may reference only immutable artifacts that have already been successfully uploaded and verified to storage.
+> 3. **Durability Invariant**: WAL truncation is permitted only after the corresponding data is durably represented by a committed manifest snapshot.
+> 4. **Maintenance Invariant**: Maintenance operations may delete an artifact only if it is neither referenced by any active snapshot nor currently in-flight.
+> 5. **Resource Invariant**: Index builds are gated to a memory-scaled concurrency budget, and production paths follow a no-panic policy — malformed input degrades to an error, never a crash.
+
+BenoStreamDB sits between two categories of system that do not overlap. Vector/graph databases own your data and cannot do general SQL analytics over a lakehouse; lakehouse query engines do SQL over Iceberg/Parquet but have no native vector, full-text, or graph indexing. BenoStreamDB fills that seam:
+
+| Capability | Vector/Graph DBs (Pinecone, Qdrant, Neo4j) | Lakehouse Engines (Trino, Spark, DuckDB) | BenoStreamDB |
+|------------|--------------------------------------------|------------------------------------------|--------------|
+| **Data ownership** | Must ingest/duplicate your data | Queries data in place | Queries data in place |
+| **Vector search** | ✅ Native | ❌ Bolt-on | ✅ Native overlay index |
+| **Full-text (BM25)** | Partial | ❌ Bolt-on | ✅ Native overlay index |
+| **Scalar indexes** | Partial | ❌ Bolt-on | ✅ RoaringBitmap |
+| **Graph analytics** | ✅ (separate system) | ❌ | ✅ SQL UDFs on edge tables |
+| **SQL analytics** | ❌ | ✅ | ✅ DataFusion |
+| **pgvector syntax** | ❌ | ❌ | ✅ |
+| **Indexes on existing Iceberg tables** | ❌ | ❌ | ✅ Layered Indexing |
+| **Deployment** | Managed cluster | Cluster | Embedded library / scale-to-zero |
+
+## ⚡ Iceberg V2/V3 Compatibility
+
+BenoStreamDB implements the core Apache Iceberg table format V2 and V3 features required for its indexed-lakehouse model:
+
+| Feature | V1 | V2 | V3 | BenoStreamDB |
+|---------|----|----|----|--------------| 
+| **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
+| **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ Parquet `distinct_count` |
+| **Row Lineage** | ❌ | ❌ | ✅ | ✅ `_row_id` (monotonic long), `_last_updated_sequence_number`, `next-row-id`, `first-row-id` |
+| **Default Values** | ❌ | ❌ | ✅ | ✅ `initial-default` & `write-default` |
+| **Deletion Vectors** | ❌ | ❌ | ✅ | ✅ Puffin Format Integrated |
+| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality Deletes |
+| **Nanosecond Timestamps** | ❌ | ❌ | ✅ | ✅ `timestamp(ns)` & `time64(ns)` |
+
+### New APIs
+
+```python
+import benostreamdb as bsdb
+
+# Create table with sort order (V2)
+table = bsdb.Table("s3://bucket/table")
+table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
+
+# V3 tables emit row lineage: _row_id (monotonic long) and
+# _last_updated_sequence_number, with next-row-id / first-row-id tracked
+# in table metadata. Enable with table.format_version = 3.
+table.format_version = 3
+```
+
+### Migration Guide: V2 → V3
+
+Upgrading to V3 enables row-level operations and enhanced tracking:
+
+1. **Enable**: set `table.format_version = 3` (persisted on the next commit)
+2. **No Data Rewrite**: Existing data remains compatible
+3. **Row lineage**: new rows get a monotonic `_row_id` (long) and `_last_updated_sequence_number`; each data file records its `first-row-id` and table metadata tracks `next-row-id`
+
 ## 🔄 Operating Modes: Authoritative vs. External Iceberg Tables
 
 BenoStreamDB runs in two distinct modes depending on who owns the lakehouse storage:
@@ -218,79 +293,6 @@ df = table.sql("""
     LIMIT 10
 """)
 ```
-
-## 🎯 Architecture: The Indexed Lakehouse
-
-BenoStreamDB implements an indexed, compute-disaggregated lakehouse architecture that pairs authoritative open table storage with advisory, persistent secondary indexes and a unified retrieval layer. The indexes are **overlays**: they attach to data files as sidecar artifacts and can be layered onto tables BenoStreamDB did not create.
-
-```text
-               Iceberg Table
-                     │
-       ┌─────────────┴──────────────┐
-       │                            │
-Authoritative Storage        Advisory Index Overlay
-       │                            │
-  Parquet Files              Scalar Bitmap / BM25 / HNSW / IVF / TQ / CSR Graph
-```
-
-> ### Core Architecture Invariants
-> 1. **The Overlay Invariant**: Index files are derived, reconstructible state. They may be absent, stale, or deleted without compromising snapshot correctness. Queries may degrade to Parquet scanning or background recovery, but never return incorrect results.
-> 2. **Publication Invariant**: A published manifest may reference only immutable artifacts that have already been successfully uploaded and verified to storage.
-> 3. **Durability Invariant**: WAL truncation is permitted only after the corresponding data is durably represented by a committed manifest snapshot.
-> 4. **Maintenance Invariant**: Maintenance operations may delete an artifact only if it is neither referenced by any active snapshot nor currently in-flight.
-> 5. **Resource Invariant**: Index builds are gated to a memory-scaled concurrency budget, and production paths follow a no-panic policy — malformed input degrades to an error, never a crash.
-
-BenoStreamDB sits between two categories of system that do not overlap. Vector/graph databases own your data and cannot do general SQL analytics over a lakehouse; lakehouse query engines do SQL over Iceberg/Parquet but have no native vector, full-text, or graph indexing. BenoStreamDB fills that seam:
-
-| Capability | Vector/Graph DBs (Pinecone, Qdrant, Neo4j) | Lakehouse Engines (Trino, Spark, DuckDB) | BenoStreamDB |
-|------------|--------------------------------------------|------------------------------------------|--------------|
-| **Data ownership** | Must ingest/duplicate your data | Queries data in place | Queries data in place |
-| **Vector search** | ✅ Native | ❌ Bolt-on | ✅ Native overlay index |
-| **Full-text (BM25)** | Partial | ❌ Bolt-on | ✅ Native overlay index |
-| **Scalar indexes** | Partial | ❌ Bolt-on | ✅ RoaringBitmap |
-| **Graph analytics** | ✅ (separate system) | ❌ | ✅ SQL UDFs on edge tables |
-| **SQL analytics** | ❌ | ✅ | ✅ DataFusion |
-| **pgvector syntax** | ❌ | ❌ | ✅ |
-| **Indexes on existing Iceberg tables** | ❌ | ❌ | ✅ Layered Indexing |
-| **Deployment** | Managed cluster | Cluster | Embedded library / scale-to-zero |
-
-## ⚡ Iceberg V2/V3 Compatibility
-
-BenoStreamDB implements the core Apache Iceberg table format V2 and V3 features required for its indexed-lakehouse model:
-
-| Feature | V1 | V2 | V3 | BenoStreamDB |
-|---------|----|----|----|--------------| 
-| **Sort Orders** | ❌ | ✅ | ✅ | ✅ Implemented |
-| **Partition Evolution** | ❌ | ✅ | ✅ | ✅ Implemented |
-| **Statistics (NDV)** | ❌ | ✅ | ✅ | ✅ Parquet `distinct_count` |
-| **Row Lineage** | ❌ | ❌ | ✅ | ✅ `_row_id` (monotonic long), `_last_updated_sequence_number`, `next-row-id`, `first-row-id` |
-| **Default Values** | ❌ | ❌ | ✅ | ✅ `initial-default` & `write-default` |
-| **Deletion Vectors** | ❌ | ❌ | ✅ | ✅ Puffin Format Integrated |
-| **Delete Files** | ❌ | ✅ | ✅ | ✅ Position + Equality Deletes |
-| **Nanosecond Timestamps** | ❌ | ❌ | ✅ | ✅ `timestamp(ns)` & `time64(ns)` |
-
-### New APIs
-
-```python
-import benostreamdb as bsdb
-
-# Create table with sort order (V2)
-table = bsdb.Table("s3://bucket/table")
-table.replace_sort_order(["timestamp", "user_id"], ascending=[False, True])
-
-# V3 tables emit row lineage: _row_id (monotonic long) and
-# _last_updated_sequence_number, with next-row-id / first-row-id tracked
-# in table metadata. Enable with table.format_version = 3.
-table.format_version = 3
-```
-
-### Migration Guide: V2 → V3
-
-Upgrading to V3 enables row-level operations and enhanced tracking:
-
-1. **Enable**: set `table.format_version = 3` (persisted on the next commit)
-2. **No Data Rewrite**: Existing data remains compatible
-3. **Row lineage**: new rows get a monotonic `_row_id` (long) and `_last_updated_sequence_number`; each data file records its `first-row-id` and table metadata tracks `next-row-id`
 
 
 ## 🌐 REST APIs (OpenSearch & Qdrant)
