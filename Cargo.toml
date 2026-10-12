@@ -208,7 +208,7 @@ features = ["invocation"]
 [dependencies.pyo3]
 version = "0.26.0"
 optional = true
-features = ["extension-module", "abi3-py310"]
+features = ["extension-module", "abi3-py310", "generate-import-lib"]
 
 [dependencies.numpy]
 version = "0.26.0"
