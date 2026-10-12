@@ -170,21 +170,7 @@ jobs:
         with:
           name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
-      - name: Install cargo-wix
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-wix
-      - name: Build Windows binaries and MSI
-        run: |
-          cargo build --release --workspace
-          cargo wix --nocapture
-      - name: Upload Windows MSI and Binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-binaries
-          path: |
-            target/wix/*.msi
-            target/release/*.exe
+
 
   sdist:
     needs: [ci]
@@ -434,11 +420,6 @@ jobs:
         run: |
           chmod +x ./build-connectors.sh
           ./build-connectors.sh
-      - name: Download Windows MSI and Binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-binaries
-          path: windows-binaries
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -450,5 +431,4 @@ jobs:
             contrib/benostreamdb-mcp/dist/*
             server/flight_sql/dist/*
             connector-artifacts/*
-            windows-binaries/*
           generate_release_notes: true
