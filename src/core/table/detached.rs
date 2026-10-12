@@ -241,10 +241,8 @@ impl Table {
             })
             .or_else(|| iceberg_meta.schemas.first())
             .context("Upstream Iceberg table has no schemas")?;
-        let hdb_schema: crate::core::manifest::Schema =
-            serde_json::from_value(current_schema_json.clone())
-                .context("Failed to map upstream Iceberg schema")?;
-        let schema_ref: arrow::datatypes::SchemaRef = Arc::new(hdb_schema.to_arrow());
+        let schema_ref = crate::core::iceberg::iceberg_json_to_arrow_schema(current_schema_json)
+            .context("Failed to map upstream Iceberg schema")?;
 
         // Open an existing overlay or create a fresh one at the overlay prefix.
         let overlay_store = create_object_store(&overlay_storage_uri)?;

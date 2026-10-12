@@ -48,6 +48,21 @@ pub fn iceberg_json_to_arrow_schema(
 
 fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<DataType> {
     if let Some(type_str) = type_json.as_str() {
+        if type_str.starts_with("decimal(") && type_str.ends_with(')') {
+            let inner = &type_str[8..type_str.len() - 1];
+            let parts: Vec<&str> = inner.split(',').map(|s| s.trim()).collect();
+            if parts.len() == 2 {
+                let p: u8 = parts[0].parse().context("Invalid decimal precision")?;
+                let s: i8 = parts[1].parse().context("Invalid decimal scale")?;
+                return Ok(DataType::Decimal128(p, s));
+            }
+        }
+        if type_str.starts_with("fixed[") && type_str.ends_with(']') {
+            let inner = &type_str[6..type_str.len() - 1];
+            let len: i32 = inner.trim().parse().context("Invalid fixed length")?;
+            return Ok(DataType::FixedSizeBinary(len));
+        }
+
         match type_str {
             "boolean" => Ok(DataType::Boolean),
             "int" => Ok(DataType::Int32),
@@ -55,19 +70,22 @@ fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<DataTy
             "float" => Ok(DataType::Float32),
             "double" => Ok(DataType::Float64),
             "string" => Ok(DataType::Utf8),
-            "binary" | "fixed" => Ok(DataType::Binary), // Simplified
+            "binary" | "fixed" => Ok(DataType::Binary),
             "date" => Ok(DataType::Date32),
+            "time" => Ok(DataType::Time64(TimeUnit::Microsecond)),
             "timestamp" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
             "timestamptz" => Ok(DataType::Timestamp(
                 TimeUnit::Microsecond,
                 Some("UTC".into()),
             )),
-            "uuid" => Ok(DataType::Utf8), // Arrow doesn't have native UUID
-            _ => {
-                // Check for complex types like list, map, struct which might be encoded as strings in some contexts?
-                // Usually they are objects.
-                Err(anyhow::anyhow!("Unsupported primitive type: {}", type_str))
-            }
+            "timestamp_ns" => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+            "timestamptz_ns" => Ok(DataType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some("UTC".into()),
+            )),
+            "time_ns" => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+            "uuid" => Ok(DataType::Utf8),
+            _ => Err(anyhow::anyhow!("Unsupported primitive type: {}", type_str)),
         }
     } else if let Some(obj) = type_json.as_object() {
         // Complex types: list, map, struct
@@ -96,11 +114,11 @@ fn convert_iceberg_type_to_arrow(type_json: &serde_json::Value) -> Result<DataTy
                 let element_type = obj
                     .get("element")
                     .or_else(|| obj.get("element-type"))
-                    .context("Missing element")?; // 'element' or 'element-type'
+                    .context("Missing element")?;
                 let required = obj
                     .get("element-required")
                     .and_then(|r| r.as_bool())
-                    .unwrap_or(true); // Default true?
+                    .unwrap_or(false);
                 let dt = convert_iceberg_type_to_arrow(element_type)?;
                 Ok(DataType::List(std::sync::Arc::new(
                     arrow::datatypes::Field::new("item", dt, !required),

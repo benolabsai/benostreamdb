@@ -7,7 +7,6 @@
 /// - `register_external`, `detect_iceberg_rest`, `new_from_rest`
 /// - `spawn_iceberg_observer`, `check_and_import_new_snapshot`, `import_iceberg_snapshot`
 use anyhow::{Context, Result};
-use arrow::datatypes::SchemaRef;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
@@ -171,9 +170,8 @@ impl Table {
                 );
                 &iceberg_meta.schemas[0]
             });
-        let hdb_schema: crate::core::manifest::Schema =
-            serde_json::from_value(current_schema_json.clone())?;
-        let schema_ref: SchemaRef = Arc::new(hdb_schema.to_arrow());
+        let schema_ref = crate::core::iceberg::iceberg_json_to_arrow_schema(current_schema_json)
+            .context("Failed to map upstream Iceberg schema")?;
 
         // 3. Initialize BenoStream Table
         let mut table = Self::create_async(uri.clone(), schema_ref.clone()).await?;
