@@ -203,7 +203,27 @@ Themes are ordered by priority.
     resident, and page in on demand via `BSDB_DISK_CACHE_DIR`. This is the only
     way a sidecar can exceed host memory.
 
-### Theme 4: GPU Scaling (single-query multi-GPU + cross-call batching) — 🟠 **Medium**
+### Theme 4: Hardware-Accelerated CPU Distance Kernels via SimSIMD (ARM NEON, AVX-512, VNNI) — 🔴 **High**
+*Deliver hand-tuned SIMD vector distance execution on ARM64 and modern x86 without manual assembly maintenance.*
+
+> **Current state & Performance Gap.** Vector distance calculations in `src/core/index/distance.rs` dominate HNSW graph traversal and point queries. Today, x86_64 uses manual 256-bit AVX2/FMA intrinsics, but:
+> 1. **ARM64 (Apple Silicon, AWS Graviton 3/4, Windows ARM / Snapdragon X Elite)** currently lacks explicit SIMD intrinsics in `distance.rs` and falls back to scalar loop unrolling (`dot_product_portable`), missing out on 1.5×–2.5× throughput gains from hardware vector registers.
+> 2. **AVX-512** on modern AMD Zen 4/5 and Intel Xeon/Core processors is unutilized, leaving 512-bit registers (16 floats/instruction) and 32 ZMM registers untapped.
+> 3. **Quantized Vector Math**: CPU lacks hardware VNNI (`int8` dot products) and half-precision (`f16`/`bf16`) SIMD instructions, forcing software conversions.
+>
+> **Approach: Integrate Unum's `simsimd` crate.** `simsimd` provides production-hardened, zero-dependency C/assembly kernels with automatic runtime CPU dispatching across AVX2, AVX-512, AVX-512-FP16, ARM NEON, and ARM SVE. Integrating `simsimd` accelerates CPU-bound HNSW traversals across all platforms while eliminating ~400 lines of fragile `unsafe` architecture-specific intrinsics.
+
+- [ ] **Integrate `simsimd` dependency into `benostreamdb` and `benostream-gpu-ann`** — 🟠 **High**:
+  - Add `simsimd` (Apache-2.0, pure Rust bindings with compiled SIMD kernels) to workspace dependencies.
+- [ ] **Wire runtime dispatch in `src/core/index/distance.rs`** — 🟠 **High**:
+  - Replace manual `dot_product_avx2`, `l2_distance_squared_avx2`, and `dot_product_portable` with `simsimd::spatial` / `simsimd::binary` dispatches.
+  - Automatically route L2, Inner Product (Dot), Cosine, Hamming, and Jaccard distances through hardware-detected kernels.
+- [ ] **Native Quantized CPU Distance Acceleration (`i8` / `f16` / `bf16`)** — 🟠 **High**:
+  - Expose hardware-accelerated integer dot products (`VNNI` / `ARM SDOT`) and `f16` distance kernels for TurboQuant / quantized vector scans on CPU.
+- [ ] **Multi-Architecture Benchmarking** — 🟡 **Medium**:
+  - Measure search latency improvements across Apple Silicon M-series (NEON), AWS Graviton 4 (SVE), AMD Zen 4/5 (AVX-512), and Windows on ARM.
+
+### Theme 5: GPU Scaling (single-query multi-GPU + cross-call batching) — 🟠 **Medium**
 
 > **Shipped in 0.12.0.** The multi-GPU device pool
 > (`gpu::set_gpu_device_pool`, wired into Trino/Spark) round-robins devices
@@ -230,7 +250,7 @@ Themes are ordered by priority.
   coarse floor; make it adaptive to the measured launch/transfer overhead so
   mid-size batches can still benefit without paying H2D/D2H for nothing.
 
-### Theme 5: AI Agent Tools & Client Ecosystem
+### Theme 6: AI Agent Tools & Client Ecosystem
 *Native interfaces for AI frameworks and autonomous agent runtimes.* — 🟠 **Medium**
 
 - [ ] **LangChain & LlamaIndex Partner Integrations** — 🟢 **Deferred**:
@@ -239,7 +259,7 @@ Themes are ordered by priority.
 - [ ] **Broker Event Adapters** — 🟢 **Deferred**:
   - Pluggable Kafka, RabbitMQ, and NATS consumers implementing the `WorkCoordinator` trait for automated event-driven lakehouse ingestion.
 
-### Theme 6: Graph Overlays
+### Theme 7: Graph Overlays
 *Elevating knowledge graphs into a first-class lakehouse data modeling primitive.* — 🟠 **Medium**
 
 > **Partially delivered.** The programmatic edge-table API has shipped:
@@ -253,7 +273,7 @@ Themes are ordered by priority.
 - [ ] **Typed Global Entity URNs (`table:id`)** — 🟢 **Deferred**:
   - Extend the CSR graph dictionary to support composite entity identifiers (e.g. `users:101`, `orders:5002`) so a single CSR graph overlay can seamlessly traverse across heterogeneous Iceberg tables.
 
-### Theme 7: Semi-Structured & JSON
+### Theme 8: Semi-Structured & JSON
 *First-class access to JSON documents without forcing a rigid column schema.* — 🟢 **Deferred**
 
 > **Current state.** JSON is stored as a `Utf8` string column (text, not a
@@ -269,13 +289,13 @@ Themes are ordered by priority.
     with path pushdown. This is a storage-fidelity improvement — it still needs
     the JSON-path index above to make containment fast.
 
-### Theme 8: Reactive Lakehouse Streaming
+### Theme 9: Reactive Lakehouse Streaming
 *Bringing change data capture (CDC) and reactive streaming to the lakehouse.* — 🟢 **Deferred**
 
 - [ ] **Arrow Flight SQL Streaming Subscriptions** — 🟢 **Deferred**:
   - Implement Flight `DoExchange` / `DoGet` streaming endpoints allowing remote clients (Python, DuckDB, web dashboards) to subscribe to table diffs in real time without polling. Build this once somebody actually needs remote subscriptions.
 
-### Theme 9: Domain-Specific Text Analyzers for BM25
+### Theme 10: Domain-Specific Text Analyzers for BM25
 *Specialized tokenization pipelines for enterprise code, legal, and multilingual knowledge bases.* — 🟢 **Deferred**
 
 - [ ] **Configurable Table Analyzer Configurations**:
