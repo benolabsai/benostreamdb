@@ -61,22 +61,65 @@ jobs:
             echo "Bumping versions to $VERSION (Cargo: $CARGO_VERSION)"
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Build wheels
+      - name: Build core wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features "python" --zig
           sccache: "false"
           manylinux: auto
-      - name: Upload wheels
+      - name: Build search gateway wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist --zig
+          sccache: "false"
+          manylinux: auto
+      - name: Build flight server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist --zig
+          sccache: "false"
+          manylinux: auto
+      - name: Build MCP server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist --zig
+          sccache: "false"
+          manylinux: auto
+      - name: Upload core wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          name: wheels-core-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+      - name: Upload search gateway wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-search-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-search/dist
+      - name: Upload flight server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-flight-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          path: server/flight_sql/dist
+      - name: Upload MCP server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-mcp-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-mcp/dist
 
   macos:
     needs: [ci]
@@ -103,21 +146,60 @@ jobs:
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Build wheels
+      - name: Build core wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features "python"
           sccache: "false"
-      - name: Upload wheels
+      - name: Build search gateway wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist
+          sccache: "false"
+      - name: Build flight server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
+          sccache: "false"
+      - name: Build MCP server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
+          sccache: "false"
+      - name: Upload core wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.target }}-${{ matrix.python-version }}
+          name: wheels-core-macos-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+      - name: Upload search gateway wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-search-macos-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-search/dist
+      - name: Upload flight server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-flight-macos-${{ matrix.target }}-${{ matrix.python-version }}
+          path: server/flight_sql/dist
+      - name: Upload MCP server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-mcp-macos-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-mcp/dist
 
   windows:
     needs: [ci]
@@ -157,21 +239,60 @@ jobs:
             # Only replace the FIRST occurrence in each file
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{CARGO_VERSION}\"/ and $done = 1' Cargo.toml
             perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' pyproject.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-search/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-search/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' server/flight_sql/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' server/flight_sql/Cargo.toml
+            perl -i -pe '$done or s/^version = \".*\"/version = \"$ENV{VERSION}\"/ and $done = 1' contrib/benostreamdb-mcp/pyproject.toml
+            perl -i -pe 's/^(benostreamdb = \{ version = )\"[^\"]*\"/${1}\"$ENV{CARGO_VERSION}\"/' contrib/benostreamdb-mcp/Cargo.toml
           fi
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Build wheels
+      - name: Build core wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features "python"
           sccache: "false"
-      - name: Upload wheels
+      - name: Build search gateway wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist
+          sccache: "false"
+      - name: Build flight server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
+          sccache: "false"
+      - name: Build MCP server wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
+          sccache: "false"
+      - name: Upload core wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          name: wheels-core-windows-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
+      - name: Upload search gateway wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-search-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-search/dist
+      - name: Upload flight server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-flight-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: server/flight_sql/dist
+      - name: Upload MCP server wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-mcp-windows-${{ matrix.target }}-${{ matrix.python-version }}
+          path: contrib/benostreamdb-mcp/dist
 
 
   sdist:
@@ -198,7 +319,7 @@ jobs:
       - name: Upload sdist
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-sdist
+          name: wheels-core-sdist
           path: dist
 
   # Pre-release gate: the long-running correctness evidence. This is the
@@ -339,15 +460,34 @@ jobs:
           fi
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Download wheels
+      - name: Download core wheels
         uses: actions/download-artifact@v4
         with:
-          pattern: wheels-*
+          pattern: wheels-core-*
           merge-multiple: true
           path: dist
+      - name: Download search gateway wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-search-*
+          merge-multiple: true
+          path: contrib/benostreamdb-search/dist
+      - name: Download flight server wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-flight-*
+          merge-multiple: true
+          path: server/flight_sql/dist
+      - name: Download MCP server wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-mcp-*
+          merge-multiple: true
+          path: contrib/benostreamdb-mcp/dist
       - name: Repair Wheels (Remove Trailing Data for PyPI)
         run: |
-          for f in dist/*.whl; do
+          for f in dist/*.whl contrib/benostreamdb-search/dist/*.whl server/flight_sql/dist/*.whl contrib/benostreamdb-mcp/dist/*.whl; do
+            [ -f "$f" ] || continue
             echo "Repairing $f"
             zip -q -F "$f" --out "${f}.fixed" || continue
             mv "${f}.fixed" "$f"
@@ -368,38 +508,28 @@ jobs:
           python -m build --outdir dbt-benostreamdb/dist dbt-benostreamdb
       - name: Publish dbt adapter to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        continue-on-error: true
         with:
           packages-dir: dbt-benostreamdb/dist
           skip-existing: true
           verbose: true
-      # The search gateway is a native Rust crate that also ships as its own
-      # PyPI distribution (`benostreamdb-search`). The wheel bundles the same
-      # `bsdb-search` binary via maturin (`bindings = "bin"`), released at the
-      # engine version alongside the core.
-      - name: Build search gateway (maturin wheel)
-        run: |
-          python -m pip install --upgrade maturin
-          maturin build --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist
       - name: Publish search gateway to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        continue-on-error: true
         with:
           packages-dir: contrib/benostreamdb-search/dist
           skip-existing: true
           verbose: true
-      - name: Build flight server (maturin wheel)
-        run: |
-          maturin build --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
       - name: Publish flight server to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        continue-on-error: true
         with:
           packages-dir: server/flight_sql/dist
           skip-existing: true
           verbose: true
-      - name: Build MCP server (maturin wheel)
-        run: |
-          maturin build --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
       - name: Publish MCP server to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        continue-on-error: true
         with:
           packages-dir: contrib/benostreamdb-mcp/dist
           skip-existing: true
