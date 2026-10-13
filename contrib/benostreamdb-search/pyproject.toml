@@ -29,9 +29,6 @@ dependencies = [
     "benostreamdb>=0.12.0",
 ]
 
-[project.scripts]
-bsdb-search = "benostreamdb_search:main"
-
 [tool.maturin]
 bindings = "bin"
 python-source = "python"
