@@ -9,12 +9,12 @@
 //! 5. Vector literal and distance operator ergonomics without ::vector casts.
 //! 6. Helpful diagnostic error on CREATE INDEX statements.
 
-use std::sync::Arc;
 use arrow::array::{Float32Array, Int64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use benostreamdb::core::sql::session::BenoStreamSession;
 use benostreamdb::core::table::Table;
+use std::sync::Arc;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -33,10 +33,7 @@ async fn test_sql_binding_ergonomics_no_arrow_cast() -> anyhow::Result<()> {
 
     let src = Int64Array::from(vec![0, 0, 1, 2, 2, 2, 3]);
     let dst = Int64Array::from(vec![1, 2, 2, 0, 1, 3, 0]);
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(src), Arc::new(dst)],
-    )?;
+    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(src), Arc::new(dst)])?;
 
     table.write_async(vec![batch]).await?;
     table.commit_async().await?;
@@ -49,49 +46,78 @@ async fn test_sql_binding_ergonomics_no_arrow_cast() -> anyhow::Result<()> {
     let (res_neighbors, _) = session
         .sql("SELECT graph_neighbors(source, target, 0, 1) AS n FROM edges")
         .await?;
-    assert!(!res_neighbors.is_empty(), "graph_neighbors should return results without arrow_cast");
+    assert!(
+        !res_neighbors.is_empty(),
+        "graph_neighbors should return results without arrow_cast"
+    );
 
     let (res_sp, _) = session
         .sql("SELECT graph_shortest_path(source, target, 0, 3) AS sp FROM edges")
         .await?;
-    assert!(!res_sp.is_empty(), "graph_shortest_path should return results without arrow_cast");
+    assert!(
+        !res_sp.is_empty(),
+        "graph_shortest_path should return results without arrow_cast"
+    );
 
     let (res_louvain, _) = session
         .sql("SELECT graph_louvain_communities(source, target, 1.0) AS comm FROM edges")
         .await?;
-    assert!(!res_louvain.is_empty(), "graph_louvain_communities should work with Float64 literal 1.0");
+    assert!(
+        !res_louvain.is_empty(),
+        "graph_louvain_communities should work with Float64 literal 1.0"
+    );
 
     let (res_pr, _) = session
         .sql("SELECT graph_pagerank(source, target, 0.85, 20) AS pr FROM edges")
         .await?;
-    assert!(!res_pr.is_empty(), "graph_pagerank should work without arrow_cast for damping and iterations");
+    assert!(
+        !res_pr.is_empty(),
+        "graph_pagerank should work without arrow_cast for damping and iterations"
+    );
 
     // 2. Priority 2: Table-Valued Functions (TVFs) with raw integer literals
     let (tvf_neighbors, _) = session
         .sql("SELECT * FROM graph_neighbors('edges', 0, 1)")
         .await?;
-    assert!(!tvf_neighbors.is_empty(), "TVF graph_neighbors should accept integer literal 0");
+    assert!(
+        !tvf_neighbors.is_empty(),
+        "TVF graph_neighbors should accept integer literal 0"
+    );
 
     let (tvf_sp, _) = session
         .sql("SELECT * FROM graph_shortest_path('edges', 0, 3)")
         .await?;
-    assert!(!tvf_sp.is_empty(), "TVF graph_shortest_path should work with integer endpoints");
+    assert!(
+        !tvf_sp.is_empty(),
+        "TVF graph_shortest_path should work with integer endpoints"
+    );
 
     // Aliased versions of table functions
     let (tvf_sp_alias, _) = session
         .sql("SELECT * FROM shortest_path('edges', 0, 3)")
         .await?;
-    assert!(!tvf_sp_alias.is_empty(), "TVF shortest_path alias should work");
+    assert!(
+        !tvf_sp_alias.is_empty(),
+        "TVF shortest_path alias should work"
+    );
 
     let (tvf_pr, _) = session
         .sql("SELECT * FROM graph_pagerank('edges', 0.85, 20)")
         .await?;
     assert!(!tvf_pr.is_empty(), "TVF graph_pagerank should work");
+    assert!(
+        tvf_pr.iter().map(|b| b.num_rows()).sum::<usize>() > 0,
+        "TVF graph_pagerank should return rows"
+    );
 
     let (tvf_louvain, _) = session
         .sql("SELECT * FROM graph_louvain('edges', 1.0)")
         .await?;
     assert!(!tvf_louvain.is_empty(), "TVF graph_louvain should work");
+    assert!(
+        tvf_louvain.iter().map(|b| b.num_rows()).sum::<usize>() > 0,
+        "TVF graph_louvain should return rows"
+    );
 
     // 3. Priority 6 & DDL: CREATE INDEX executes via DDL interception
     let (res_idx, _) = session
@@ -140,7 +166,11 @@ async fn test_vector_ergonomics_without_casts() -> anyhow::Result<()> {
         .sql("SELECT id, embedding <-> [1.0, 0.0, 0.0] AS dist FROM items ORDER BY dist LIMIT 1")
         .await?;
     assert_eq!(res.len(), 1);
-    let dist_col = res[0].column(1).as_any().downcast_ref::<Float32Array>().unwrap();
+    let dist_col = res[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .unwrap();
     assert!((dist_col.value(0) - 0.0).abs() < 1e-5);
 
     // Also with cosine operator <=>

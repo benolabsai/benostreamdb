@@ -342,16 +342,14 @@ impl BenoStreamSession {
         }
 
         // Parse the SQL query to get a logical plan
-        let plan = match self
-            .ctx
-            .state()
-            .create_logical_plan(&query_processed)
-            .await
-        {
+        let plan = match self.ctx.state().create_logical_plan(&query_processed).await {
             Ok(p) => p,
             Err(e) => {
                 let err_str = e.to_string();
-                if err_str.contains("CreateIndex") || err_str.contains("create index") || (err_str.contains("Unsupported") && err_str.contains("Index")) {
+                if err_str.contains("CreateIndex")
+                    || err_str.contains("create index")
+                    || (err_str.contains("Unsupported") && err_str.contains("Index"))
+                {
                     anyhow::bail!("CREATE INDEX is not supported directly in session.sql(). Use table.add_index(col, algo) for embedded tables, or execute DDL via Flight SQL / Trino.");
                 }
                 return Err(e.into());

@@ -37,7 +37,8 @@ use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, Float64Array, Float64Builder, ListBuilder, UInt32Builder, UInt64Array, UInt64Builder,
+    Array, ArrayRef, Float64Array, Float64Builder, ListBuilder, UInt32Builder, UInt64Array,
+    UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
@@ -130,12 +131,30 @@ impl GraphTraversalKind {
 pub fn all_graph_table_functions() -> Vec<(String, Arc<dyn TableFunctionImpl>)> {
     let mut funcs: Vec<(String, Arc<dyn TableFunctionImpl>)> = Vec::new();
     let kinds: &[(GraphTraversalKind, &[&str])] = &[
-        (GraphTraversalKind::Neighbors, &["graph_neighbors", "neighbors"]),
-        (GraphTraversalKind::ShortestPath, &["graph_shortest_path", "shortest_path"]),
-        (GraphTraversalKind::AllShortestPaths, &["graph_all_shortest_paths", "all_shortest_paths"]),
-        (GraphTraversalKind::Subgraph, &["graph_subgraph", "subgraph"]),
-        (GraphTraversalKind::ConnectingPaths, &["graph_connecting_paths", "connecting_paths"]),
-        (GraphTraversalKind::PageRank, &["graph_pagerank", "pagerank"]),
+        (
+            GraphTraversalKind::Neighbors,
+            &["graph_neighbors", "neighbors"],
+        ),
+        (
+            GraphTraversalKind::ShortestPath,
+            &["graph_shortest_path", "shortest_path"],
+        ),
+        (
+            GraphTraversalKind::AllShortestPaths,
+            &["graph_all_shortest_paths", "all_shortest_paths"],
+        ),
+        (
+            GraphTraversalKind::Subgraph,
+            &["graph_subgraph", "subgraph"],
+        ),
+        (
+            GraphTraversalKind::ConnectingPaths,
+            &["graph_connecting_paths", "connecting_paths"],
+        ),
+        (
+            GraphTraversalKind::PageRank,
+            &["graph_pagerank", "pagerank"],
+        ),
         (GraphTraversalKind::Louvain, &["graph_louvain", "louvain"]),
     ];
 
@@ -717,9 +736,10 @@ fn as_f64(expr: &Expr) -> Result<f64> {
         Expr::Literal(ScalarValue::UInt32(Some(n)), _) => Ok(*n as f64),
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
         | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _)
-        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => s.trim().parse::<f64>().map_err(|_| {
-            DataFusionError::Plan(format!("cannot parse '{s}' as float"))
-        }),
+        | Expr::Literal(ScalarValue::Utf8View(Some(s)), _) => s
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| DataFusionError::Plan(format!("cannot parse '{s}' as float"))),
         other => plan_err!("expected a float literal, got {other:?}"),
     }
 }
@@ -744,35 +764,35 @@ fn as_seed_list(expr: &Expr) -> Result<Vec<u64>> {
             }
             Ok(seeds)
         }
-        Expr::Literal(scalar, _) => {
-            match scalar {
-                ScalarValue::Int64(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::Int32(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::Int16(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::Int8(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::UInt64(Some(n)) => Ok(vec![*n]),
-                ScalarValue::UInt32(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::UInt16(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::UInt8(Some(n)) => Ok(vec![*n as u64]),
-                ScalarValue::List(arr) => {
-                    let list_arr = arr.as_ref();
-                    if list_arr.is_empty() {
-                        return Ok(Vec::new());
-                    }
-                    let inner = list_arr.value(0);
-                    let mut out = Vec::new();
-                    if let Ok(u64s) = crate::core::sql::graph_udf::graph_view::coerce_to_u64_array(&inner) {
-                        for i in 0..u64s.len() {
-                            if !u64s.is_null(i) {
-                                out.push(u64s.value(i));
-                            }
+        Expr::Literal(scalar, _) => match scalar {
+            ScalarValue::Int64(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::Int32(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::Int16(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::Int8(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::UInt64(Some(n)) => Ok(vec![*n]),
+            ScalarValue::UInt32(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::UInt16(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::UInt8(Some(n)) => Ok(vec![*n as u64]),
+            ScalarValue::List(arr) => {
+                let list_arr = arr.as_ref();
+                if list_arr.is_empty() {
+                    return Ok(Vec::new());
+                }
+                let inner = list_arr.value(0);
+                let mut out = Vec::new();
+                if let Ok(u64s) =
+                    crate::core::sql::graph_udf::graph_view::coerce_to_u64_array(&inner)
+                {
+                    for i in 0..u64s.len() {
+                        if !u64s.is_null(i) {
+                            out.push(u64s.value(i));
                         }
                     }
-                    Ok(out)
                 }
-                other => plan_err!("expected a string, integer, or array seed literal, got {other:?}"),
+                Ok(out)
             }
-        }
+            other => plan_err!("expected a string, integer, or array seed literal, got {other:?}"),
+        },
         Expr::ScalarFunction(func) if func.name() == "make_array" || func.name() == "array" => {
             let mut seeds = Vec::new();
             for arg in &func.args {
@@ -784,11 +804,7 @@ fn as_seed_list(expr: &Expr) -> Result<Vec<u64>> {
     }
 }
 
-fn execute_pagerank(
-    view: &dyn GraphView,
-    damping: f64,
-    iterations: u32,
-) -> (ArrayRef, ArrayRef) {
+fn execute_pagerank(view: &dyn GraphView, damping: f64, iterations: u32) -> (ArrayRef, ArrayRef) {
     let mut nodes = view.all_nodes();
     if nodes.is_empty() {
         return (
@@ -799,11 +815,7 @@ fn execute_pagerank(
     nodes.sort_unstable();
     nodes.dedup();
     let num_nodes = nodes.len();
-    let node_to_idx: HashMap<u64, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, &n)| (n, i))
-        .collect();
+    let node_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, &n)| (n, i)).collect();
 
     let mut adj: Vec<Vec<usize>> = Vec::with_capacity(num_nodes);
     let mut scratch = Vec::new();
@@ -853,13 +865,13 @@ fn execute_pagerank(
         node_builder.append_value(nodes[i]);
         rank_builder.append_value(scores[i]);
     }
-    (Arc::new(node_builder.finish()), Arc::new(rank_builder.finish()))
+    (
+        Arc::new(node_builder.finish()),
+        Arc::new(rank_builder.finish()),
+    )
 }
 
-fn execute_louvain(
-    view: &dyn GraphView,
-    resolution: f32,
-) -> (ArrayRef, ArrayRef) {
+fn execute_louvain(view: &dyn GraphView, resolution: f32) -> (ArrayRef, ArrayRef) {
     let mut nodes = view.all_nodes();
     if nodes.is_empty() {
         return (
@@ -870,11 +882,7 @@ fn execute_louvain(
     nodes.sort_unstable();
     nodes.dedup();
     let num_nodes = nodes.len();
-    let node_to_idx: HashMap<u64, usize> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, &n)| (n, i))
-        .collect();
+    let node_to_idx: HashMap<u64, usize> = nodes.iter().enumerate().map(|(i, &n)| (n, i)).collect();
 
     let mut adj: Vec<Vec<(usize, f32)>> = Vec::with_capacity(num_nodes);
     let mut degrees: Vec<f32> = vec![0.0; num_nodes];
@@ -895,7 +903,11 @@ fn execute_louvain(
         adj.push(u_adj);
     }
 
-    let m2 = if total_weight == 0.0 { 1.0 } else { total_weight };
+    let m2 = if total_weight == 0.0 {
+        1.0
+    } else {
+        total_weight
+    };
     let mut community: Vec<usize> = (0..num_nodes).collect();
     let mut comm_tot: Vec<f32> = degrees.clone();
 
@@ -920,7 +932,8 @@ fn execute_louvain(
                 let mut best_delta = 0.0f32;
 
                 for (&c, &k_c) in &comm_weights {
-                    let delta = k_c - k_curr - resolution * (comm_tot[c] - comm_tot[c_curr]) * k_u / m2;
+                    let delta =
+                        k_c - k_curr - resolution * (comm_tot[c] - comm_tot[c_curr]) * k_u / m2;
                     if delta > best_delta {
                         best_delta = delta;
                         best_comm = c;
@@ -952,7 +965,10 @@ fn execute_louvain(
         comm_builder.append_value(cid);
     }
 
-    (Arc::new(node_builder.finish()), Arc::new(comm_builder.finish()))
+    (
+        Arc::new(node_builder.finish()),
+        Arc::new(comm_builder.finish()),
+    )
 }
 
 #[cfg(test)]

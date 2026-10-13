@@ -44,19 +44,24 @@ pub fn coerce_to_u64_array(array: &ArrayRef) -> Result<Arc<UInt64Array>> {
         | DataType::UInt32
         | DataType::UInt16
         | DataType::UInt8 => {
-            let casted = arrow::compute::cast(array.as_ref(), &DataType::UInt64)
-                .map_err(|e| DataFusionError::Execution(format!("failed to cast to UInt64: {e}")))?;
+            let casted = arrow::compute::cast(array.as_ref(), &DataType::UInt64).map_err(|e| {
+                DataFusionError::Execution(format!("failed to cast to UInt64: {e}"))
+            })?;
             let u64_arr = casted
                 .as_any()
                 .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcast to UInt64Array failed".to_string()))?;
+                .ok_or_else(|| {
+                    DataFusionError::Execution("downcast to UInt64Array failed".to_string())
+                })?;
             Ok(Arc::new(u64_arr.clone()))
         }
         DataType::Float32 => {
             let f_arr = array
                 .as_any()
                 .downcast_ref::<Float32Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcast to Float32Array failed".to_string()))?;
+                .ok_or_else(|| {
+                    DataFusionError::Execution("downcast to Float32Array failed".to_string())
+                })?;
             let mut builder = UInt64Builder::with_capacity(f_arr.len());
             for i in 0..f_arr.len() {
                 if f_arr.is_valid(i) {
@@ -71,7 +76,9 @@ pub fn coerce_to_u64_array(array: &ArrayRef) -> Result<Arc<UInt64Array>> {
             let f_arr = array
                 .as_any()
                 .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcast to Float64Array failed".to_string()))?;
+                .ok_or_else(|| {
+                    DataFusionError::Execution("downcast to Float64Array failed".to_string())
+                })?;
             let mut builder = UInt64Builder::with_capacity(f_arr.len());
             for i in 0..f_arr.len() {
                 if f_arr.is_valid(i) {
@@ -92,8 +99,14 @@ pub fn coerce_to_u64_array(array: &ArrayRef) -> Result<Arc<UInt64Array>> {
             for i in 0..array.len() {
                 if array.is_valid(i) {
                     let s = match array.data_type() {
-                        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().map(|a| a.value(i)),
-                        DataType::LargeUtf8 => array.as_any().downcast_ref::<arrow::array::LargeStringArray>().map(|a| a.value(i)),
+                        DataType::Utf8 => array
+                            .as_any()
+                            .downcast_ref::<StringArray>()
+                            .map(|a| a.value(i)),
+                        DataType::LargeUtf8 => array
+                            .as_any()
+                            .downcast_ref::<arrow::array::LargeStringArray>()
+                            .map(|a| a.value(i)),
                         _ => None,
                     };
                     if let Some(s) = s {
@@ -110,20 +123,20 @@ pub fn coerce_to_u64_array(array: &ArrayRef) -> Result<Arc<UInt64Array>> {
             }
             Ok(Arc::new(builder.finish()))
         }
-        other => {
-            match arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
-                Ok(casted) => {
-                    let u64_arr = casted
-                        .as_any()
-                        .downcast_ref::<UInt64Array>()
-                        .ok_or_else(|| DataFusionError::Execution("downcast to UInt64Array failed".to_string()))?;
-                    Ok(Arc::new(u64_arr.clone()))
-                }
-                Err(_) => Err(DataFusionError::Execution(format!(
-                    "Cannot coerce column of type {other:?} to UInt64"
-                ))),
+        other => match arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
+            Ok(casted) => {
+                let u64_arr = casted
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("downcast to UInt64Array failed".to_string())
+                    })?;
+                Ok(Arc::new(u64_arr.clone()))
             }
-        }
+            Err(_) => Err(DataFusionError::Execution(format!(
+                "Cannot coerce column of type {other:?} to UInt64"
+            ))),
+        },
     }
 }
 
@@ -165,7 +178,10 @@ pub fn extract_scalar_u64(array: &ArrayRef, idx: usize) -> Option<u64> {
     if let Some(a) = array.as_any().downcast_ref::<StringArray>() {
         return a.value(idx).trim().parse::<u64>().ok();
     }
-    if let Some(a) = array.as_any().downcast_ref::<arrow::array::LargeStringArray>() {
+    if let Some(a) = array
+        .as_any()
+        .downcast_ref::<arrow::array::LargeStringArray>()
+    {
         return a.value(idx).trim().parse::<u64>().ok();
     }
     if let Ok(casted) = arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
@@ -255,7 +271,10 @@ pub fn extract_u64_list(array: &ArrayRef, idx: usize) -> Vec<u64> {
                 .collect();
         }
     }
-    if let Some(fsl_arr) = array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+    if let Some(fsl_arr) = array
+        .as_any()
+        .downcast_ref::<arrow::array::FixedSizeListArray>()
+    {
         let inner = fsl_arr.value(idx);
         if let Ok(u64s) = coerce_to_u64_array(&inner) {
             return (0..u64s.len())
@@ -267,7 +286,8 @@ pub fn extract_u64_list(array: &ArrayRef, idx: usize) -> Vec<u64> {
     if let Some(val) = extract_scalar_u64(array, idx) {
         return vec![val];
     }
-    Vec::new()}
+    Vec::new()
+}
 
 /// The minimal graph surface every graph algorithm needs.
 ///

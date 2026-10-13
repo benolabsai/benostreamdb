@@ -196,19 +196,25 @@ impl Accumulator for PersonalizedPageRankAccumulator {
                 if weights_list.len() > 0 && weights_list.is_valid(0) {
                     let list_values = weights_list.value(0);
                     let mut sw = Vec::new();
-                    if let Some(float_values) = list_values.as_any().downcast_ref::<Float64Array>() {
+                    if let Some(float_values) = list_values.as_any().downcast_ref::<Float64Array>()
+                    {
                         for i in 0..float_values.len() {
                             if float_values.is_valid(i) {
                                 sw.push(float_values.value(i));
                             }
                         }
-                    } else if let Some(float_values) = list_values.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                    } else if let Some(float_values) = list_values
+                        .as_any()
+                        .downcast_ref::<arrow::array::Float32Array>()
+                    {
                         for i in 0..float_values.len() {
                             if float_values.is_valid(i) {
                                 sw.push(float_values.value(i) as f64);
                             }
                         }
-                    } else if let Ok(casted) = arrow::compute::cast(&list_values, &DataType::Float64) {
+                    } else if let Ok(casted) =
+                        arrow::compute::cast(&list_values, &DataType::Float64)
+                    {
                         if let Some(float_values) = casted.as_any().downcast_ref::<Float64Array>() {
                             for i in 0..float_values.len() {
                                 if float_values.is_valid(i) {

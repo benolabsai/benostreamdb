@@ -811,6 +811,48 @@ impl Table {
     ) -> Result<Vec<(u64, u64)>> {
         use crate::core::sql::graph_udf::graph_view::GraphView;
 
+        let (src_col_name, tgt_col_name) = self
+            .resolve_endpoint_columns(source_column, target_column)
+            .await;
+
+        if seeds.is_empty() {
+            let col_to_check = graph_column.unwrap_or(src_col_name.as_str());
+            if let Ok(Some(forward)) = self.load_graph_index(col_to_check).await {
+                let mut out = forward.all_edges();
+                out.sort_unstable();
+                return Ok(out);
+            }
+
+            let batches = self.read_async(None, None, None).await?;
+            let mut edges = HashSet::new();
+            for batch in &batches {
+                let b_schema = batch.schema();
+                let src_idx = match b_schema.index_of(&src_col_name) {
+                    Ok(i) => i,
+                    Err(_) => continue,
+                };
+                let tgt_idx = match b_schema.index_of(&tgt_col_name) {
+                    Ok(i) => i,
+                    Err(_) => continue,
+                };
+
+                let sources = extract_u64_values(batch.column(src_idx).as_ref());
+                let targets = extract_u64_values(batch.column(tgt_idx).as_ref());
+
+                for i in 0..batch.num_rows() {
+                    if let (Some(Some(s)), Some(Some(t))) =
+                        (sources.get(i).copied(), targets.get(i).copied())
+                    {
+                        edges.insert((s, t));
+                    }
+                }
+            }
+
+            let mut out: Vec<(u64, u64)> = edges.into_iter().collect();
+            out.sort_unstable();
+            return Ok(out);
+        }
+
         let opts = GraphNeighborhoodOptions {
             seeds: seeds.to_vec(),
             hops,
@@ -828,10 +870,6 @@ impl Table {
         if node_set.is_empty() {
             return Ok(Vec::new());
         }
-
-        let (src_col_name, tgt_col_name) = self
-            .resolve_endpoint_columns(source_column, target_column)
-            .await;
 
         let mut edges = HashSet::new();
         let col_to_check = graph_column.unwrap_or(src_col_name.as_str());
@@ -1016,6 +1054,9 @@ impl Table {
             }
             _ => {
                 let backing = self.load_graph_backing(mode, source_column).await?;
+                if seeds.is_empty() {
+                    return Ok(backing);
+                }
                 let region = self
                     .region_nodes_with_columns(seeds, hops, source_column, target_column)
                     .await?;

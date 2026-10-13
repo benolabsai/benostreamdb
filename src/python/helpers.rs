@@ -62,7 +62,9 @@ pub fn sanitize_sql(query: &str) -> PyResult<String> {
     }
 
     Ok(match SQL_REGEX.as_ref() {
-        Some(re) => re.replace_all(final_query, "dist_l2($1, ARRAY[$2])").to_string(),
+        Some(re) => re
+            .replace_all(final_query, "dist_l2($1, ARRAY[$2])")
+            .to_string(),
         None => final_query.to_string(),
     })
 }

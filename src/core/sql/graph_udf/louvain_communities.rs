@@ -3,9 +3,7 @@
 use crate::core::sql::graph_udf::graph_view::{
     coerce_to_u64_array, extract_scalar_f32, GraphAccumulatorBase,
 };
-use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, ListBuilder, UInt64Builder,
-};
+use arrow::array::{Array, ArrayRef, Float32Array, Float64Array, ListBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
