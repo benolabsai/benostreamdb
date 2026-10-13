@@ -315,8 +315,10 @@ impl BenoStreamSession {
     }
 
     pub async fn sql_to_df(&self, query: &str) -> Result<datafusion::dataframe::DataFrame> {
+        // Strip line comments and trailing semicolons
+        let sanitized = sanitize_sql_query(query)?;
         // Pre-process string to handle pgvector syntax not supported by DataFusion parser natively
-        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(query);
+        let query_processed = crate::core::sql::pgvector_rewriter::rewrite_sql_string(&sanitized);
         // Strip PARTITIONED BY to bypass DataFusion's lack of Hive distribution support on memory tables
         let query_processed =
             crate::core::sql::partition_rewriter::strip_partitioned_by(&query_processed);
@@ -340,11 +342,21 @@ impl BenoStreamSession {
         }
 
         // Parse the SQL query to get a logical plan
-        let plan = self
+        let plan = match self
             .ctx
             .state()
             .create_logical_plan(&query_processed)
-            .await?;
+            .await
+        {
+            Ok(p) => p,
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("CreateIndex") || err_str.contains("create index") || (err_str.contains("Unsupported") && err_str.contains("Index")) {
+                    anyhow::bail!("CREATE INDEX is not supported directly in session.sql(). Use table.add_index(col, algo) for embedded tables, or execute DDL via Flight SQL / Trino.");
+                }
+                return Err(e.into());
+            }
+        };
 
         // Rewrite the plan to convert pgvector syntax to UDF calls
         let rewritten_plan = crate::core::sql::pgvector_rewriter::rewrite_pgvector_plan(plan)?;
@@ -393,6 +405,34 @@ impl BenoStreamSession {
         let batches = df.collect().await?;
         Ok((batches, schema))
     }
+}
+
+/// Sanitize a SQL query by stripping line comments (`--`) and trailing semicolons (`;`).
+pub fn sanitize_sql_query(query: &str) -> Result<String> {
+    if query.contains('\0') {
+        anyhow::bail!("SQL query contains NULL bytes");
+    }
+
+    let mut cleaned_lines = Vec::new();
+    for line in query.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with("--") {
+            continue;
+        }
+        if let Some((before_comment, _)) = line.split_once("--") {
+            cleaned_lines.push(before_comment);
+        } else {
+            cleaned_lines.push(line);
+        }
+    }
+    let cleaned_query = cleaned_lines.join("\n");
+    let trimmed = cleaned_query.trim();
+
+    let final_query = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+    if final_query.contains(';') {
+        anyhow::bail!("SQL query contains disallowed multiple statements (';'). Use single-statement queries.");
+    }
+    Ok(final_query.to_string())
 }
 
 impl Default for BenoStreamSession {

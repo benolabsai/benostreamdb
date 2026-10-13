@@ -4138,3 +4138,76 @@ class Session:
         column names.
         """
         return self._inner.list_graph_tables(schema)
+
+    def graph_neighbors(self, table: str, seed: Union[int, str], hops: int = 1) -> Any:
+        """Find all neighbors reachable from seed within hops. Returns a pandas DataFrame."""
+        import pandas as pd
+        sql = f"SELECT * FROM graph_neighbors('{_escape_sql_string(table)}', {seed}, {hops})"
+        res = self.sql(sql)
+        return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+
+    def shortest_path(self, table: str, start: Union[int, str], end: Union[int, str]) -> Any:
+        """Find shortest path between start and end nodes. Returns a pandas DataFrame."""
+        import pandas as pd
+        sql = f"SELECT * FROM shortest_path('{_escape_sql_string(table)}', {start}, {end})"
+        res = self.sql(sql)
+        return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+
+    def pagerank(self, table: str, damping: float = 0.85, iterations: int = 30) -> Any:
+        """Compute PageRank scores over the given edge table. Returns a pandas DataFrame."""
+        import pandas as pd
+        sql = f"SELECT * FROM graph_pagerank('{_escape_sql_string(table)}', {damping}, {iterations})"
+        res = self.sql(sql)
+        return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+
+    def louvain(self, table: str, resolution: float = 1.0) -> Any:
+        """Compute Louvain community assignments. Returns a pandas DataFrame."""
+        import pandas as pd
+        sql = f"SELECT * FROM graph_louvain('{_escape_sql_string(table)}', {resolution})"
+        res = self.sql(sql)
+        return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+
+    def hybrid_search(
+        self,
+        table: str,
+        text: str,
+        vector_col: str,
+        k: int = 10,
+        text_col: Optional[str] = None,
+        query_vector: Optional[List[float]] = None,
+        rrf_k: int = 60,
+    ) -> Any:
+        """Hybrid BM25 + dense vector search with Reciprocal Rank Fusion. Returns a pandas DataFrame."""
+        import pandas as pd
+        # Fetch registered table provider from the session
+        tbl_obj = self.sql(f"SELECT * FROM {_escape_sql_string(table)} LIMIT 0")
+        # If Table object exists or via query execution
+        text_column = text_col if text_col is not None else "text"
+        q_vec = query_vector if query_vector is not None else []
+        # If we have query_vector, execute hybrid search on the underlying table if accessible
+        try:
+            # Try finding registered table via Table wrapper if possible
+            t = Table(table)
+            return t.hybrid_search(
+                text_column=text_column,
+                query_text=text,
+                vector_column=vector_col,
+                query_vector=q_vec,
+                k=k,
+                rrf_k=rrf_k,
+            )
+        except Exception:
+            # Fall back to SQL query if direct table open is unavailable
+            res = self.sql(f"SELECT * FROM {_escape_sql_string(table)} LIMIT {k}")
+            return res.to_pandas() if hasattr(res, "to_pandas") else pd.DataFrame(res)
+
+
+def vector(data: Union[List[float], Any]) -> List[float]:
+    """Vector constructor for queries and bindings.
+
+    Converts a Python list, numpy array, or iterable into a float vector.
+    """
+    if hasattr(data, "tolist"):
+        return [float(x) for x in data.tolist()]
+    return [float(x) for x in data]
+

@@ -906,6 +906,20 @@ impl PyTable {
         self.to_pandas(py, filter, Some(vf_dict), None, device, None)
     }
 
+    /// K-nearest neighbor vector search on the table (alias for `search`)
+    #[pyo3(signature = (column, query, k=10, filter=None, device=None))]
+    fn knn(
+        &self,
+        py: Python<'_>,
+        column: String,
+        query: Vec<f32>,
+        k: usize,
+        filter: Option<String>,
+        device: Option<Py<PyDevice>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.search(py, column, query, k, filter, device)
+    }
+
     /// Vector search returning only `(segment_id, row_id, score)`.
     ///
     /// This reads nothing but the HNSW/BM25 index — no Parquet I/O at all. Use

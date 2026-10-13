@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{
+    extract_scalar_u32, extract_u64_list, GraphAccumulatorBase,
+};
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, ListArray, ListBuilder, StructBuilder,
     UInt32Array, UInt64Array, UInt64Builder,
@@ -281,24 +283,14 @@ impl Accumulator for SubgraphAccumulator {
         self.base.update_edge_batch(values, Some(5), Some(6))?;
 
         if values.len() > 2 && !values[2].is_empty() && self.seeds.is_empty() {
-            if let Some(seeds_list) = values[2].as_any().downcast_ref::<ListArray>() {
-                if seeds_list.len() > 0 && seeds_list.is_valid(0) {
-                    let list_values = seeds_list.value(0);
-                    if let Some(uint_values) = list_values.as_any().downcast_ref::<UInt64Array>() {
-                        for i in 0..uint_values.len() {
-                            if uint_values.is_valid(i) {
-                                self.seeds.push(uint_values.value(i));
-                            }
-                        }
-                    }
-                }
+            let parsed_seeds = extract_u64_list(&values[2], 0);
+            if !parsed_seeds.is_empty() {
+                self.seeds = parsed_seeds;
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(hops_arr) = values[3].as_any().downcast_ref::<UInt32Array>() {
-                if hops_arr.is_valid(0) {
-                    self.hops = Some(hops_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u32(&values[3], 0) {
+                self.hops = Some(val);
             }
         }
         if values.len() > 4 && !values[4].is_empty() {
@@ -548,17 +540,9 @@ impl Accumulator for ConnectingPathsAccumulator {
         self.base.update_edge_batch(values, Some(4), Some(5))?;
 
         if values.len() > 2 && !values[2].is_empty() && self.seeds.is_empty() {
-            if let Some(seeds_list) = values[2].as_any().downcast_ref::<ListArray>() {
-                if seeds_list.len() > 0 && seeds_list.is_valid(0) {
-                    let list_values = seeds_list.value(0);
-                    if let Some(uint_values) = list_values.as_any().downcast_ref::<UInt64Array>() {
-                        for i in 0..uint_values.len() {
-                            if uint_values.is_valid(i) {
-                                self.seeds.push(uint_values.value(i));
-                            }
-                        }
-                    }
-                }
+            let parsed_seeds = extract_u64_list(&values[2], 0);
+            if !parsed_seeds.is_empty() {
+                self.seeds = parsed_seeds;
             }
         }
         if values.len() > 3 && !values[3].is_empty() {

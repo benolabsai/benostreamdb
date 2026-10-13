@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{
+    extract_scalar_f64, extract_scalar_u32, GraphAccumulatorBase,
+};
 use ahash::AHashMap as HashMap;
 use arrow::array::{Array, ArrayRef, ListBuilder, StructBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Fields};
@@ -124,23 +126,13 @@ impl Accumulator for PageRankAccumulator {
         let iter_idx = states.len().saturating_sub(1).max(5);
 
         if states.len() > damping_idx {
-            if let Some(damping_arr) = states[damping_idx]
-                .as_any()
-                .downcast_ref::<arrow::array::Float64Array>()
-            {
-                if !damping_arr.is_empty() && damping_arr.is_valid(0) {
-                    self.damping = damping_arr.value(0);
-                }
+            if let Some(val) = extract_scalar_f64(&states[damping_idx], 0) {
+                self.damping = val;
             }
         }
         if states.len() > iter_idx {
-            if let Some(iterations_arr) = states[iter_idx]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt32Array>()
-            {
-                if !iterations_arr.is_empty() && iterations_arr.is_valid(0) {
-                    self.iterations = iterations_arr.value(0);
-                }
+            if let Some(val) = extract_scalar_u32(&states[iter_idx], 0) {
+                self.iterations = val;
             }
         }
 
@@ -157,24 +149,14 @@ impl Accumulator for PageRankAccumulator {
         self.base.update_edge_batch(values, Some(4), Some(5))?;
 
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(arr) = values[2]
-                .as_any()
-                .downcast_ref::<arrow::array::Float64Array>()
-            {
-                if arr.is_valid(0) {
-                    self.damping = arr.value(0);
-                }
+            if let Some(val) = extract_scalar_f64(&values[2], 0) {
+                self.damping = val;
             }
         }
 
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt32Array>()
-            {
-                if arr.is_valid(0) {
-                    self.iterations = arr.value(0);
-                }
+            if let Some(val) = extract_scalar_u32(&values[3], 0) {
+                self.iterations = val;
             }
         }
 

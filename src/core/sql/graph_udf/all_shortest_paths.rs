@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{extract_scalar_u64, GraphAccumulatorBase};
 use ahash::AHashMap as HashMap;
-use arrow::array::{Array, ArrayRef, ListBuilder, UInt64Array, UInt64Builder};
+use arrow::array::{Array, ArrayRef, ListBuilder, UInt64Builder};
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::Result;
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -106,17 +106,13 @@ impl Accumulator for AllShortestPathsAccumulator {
         let end_idx = states.len().saturating_sub(1).max(5);
 
         if states.len() > start_idx {
-            if let Some(start_arr) = states[start_idx].as_any().downcast_ref::<UInt64Array>() {
-                if start_arr.is_valid(0) {
-                    self.start = Some(start_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&states[start_idx], 0) {
+                self.start = Some(val);
             }
         }
         if states.len() > end_idx {
-            if let Some(end_arr) = states[end_idx].as_any().downcast_ref::<UInt64Array>() {
-                if end_arr.is_valid(0) {
-                    self.end = Some(end_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&states[end_idx], 0) {
+                self.end = Some(val);
             }
         }
         Ok(())
@@ -125,17 +121,13 @@ impl Accumulator for AllShortestPathsAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.base.update_edge_batch(values, Some(4), Some(5))?;
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(arr) = values[2].as_any().downcast_ref::<UInt64Array>() {
-                if arr.is_valid(0) {
-                    self.start = Some(arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&values[2], 0) {
+                self.start = Some(val);
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(arr) = values[3].as_any().downcast_ref::<UInt64Array>() {
-                if arr.is_valid(0) {
-                    self.end = Some(arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&values[3], 0) {
+                self.end = Some(val);
             }
         }
         Ok(())

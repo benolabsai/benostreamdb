@@ -16,9 +16,11 @@
 //! chosen for. It is single-level (no aggregation), matching the current
 //! single-level Louvain implementation.
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{
+    coerce_to_u64_array, extract_scalar_f32, GraphAccumulatorBase,
+};
 use arrow::array::{
-    Array, ArrayRef, Float32Array, Float64Array, ListBuilder, UInt64Array, UInt64Builder,
+    Array, ArrayRef, Float32Array, Float64Array, ListBuilder, UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
@@ -146,25 +148,18 @@ impl Accumulator for LeidenAccumulator {
         }
 
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(r_arr) = values[3].as_any().downcast_ref::<Float64Array>() {
-                if r_arr.is_valid(0) {
-                    self.resolution = r_arr.value(0) as f32;
-                }
-            } else if let Some(r_arr) = values[3].as_any().downcast_ref::<Float32Array>() {
-                if r_arr.is_valid(0) {
-                    self.resolution = r_arr.value(0);
-                }
+            if let Some(r) = extract_scalar_f32(&values[3], 0) {
+                self.resolution = r;
+            }
+        } else if values.len() == 3 && !values[2].is_empty() {
+            // If called as leiden_communities(source, target, resolution)
+            if let Some(r) = extract_scalar_f32(&values[2], 0) {
+                self.resolution = r;
             }
         }
 
-        let sources_arr = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| datafusion::error::DataFusionError::Execution("type mismatch".into()))?;
-        let targets_arr = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| datafusion::error::DataFusionError::Execution("type mismatch".into()))?;
+        let sources_arr = coerce_to_u64_array(&values[0])?;
+        let targets_arr = coerce_to_u64_array(&values[1])?;
 
         for i in 0..len {
             if sources_arr.is_valid(i) && targets_arr.is_valid(i) {

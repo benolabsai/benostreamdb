@@ -1,7 +1,9 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{
+    extract_scalar_u32, extract_scalar_u64, GraphAccumulatorBase,
+};
 use arrow::array::{Array, ArrayRef, Float64Array, UInt32Array, UInt64Array};
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
@@ -113,22 +115,14 @@ impl Accumulator for GraphNeighborsAccumulator {
         let hops_idx = 5;
 
         if states.len() > node_idx {
-            if let Some(node_arr) = states[node_idx]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
-            {
-                if node_arr.is_valid(0) {
-                    self.node = Some(node_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&states[node_idx], 0) {
+                self.node = Some(val);
             }
         }
         if states.len() > hops_idx {
-            if let Some(hops_arr) = states[hops_idx]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt32Array>()
-            {
-                if hops_arr.is_valid(0) && self.hops.is_none() {
-                    self.hops = Some(hops_arr.value(0));
+            if let Some(val) = extract_scalar_u32(&states[hops_idx], 0) {
+                if self.hops.is_none() {
+                    self.hops = Some(val);
                 }
             }
         }
@@ -180,23 +174,13 @@ impl Accumulator for GraphNeighborsAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.base.update_edge_batch(values, Some(4), Some(5))?;
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(node_arr) = values[2]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
-            {
-                if node_arr.is_valid(0) {
-                    self.node = Some(node_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&values[2], 0) {
+                self.node = Some(val);
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(hops_arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt32Array>()
-            {
-                if hops_arr.is_valid(0) {
-                    self.hops = Some(hops_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u32(&values[3], 0) {
+                self.hops = Some(val);
             }
         }
 

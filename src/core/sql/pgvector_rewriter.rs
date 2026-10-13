@@ -212,9 +212,9 @@ pub fn rewrite_sql_string(query: &str) -> String {
     ];
 
     for (op, func) in operators {
-        // Simple regex to grab word-character identifiers and simple string literals
+        // Simple regex to grab word-character identifiers, string literals, and bracketed/ARRAY lists
         let pattern = format!(
-            r"(?P<lhs>[a-zA-Z0-9_.]+(?:\([^)]*\))?)\s*{}\s*(?P<rhs>'[^']+'|ARRAY\[[^\]]+\]|[a-zA-Z0-9_.]+)",
+            r"(?P<lhs>[a-zA-Z0-9_.]+(?:\([^)]*\))?)\s*{}\s*(?P<rhs>'[^']+'|ARRAY\[[^\]]+\]|\[[^\]]+\]|[a-zA-Z0-9_.]+)",
             regex::escape(op)
         );
         if let Ok(re) = regex::Regex::new(&pattern) {

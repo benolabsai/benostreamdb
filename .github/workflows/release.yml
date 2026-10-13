@@ -20,6 +20,9 @@ env:
   CARGO_PROFILE_TEST_DEBUG: 0
   # Opt into Node.js 24 for actions to avoid deprecation warnings (required by June 2026)
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Persist sccache objects in the GitHub Actions cache so wheels reuse compiled
+  # crates across steps and across runs instead of recompiling from scratch.
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   ci:
@@ -77,28 +80,28 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features "python" --zig
-          sccache: "false"
+          sccache: "true"
           manylinux: auto
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist --zig
-          sccache: "false"
+          sccache: "true"
           manylinux: auto
       - name: Build flight server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist --zig
-          sccache: "false"
+          sccache: "true"
           manylinux: auto
       - name: Build MCP server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist --zig
-          sccache: "false"
+          sccache: "true"
           manylinux: auto
       - name: Upload core wheels
         uses: actions/upload-artifact@v4
@@ -161,25 +164,25 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --find-interpreter --features "python"
-          sccache: "false"
+          sccache: "true"
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist
-          sccache: "false"
+          sccache: "true"
       - name: Build flight server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
-          sccache: "false"
+          sccache: "true"
       - name: Build MCP server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
-          sccache: "false"
+          sccache: "true"
       - name: Upload core wheels
         uses: actions/upload-artifact@v4
         with:
@@ -228,7 +231,7 @@ jobs:
         if: matrix.target == 'x86_64'
         env:
           SKIP_GPU_TESTS: "1"
-        run: cargo test -p benostream-gpu-ann --features cuda -- --nocapture
+        run: cargo test -p benostream-gpu-ann --features cuda --release -- --nocapture
       - name: Update version from tag
         shell: bash
         run: |
@@ -254,25 +257,25 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features "python"
-          sccache: "false"
+          sccache: "true"
       - name: Build search gateway wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-search/Cargo.toml --out contrib/benostreamdb-search/dist
-          sccache: "false"
+          sccache: "true"
       - name: Build flight server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path server/flight_sql/Cargo.toml --out server/flight_sql/dist
-          sccache: "false"
+          sccache: "true"
       - name: Build MCP server wheel
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
           args: --release --manifest-path contrib/benostreamdb-mcp/Cargo.toml --out contrib/benostreamdb-mcp/dist
-          sccache: "false"
+          sccache: "true"
       - name: Upload core wheels
         uses: actions/upload-artifact@v4
         with:

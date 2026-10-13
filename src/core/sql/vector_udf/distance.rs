@@ -219,6 +219,8 @@ macro_rules! make_vector_dist_udf {
 
                             if let Some(f32_arr) = value_arr.as_any().downcast_ref::<Float32Array>() {
                                 Ok(f32_arr.values().to_vec())
+                            } else if let Some(f64_arr) = value_arr.as_any().downcast_ref::<arrow::array::Float64Array>() {
+                                Ok(f64_arr.values().iter().map(|&x| x as f32).collect())
                             } else if let Some(f16_arr) = value_arr.as_any().downcast_ref::<Float16Array>() {
                                 Ok(f16_arr.iter().map(|f| f.unwrap_or_default().to_f32()).collect())
                             } else if let Some(u8_arr) = value_arr.as_any().downcast_ref::<UInt8Array>() {

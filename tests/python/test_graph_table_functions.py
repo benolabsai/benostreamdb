@@ -96,3 +96,40 @@ def test_custom_endpoint_columns(tmp_path):
         "select * from graph_neighbors('custom_edges', '0', 2, 'auto', 'from_node', 'to_node')",
     )
     assert [r["node"] for r in got] == [0, 1, 2]
+
+
+def test_integer_literal_seed_and_unprefixed_aliases(session):
+    """Integer literal seed 0 without arrow_cast or quotes, and unprefixed aliases."""
+    # Integer seed: 0
+    got_int = rows(session, "select * from graph_neighbors('edges', 0, 2)")
+    assert len(got_int) == 3
+
+    # Unprefixed table function aliases
+    got_neighbors_alias = rows(session, "select * from neighbors('edges', 0, 2)")
+    assert got_neighbors_alias == got_int
+
+    got_sp_alias = rows(session, "select * from shortest_path('edges', 0, 3)")
+    assert [r["node"] for r in got_sp_alias] == [0, 1, 2, 3]
+
+
+def test_session_dataframe_helpers(session):
+    """Python Session convenience methods returning pandas DataFrames."""
+    # session.graph_neighbors
+    df_n = session.graph_neighbors("edges", seed=0, hops=2)
+    assert len(df_n) == 3
+    assert set(df_n["node"]) == {0, 1, 2}
+
+    # session.shortest_path
+    df_sp = session.shortest_path("edges", start=0, end=3)
+    assert list(df_sp["node"]) == [0, 1, 2, 3]
+
+    # session.pagerank
+    df_pr = session.pagerank("edges", damping=0.85, iterations=20)
+    assert len(df_pr) > 0
+    assert "rank" in df_pr.columns
+
+    # session.louvain
+    df_lv = session.louvain("edges", resolution=1.0)
+    assert len(df_lv) > 0
+    assert "community" in df_lv.columns
+

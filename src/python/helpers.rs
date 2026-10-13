@@ -27,14 +27,6 @@ pub static SQL_REGEX: Lazy<Option<Regex>> =
 /// termination) or `--` (line comment) that would indicate multi-statement
 /// or comment injection.
 pub fn sanitize_sql(query: &str) -> PyResult<String> {
-    // Reject queries with statement terminators or comment markers
-    if query.contains(';') || query.contains("--") {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "SQL query contains disallowed characters (';' or '--'). \
-             Use parameterized queries or filter expressions instead.",
-        ));
-    }
-
     // Reject queries with embedded NULL bytes (common in FFI injection)
     if query.contains('\0') {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -42,9 +34,36 @@ pub fn sanitize_sql(query: &str) -> PyResult<String> {
         ));
     }
 
+    // Strip comments line-by-line while preserving query content
+    let mut cleaned_lines = Vec::new();
+    for line in query.lines() {
+        let trimmed_line = line.trim();
+        if trimmed_line.starts_with("--") {
+            continue; // Skip full-line comments
+        }
+        if let Some((before_comment, _)) = line.split_once("--") {
+            cleaned_lines.push(before_comment);
+        } else {
+            cleaned_lines.push(line);
+        }
+    }
+    let cleaned_query = cleaned_lines.join("\n");
+    let trimmed = cleaned_query.trim();
+
+    // Strip a single trailing semicolon if present
+    let final_query = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+
+    // Reject queries with internal statement terminators (indicating multi-statement injection)
+    if final_query.contains(';') {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "SQL query contains disallowed multiple statements (';'). \
+             Use single-statement queries or filter expressions instead.",
+        ));
+    }
+
     Ok(match SQL_REGEX.as_ref() {
-        Some(re) => re.replace_all(query, "dist_l2($1, ARRAY[$2])").to_string(),
-        None => query.to_string(),
+        Some(re) => re.replace_all(final_query, "dist_l2($1, ARRAY[$2])").to_string(),
+        None => final_query.to_string(),
     })
 }
 

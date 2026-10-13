@@ -1,9 +1,11 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{
+    extract_scalar_f64, extract_scalar_u32, extract_u64_list, GraphAccumulatorBase,
+};
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Float64Array, ListArray, ListBuilder, StructBuilder,
-    UInt32Array, UInt64Array, UInt64Builder,
+    UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field, Fields};
 use datafusion::error::{DataFusionError, Result};
@@ -163,34 +165,21 @@ impl Accumulator for PersonalizedPageRankAccumulator {
 
         self.base.update_edge_batch(values, Some(7), Some(8))?;
 
-        // seeds is a ListArray
-        if let Some(seeds_list) = values[2].as_any().downcast_ref::<ListArray>() {
-            if seeds_list.len() > 0 && seeds_list.is_valid(0) {
-                let list_values = seeds_list.value(0);
-                if let Some(uint_values) = list_values.as_any().downcast_ref::<UInt64Array>() {
-                    self.seeds.clear();
-                    for i in 0..uint_values.len() {
-                        if uint_values.is_valid(i) {
-                            self.seeds.push(uint_values.value(i));
-                        }
-                    }
-                }
-            }
+        // seeds can be ListArray, FixedSizeListArray, or single integer scalar
+        let parsed_seeds = extract_u64_list(&values[2], 0);
+        if !parsed_seeds.is_empty() {
+            self.seeds = parsed_seeds;
         }
 
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(arr) = values[3].as_any().downcast_ref::<Float64Array>() {
-                if arr.is_valid(0) {
-                    self.damping = arr.value(0);
-                }
+            if let Some(val) = extract_scalar_f64(&values[3], 0) {
+                self.damping = val;
             }
         }
 
         if values.len() > 4 && !values[4].is_empty() {
-            if let Some(arr) = values[4].as_any().downcast_ref::<UInt32Array>() {
-                if arr.is_valid(0) {
-                    self.iterations = arr.value(0);
-                }
+            if let Some(val) = extract_scalar_u32(&values[4], 0) {
+                self.iterations = val;
             }
         }
 
@@ -206,17 +195,30 @@ impl Accumulator for PersonalizedPageRankAccumulator {
             if let Some(weights_list) = values[6].as_any().downcast_ref::<ListArray>() {
                 if weights_list.len() > 0 && weights_list.is_valid(0) {
                     let list_values = weights_list.value(0);
-                    if let Some(float_values) = list_values.as_any().downcast_ref::<Float64Array>()
-                    {
-                        let mut sw = Vec::new();
+                    let mut sw = Vec::new();
+                    if let Some(float_values) = list_values.as_any().downcast_ref::<Float64Array>() {
                         for i in 0..float_values.len() {
                             if float_values.is_valid(i) {
                                 sw.push(float_values.value(i));
                             }
                         }
-                        if sw.len() == self.seeds.len() {
-                            self.seed_weights = Some(sw);
+                    } else if let Some(float_values) = list_values.as_any().downcast_ref::<arrow::array::Float32Array>() {
+                        for i in 0..float_values.len() {
+                            if float_values.is_valid(i) {
+                                sw.push(float_values.value(i) as f64);
+                            }
                         }
+                    } else if let Ok(casted) = arrow::compute::cast(&list_values, &DataType::Float64) {
+                        if let Some(float_values) = casted.as_any().downcast_ref::<Float64Array>() {
+                            for i in 0..float_values.len() {
+                                if float_values.is_valid(i) {
+                                    sw.push(float_values.value(i));
+                                }
+                            }
+                        }
+                    }
+                    if sw.len() == self.seeds.len() {
+                        self.seed_weights = Some(sw);
                     }
                 }
             }

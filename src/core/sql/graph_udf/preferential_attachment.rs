@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
-use arrow::array::{Array, ArrayRef, UInt64Array};
+use crate::core::sql::graph_udf::graph_view::{extract_scalar_u64, GraphAccumulatorBase};
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{AggregateUDFImpl, Signature, Volatility};
@@ -153,24 +153,11 @@ impl Accumulator for PreferentialAttachmentAccumulator {
 
         self.base.update_edge_batch(values, Some(4), Some(5))?;
 
-        let n1_arr = values[2]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for node1".to_string())
-            })?;
-        let n2_arr = values[3]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for node2".to_string())
-            })?;
-
-        if !n1_arr.is_empty() && n1_arr.is_valid(0) {
-            self.node1 = n1_arr.value(0);
+        if let Some(val) = extract_scalar_u64(&values[2], 0) {
+            self.node1 = val;
         }
-        if !n2_arr.is_empty() && n2_arr.is_valid(0) {
-            self.node2 = n2_arr.value(0);
+        if let Some(val) = extract_scalar_u64(&values[3], 0) {
+            self.node2 = val;
         }
 
         Ok(())

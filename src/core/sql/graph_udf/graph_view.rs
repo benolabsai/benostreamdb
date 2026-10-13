@@ -20,13 +20,254 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, ListArray, ListBuilder, StringArray, UInt64Array, UInt64Builder,
+    Array, ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    ListArray, ListBuilder, StringArray, UInt16Array, UInt32Array, UInt64Array, UInt64Builder,
+    UInt8Array,
 };
 use arrow::datatypes::{DataType, Field};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::scalar::ScalarValue;
 
 use crate::core::table::Table;
+
+/// Coerce an arbitrary Arrow array (integers, floats, strings) to `Arc<UInt64Array>`.
+pub fn coerce_to_u64_array(array: &ArrayRef) -> Result<Arc<UInt64Array>> {
+    if let Some(u64_arr) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Ok(Arc::new(u64_arr.clone()));
+    }
+
+    match array.data_type() {
+        DataType::Int64
+        | DataType::Int32
+        | DataType::Int16
+        | DataType::Int8
+        | DataType::UInt32
+        | DataType::UInt16
+        | DataType::UInt8 => {
+            let casted = arrow::compute::cast(array.as_ref(), &DataType::UInt64)
+                .map_err(|e| DataFusionError::Execution(format!("failed to cast to UInt64: {e}")))?;
+            let u64_arr = casted
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcast to UInt64Array failed".to_string()))?;
+            Ok(Arc::new(u64_arr.clone()))
+        }
+        DataType::Float32 => {
+            let f_arr = array
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcast to Float32Array failed".to_string()))?;
+            let mut builder = UInt64Builder::with_capacity(f_arr.len());
+            for i in 0..f_arr.len() {
+                if f_arr.is_valid(i) {
+                    builder.append_value(f_arr.value(i) as u64);
+                } else {
+                    builder.append_null();
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Float64 => {
+            let f_arr = array
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcast to Float64Array failed".to_string()))?;
+            let mut builder = UInt64Builder::with_capacity(f_arr.len());
+            for i in 0..f_arr.len() {
+                if f_arr.is_valid(i) {
+                    builder.append_value(f_arr.value(i) as u64);
+                } else {
+                    builder.append_null();
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            if let Ok(casted) = arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
+                if let Some(u64_arr) = casted.as_any().downcast_ref::<UInt64Array>() {
+                    return Ok(Arc::new(u64_arr.clone()));
+                }
+            }
+            let mut builder = UInt64Builder::with_capacity(array.len());
+            for i in 0..array.len() {
+                if array.is_valid(i) {
+                    let s = match array.data_type() {
+                        DataType::Utf8 => array.as_any().downcast_ref::<StringArray>().map(|a| a.value(i)),
+                        DataType::LargeUtf8 => array.as_any().downcast_ref::<arrow::array::LargeStringArray>().map(|a| a.value(i)),
+                        _ => None,
+                    };
+                    if let Some(s) = s {
+                        match s.trim().parse::<u64>() {
+                            Ok(v) => builder.append_value(v),
+                            Err(_) => builder.append_null(),
+                        }
+                    } else {
+                        builder.append_null();
+                    }
+                } else {
+                    builder.append_null();
+                }
+            }
+            Ok(Arc::new(builder.finish()))
+        }
+        other => {
+            match arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
+                Ok(casted) => {
+                    let u64_arr = casted
+                        .as_any()
+                        .downcast_ref::<UInt64Array>()
+                        .ok_or_else(|| DataFusionError::Execution("downcast to UInt64Array failed".to_string()))?;
+                    Ok(Arc::new(u64_arr.clone()))
+                }
+                Err(_) => Err(DataFusionError::Execution(format!(
+                    "Cannot coerce column of type {other:?} to UInt64"
+                ))),
+            }
+        }
+    }
+}
+
+/// Extract a scalar `u64` from an array at `idx`, with transparent coercion.
+pub fn extract_scalar_u64(array: &ArrayRef, idx: usize) -> Option<u64> {
+    if !array.is_valid(idx) {
+        return None;
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Some(a.value(idx));
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int64Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int32Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt16Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int16Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt8Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int8Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float64Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float32Array>() {
+        return Some(a.value(idx) as u64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<StringArray>() {
+        return a.value(idx).trim().parse::<u64>().ok();
+    }
+    if let Some(a) = array.as_any().downcast_ref::<arrow::array::LargeStringArray>() {
+        return a.value(idx).trim().parse::<u64>().ok();
+    }
+    if let Ok(casted) = arrow::compute::cast(array.as_ref(), &DataType::UInt64) {
+        if let Some(u) = casted.as_any().downcast_ref::<UInt64Array>() {
+            if u.is_valid(idx) {
+                return Some(u.value(idx));
+            }
+        }
+    }
+    None
+}
+
+/// Extract a scalar `u32` from an array at `idx`, with transparent coercion.
+pub fn extract_scalar_u32(array: &ArrayRef, idx: usize) -> Option<u32> {
+    extract_scalar_u64(array, idx).map(|n| n as u32)
+}
+
+/// Extract a scalar `f32` from an array at `idx`, with transparent coercion.
+pub fn extract_scalar_f32(array: &ArrayRef, idx: usize) -> Option<f32> {
+    if !array.is_valid(idx) {
+        return None;
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float32Array>() {
+        return Some(a.value(idx));
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float64Array>() {
+        return Some(a.value(idx) as f32);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int64Array>() {
+        return Some(a.value(idx) as f32);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int32Array>() {
+        return Some(a.value(idx) as f32);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Some(a.value(idx) as f32);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Some(a.value(idx) as f32);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<StringArray>() {
+        return a.value(idx).trim().parse::<f32>().ok();
+    }
+    None
+}
+
+/// Extract a scalar `f64` from an array at `idx`, with transparent coercion.
+pub fn extract_scalar_f64(array: &ArrayRef, idx: usize) -> Option<f64> {
+    if !array.is_valid(idx) {
+        return None;
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float64Array>() {
+        return Some(a.value(idx));
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Float32Array>() {
+        return Some(a.value(idx) as f64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int64Array>() {
+        return Some(a.value(idx) as f64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<Int32Array>() {
+        return Some(a.value(idx) as f64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt64Array>() {
+        return Some(a.value(idx) as f64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<UInt32Array>() {
+        return Some(a.value(idx) as f64);
+    }
+    if let Some(a) = array.as_any().downcast_ref::<StringArray>() {
+        return a.value(idx).trim().parse::<f64>().ok();
+    }
+    None
+}
+
+/// Extract a list of `u64` from an array at `idx` (handles List, FixedSizeList, and scalar numbers).
+pub fn extract_u64_list(array: &ArrayRef, idx: usize) -> Vec<u64> {
+    if !array.is_valid(idx) {
+        return Vec::new();
+    }
+    if let Some(list_arr) = array.as_any().downcast_ref::<ListArray>() {
+        let inner = list_arr.value(idx);
+        if let Ok(u64s) = coerce_to_u64_array(&inner) {
+            return (0..u64s.len())
+                .filter(|&i| u64s.is_valid(i))
+                .map(|i| u64s.value(i))
+                .collect();
+        }
+    }
+    if let Some(fsl_arr) = array.as_any().downcast_ref::<arrow::array::FixedSizeListArray>() {
+        let inner = fsl_arr.value(idx);
+        if let Ok(u64s) = coerce_to_u64_array(&inner) {
+            return (0..u64s.len())
+                .filter(|&i| u64s.is_valid(i))
+                .map(|i| u64s.value(i))
+                .collect();
+        }
+    }
+    if let Some(val) = extract_scalar_u64(array, idx) {
+        return vec![val];
+    }
+    Vec::new()}
 
 /// The minimal graph surface every graph algorithm needs.
 ///
@@ -648,23 +889,13 @@ impl GraphAccumulatorBase {
             return Ok(());
         }
 
-        let sources = values[0]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for sources".to_string())
-            })?;
-        let targets = values[1]
-            .as_any()
-            .downcast_ref::<UInt64Array>()
-            .ok_or_else(|| {
-                DataFusionError::Execution("Expected UInt64Array for targets".to_string())
-            })?;
+        let sources = coerce_to_u64_array(&values[0])?;
+        let targets = coerce_to_u64_array(&values[1])?;
 
         if sources.null_count() == 0 && targets.null_count() == 0 {
-            // Zero-copy: retain the batch's own columns (Arc bumps only).
-            self.source_chunks.push(values[0].clone());
-            self.target_chunks.push(values[1].clone());
+            // Retain the coerced chunks (zero-copy if already UInt64).
+            self.source_chunks.push(sources);
+            self.target_chunks.push(targets);
         } else {
             // Null-bearing input: retain only valid rows (one compact copy).
             let keep = |i: usize| sources.is_valid(i) && targets.is_valid(i);

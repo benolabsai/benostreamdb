@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Richard Albright and BenoStreamDB Contributors.
 #![allow(unused_imports, unused_mut, unused_variables, dead_code)]
 
-use crate::core::sql::graph_udf::graph_view::GraphAccumulatorBase;
+use crate::core::sql::graph_udf::graph_view::{extract_scalar_u64, GraphAccumulatorBase};
 use ahash::{AHashMap as HashMap, AHashSet as HashSet};
 use arrow::array::{Array, ArrayRef, Float64Array, UInt32Array, UInt64Array, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Fields};
@@ -156,23 +156,13 @@ impl Accumulator for JaccardCoefficientAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.base.update_edge_batch(values, Some(4), Some(5))?;
         if values.len() > 2 && !values[2].is_empty() {
-            if let Some(a_arr) = values[2]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
-            {
-                if a_arr.is_valid(0) {
-                    self.node1 = Some(a_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&values[2], 0) {
+                self.node1 = Some(val);
             }
         }
         if values.len() > 3 && !values[3].is_empty() {
-            if let Some(b_arr) = values[3]
-                .as_any()
-                .downcast_ref::<arrow::array::UInt64Array>()
-            {
-                if b_arr.is_valid(0) {
-                    self.node2 = Some(b_arr.value(0));
-                }
+            if let Some(val) = extract_scalar_u64(&values[3], 0) {
+                self.node2 = Some(val);
             }
         }
 
