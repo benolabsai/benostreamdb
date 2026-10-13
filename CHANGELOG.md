@@ -1,4 +1,4 @@
-s, t# Changelog
+# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -25,6 +25,9 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   matrices under the shared envelope after the fixes below.
 
 ### Fixed
+- **Vector distance UDF formulas corrected** — `l2_distance` and
+  `cosine_distance` scalar UDFs now correctly compute Euclidean ($L_2$) distance
+  and cosine distance ($1 - \cos(\theta)$), matching pgvector operators `<->` and `<=>`.
 - **Neo4j graph benchmark measured the driver, not the database** —
   `_graph_neo4j` timed `gds.*.stream` with `list(res)`, i.e. Python marshalling
   of 100k+ Bolt records (PageRank read as ~3.7 s on web-Google). It now runs
@@ -348,6 +351,27 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   node/edge tables — the discovery primitive an MCP agent uses. New
   `Table.table_type()` / `graph_metadata()` / `edge_endpoints()` (metadata-first)
   bindings.
+- **Model Context Protocol (MCP) server overhaul (`contrib/benostreamdb-mcp`)** —
+  A production-ready stdio MCP server for agentic SQL execution, RAG, and memory:
+  - **Multimodal file ingestion (`ingest_file`)** — Ingests local files into scratch
+    tables with automatic format detection: PDF documents (with page/line metadata
+    chunking via `pdf-extract`), Excel spreadsheets (`.xlsx`, `.xls`, `.ods` via
+    `calamine`), images (`.png`, `.jpg`, `.jpeg`, `.webp`, `.svg` with base64 Data
+    URI encoding and optional multimodal embeddings), source code/text chunking,
+    JSON/NDJSON, and Parquet.
+  - **Tool surface consolidation** — Consolidated record insertion into `ingest_records`
+    (schema inference, auto table creation, and optional vector embeddings) and removed
+    redundant `insert_scratch_records`, standardizing the MCP surface to 11 unified tools.
+  - **Automatic table naming** — `table_name` is optional in `ingest_file`, defaulting
+    to a sanitized file stem in `scratch.<stem>`.
+  - **Injection hardening & table name sanitization** — Spaces, hyphens, and
+    non-alphanumerics in table names and file stems are automatically converted to `_`
+    via `sanitize_table_name`, digit-leading names are prefixed with `t_`, column
+    names are validated, and schema DDLs are AST-verified to prevent SQL injection and
+    unauthorized command execution.
+  - **Fuzzing resilience** — Hardened JSON-RPC loop against corrupt payloads, random
+    garbage inputs, and invalid methods without exiting or leaking state; verified
+    with Node `@modelcontextprotocol/inspector --cli` and 20 passing unit tests.
 
 ### Changed
 - **Puffin compound bundles are the index storage format.** Every secondary
